@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 1 |
 | perf | 84 | 0 |
-| other | 63 | 1 |
+| other | 64 | 2 |
 | soundness | 62 | 0 |
 | crash | 59 | 0 |
 | use-after-free | 21 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1096 | 3 |
+| codegen | 1097 | 4 |
 | typecheck | 277 | 1 |
 | interp | 191 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1655 surfaced · 4 open · 1625 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced · 5 open · 1625 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1655 surfaced
 | B-2026-08-27-33 | 2026-08-27 | typecheck | medium | A `T: Ord` bound on a GENERIC IMPL rejects a tuple that the IDENTICAL bound on a free fn accepts: `impl[T: Ord] W[T]` refuses `W[(i64, i64)]` with "`(i64, i64)` does not implement `Ord`", while `fn pick[T: Ord](a: T, b: T)` takes the same tuple and may even call `.cmp()` on it | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-27-34 | 2026-08-27 | codegen | high | 3454927 (B-2026-08-26-12) EMITS THE BRANCH-LEAF RETAIN ONCE PER BINDING, NOT ONCE PER USE, so the THIRD consumption of an `Option[shared]` selected by a value-position branch reads through a freed box. Eight lines, no loop: `let t = if true { a } else { b };` then three `show(t)` calls prints `1 1 1` under `--interp` and `1 1 <garbage>` under `karac build` -- WHICH EXITS 0. Two uses are balanced and green; the boundary is exactly the third. The fix's own fixtures all consume the value once, so the axis was never covered. | — |
 | B-2026-08-27-35 | 2026-08-27 | codegen | medium | An indexed array LITERAL temporary leaks the element it hands back -- `Array[f"a{n}", f"b{n}"][0]` loses 2 bytes in 1 allocation -- a different mechanism from B-2026-08-27-31 and not covered by its fix. | — |
+| B-2026-08-27-36 | 2026-08-27 | codegen | medium | UNVERIFIED, not clean: the NON-`let` binding sites (for-loop binding, match pattern binding, tuple destructure) were never cleared of the wrong-monomorph defect B-2026-08-25-27/-28 fixed everywhere else — the probe that would clear them cannot reproduce the defect even on a KNOWN-BROKEN form | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (2)
 
