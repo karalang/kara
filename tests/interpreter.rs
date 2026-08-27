@@ -725,6 +725,87 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
 }
 
 #[test]
+fn a_float_field_compares_by_ieee_semantics_not_by_bits() {
+    // B-2026-08-27-9. Every TYPE-DIRECTED comparator routed a float field to
+    // `emit_eq_fn_for_type`'s byte loop, and bit equality differs from float
+    // equality in exactly the two places IEEE-754 defines specially. So `==`
+    // was wrong in BOTH directions on the compiled backends: `0.0` and `-0.0`
+    // are numerically EQUAL with different bits (answered false), and NaN is
+    // UNEQUAL TO ITSELF with identical bits (answered true).
+    //
+    // THE OPERANDS COME FROM OPAQUE FUNCTIONS ON PURPOSE. With `0.0 / 0.0`
+    // written inline, LLVM constant-folds the whole comparison and returns the
+    // RIGHT answer without ever running the emitted comparator — which is
+    // exactly how the first version of this fix looked correct while the
+    // runtime path was untouched. A test that lets the folder answer proves
+    // nothing about codegen.
+    //
+    // Four shapes because four routes reach the comparator family: a shared
+    // struct's direct field, a `Vec[f64]` element (via the vec comparator), a
+    // PLAIN struct with a Vec field (a Vec field is what pulls a plain struct
+    // onto the type-directed path at all), and a nested plain struct inside a
+    // shared one. Codegen twin: `test_e2e_float_field_compares_by_ieee`.
+    let src = "#[derive(PartialEq)]
+        shared struct Sf { x: f64 }
+        #[derive(PartialEq)]
+        shared struct Sv { v: Vec[f64] }
+        #[derive(PartialEq)]
+        struct Pv { v: Vec[f64] }
+        #[derive(PartialEq)]
+        struct Inner { x: f64 }
+        #[derive(PartialEq)]
+        shared struct Outer { i: Inner }
+        fn nan64(z: f64) -> f64 { return z / z; }
+        fn negzero(z: f64) -> f64 { return -z; }
+        fn one(x: f64) -> Vec[f64] {
+            let mut v: Vec[f64] = Vec.new();
+            v.push(x);
+            return v;
+        }
+        fn main() {
+            let p = 0.0;
+            let n = negzero(p);
+            let q = nan64(p);
+
+            println(f\"scalar-negzero={p == n}\");
+            println(f\"scalar-nan={q == q}\");
+
+            let sa = Sf { x: p };
+            let sb = Sf { x: n };
+            let sq1 = Sf { x: q };
+            let sq2 = Sf { x: q };
+            println(f\"shared-negzero={sa == sb}\");
+            println(f\"shared-nan={sq1 == sq2}\");
+
+            let va = Sv { v: one(p) };
+            let vb = Sv { v: one(n) };
+            let vq1 = Sv { v: one(q) };
+            let vq2 = Sv { v: one(q) };
+            println(f\"sharedvec-negzero={va == vb}\");
+            println(f\"sharedvec-nan={vq1 == vq2}\");
+
+            let pa = Pv { v: one(p) };
+            let pb = Pv { v: one(n) };
+            let pq1 = Pv { v: one(q) };
+            let pq2 = Pv { v: one(q) };
+            println(f\"plainvec-negzero={pa == pb}\");
+            println(f\"plainvec-nan={pq1 == pq2}\");
+
+            let o1 = Outer { i: Inner { x: p } };
+            let o2 = Outer { i: Inner { x: n } };
+            println(f\"nested-negzero={o1 == o2}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "scalar-negzero=true\nscalar-nan=false\n\
+         shared-negzero=true\nshared-nan=false\n\
+         sharedvec-negzero=true\nsharedvec-nan=false\n\
+         plainvec-negzero=true\nplainvec-nan=false\n\
+         nested-negzero=true\n"
+    );
+}
+
+#[test]
 fn eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche() {
     // B-2026-08-27-5. `==` on a shared struct with a niche-encoded
     // `Option[shared T]` field answered `false` for structurally equal values

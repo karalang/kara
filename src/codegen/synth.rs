@@ -749,6 +749,47 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_int_compare(IntPredicate::EQ, va, vb, "eq")
                 .unwrap();
             self.builder.build_return(Some(&eq)).unwrap();
+        } else if let BasicTypeEnum::FloatType(float_ty) = key_ty {
+            // B-2026-08-27-9 — float primitives: load and compare as FLOATS.
+            // Without this arm a float fell to the byte loop below, and BIT
+            // equality differs from float equality in exactly the two places
+            // IEEE-754 defines specially — so `==` was wrong in BOTH
+            // directions: `0.0` and `-0.0` are numerically EQUAL with
+            // different bit patterns (answered false), and NaN is numerically
+            // UNEQUAL TO ITSELF with identical ones (answered true).
+            //
+            // `OEQ` — ordered-and-equal — is the predicate that reproduces
+            // what the scalar `==` operator and the interpreter already do.
+            // Not `UEQ`, which is true when either operand is NaN.
+            //
+            // Reached by every type-directed comparator, not just the shared
+            // one: a `Vec[f64]` element, a struct field, a nested struct.
+            //
+            // NOT, however, by a TOTAL-ORDER WRAPPER (`F32`/`F64`/`F16`/`Bf16`),
+            // whose bit-level equality is the entire point of the type — it is
+            // what lets a float be a `Map` key and be sorted at all, and its
+            // hash hashes the same bits. `emit_eq_fn_for_struct` diverts those
+            // to an integer compare of matching width before reaching here; see
+            // the guard there. Routing a wrapper through this arm makes two
+            // canonicalized NaN keys stop colliding (`m.len()` 1 → 2) while its
+            // hash still says they should — the silent hash/eq split that
+            // `test_e2e_total_order_wrapper_nan_canonicalized` exists to catch,
+            // and did.
+            let va = self
+                .builder
+                .build_load(float_ty, a_ptr, "fva")
+                .unwrap()
+                .into_float_value();
+            let vb = self
+                .builder
+                .build_load(float_ty, b_ptr, "fvb")
+                .unwrap()
+                .into_float_value();
+            let eq = self
+                .builder
+                .build_float_compare(inkwell::FloatPredicate::OEQ, va, vb, "feq")
+                .unwrap();
+            self.builder.build_return(Some(&eq)).unwrap();
         } else {
             // Structs and other fixed-size types: byte-by-byte comparison.
             let raw_size = key_ty
@@ -1705,10 +1746,42 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_types
             .get(struct_name)
             .expect("emit_eq_fn_for_struct: struct LLVM type must be registered");
-        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
-            .iter()
-            .map(|te| self.emit_eq_fn_for_type_expr(te))
-            .collect();
+        // B-2026-08-27-9 — a TOTAL-ORDER WRAPPER (`F32`/`F64`/`F16`/`Bf16`)
+        // compares its float field BY BITS, deliberately, and must keep doing
+        // so. Bit equality is the whole reason the type exists: it is what
+        // gives floats a total order, which is what lets one be a `Map` key or
+        // be sorted. Under it two canonicalized NaNs are EQUAL and `-0.0` and
+        // `+0.0` are DISTINCT — the exact opposite of the IEEE `==` the float
+        // arm of `emit_eq_fn_for_type` now (correctly) gives a genuine float
+        // field.
+        //
+        // The wrapper's HASH hashes those same bits and is unchanged, so
+        // sending its field through the IEEE arm splits hash from eq: two
+        // canonical-NaN keys stop comparing equal while still hashing
+        // together, and a `Map[F64, V]` silently grows a second entry for one
+        // key. Measured exactly that way before this guard existed
+        // (`m.len()` 1 → 2, `m.get(r)` 2 → -1), which is what
+        // `test_e2e_total_order_wrapper_nan_canonicalized` is for.
+        //
+        // Reusing `emit_eq_fn_for_type` with the matching-width INT type is
+        // what makes this a bit compare: its `IntType` arm loads and compares
+        // integers, and the float slot reinterpreted at that width IS the bit
+        // pattern. The name is keyed to the wrapper so it cannot collide with
+        // the real `karac_eq_i64`.
+        let wrapper_bits = self
+            .total_float_wrapper_widths(struct_name)
+            .map(|(_, int_ty, _)| int_ty);
+        let child_fns: Vec<FunctionValue<'ctx>> = match wrapper_bits {
+            Some(int_ty) => {
+                let bits_fn =
+                    self.emit_eq_fn_for_type(&format!("{struct_name}__bits"), int_ty.into());
+                field_tes.iter().map(|_| bits_fn).collect()
+            }
+            None => field_tes
+                .iter()
+                .map(|te| self.emit_eq_fn_for_type_expr(te))
+                .collect(),
+        };
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let bool_t = self.context.bool_type();

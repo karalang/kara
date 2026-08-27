@@ -105239,6 +105239,218 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-9 — the compiled twin of
+    /// `a_float_field_compares_by_ieee_semantics_not_by_bits`, same bytes.
+    ///
+    /// Every TYPE-DIRECTED comparator routed a float field to
+    /// `emit_eq_fn_for_type`'s byte loop. Bit equality differs from float
+    /// equality in exactly the two places IEEE-754 defines specially, so `==`
+    /// was wrong in BOTH directions: `0.0` vs `-0.0` (equal, different bits)
+    /// answered false, and NaN vs NaN (unequal, identical bits) answered true.
+    ///
+    /// THE OPERANDS COME FROM OPAQUE FUNCTIONS ON PURPOSE, and this is the
+    /// part of the test that is load-bearing. Written inline as `0.0 / 0.0`,
+    /// LLVM constant-folds the entire comparison and yields the RIGHT answer
+    /// without the emitted comparator ever running — which is precisely how
+    /// the first draft of this fix appeared to work while the runtime path was
+    /// untouched. Keep `nan64` / `negzero` opaque, or this test stops testing
+    /// codegen and starts testing the constant folder.
+    ///
+    /// Four shapes, four routes into the comparator family: a shared struct's
+    /// direct field; a `Vec[f64]` ELEMENT; a PLAIN struct with a Vec field
+    /// (per B-2026-08-12-5 a Vec field is what pulls a plain struct onto the
+    /// type-directed path at all, so "plain structs are unaffected" is only
+    /// true of a DIRECT float field); and a plain struct nested in a shared
+    /// one. Operands are BOUND to locals rather than compared as inline struct
+    /// literals: comparing two non-binding operands is a separate,
+    /// already-diagnosed codegen gap, and letting it fire would mean this test
+    /// never reached the comparator at all.
+    ///
+    /// `negzero` is `-z`, NOT `0.0 - z`. The latter yields `+0.0` in IEEE, so
+    /// every negzero assertion here would compare `0.0` to `0.0` and hold
+    /// whatever the comparator did. It was written that way first and the A/B
+    /// against the unfixed compiler is what caught it: the negzero lines
+    /// passed before the fix.
+    #[test]
+    fn test_e2e_float_field_compares_by_ieee() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+shared struct Sf { x: f64 }
+#[derive(PartialEq)]
+shared struct Sv { v: Vec[f64] }
+#[derive(PartialEq)]
+struct Pv { v: Vec[f64] }
+#[derive(PartialEq)]
+struct Inner { x: f64 }
+#[derive(PartialEq)]
+shared struct Outer { i: Inner }
+fn nan64(z: f64) -> f64 { return z / z; }
+fn negzero(z: f64) -> f64 { return -z; }
+fn one(x: f64) -> Vec[f64] {
+    let mut v: Vec[f64] = Vec.new();
+    v.push(x);
+    return v;
+}
+fn main() {
+    let p = 0.0;
+    let n = negzero(p);
+    let q = nan64(p);
+
+    println(f"scalar-negzero={p == n}");
+    println(f"scalar-nan={q == q}");
+
+    let sa = Sf { x: p };
+    let sb = Sf { x: n };
+    let sq1 = Sf { x: q };
+    let sq2 = Sf { x: q };
+    println(f"shared-negzero={sa == sb}");
+    println(f"shared-nan={sq1 == sq2}");
+
+    let va = Sv { v: one(p) };
+    let vb = Sv { v: one(n) };
+    let vq1 = Sv { v: one(q) };
+    let vq2 = Sv { v: one(q) };
+    println(f"sharedvec-negzero={va == vb}");
+    println(f"sharedvec-nan={vq1 == vq2}");
+
+    let pa = Pv { v: one(p) };
+    let pb = Pv { v: one(n) };
+    let pq1 = Pv { v: one(q) };
+    let pq2 = Pv { v: one(q) };
+    println(f"plainvec-negzero={pa == pb}");
+    println(f"plainvec-nan={pq1 == pq2}");
+
+    let o1 = Outer { i: Inner { x: p } };
+    let o2 = Outer { i: Inner { x: n } };
+    println(f"nested-negzero={o1 == o2}");
+}
+"#
+            ),
+            Some(
+                "scalar-negzero=true\nscalar-nan=false\n\
+                 shared-negzero=true\nshared-nan=false\n\
+                 sharedvec-negzero=true\nsharedvec-nan=false\n\
+                 plainvec-negzero=true\nplainvec-nan=false\n\
+                 nested-negzero=true\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-27-9, the DISTINCTION the fix turns on, asserted in one
+    /// program so the contrast cannot drift apart.
+    ///
+    /// A genuine float field compares by IEEE `==`: `-0.0` equals `0.0`, NaN
+    /// does not equal itself. A TOTAL-ORDER WRAPPER field compares BY BITS,
+    /// deliberately and oppositely: `-0.0` differs from `0.0`, and two
+    /// canonicalized NaNs are equal. Bit equality is the whole reason the
+    /// wrapper type exists — it is what gives floats a total order, hence what
+    /// lets one be a `Map` key or be sorted.
+    ///
+    /// Both directions matter and neither implies the other. Widening the IEEE
+    /// arm over the wrapper splits its hash from its eq (its hash hashes bits),
+    /// so two canonical-NaN keys stop comparing equal while still hashing
+    /// together and a `Map[F64, V]` silently grows a second entry for one key.
+    /// That is what happened when this fix was first written, and it is why
+    /// the `wrapper-*` lines live here next to the `plain-*` ones rather than
+    /// only in the wrapper's own test.
+    #[test]
+    fn test_e2e_ieee_float_field_and_total_order_wrapper_differ() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+shared struct Sf { x: f64 }
+fn nan64(z: f64) -> f64 { return z / z; }
+fn negzero(z: f64) -> f64 { return -z; }
+fn main() {
+    let p = 0.0;
+    let n = negzero(p);
+    let q = nan64(p);
+
+    let a = Sf { x: p };
+    let b = Sf { x: n };
+    let q1 = Sf { x: q };
+    let q2 = Sf { x: q };
+    println(f"plain-negzero-eq={a == b}");
+    println(f"plain-nan-eq={q1 == q2}");
+
+    let wp: F64 = F64 { value: p };
+    let wn: F64 = F64 { value: n };
+    let wq1: F64 = F64 { value: q };
+    let wq2: F64 = F64 { value: q };
+    println(f"wrapper-negzero-eq={wp == wn}");
+    println(f"wrapper-nan-eq={wq1 == wq2}");
+
+    let mut m: Map[F64, i64] = Map.new();
+    let _ = m.insert(wq1, 1);
+    let _ = m.insert(wq2, 2);
+    println(f"wrapper-key-collides={m.len()}");
+    match m.get(wq2) { Some(x) => println(f"wrapper-key-get={x}"), None => println(f"wrapper-key-get=miss") }
+}
+"#
+            ),
+            Some(
+                "plain-negzero-eq=true\nplain-nan-eq=false\n\
+                 wrapper-negzero-eq=false\nwrapper-nan-eq=true\n\
+                 wrapper-key-collides=1\nwrapper-key-get=2\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-27-9, the narrower-width legs. `f32` takes the identical
+    /// route, and the half-precision types (`f16` / `bf16`) reach it through
+    /// their prelude wrapper structs rather than as bare scalars — a different
+    /// path into the same comparator, worth pinning separately so a later
+    /// change to those wrappers cannot regress them silently.
+    #[test]
+    fn test_e2e_narrow_float_fields_compare_by_ieee() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+shared struct S32 { x: f32 }
+#[derive(PartialEq)]
+shared struct S16 { x: f16 }
+#[derive(PartialEq)]
+shared struct Sb16 { x: bf16 }
+fn nan32(z: f32) -> f32 { return z / z; }
+fn negzero32(z: f32) -> f32 { return -z; }
+fn main() {
+    let p: f32 = 0.0;
+    let n = negzero32(p);
+    let q = nan32(p);
+    let a = S32 { x: p };
+    let b = S32 { x: n };
+    let q1 = S32 { x: q };
+    let q2 = S32 { x: q };
+    println(f"f32-negzero={a == b}");
+    println(f"f32-nan={q1 == q2}");
+    let h1 = S16 { x: 1.5f16 };
+    let h2 = S16 { x: 1.5f16 };
+    let h3 = S16 { x: 2.5f16 };
+    println(f"f16-eq={h1 == h2}");
+    println(f"f16-ne={h1 == h3}");
+    let g1 = Sb16 { x: 1.5bf16 };
+    let g2 = Sb16 { x: 1.5bf16 };
+    let g3 = Sb16 { x: 2.5bf16 };
+    println(f"bf16-eq={g1 == g2}");
+    println(f"bf16-ne={g1 == g3}");
+}
+"#
+            ),
+            Some(
+                "f32-negzero=true\nf32-nan=false\n\
+                 f16-eq=true\nf16-ne=false\n\
+                 bf16-eq=true\nbf16-ne=false\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// B-2026-08-27-5 — the compiled twin of
     /// `eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche`.
     ///
