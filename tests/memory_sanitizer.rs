@@ -55156,4 +55156,33 @@ fn main() {
             "map-remove-shared-key-balanced",
         );
     }
+
+    /// PROBE (B-2026-08-27-5): is the niche-field `==` an OUT-OF-BOUNDS READ,
+    /// not merely a wrong answer? A niche `Option[shared T]` slot is one
+    /// pointer (8 bytes); the comparator built for `Option[T]` expects the
+    /// conventional `{tag, w0, w1, w2}` (32 bytes). `Tiny`'s whole heap box is
+    /// `{i64 rc, ptr next}` = 16 bytes, so a 32-byte read from offset 8 runs
+    /// 24 bytes past the end of the allocation.
+    #[test]
+    fn asan_probe_shared_struct_niche_option_field_eq() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct Tiny { next: Option[Tiny] }
+fn main() {
+    let mut i = 0i64;
+    let mut hits = 0i64;
+    while i < 50i64 {
+        let a = Tiny { next: None };
+        let b = Tiny { next: None };
+        if a == b { hits = hits + 1i64; }
+        i = i + 1i64;
+    }
+    println(f"{hits}");
+}
+"#,
+            &["50"],
+            "shared-niche-option-field-eq-probe",
+        );
+    }
 }

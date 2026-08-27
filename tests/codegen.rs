@@ -105239,6 +105239,111 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-5 — the compiled twin of
+    /// `eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche`.
+    ///
+    /// `==` on a shared struct with a niche-encoded `Option[shared T]` field
+    /// answered `false` for structurally equal values. The slot is ONE pointer
+    /// (null = None); the comparator `emit_eq_fn_for_type_expr` builds for
+    /// `Option[T]` is for the conventional `{tag, w0, w1, w2}`, FOUR words —
+    /// so its byte loop ran past the end of the field.
+    ///
+    /// THE `padded` LINES ARE THE ONES THAT PIN THE MECHANISM. With trailing
+    /// fields the surplus 24 bytes land on p1/p2 and the compiled answer came
+    /// out RIGHT purely because those were equal; only with the niche field
+    /// LAST does it read past the object and go wrong. A test written around
+    /// the last-field shape alone can be satisfied by a "fix" that merely
+    /// moves the over-read somewhere harmless.
+    ///
+    /// `deep` exercises the recursion this cannot terminate by luck: a 5-link
+    /// chain compares link by link, and each level re-enters the same
+    /// comparator through the niche slot. Its operands are BOUND rather than
+    /// inline `chain(4) == chain(4)` — comparing two call results is a
+    /// separate, already-diagnosed codegen gap ("structural `==` on this
+    /// reference type is not yet supported under `karac build`"), and letting
+    /// it fire here would mean this test never reached the comparator.
+    #[test]
+    fn test_e2e_eq_on_a_shared_struct_niche_option_field() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct Node { v: i64, next: Option[Node] }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Padded { v: i64, next: Option[Padded], p1: i64, p2: i64 }
+fn chain(n: i64) -> Node {
+    if n == 0 { return Node { v: 0, next: None }; }
+    return Node { v: n, next: Some(chain(n - 1)) };
+}
+fn main() {
+    let a = Node { v: 1, next: None };
+    let b = Node { v: 1, next: None };
+    println(f"none-none={a == b}");
+
+    let leaf = Node { v: 2, next: None };
+    let c = Node { v: 1, next: Some(leaf) };
+    let leaf2 = Node { v: 2, next: None };
+    let d = Node { v: 1, next: Some(leaf2) };
+    println(f"some-some={c == d}");
+    println(f"some-none={c == a}");
+
+    let x = chain(4);
+    let y = chain(4);
+    let z = chain(3);
+    println(f"deep={x == y}");
+    println(f"deep-ne={x == z}");
+
+    let p = Padded { v: 1, next: None, p1: 7, p2: 8 };
+    let q = Padded { v: 1, next: None, p1: 7, p2: 8 };
+    let r = Padded { v: 1, next: None, p1: 7, p2: 9 };
+    println(f"padded={p == q}");
+    println(f"padded-ne={p == r}");
+}
+"#
+            ),
+            Some(
+                "none-none=true\nsome-some=true\nsome-none=false\n\
+                 deep=true\ndeep-ne=false\n\
+                 padded=true\npadded-ne=false\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-27-5, the half that closes the INCONSISTENCY the previous fix
+    /// exposed. B-2026-08-27-4 made a shared map key match structurally while
+    /// `==` still compared a niche field's surrounding bytes, so one program
+    /// could answer `contains_key(b) == true` and `a == b` == false for the
+    /// same pair. There were two independent structural comparators for one
+    /// type — `karac_eq_<T>` for keys and `karac_sheq_<T>` for `==` — and only
+    /// one of them knew about niches.
+    ///
+    /// They are one implementation now (the key comparator is a slot adapter
+    /// over the `==` walk), and this asserts the property that requires:
+    /// whatever the two are asked, they agree.
+    #[test]
+    fn test_e2e_shared_niche_key_and_eq_operator_agree() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct Node { v: i64, next: Option[Node] }
+fn main() {
+    let leaf = Node { v: 2, next: None };
+    let a = Node { v: 1, next: Some(leaf) };
+    let leaf2 = Node { v: 2, next: None };
+    let b = Node { v: 1, next: Some(leaf2) };
+    let mut m: Map[Node, i64] = Map.new();
+    m.insert(a, 7);
+    println(f"contains={m.contains_key(b)}");
+    println(f"operator={a == b}");
+}
+"#
+            ),
+            Some("contains=true\noperator=true\n".to_string())
+        );
+    }
+
     /// B-2026-08-27-4 — the compiled twin of
     /// `a_shared_key_is_matched_structurally_not_by_pointer_identity`.
     ///

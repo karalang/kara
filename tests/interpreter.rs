@@ -725,6 +725,62 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
 }
 
 #[test]
+fn eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche() {
+    // B-2026-08-27-5. `==` on a shared struct with a niche-encoded
+    // `Option[shared T]` field answered `false` for structurally equal values
+    // on the compiled backends. The slot is ONE pointer (null = None); the
+    // comparator `emit_eq_fn_for_type_expr` builds for `Option[T]` is for the
+    // conventional `{tag, w0, w1, w2}`, FOUR words — so its byte loop ran off
+    // the end of the field.
+    //
+    // The `padded` case is the one that shows the mechanism rather than just
+    // the symptom: with three trailing `i64` fields the surplus 24 bytes land
+    // on p1/p2/p3, and the compiled answer came out RIGHT purely because those
+    // were equal. Same defect, opposite symptom — which is why a test that
+    // only checked the last-field shape could be satisfied by a fix that
+    // merely shifted the over-read.
+    // Codegen twin: `test_e2e_eq_on_a_shared_struct_niche_option_field`.
+    let src = "#[derive(Hash, Eq, PartialEq)]
+        shared struct Node { v: i64, next: Option[Node] }
+        #[derive(Hash, Eq, PartialEq)]
+        shared struct Padded { v: i64, next: Option[Padded], p1: i64, p2: i64 }
+        fn chain(n: i64) -> Node {
+            if n == 0 { return Node { v: 0, next: None }; }
+            return Node { v: n, next: Some(chain(n - 1)) };
+        }
+        fn main() {
+            let a = Node { v: 1, next: None };
+            let b = Node { v: 1, next: None };
+            println(f\"none-none={a == b}\");
+
+            let leaf = Node { v: 2, next: None };
+            let c = Node { v: 1, next: Some(leaf) };
+            let leaf2 = Node { v: 2, next: None };
+            let d = Node { v: 1, next: Some(leaf2) };
+            println(f\"some-some={c == d}\");
+            println(f\"some-none={c == a}\");
+
+            let x = chain(4);
+            let y = chain(4);
+            let z = chain(3);
+            println(f\"deep={x == y}\");
+            println(f\"deep-ne={x == z}\");
+
+            let p = Padded { v: 1, next: None, p1: 7, p2: 8 };
+            let q = Padded { v: 1, next: None, p1: 7, p2: 8 };
+            let r = Padded { v: 1, next: None, p1: 7, p2: 9 };
+            println(f\"padded={p == q}\");
+            println(f\"padded-ne={p == r}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "none-none=true\nsome-some=true\nsome-none=false\n\
+         deep=true\ndeep-ne=false\n\
+         padded=true\npadded-ne=false\n"
+    );
+}
+
+#[test]
 fn a_shared_key_is_matched_structurally_not_by_pointer_identity() {
     // B-2026-08-27-4. The compiled backends matched a `shared` map/set key by
     // POINTER IDENTITY: `contains_key` answered `false` for a structurally

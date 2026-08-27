@@ -1355,41 +1355,34 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(Linkage::Internal),
         );
 
-        // A shared ENUM's payload area is not a field list, so the struct walk
-        // below does not apply; deferring to what the non-shared enum key does
-        // (a byte compare of the value) keeps the two in step, which is the
-        // whole rule here. Emitted against the heap type so the compare covers
-        // the tag and payload words rather than the pointer.
-        let field_tes: Vec<crate::ast::TypeExpr> = if info.is_enum {
-            Vec::new()
+        // The STRUCT walk is not duplicated here (B-2026-08-27-5).
+        // `emit_shared_struct_eq_fn` already owns it — same field list, same
+        // `shared_gep_layout` base, and since B-2026-08-27-5 the same niche
+        // handling — so this fn is the SLOT ADAPTER over it: load, null-guard,
+        // delegate. Two independent structural comparators for one type is the
+        // hazard, and they existed side by side (`karac_eq_<T>` for map keys,
+        // `karac_sheq_<T>` for `==`) with different niche behaviour, which is
+        // how `contains_key` and `==` came to answer differently for one pair.
+        //
+        // Shared ENUMS keep the area compare below: their payload area is not
+        // a field list, so `emit_shared_struct_eq_fn` (which requires a
+        // registered field list) does not apply, and a byte compare of the
+        // user area is what a NON-shared enum key does — the rule this fn
+        // follows. `base` below is for that branch; the struct branch needs no
+        // layout of its own now that it delegates.
+        //
+        // Registering `eq_fn` above BEFORE this call is what makes the mutual
+        // recursion terminate: a niche field sends
+        // `emit_shared_struct_eq_fn` straight back here for the inner type,
+        // and a self-referential `Node { next: Option[Node] }` closes that
+        // loop on itself.
+        let struct_walk = if info.is_enum {
+            None
         } else {
-            self.type_decls
-                .struct_field_type_exprs
-                .get(name)
-                .cloned()
-                .unwrap_or_default()
+            Some(self.emit_shared_struct_eq_fn(name))
         };
-        // A niche-encoded `Option[shared Inner]` field stores a BARE pointer
-        // (null = None), not the conventional 4-i64 Option layout, so the
-        // `Option` child fn would read the wrong shape. The inner type's own
-        // shared eq fn reads exactly that slot — pointer in, null-guarded —
-        // so it is the right callee, and the recursion is what the
-        // declare-first above exists to terminate.
-        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
-            .iter()
-            .enumerate()
-            .map(
-                |(i, te)| match info.niche_option_fields.get(i).and_then(|n| n.as_ref()) {
-                    Some(inner) => {
-                        let inner = inner.clone();
-                        self.emit_eq_fn_for_shared(&inner)
-                    }
-                    None => self.emit_eq_fn_for_type_expr(te),
-                },
-            )
-            .collect();
 
-        let (gep_ty, base) = self.shared_gep_layout(name, info.heap_type);
+        let base = self.shared_gep_layout(name, info.heap_type).1;
         let entry_bb = self.context.append_basic_block(eq_fn, "entry");
         let neq_bb = self.context.append_basic_block(eq_fn, "neq");
         let null_bb = self.context.append_basic_block(eq_fn, "null");
@@ -1431,7 +1424,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(Some(&both)).unwrap();
 
         self.builder.position_at_end(fields_bb);
-        if info.is_enum {
+        if let Some(walk) = struct_walk {
+            let r = self
+                .builder
+                .build_call(walk, &[pa.into(), pb.into()], "sh.eq.walk")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            self.builder.build_return(Some(&r)).unwrap();
+        } else if info.is_enum {
             // The USER AREA only — the rc header differs between two
             // structurally-equal objects, so comparing the whole box would
             // answer `false` for every distinct pair. The area type is the
@@ -1456,33 +1458,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_basic()
                 .into_int_value();
             self.builder.build_return(Some(&eq)).unwrap();
-        } else {
-            for (i, child_fn) in child_fns.iter().enumerate() {
-                let idx = base + i as u32;
-                let fa = self
-                    .builder
-                    .build_struct_gep(gep_ty, pa, idx, &format!("sh.eq.fa{i}"))
-                    .unwrap();
-                let fb = self
-                    .builder
-                    .build_struct_gep(gep_ty, pb, idx, &format!("sh.eq.fb{i}"))
-                    .unwrap();
-                let ok = self
-                    .builder
-                    .build_call(*child_fn, &[fa.into(), fb.into()], &format!("sh.eq.f{i}"))
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_int_value();
-                let next = self.context.append_basic_block(eq_fn, &format!("f{i}.ok"));
-                self.builder
-                    .build_conditional_branch(ok, next, neq_bb)
-                    .unwrap();
-                self.builder.position_at_end(next);
-            }
-            self.builder
-                .build_return(Some(&bool_t.const_int(1, false)))
-                .unwrap();
         }
 
         if let Some(bb) = saved_bb {
@@ -1885,6 +1860,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_struct_gep(gep_ty, b_obj, idx, &format!("sheq.fb{i}"))
                 .unwrap();
+            // B-2026-08-27-5 — a NICHE-encoded `Option[shared Inner]` field.
+            // The slot is a BARE pointer (null = None), one word; the
+            // comparator `emit_eq_fn_for_type_expr` builds for `Option[T]` is
+            // for the conventional `{tag, w0, w1, w2}`, four words. Its byte
+            // loop therefore ran off the end of the field: measured on
+            // `shared struct Padded { v, next, p1, p2, p3 }`, where the
+            // surplus 24 bytes consumed p1/p2/p3 and the answer came out right
+            // only because those happened to be equal; with the niche field
+            // LAST it reads past the object and two `None`s compared UNEQUAL.
+            //
+            // `emit_eq_fn_for_shared` is the right callee and needs no new
+            // machinery: it takes the SLOT, loads it, and null-guards (both
+            // null equal, one null unequal) before walking — which is exactly
+            // the niche encoding's three cases. Checked BEFORE the bare-shared
+            // arm below because a niche field's TypeExpr is `Option[Inner]`,
+            // not `Inner`, so that arm never sees it.
+            if let Some(inner) = info
+                .niche_option_fields
+                .get(i)
+                .and_then(|n| n.as_ref())
+                .cloned()
+            {
+                let inner_fn = self.emit_eq_fn_for_shared(&inner);
+                let r = self
+                    .builder
+                    .build_call(inner_fn, &[fa.into(), fb.into()], &format!("sheq.n{i}"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let next_bb = self
+                    .context
+                    .append_basic_block(eq_fn, &format!("sheq.next{i}"));
+                self.builder
+                    .build_conditional_branch(r, next_bb, neq_bb)
+                    .unwrap();
+                self.builder.position_at_end(next_bb);
+                continue;
+            }
             // Nested shared-struct field: load the inner RC pointer and recurse
             // structurally. Shared *enums* (out of C1 scope) fall to the
             // slot-based dispatcher, which compares them by pointer identity.
