@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 110 | 0 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
-| other | 62 | 0 |
+| other | 63 | 1 |
 | soundness | 61 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1073 | 4 |
+| codegen | 1074 | 5 |
 | typecheck | 270 | 1 |
 | interp | 190 | 2 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1627 surfaced · 6 open · 1595 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1628 surfaced · 7 open · 1595 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1627 surfaced
 | B-2026-08-27-5 | 2026-08-27 | codegen | medium | `==` ON A `shared struct` WITH A NICHE-ENCODED `Option[shared T]` FIELD COMPARES RAW POINTERS, so two structurally-equal values answer `false` on the compiled backends and `true` on the interpreter. `try_compile_struct_eq_typed` routes a struct to the TYPE-directed comparator only when it has a Vec field AND is not shared; everything else falls to the SHAPE-directed field walk, which does not know a niche slot holds a bare pointer instead of the 4-i64 Option layout. | — |
 | B-2026-08-27-6 | 2026-08-27 | codegen | medium | A PLAIN (non-shared) ENUM USED AS A MAP/SET KEY WITH A HEAP-BEARING PAYLOAD COMPARES ITS PAYLOAD WORDS INSTEAD OF RECURSING, so `Map[S, V]` where `enum S { A { s: String } }` misses a structurally-equal key on the compiled backends and finds it on the interpreter. `emit_eq_fn_for_type_expr` has arms for tuples, `Vec`, and STRUCTS, but none for enums -- an enum key falls to the byte-compare fallback, which for a `String` payload compares two distinct heap POINTERS. | — |
 | B-2026-08-27-7 | 2026-08-27 | codegen+interp | medium | CONTAINER ELEMENT `Drop` BODIES FIRE IN A DIFFERENT ORDER ON THE TWO BACKENDS: the interpreter walks INSERTION order (deterministic across seeds and runs), the compiled backends walk BUCKET order (a different permutation per `KARAC_HASH_SEED`). Affects all three walks -- Map values, Map keys, Set elements. Ordinary `for (k, v) in m` iteration is NOT affected: it is hash-ordered and run-to-run random on BOTH backends, exactly as design.md specifies. So this is the drop walk alone, and it breaks the A/B rule for any RAII element type. | — |
+| B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 
 ### Relocated (2)
 
