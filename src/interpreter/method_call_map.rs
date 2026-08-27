@@ -289,41 +289,73 @@ impl<'a> super::Interpreter<'a> {
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
                 if let Value::Map(m) = obj {
-                    let old = match m.write().unwrap().remove(&val) {
-                        Some((_, v)) => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![v]),
-                        },
-                        None => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "None".to_string(),
-                            data: EnumData::Unit,
-                        },
+                    // B-2026-08-27-2 — the stored KEY is destroyed here, so its
+                    // body is owed. The VALUE is not: it moves out into the
+                    // returned `Some(old)` and drops wherever that lands, which
+                    // is why only the key is run here. Key before value follows
+                    // from that ordering for free, matching B-2026-08-26-41.
+                    let (removed_key, old) = match m.write().unwrap().remove(&val) {
+                        Some((k, v)) => (
+                            Some(k),
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![v]),
+                            },
+                        ),
+                        None => (
+                            None,
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            },
+                        ),
                     };
                     self.write_back_receiver(object, Value::Map(m));
+                    if let Some(k) = removed_key {
+                        self.run_discarded_value_user_drops(k);
+                    }
                     return Some(old);
                 }
                 if let Value::SortedMap(mut m) = obj {
                     // SortedMap.remove(key) -> Option[V] (old value), mirroring Map.remove.
-                    let old = match m.remove(&OrdValue(val)) {
-                        Some(prev) => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![prev]),
-                        },
-                        None => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "None".to_string(),
-                            data: EnumData::Unit,
-                        },
+                    // `remove_entry` rather than `remove` so the stored KEY comes
+                    // back and its body can run (B-2026-08-27-2) — plain `remove`
+                    // dropped it on the floor.
+                    let (removed_key, old) = match m.remove_entry(&OrdValue(val)) {
+                        Some((k, prev)) => (
+                            Some(k.0),
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![prev]),
+                            },
+                        ),
+                        None => (
+                            None,
+                            Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            },
+                        ),
                     };
                     self.write_back_receiver(object, Value::SortedMap(m));
+                    if let Some(k) = removed_key {
+                        self.run_discarded_value_user_drops(k);
+                    }
                     return Some(old);
                 }
                 if let Value::SortedSet(mut set) = obj {
-                    let was_present = set.remove(&OrdValue(val)).is_some();
+                    // The element IS the key half — same body debt as a Map key
+                    // (B-2026-08-27-2).
+                    let removed = set.remove_entry(&OrdValue(val)).map(|(k, _)| k.0);
+                    let was_present = removed.is_some();
                     self.write_back_receiver(object, Value::SortedSet(set));
+                    if let Some(e) = removed {
+                        self.run_discarded_value_user_drops(e);
+                    }
                     return Some(Value::Bool(was_present));
                 }
                 if let Value::Set(set) = obj {
@@ -332,8 +364,13 @@ impl<'a> super::Interpreter<'a> {
                     // into the hole. Both are legal (design.md § Map leaves
                     // `Set` iteration order unspecified) and order-preserving
                     // is what every other interpreter container does.
-                    let was_present = set.write().unwrap().remove(&val);
+                    let removed = set.write().unwrap().remove_entry(&val);
+                    let was_present = removed.is_some();
                     self.write_back_receiver(object, Value::Set(set));
+                    // The element IS the key half (B-2026-08-27-2).
+                    if let Some(e) = removed {
+                        self.run_discarded_value_user_drops(e);
+                    }
                     return Some(Value::Bool(was_present));
                 }
             }

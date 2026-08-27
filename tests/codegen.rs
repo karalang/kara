@@ -105142,6 +105142,68 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-2 — the compiled twin of
+    /// `removing_an_entry_runs_the_key_or_element_drop_body`, same bytes.
+    ///
+    /// `remove` is the site B-2026-08-26-41 left out, because its fix is not
+    /// the whole-table walk the other four sites take. It destroys ONE entry's
+    /// key IN PLACE, and the body has to run on that key while its fields are
+    /// still readable — after the bucket is located, before the runtime frees
+    /// it. Codegen cannot reach that window, so the body travels INTO the
+    /// runtime as a function pointer: `karac_map_remove_old_with_key_drop_fn`
+    /// invokes it between `lookup` and `free_stored_key`.
+    ///
+    /// A SEPARATE runtime symbol rather than a fifth parameter on
+    /// `karac_map_remove_old`: widening a signature keeps the name, so an
+    /// archive built before the change still links and is handed one argument
+    /// too few. A new name makes that staleness the undefined-reference the
+    /// E2E harness already reports.
+    ///
+    /// All four containers, because all four were affected — a Set's ELEMENT
+    /// is the key half, so `Set.remove` ran no body at all. The VALUE's body
+    /// was already correct everywhere: it moves out into the returned
+    /// `Some(old)` and drops at the caller, which is why key-before-value here
+    /// is a consequence rather than an imposed order.
+    #[test]
+    fn test_e2e_remove_runs_the_key_drop_body() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq, Ord)]
+struct K { n: i64 }
+struct V { n: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.n}") } }
+impl Drop for V { fn drop(mut ref self) { println(f"dropV {self.n}") } }
+fn main() {
+    let mut m: Map[K, V] = Map.new();
+    m.insert(K { n: 1 }, V { n: 1 });
+    m.remove(K { n: 1 });
+    println(f"map len={m.len()}")
+    let mut sm: SortedMap[K, V] = SortedMap.new();
+    sm.insert(K { n: 2 }, V { n: 2 });
+    sm.remove(K { n: 2 });
+    println(f"smap len={sm.len()}")
+    let mut st: Set[K] = Set.new();
+    st.insert(K { n: 3 });
+    st.remove(K { n: 3 });
+    println(f"set len={st.len()}")
+    let mut ss: SortedSet[K] = SortedSet.new();
+    ss.insert(K { n: 4 });
+    ss.remove(K { n: 4 });
+    println(f"sset len={ss.len()}")
+}
+"#
+            ),
+            Some(
+                "dropK 1\ndropV 1\nmap len=0\n\
+                 dropK 2\ndropV 2\nsmap len=0\n\
+                 dropK 3\nset len=0\n\
+                 dropK 4\nsset len=0\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// The disarm half of B-2026-08-26-41, compiled. A bound-local key moved
     /// into a map must run its body ONCE, at teardown, over live data — not at
     /// the move site over a moved-from slot, which is what `karac build` did

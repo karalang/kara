@@ -7699,6 +7699,85 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_map_half_user_drop_bodies_fn(map_te, false)
     }
 
+    /// The ONE-KEY form of the key-half bodies walk (B-2026-08-27-2).
+    ///
+    /// The table walk above is what a map's teardown needs; `Map.remove(k)`
+    /// destroys a SINGLE entry, so it needs the same two calls the walk makes
+    /// per element — the type's own `drop` body and its field bodies — applied
+    /// to one key blob. The result is handed to
+    /// `karac_map_remove_old_with_key_drop_fn`, which invokes it in place after
+    /// locating the bucket and before freeing the key: the only window where
+    /// the key's fields are still readable.
+    ///
+    /// BODY-ONLY, like every `dropelems`/`dropkeys` function: the key's memory
+    /// stays the runtime's to release through `drop_key`. Returns `None` when
+    /// the key type runs no body at all, which is the signal to keep using the
+    /// plain `karac_map_remove_old` and pass no function pointer.
+    pub(super) fn emit_map_key_one_drop_body_fn(
+        &mut self,
+        map_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let TypeKind::Path(p) = &map_te.kind else {
+            return None;
+        };
+        match p.segments.last().map(|s| s.as_str()) {
+            Some("Map") | Some("SortedMap") | Some("Set") | Some("SortedSet") => {}
+            _ => return None,
+        }
+        let key_te = match p.generic_args.as_ref().and_then(|a| a.first())? {
+            crate::ast::GenericArg::Type(t) => t.clone(),
+            _ => return None,
+        };
+        let TypeKind::Path(kp) = &key_te.kind else {
+            return None;
+        };
+        let kname = kp.segments.last()?.clone();
+
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|prog| prog.drop_method_keys.contains_key(&kname));
+        let field_bodies =
+            self.emit_user_drop_field_bodies_fn(&kname, &std::collections::HashMap::new());
+        let own_body = if owns_body {
+            self.module.get_function(&format!("{kname}.drop"))
+        } else {
+            None
+        };
+        if own_body.is_none() && field_bodies.is_none() {
+            return None;
+        }
+
+        let fn_name = format!("__karac_dropkey1_{}", Self::display_mangle_te(&key_te));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let f = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        self.current_fn = Some(f);
+        let kptr = f.get_nth_param(0).unwrap().into_pointer_value();
+        if let Some(b) = own_body {
+            self.builder.build_call(b, &[kptr.into()], "").unwrap();
+        }
+        if let Some(b) = field_bodies {
+            self.builder.build_call(b, &[kptr.into()], "").unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(f)
+    }
+
     /// KEY-half twin of [`Self::emit_map_val_user_drop_bodies_fn`]
     /// (B-2026-08-26-41). B-2026-07-30-11 shipped the values leg and keys
     /// were left with `emit_map_key_drop_fn_walk`, which reclaims MEMORY and

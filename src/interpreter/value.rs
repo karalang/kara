@@ -1404,14 +1404,19 @@ impl SetData {
     }
 
     pub fn remove(&mut self, item: &Value) -> bool {
-        match self.position_of(item) {
-            Some(i) => {
-                self.items.remove(i);
-                self.reindex();
-                true
-            }
-            None => false,
-        }
+        self.remove_entry(item).is_some()
+    }
+
+    /// Remove and RETURN the stored element, the sibling of
+    /// [`MapData::remove`] (which already hands back the stored key).
+    /// B-2026-08-27-2: `remove` discarded it, so a `Set` element carrying a
+    /// user `impl Drop` was destroyed without its body ever running — the
+    /// element IS the key half, so this is the `Set` face of the same gap.
+    pub fn remove_entry(&mut self, item: &Value) -> Option<Value> {
+        let i = self.position_of(item)?;
+        let removed = self.items.remove(i);
+        self.reindex();
+        Some(removed)
     }
 
     pub fn clear(&mut self) {

@@ -445,21 +445,50 @@ impl<'ctx> super::Codegen<'ctx> {
                     .context
                     .i32_type()
                     .const_int(u64::from(self.llvm_ty_is_vec_struct(elem_ty)), false);
-                let existed = self
-                    .builder
-                    .build_call(
-                        self.runtime_fns.karac_map_remove_old_fn,
-                        &[
-                            set_handle.into(),
-                            elem_slot.into(),
-                            dummy.into(),
-                            drop_key.into(),
-                        ],
-                        "set.remove.existed",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic();
+                // B-2026-08-27-2 — a Set's ELEMENT is the key half, so it has
+                // the same body debt a Map key does: `remove` destroys it in
+                // place, and the body has to run before the buffer free. Same
+                // runtime variant the Map path uses (Set.remove already lowers
+                // to `remove_old` with a dummy out slot).
+                let elem_body = self
+                    .mapset
+                    .map_val_bodies_tes
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|te| self.emit_map_key_one_drop_body_fn(&te));
+                let existed = match elem_body {
+                    Some(eb) => self
+                        .builder
+                        .build_call(
+                            self.runtime_fns.karac_map_remove_old_with_key_drop_fn,
+                            &[
+                                set_handle.into(),
+                                elem_slot.into(),
+                                dummy.into(),
+                                drop_key.into(),
+                                eb.as_global_value().as_pointer_value().into(),
+                            ],
+                            "set.remove.existed",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic(),
+                    None => self
+                        .builder
+                        .build_call(
+                            self.runtime_fns.karac_map_remove_old_fn,
+                            &[
+                                set_handle.into(),
+                                elem_slot.into(),
+                                dummy.into(),
+                                drop_key.into(),
+                            ],
+                            "set.remove.existed",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic(),
+                };
                 // Lookup-only for the INCOMING element: `karac_map_remove_old`
                 // tombstones the bucket and (with `drop_key`) frees the bucket's
                 // STORED element, but never retains the incoming argument — so

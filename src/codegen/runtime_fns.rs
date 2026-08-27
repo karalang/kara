@@ -203,6 +203,13 @@ pub(crate) struct RuntimeFns<'ctx> {
     pub(crate) karac_map_insert_borrowed_str_old_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_get_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_remove_old_fn: FunctionValue<'ctx>,
+    /// B-2026-08-27-2 — `karac_map_remove_old` plus the stored KEY's user
+    /// `Drop` body, run in place between locating the bucket and freeing the
+    /// key. Used instead of the plain form whenever the key type carries a
+    /// body; the plain form stays for every key that does not. `Set.remove`
+    /// uses it too — a Set lowers to `Map[T, ()]` and already removes through
+    /// `remove_old` with a dummy out slot, so its ELEMENT is this key.
+    pub(crate) karac_map_remove_old_with_key_drop_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_contains_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_len_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_clear_fn: FunctionValue<'ctx>,

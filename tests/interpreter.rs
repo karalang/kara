@@ -681,6 +681,50 @@ fn a_user_impl_drop_on_a_map_key_fires_like_one_on_a_value() {
 }
 
 #[test]
+fn removing_an_entry_runs_the_key_or_element_drop_body() {
+    // B-2026-08-27-2 — the site B-2026-08-26-41 deliberately left out.
+    // `remove` destroys an entry's KEY in place while its VALUE moves out into
+    // the returned `Some(old)`, so the value's body already ran at the caller
+    // and only the key's was missing. All four containers are covered because
+    // all four were affected: a Set's ELEMENT is the key half, so `Set.remove`
+    // ran no body at all.
+    //
+    // Key before value falls out of the semantics rather than being imposed:
+    // the key dies at the call, the value dies wherever the returned `Option`
+    // does. Codegen twin: `test_e2e_remove_runs_the_key_drop_body`.
+    let src = "#[derive(Hash, Eq, PartialEq, Ord)]
+        struct K { n: i64 }
+        struct V { n: i64 }
+        impl Drop for K { fn drop(mut ref self) { println(f\"dropK {self.n}\"); } }
+        impl Drop for V { fn drop(mut ref self) { println(f\"dropV {self.n}\"); } }
+        fn main() {
+            let mut m: Map[K, V] = Map.new();
+            m.insert(K { n: 1 }, V { n: 1 });
+            m.remove(K { n: 1 });
+            println(f\"map len={m.len()}\");
+            let mut sm: SortedMap[K, V] = SortedMap.new();
+            sm.insert(K { n: 2 }, V { n: 2 });
+            sm.remove(K { n: 2 });
+            println(f\"smap len={sm.len()}\");
+            let mut st: Set[K] = Set.new();
+            st.insert(K { n: 3 });
+            st.remove(K { n: 3 });
+            println(f\"set len={st.len()}\");
+            let mut ss: SortedSet[K] = SortedSet.new();
+            ss.insert(K { n: 4 });
+            ss.remove(K { n: 4 });
+            println(f\"sset len={ss.len()}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "dropK 1\ndropV 1\nmap len=0\n\
+         dropK 2\ndropV 2\nsmap len=0\n\
+         dropK 3\nset len=0\n\
+         dropK 4\nsset len=0\n"
+    );
+}
+
+#[test]
 fn a_moved_map_key_runs_its_drop_body_exactly_once() {
     // The half of B-2026-08-26-41 that had to move WITH the walk. Before it,
     // a BOUND-LOCAL key moved into a map ran its body at the MOVE SITE — the

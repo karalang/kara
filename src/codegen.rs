@@ -5191,6 +5191,22 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_map_remove_old_with_key_drop_fn(map, key, out_old_val, drop_key,
+        //                                       key_drop_fn: ptr) -> i1
+        // B-2026-08-27-2 — same contract plus the stored KEY's user `Drop`
+        // body, which the runtime runs in place after locating the bucket and
+        // before freeing the key. A SEPARATE symbol rather than a fifth
+        // parameter on the above: widening a signature keeps the name, so a
+        // stale archive would still link and be handed one argument too few.
+        let map_remove_old_kd_ty = context
+            .bool_type()
+            .fn_type(&[ptr_md, ptr_md, ptr_md, i32_md, ptr_md], false);
+        let karac_map_remove_old_with_key_drop_fn = module.add_function(
+            "karac_map_remove_old_with_key_drop_fn",
+            map_remove_old_kd_ty,
+            Some(Linkage::External),
+        );
+
         // karac_map_contains(map: ptr, key: ptr) -> i1
         let map_contains_ty = context.bool_type().fn_type(&[ptr_md, ptr_md], false);
         let karac_map_contains_fn = module.add_function(
@@ -5712,6 +5728,7 @@ impl<'ctx> Codegen<'ctx> {
                 karac_map_insert_borrowed_str_old_fn,
                 karac_map_get_fn,
                 karac_map_remove_old_fn,
+                karac_map_remove_old_with_key_drop_fn,
                 karac_map_contains_fn,
                 karac_map_len_fn,
                 karac_map_clear_fn,

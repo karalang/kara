@@ -399,6 +399,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_get,
         map::karac_map_remove,
         map::karac_map_remove_old,
+        // B-2026-08-27-2 — the key-body variants. Keep-list entries are
+        // load-bearing for the JIT: without them `karac run` fails with
+        // "Symbols not found" while AOT links fine (the B-2026-07-12-22 class).
+        map::karac_map_remove_old_with_key_drop_fn,
         map::karac_map_contains,
         map::karac_map_len,
         // B-2026-08-26-22 — `Map.reserve` / `Map.try_reserve`. Without these

@@ -1173,6 +1173,57 @@ pub unsafe extern "C" fn karac_map_remove_old(
     }
 }
 
+/// [`karac_map_remove_old`] plus the stored KEY's user `Drop` body
+/// (B-2026-08-27-2).
+///
+/// `key_drop_fn` receives a pointer to the stored key blob IN PLACE and is
+/// called BEFORE `free_stored_key`, which is the only window where the key's
+/// fields are still readable: the bucket has been located, nothing has been
+/// freed, and the tombstone has not gone down. Body-only by contract — the
+/// memory is still this function's to release through `drop_key`, exactly as
+/// in the plain variant.
+///
+/// A SEPARATE SYMBOL rather than a fifth parameter on `karac_map_remove_old`.
+/// Widening the existing signature keeps the name, so an archive built before
+/// the change still LINKS and is handed one argument too few — silent garbage.
+/// A new name turns that same staleness into the undefined-reference the E2E
+/// harness already knows how to report (CLAUDE.md § "A STALE archive is not a
+/// missing archive").
+///
+/// # Safety
+/// Shared contract with [`karac_map_remove_old`]; additionally, a non-null
+/// `key_drop_fn` must be sound to call on one stored key blob, must not free
+/// that blob, and must not re-enter the map.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_remove_old_with_key_drop_fn(
+    map: *mut c_void,
+    key: *const c_void,
+    out_old_val: *mut c_void,
+    drop_key: i32,
+    key_drop_fn: Option<unsafe extern "C" fn(*mut c_void)>,
+) -> bool {
+    unsafe {
+        let m = &mut *(map as *mut KaracMap);
+        if let Some(slot) = m.lookup(key) {
+            ptr::copy_nonoverlapping(
+                m.val_ptr(slot) as *const u8,
+                out_old_val as *mut u8,
+                m.val_size,
+            );
+            if let Some(f) = key_drop_fn {
+                f(m.key_ptr(slot) as *mut c_void);
+            }
+            if drop_key != 0 {
+                m.free_stored_key(slot);
+            }
+            m.vacate(slot);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Collect all live keys into a freshly-`malloc`'d buffer of `len * key_size`
 /// bytes, SORTED ascending by `cmp_fn` (a codegen-emitted comparator returning
 /// `<0` / `0` / `>0`, the same 3-way sign the interpreter's `value_compare`

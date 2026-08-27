@@ -2556,22 +2556,53 @@ impl<'ctx> super::Codegen<'ctx> {
                     .context
                     .i32_type()
                     .const_int(u64::from(self.llvm_ty_is_vec_struct(key_ty)), false);
-                let found = self
-                    .builder
-                    .build_call(
-                        self.runtime_fns.karac_map_remove_old_fn,
-                        &[
-                            map_handle.into(),
-                            key_slot.into(),
-                            old_slot.into(),
-                            drop_key.into(),
-                        ],
-                        "map.remove.found",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_int_value();
+                // B-2026-08-27-2 — when the KEY type runs a user `Drop`, take
+                // the variant that hands the runtime a body to invoke on the
+                // stored key. `remove` destroys that key in place (the value
+                // moves out to the caller and drops there, which is already
+                // right), so its body has to run between locating the bucket
+                // and freeing it — a window only the runtime is inside.
+                let key_body = self
+                    .mapset
+                    .map_val_bodies_tes
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|te| self.emit_map_key_one_drop_body_fn(&te));
+                let found = match key_body {
+                    Some(kb) => self
+                        .builder
+                        .build_call(
+                            self.runtime_fns.karac_map_remove_old_with_key_drop_fn,
+                            &[
+                                map_handle.into(),
+                                key_slot.into(),
+                                old_slot.into(),
+                                drop_key.into(),
+                                kb.as_global_value().as_pointer_value().into(),
+                            ],
+                            "map.remove.found",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value(),
+                    None => self
+                        .builder
+                        .build_call(
+                            self.runtime_fns.karac_map_remove_old_fn,
+                            &[
+                                map_handle.into(),
+                                key_slot.into(),
+                                old_slot.into(),
+                                drop_key.into(),
+                            ],
+                            "map.remove.found",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value(),
+                };
                 // `remove` looks the key up and tombstones the bucket; it never
                 // stores the incoming key, so a fresh-owned-temp key must be
                 // freed (no-ops on a borrowed view / moved binding / literal).

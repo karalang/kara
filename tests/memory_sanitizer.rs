@@ -29891,6 +29891,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_remove_key_drop_body_runs_before_the_free() {
+        // B-2026-08-27-2. The body travels into the runtime as a function
+        // pointer and is invoked ON THE STORED KEY IN PLACE, in the window
+        // between `lookup` and `free_stored_key`. That is the only place it can
+        // read the key's fields — and the only place it can go wrong: run it
+        // one step later and it reads freed memory; let it own the memory and
+        // the runtime's `drop_key` free becomes a double free.
+        //
+        // The key's fields are SCALAR on purpose. A `String`-bearing struct key
+        // would be the more obvious fixture, and it leaks that field on every
+        // `remove` for a reason that has nothing to do with drop bodies:
+        // `drop_key` is `llvm_ty_is_vec_struct(key_ty)`, false for a struct, so
+        // the runtime never frees a struct key's inner buffer. Measured
+        // identically with the key's `Drop` impl DELETED, and a bare
+        // `Map[String, V]` is clean — filed as its own row. Using such a key
+        // here would assert someone else's bug and mask this one.
+        //
+        // What is left is exactly this row's hazard: the body reads the stored
+        // key through a pointer the runtime hands it mid-operation, and the
+        // printed count is the oracle for it firing exactly once per removal —
+        // which no sanitizer can see, because a double body is not a memory
+        // error.
+        let label = "remove_key_drop_body";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { n: i64 }
+struct V { s: String }
+impl Drop for K { fn drop(mut ref self) { bump(self.n) } }
+impl Drop for V { fn drop(mut ref self) { bump(0) } }
+let mut FIRED: i64 = 0;
+fn bump(n: i64) { FIRED = FIRED + 1; }
+fn main() {
+    let mut m: Map[K, V] = Map.new();
+    let mut i = 0;
+    while i < 200 {
+        m.insert(K { n: i }, V { s: f"val-{i}-padding-padding" });
+        m.remove(K { n: i });
+        i = i + 1;
+    }
+    println(f"fired={FIRED} len={m.len()}");
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
+        );
+        // 200 removals x (one key body + one value body) = 400.
+        assert_eq!(
+            stdout.trim(),
+            "fired=400 len=0",
+            "[{label}] stdout:\n{stdout}"
+        );
+    }
+
+    #[test]
     fn asan_map_key_user_drop_bodies_fire_once() {
         // B-2026-08-26-41 — keys twin of
         // `asan_map_value_user_drop_bodies_fire_once`. A map key's MEMORY was
