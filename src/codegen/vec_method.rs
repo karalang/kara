@@ -8777,7 +8777,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // must be the TOTAL order (below), NOT the derived field
                     // comparator which would use the IEEE partial order on
                     // `value`.
-                    if !matches!(head.as_str(), "F32" | "F64" | "F16" | "Bf16") {
+                    if !self.is_prelude_total_float_wrapper(head.as_str()) {
                         if self.type_decls.struct_field_type_exprs.contains_key(head)
                             && !self.type_decls.shared_types.contains_key(head)
                         {
@@ -8836,10 +8836,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         Body::IntScalar { signed: false }
                     }
                     "f32" | "f64" => Body::FloatScalar,
-                    "F32" | "F64" | "F16" | "Bf16" => {
-                        let (_ft, int_ty, top) = self
-                            .total_float_wrapper_widths(head)
-                            .expect("F32/F64/F16/Bf16 have wrapper widths");
+                    // B-2026-08-27-11 — `?`, not `expect`. The arm is keyed on
+                    // the bare NAME, and a user may declare a type of that name
+                    // (prelude names are not reserved), in which case
+                    // `total_float_wrapper_widths` now declines. Panicking on a
+                    // shadowed name would turn a legal program into a compiler
+                    // crash; declining routes it to the ordinary body instead.
+                    _ if self.is_prelude_total_float_wrapper(head) => {
+                        let (_ft, int_ty, top) = self.total_float_wrapper_widths(head)?;
                         Body::TotalFloatScalar { int_ty, top }
                     }
                     // Both String spellings (the 3p discipline).

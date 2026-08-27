@@ -3706,10 +3706,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     &callee.kind,
                     ExprKind::Path { segments, .. }
                         if segments.len() == 2
-                            && matches!(
-                                segments[0].as_str(),
-                                "F32" | "F64" | "F16" | "Bf16"
-                            )
+                            && self.is_prelude_total_float_wrapper(segments[0].as_str())
                             && segments[1] == "from"
                 ) =>
             {

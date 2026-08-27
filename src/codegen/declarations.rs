@@ -708,6 +708,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // instead of the conventional 4-i64 Option layout. Saves
             // 24 bytes/field — biggest win on small reference-
             // semantics shapes like the ListNode kata.
+            // B-2026-08-27-11 — record the shadow for BOTH struct kinds, ahead
+            // of the shared/plain split below. This lived in the PLAIN branch
+            // only, so a `shared struct F64 { .. }` was never recorded and every
+            // consumer of the set — the built-in refusals this comment
+            // describes, the layout path in `types_lowering`, the HTTP client —
+            // went on treating a shared user type as the stdlib one. Measured
+            // on the total-order float wrappers: a `shared struct F64` kept the
+            // wrapper's single-float comparison and answered `true` for values
+            // whose second field differed, while the plain form of the same
+            // program was already correct.
+            //
+            // Same `stdlib_origin` gate as before: spliced stdlib declarations
+            // flow through this pass too, and a name-only test would flag the
+            // stdlib against itself.
+            if !self.declaring_stdlib_program
+                && !s.stdlib_origin
+                && crate::prelude::PRELUDE_TYPES.contains(&s.name.as_str())
+            {
+                self.type_decls
+                    .user_shadowed_prelude_types
+                    .insert(s.name.clone());
+            }
             let niche_option_fields: Vec<Option<String>> = if s.is_shared {
                 s.fields
                     .iter()
@@ -799,14 +821,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 // itself and refuse every legitimate regex program;
                 // `stdlib_origin` separates them, and
                 // `expand_gated_stdlib_imports` now sets it at the splice.
-                if !self.declaring_stdlib_program
-                    && !s.stdlib_origin
-                    && crate::prelude::PRELUDE_TYPES.contains(&s.name.as_str())
-                {
-                    self.type_decls
-                        .user_shadowed_prelude_types
-                        .insert(s.name.clone());
-                }
                 self.type_decls.struct_types.insert(s.name.clone(), st);
             }
         }

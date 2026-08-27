@@ -4505,7 +4505,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // question the other callers ask, and answering it for them here would
         // be a silent change to every one of those sites.
         if !super::vec_method::is_trivially_copyable_te(&elem_te)
-            && !Self::is_total_float_wrapper_te(&elem_te)
+            && !self.is_prelude_total_float_wrapper_te(&elem_te)
         {
             return Ok(None);
         }

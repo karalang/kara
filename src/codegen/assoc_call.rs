@@ -1396,10 +1396,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // read) or "operand is not a struct/float value" (a comparison).
         // Build the single-field wrapper struct directly, exactly as the
         // `F64 { value: x }` literal does.
-        if matches!(type_name, "F32" | "F64" | "F16" | "Bf16")
-            && method == "from"
-            && _args.len() == 1
-        {
+        if self.is_prelude_total_float_wrapper(type_name) && method == "from" && _args.len() == 1 {
             return self.compile_total_order_wrapper_from(type_name, &_args[0].value);
         }
         // Total-order float wrapper comparison (B-2026-07-22-11):
@@ -1409,7 +1406,60 @@ impl<'ctx> super::Codegen<'ctx> {
         // contract is a TOTAL order (NaN sorts last, -0 < +0, bit-equality).
         // Intercept before the `is_primitive` reroute (which omits F32/F64
         // and would fall through to the const-0 unknown-callee tail).
-        if matches!(type_name, "F32" | "F64" | "F16" | "Bf16")
+        // B-2026-08-27-11 — a lowered comparison on a USER-SHADOWED prelude
+        // name. `rewrite_binary` turns `a == b` into `T.eq(a, b)` whenever the
+        // impl table says `T: Eq`, and that table is NAME-keyed: the stdlib's
+        // own `#[derive(Eq, Ord, Hash, ...)] struct F64` answers for a user
+        // `struct F64`, so the rewrite fires for a type that has no such impl.
+        //
+        // Before the wrapper intercepts learned about shadowing, the arm below
+        // swallowed the call and applied the wrapper's single-float comparison
+        // — the false-positive equality this row is about. Declining there is
+        // correct but not sufficient: the call then reaches the unknown-callee
+        // tail and yields a const `i64` 0, which is the "compiled binary
+        // printed a raw `0` instead of `true`" failure `rewrite_binary`'s own
+        // comment records. Both halves were measured on this program.
+        //
+        // So the call is compiled as what the source actually said: an ordinary
+        // comparison between two values of the user's type, which is what an
+        // unlowered `a == b` would have produced. Keyed on the shadow set
+        // rather than on the four float names, because any prelude type whose
+        // stdlib declaration carries a comparison derive can reach here the
+        // same way.
+        if self
+            .type_decls
+            .user_shadowed_prelude_types
+            .contains(type_name)
+            && matches!(method, "gt" | "lt" | "ge" | "le" | "eq" | "ne")
+            && _args.len() == 2
+        {
+            let op = match method {
+                "eq" => crate::ast::BinOp::Eq,
+                "ne" => crate::ast::BinOp::NotEq,
+                "lt" => crate::ast::BinOp::Lt,
+                "le" => crate::ast::BinOp::LtEq,
+                "gt" => crate::ast::BinOp::Gt,
+                _ => crate::ast::BinOp::GtEq,
+            };
+            // Rebuild the BINARY EXPRESSION and compile that, rather than
+            // compiling both operands to values and calling `compile_binop`.
+            // The two are not equivalent: a `shared struct` comparison resolves
+            // its type from the OPERAND EXPRESSIONS (that is how it reaches
+            // `emit_shared_struct_eq_fn`), and two bare pointers carry no such
+            // name — measured, that spelling reported the "structural `==` on
+            // this reference type is not yet supported" gap for a shape the
+            // unlowered operator compiles fine.
+            let rebuilt = crate::ast::Expr {
+                kind: crate::ast::ExprKind::Binary {
+                    op,
+                    left: Box::new(_args[0].value.clone()),
+                    right: Box::new(_args[1].value.clone()),
+                },
+                span: _args[0].value.span,
+            };
+            return self.compile_expr(&rebuilt);
+        }
+        if self.is_prelude_total_float_wrapper(type_name)
             && matches!(method, "gt" | "lt" | "ge" | "le" | "eq" | "ne")
             && _args.len() == 2
         {
@@ -4057,6 +4107,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// iterator `max`/`min` reduce path without widening the primitive-name
     /// `is_trivially_copyable_te`, whose other 36 callers ask a different
     /// ownership question.
+    /// Shadow-aware form of [`Self::is_total_float_wrapper_te`]
+    /// (B-2026-08-27-11). The static one answers on the NAME alone, which is
+    /// all a `TypeExpr` carries; this one additionally refuses a name the user
+    /// has redeclared. Prefer it at any site that has `self`.
+    pub(super) fn is_prelude_total_float_wrapper_te(&self, te: &crate::ast::TypeExpr) -> bool {
+        if !Self::is_total_float_wrapper_te(te) {
+            return false;
+        }
+        let crate::ast::TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        !self
+            .type_decls
+            .user_shadowed_prelude_types
+            .contains(&p.segments[0])
+    }
+
     pub(super) fn is_total_float_wrapper_te(te: &crate::ast::TypeExpr) -> bool {
         let crate::ast::TypeKind::Path(p) = &te.kind else {
             return false;
@@ -4064,6 +4131,23 @@ impl<'ctx> super::Codegen<'ctx> {
         p.generic_args.is_none()
             && p.segments.len() == 1
             && matches!(p.segments[0].as_str(), "F32" | "F64" | "F16" | "Bf16")
+    }
+
+    /// True when `name` is a PRELUDE total-order float wrapper — the name AND
+    /// not a user redeclaration of it (B-2026-08-27-11).
+    ///
+    /// Every wrapper site was keyed on the bare name, so a user
+    /// `struct F64 { .. }` inherited the wrapper's comparison, its `Display`
+    /// (which prints the inner float, not the struct), and its sort
+    /// comparator. design.md § Module System is explicit that this is the
+    /// user's type to define: "Users can shadow prelude names in their own
+    /// code — the language does not reserve them."
+    ///
+    /// Route EVERY `matches!(name, "F32" | "F64" | "F16" | "Bf16")` through
+    /// here. A bare name test is the defect, not a shorthand for it.
+    pub(super) fn is_prelude_total_float_wrapper(&self, name: &str) -> bool {
+        matches!(name, "F32" | "F64" | "F16" | "Bf16")
+            && !self.type_decls.user_shadowed_prelude_types.contains(name)
     }
 
     pub(super) fn total_float_wrapper_widths(
@@ -4074,6 +4158,34 @@ impl<'ctx> super::Codegen<'ctx> {
         inkwell::types::IntType<'ctx>,
         u64,
     )> {
+        // B-2026-08-27-11 — a USER type of this name is not the wrapper.
+        // design.md § Module System is explicit that prelude names are not
+        // reserved ("Users can shadow prelude names in their own code — the
+        // language does not reserve them"), and `user_shadowed_prelude_types`
+        // already records exactly this, distinguishing a user declaration from
+        // the stdlib's own via `stdlib_origin`.
+        //
+        // Without the check, every site below keyed off the bare NAME, so a
+        // user `struct F64 { x: f64, tag: i64 }` inherited the wrapper's
+        // single-float comparison and answered `true` for two values whose
+        // `tag` differed — a FALSE-POSITIVE equality, reported on the compiled
+        // backends while the interpreter said `false`. The type's LAYOUT was
+        // already the user's (field reads were correct), so only the built-in
+        // machinery was capturing it.
+        //
+        // This is the same complement `types_lowering` documents for the
+        // shadow set: stop describing a user value with built-in machinery's
+        // layout, and refuse to run built-in machinery over a user value. The
+        // callers that can fall back to ordinary struct behaviour do; the ones
+        // that are wrapper-only (`F64.from`, the wrapper `cmp`) surface their
+        // existing "not a total-order float wrapper" message instead.
+        if self
+            .type_decls
+            .user_shadowed_prelude_types
+            .contains(type_name)
+        {
+            return None;
+        }
         let ctx = self.context;
         Some(match type_name {
             "F32" => (ctx.f32_type(), ctx.i32_type(), 31),

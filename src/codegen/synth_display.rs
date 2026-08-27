@@ -319,7 +319,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // `Double` prints the same as `double` for the same reason.)
             // Reuses the `f32`/`f64` shortest-round-trip formatter below, so
             // wrapped and unwrapped renderings cannot drift apart.
-            "F32" | "F64" | "F16" | "Bf16" => {
+            // B-2026-08-27-11 — the name alone is not enough: a user type of
+            // this name is not the wrapper and must render as the struct they
+            // wrote. Reached here for a shadowed name, this arm formats the
+            // value as the wrapped FLOAT, so a `bool` (the result of comparing
+            // two user `F64`s, interpolated in an f-string) printed as `0`
+            // where the interpreter printed `false`.
+            _ if self.is_prelude_total_float_wrapper(type_name) => {
                 let inner_ty: BasicTypeEnum<'ctx> = match type_name {
                     "F32" => self.context.f32_type().into(),
                     "F64" => self.context.f64_type().into(),
@@ -1546,7 +1552,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // interpreter prints `3.14`, a run-vs-build divergence on
                     // every `println` of a wrapper. Covers the nested cases
                     // too: `Vec[F64]` recurses here for its element.
-                    if matches!(seg.as_str(), "F32" | "F64" | "F16" | "Bf16") {
+                    if self.is_prelude_total_float_wrapper(seg.as_str()) {
                         let llvm_ty = self.llvm_type_for_type_expr(te);
                         return self.emit_display_fn_for_type(seg, llvm_ty);
                     }
@@ -1863,7 +1869,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the interpreter's `Display for Value`. This is the single seam that
         // covers BOTH `println(x)` and `f"{x}"`: they both arrive here via
         // `expr_user_struct_name` → `compile_struct_display_string`.
-        if matches!(type_name, "F32" | "F64" | "F16" | "Bf16") {
+        if self.is_prelude_total_float_wrapper(type_name) {
             return Ok(vec![P::Expr(
                 Box::new(Expr {
                     kind: ExprKind::FieldAccess {

@@ -105337,6 +105337,110 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-11 — the compiled twin of
+    /// `a_user_type_shadowing_a_prelude_name_keeps_its_own_comparison`.
+    ///
+    /// The total-order float wrapper machinery was keyed on the bare NAME, so
+    /// a user `struct F64 { .. }` inherited the wrapper's comparison — which
+    /// reads ONE float field and stops. Two values differing only in a second
+    /// field compared EQUAL: a FALSE-POSITIVE equality, worse than a false
+    /// negative because a dedup or a guard clause then takes the wrong branch
+    /// rather than merely doing redundant work. design.md § Module System
+    /// makes this the user's type to define ("the language does not reserve
+    /// them"), and the pre-existing shadowing test covers only LAYOUT, which
+    /// was already correct.
+    ///
+    /// THREE DECLARATION KINDS, because each reached a different hole. The
+    /// PLAIN struct is the row's shape. The SHARED struct additionally proved
+    /// that `user_shadowed_prelude_types` was recorded in the plain branch
+    /// ONLY, so a `shared struct F64` was never marked and every consumer of
+    /// that set — not just this one — went on treating it as the stdlib type.
+    /// The `#[derive(Eq)]` one reaches the lowered `F64.eq(a, b)` form, since
+    /// `rewrite_binary` consults a NAME-keyed impl table that the stdlib's own
+    /// `#[derive(Eq, Ord, Hash, ...)] struct F64` answers for.
+    ///
+    /// `plain-eq` is not padding. Declining the wrapper machinery is only half
+    /// the fix; the call then reaches the unknown-callee tail and yields a
+    /// const `i64` 0, which prints as a plausible-looking `false`. A test with
+    /// only inequality assertions passes on that bug.
+    #[test]
+    fn test_e2e_shadowed_prelude_name_keeps_its_own_comparison() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+struct F64 { x: i64, tag: i64 }
+#[derive(PartialEq)]
+shared struct F32 { x: i64, tag: i64 }
+#[derive(Eq, PartialEq)]
+struct F16 { x: i64, tag: i64 }
+fn main() {
+    let a = F64 { x: 1, tag: 1 };
+    let b = F64 { x: 1, tag: 2 };
+    let c = F64 { x: 1, tag: 1 };
+    println(f"plain-ne={a == b}");
+    println(f"plain-eq={a == c}");
+
+    let d = F32 { x: 1, tag: 1 };
+    let e = F32 { x: 1, tag: 2 };
+    println(f"shared-ne={d == e}");
+
+    let g = F16 { x: 1, tag: 1 };
+    let h = F16 { x: 1, tag: 2 };
+    println(f"derived-ne={g == h}");
+
+    println(f"fields={a.x} {a.tag}");
+}
+"#
+            ),
+            Some(
+                "plain-ne=false\nplain-eq=true\nshared-ne=false\n\
+                 derived-ne=false\nfields=1 1\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-27-11, the OTHER direction: the real prelude wrapper must
+    /// keep every behaviour the shadow check now gates. Its comparison is
+    /// bit-level (two canonicalized NaNs are EQUAL), it sorts, it is a legal
+    /// `Map` key where both NaN keys collide into one, and its `Display`
+    /// prints the wrapped float rather than a struct form.
+    ///
+    /// Worth asserting next to the shadowed case rather than trusting the
+    /// wrapper's own tests: the fix touches nine name-keyed sites, and a
+    /// predicate that is too eager silently demotes the wrapper to an ordinary
+    /// struct at any one of them.
+    #[test]
+    fn test_e2e_unshadowed_total_order_wrapper_keeps_its_behaviour() {
+        assert_eq!(
+            run_program(
+                r#"
+fn nan64(z: f64) -> f64 { return z / z; }
+fn main() {
+    let q = nan64(0.0);
+    let c: F64 = F64 { value: q };
+    let r: F64 = F64.from(q);
+    println(f"nan-eq={c == r}");
+    let p: F64 = F64 { value: 2.5 };
+    println(f"display={p}");
+    let mut v: Vec[F64] = Vec.new();
+    v.push(F64 { value: 3.0 });
+    v.push(F64 { value: 1.0 });
+    v.push(F64 { value: 2.0 });
+    v.sort();
+    println(f"sorted={v[0].value} {v[1].value} {v[2].value}");
+    let mut m: Map[F64, i64] = Map.new();
+    let _ = m.insert(c, 1);
+    let _ = m.insert(r, 2);
+    println(f"keylen={m.len()}");
+}
+"#
+            ),
+            Some("nan-eq=true\ndisplay=2.5\nsorted=1 2 3\nkeylen=1\n".to_string())
+        );
+    }
+
     /// B-2026-08-27-9, the DISTINCTION the fix turns on, asserted in one
     /// program so the contrast cannot drift apart.
     ///

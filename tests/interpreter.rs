@@ -725,6 +725,55 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
 }
 
 #[test]
+fn a_user_type_shadowing_a_prelude_name_keeps_its_own_comparison() {
+    // B-2026-08-27-11. The total-order float wrapper machinery was keyed on
+    // the bare NAME, so a user `struct F64 { .. }` inherited the wrapper's
+    // comparison — which reads ONE float field and stops. Two values whose
+    // second field differed compared EQUAL on the compiled backends: a
+    // FALSE-POSITIVE equality, worse than a false negative because a dedup, a
+    // cache hit, or a guard clause then takes the wrong branch instead of
+    // merely doing redundant work.
+    //
+    // design.md § Module System is what makes this the user's type to define:
+    // "Users can shadow prelude names in their own code — the language does
+    // not reserve them." The existing shadowing test covers LAYOUT, which was
+    // already correct; comparison was the half that was captured.
+    //
+    // Both struct kinds, because the shadow was recorded for PLAIN structs
+    // only — a `shared struct F64` was never marked at all, so every consumer
+    // of `user_shadowed_prelude_types` went on treating it as the stdlib type.
+    // Codegen twin: `test_e2e_shadowed_prelude_name_keeps_its_own_comparison`.
+    let src = "#[derive(PartialEq)]
+        struct F64 { x: i64, tag: i64 }
+        #[derive(PartialEq)]
+        shared struct F32 { x: i64, tag: i64 }
+        #[derive(Eq, PartialEq)]
+        struct F16 { x: i64, tag: i64 }
+        fn main() {
+            let a = F64 { x: 1, tag: 1 };
+            let b = F64 { x: 1, tag: 2 };
+            let c = F64 { x: 1, tag: 1 };
+            println(f\"plain-ne={a == b}\");
+            println(f\"plain-eq={a == c}\");
+
+            let d = F32 { x: 1, tag: 1 };
+            let e = F32 { x: 1, tag: 2 };
+            println(f\"shared-ne={d == e}\");
+
+            let g = F16 { x: 1, tag: 1 };
+            let h = F16 { x: 1, tag: 2 };
+            println(f\"derived-ne={g == h}\");
+
+            println(f\"fields={a.x} {a.tag}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "plain-ne=false\nplain-eq=true\nshared-ne=false\n\
+         derived-ne=false\nfields=1 1\n"
+    );
+}
+
+#[test]
 fn a_float_field_compares_by_ieee_semantics_not_by_bits() {
     // B-2026-08-27-9. Every TYPE-DIRECTED comparator routed a float field to
     // `emit_eq_fn_for_type`'s byte loop, and bit equality differs from float
