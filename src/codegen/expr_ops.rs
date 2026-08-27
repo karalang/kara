@@ -6646,6 +6646,102 @@ impl<'ctx> super::Codegen<'ctx> {
             })
     }
 
+    /// Would a WORD-WISE compare give the wrong answer for `enum_name`'s
+    /// payloads — i.e. must `==` take the structural comparator?
+    /// (B-2026-08-27-19.)
+    ///
+    /// This exists because the gate used to be `enum_has_heap_payload`, which
+    /// is a fold over `field_drop_kinds` — a DROP classification being asked an
+    /// EQUALITY question. The two disagree, and where they disagree the drop
+    /// side is right to say what it says: `enum_drop_kind_for_type_expr`
+    /// refuses to classify a payload struct `NestedStruct` unless it is
+    /// word-ALIGNED, because the drop path and the deep-copy-on-entry must stay
+    /// symmetric and classifying one the entry-copy cannot duplicate turns a
+    /// status-quo leak into a DOUBLE FREE. So `enum Holder { W(TwoNarrow) }`
+    /// with `struct TwoNarrow { a: i32, b: i32, s: String }` reported "no heap
+    /// payload", `==` fell to the word-wise path, and two structurally-equal
+    /// values compared their `String`'s heap POINTER.
+    ///
+    /// Equality's question is narrower and has nothing to do with ownership:
+    /// can these bytes be compared as opaque words? Two ways they cannot, and
+    /// the second is why this is not simply "owns heap":
+    ///
+    /// * The word holds a POINTER or handle — `String`/`Vec`/`Slice`, a Map/Set
+    ///   family handle, a `shared` RC pointer, a boxed nested enum — so a word
+    ///   compare is a pointer-identity compare.
+    /// * The word holds a FLOAT. Bit equality is not IEEE equality in exactly
+    ///   the two places the standard defines specially: `0.0` and `-0.0` are
+    ///   numerically equal with different bits, and NaN is unequal to itself
+    ///   with identical bits. A float payload answered both backwards
+    ///   (B-2026-08-27-9 fixed this for the type-directed comparators; the enum
+    ///   operator path never reached them).
+    ///
+    /// Integers, `bool` and `char` are wholly inline with no such trap, so an
+    /// all-scalar enum keeps the cheaper word compare.
+    pub(super) fn enum_payload_needs_structural_eq(
+        &self,
+        enum_name: &str,
+        inst: Option<&TypeExpr>,
+    ) -> bool {
+        let subst = self.enum_param_subst(enum_name, inst);
+        self.enum_variant_field_type_exprs(enum_name)
+            .iter()
+            .flat_map(|(_, _, tys)| tys.iter())
+            .any(|t| {
+                let t = Self::subst_type_params(t, &subst);
+                self.type_needs_structural_eq(&t, &mut Vec::new())
+            })
+    }
+
+    /// Per-type half of [`Self::enum_payload_needs_structural_eq`]. `seen`
+    /// breaks the cycle a `shared` field can close back onto its own struct.
+    fn type_needs_structural_eq(&self, te: &TypeExpr, seen: &mut Vec<String>) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.type_needs_structural_eq(e, seen)),
+            TypeKind::Path(p) => {
+                let Some(name) = p.segments.first().map(|s| s.as_str()) else {
+                    return false;
+                };
+                match name {
+                    // Pointer / handle words.
+                    "String" | "Vec" | "Slice" | "Map" | "Set" | "SortedMap" | "SortedSet" => true,
+                    // Bit equality is not IEEE equality.
+                    "f16" | "bf16" | "f32" | "f64" => true,
+                    // Wholly inline, no trap.
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64"
+                    | "u128" | "usize" | "isize" | "bool" | "char" | "Unit" => false,
+                    _ => {
+                        // An RC pointer: design.md § Equality is explicit that
+                        // `==` on a shared value is structural, never identity.
+                        if self.type_decls.shared_types.contains_key(name) {
+                            return true;
+                        }
+                        // A nested enum payload is boxed, so the word is a
+                        // pointer regardless of what it wraps.
+                        if self.type_decls.enum_layouts.contains_key(name) {
+                            return true;
+                        }
+                        if seen.iter().any(|s| s == name) {
+                            return false;
+                        }
+                        let Some(fields) = self.struct_field_type_exprs(name) else {
+                            // Unknown/opaque: keep the cheaper path, which is
+                            // what this site did for everything before.
+                            return false;
+                        };
+                        seen.push(name.to_string());
+                        let r = fields
+                            .iter()
+                            .any(|f| self.type_needs_structural_eq(f, seen));
+                        seen.pop();
+                        r
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Would `emit_enum_drop_switch` emit a fn for `enum_name` — i.e. does its
     /// drop do any work at all? The DROP-REGISTRATION question, deliberately
     /// separate from [`Self::enum_has_heap_payload`]: that predicate also picks
@@ -7677,9 +7773,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(p) => p.segments.last().map(String::as_str) == Some(en.as_str()),
                 _ => false,
             });
-        let heap = self.enum_has_heap_payload(&en)
+        // `enum_payload_needs_structural_eq` is the one that asks equality's
+        // own question (B-2026-08-27-19); the other two are kept because they
+        // fold over a classification this walk cannot see, so a payload kind
+        // recorded there but unknown to the type walk still routes correctly.
+        let structural = self.enum_payload_needs_structural_eq(&en, inst.as_ref())
+            || self.enum_has_heap_payload(&en)
             || self.instantiated_enum_has_heap_payload(&en, inst.as_ref());
-        if !heap {
+        if !structural {
             return None;
         }
         Some(self.compile_enum_eq(

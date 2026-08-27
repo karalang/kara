@@ -105980,6 +105980,92 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-19 — `==` on an enum was gated on a DROP classification, so
+    /// an enum the drop path deliberately declines to own compared its payload
+    /// WORDS.
+    ///
+    /// `enum_has_heap_payload` folds over `field_drop_kinds`, and
+    /// `enum_drop_kind_for_type_expr` refuses to classify a payload struct
+    /// `NestedStruct` unless it is word-ALIGNED — because the drop path and the
+    /// deep-copy-on-entry must stay symmetric, and classifying one the entry-copy
+    /// cannot duplicate turns a status-quo leak into a DOUBLE FREE. That `None` is
+    /// correct for ownership and wrong as an answer to "can these bytes be
+    /// compared as words". `subword` is the shape: `{ a: i32, b: i32, s: String }`
+    /// spends one word per field where LLVM packs the two `i32`s into eight bytes,
+    /// so it is not word-aligned, and `==` compared the `String`'s heap POINTER.
+    ///
+    /// `zeros` and `nan` are the SECOND symptom of the same gate, and the reason
+    /// the new predicate is not simply "owns heap". A float payload has no heap at
+    /// all, so no drop classification would ever have routed it — but bit equality
+    /// is not IEEE equality in exactly the two places the standard defines
+    /// specially: `0.0` and `-0.0` are equal with different bits, NaN is unequal
+    /// to itself with identical bits. Both answered backwards. The operands come
+    /// from opaque functions so LLVM cannot constant-fold the comparison and
+    /// answer correctly without running the emitted code.
+    ///
+    /// `scalarstruct` and `ints` are the controls: an all-scalar payload, struct
+    /// or not, is wholly inline and keeps the cheaper word compare. `AllScalar`
+    /// is deliberately three `i32`s — also not word-aligned, so it proves the
+    /// predicate keys on what the bytes MEAN rather than on alignment.
+    ///
+    /// The `-tag` lines guard the same dereference hazard B-2026-08-27-16 closed:
+    /// the payload walk must not run when the tags differ, since a unit variant's
+    /// uninitialised words become a wild pointer once a field is read through.
+    #[test]
+    fn test_e2e_enum_eq_is_not_gated_on_a_drop_classification() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+struct TwoNarrow { a: i32, b: i32, s: String }
+#[derive(Hash, Eq, PartialEq)]
+struct AllScalar { a: i32, b: i32, c: i32 }
+#[derive(Hash, Eq, PartialEq)]
+enum Holder { W(TwoNarrow), S(AllScalar), N }
+#[derive(PartialEq)]
+enum Num { F(f64), I(i64), N }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+fn nan64(z: f64) -> f64 { return z / z; }
+fn negzero(z: f64) -> f64 { return -z; }
+
+fn main() {
+    let x: Holder = Holder.W(TwoNarrow { a: 1, b: 2, s: mk(1) });
+    let y: Holder = Holder.W(TwoNarrow { a: 1, b: 2, s: mk(1) });
+    println(f"subword={x == y}");
+    println(f"subword-ne-s={x == Holder.W(TwoNarrow { a: 1, b: 2, s: mk(2) })}");
+    println(f"subword-ne-a={x == Holder.W(TwoNarrow { a: 9, b: 2, s: mk(1) })}");
+    println(f"subword-ne-b={x == Holder.W(TwoNarrow { a: 1, b: 9, s: mk(1) })}");
+    println(f"subword-tag={x == Holder.N}");
+
+    let p: Holder = Holder.S(AllScalar { a: 1, b: 2, c: 3 });
+    println(f"scalarstruct={p == Holder.S(AllScalar { a: 1, b: 2, c: 3 })}");
+    println(f"scalarstruct-ne={p == Holder.S(AllScalar { a: 1, b: 2, c: 4 })}");
+
+    let z = 0.0;
+    let neg = negzero(z);
+    let nan = nan64(z);
+    println(f"zeros={Num.F(0.0) == Num.F(neg)}");
+    println(f"nan={Num.F(nan) == Num.F(nan)}");
+    println(f"floats={Num.F(1.5) == Num.F(1.5)}");
+    println(f"floats-ne={Num.F(1.5) == Num.F(2.5)}");
+    println(f"ints={Num.I(7) == Num.I(7)}");
+    println(f"ints-ne={Num.I(7) == Num.I(8)}");
+    println(f"num-tag={Num.F(1.5) == Num.N}");
+}
+"#
+            ),
+            Some(
+                "subword=true\nsubword-ne-s=false\nsubword-ne-a=false\n\
+                 subword-ne-b=false\nsubword-tag=false\n\
+                 scalarstruct=true\nscalarstruct-ne=false\nzeros=true\n\
+                 nan=false\nfloats=true\nfloats-ne=false\nints=true\n\
+                 ints-ne=false\nnum-tag=false\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// B-2026-08-27-17 — `assert_eq` / `assert_ne` compared an ENUM by its
     /// payload WORDS, so an assertion over two structurally-equal enums PASSED on
     /// the interpreter and FAILED compiled. A test asserting enum equality got the
