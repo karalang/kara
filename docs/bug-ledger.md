@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 84 | 0 |
 | other | 63 | 1 |
 | soundness | 62 | 0 |
-| crash | 59 | 1 |
+| crash | 59 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1089 | 10 |
+| codegen | 1089 | 9 |
 | typecheck | 276 | 4 |
 | interp | 191 | 2 |
 | other | 70 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced · 13 open · 1608 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced · 12 open · 1609 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
-| B-2026-08-27-18 | 2026-08-27 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { .. } == S3 { .. }` aborts `karac build` with an unwrap failure in `compile_string_binop`. `compile_binop` dispatches an aggregate by FIELD COUNT -- `field_count == vec_struct_type().count_fields()` -- and a `String`'s `{ptr, len, cap}` also has three, so any three-field struct is routed to the string comparator, which reads field 0 as a pointer. | — |
 | B-2026-08-27-19 | 2026-08-27 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder { W(TwoNarrow) }` with `struct TwoNarrow { a: i32, b: i32, s: String }` answers `false` for two structurally-equal values on the compiled backends and `true` on the interpreter. `enum_drop_kind_for_type_expr` requires `struct_payload_word_aligned` before classifying a struct payload `NestedStruct`, so a struct with two consecutive sub-word fields classifies `None`, and `enum_has_heap_payload` -- which gates the structural `==` path -- then reports false. | — |
 | B-2026-08-27-20 | 2026-08-27 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`) is clean and the interpreter is correct in both. One binding is the whole difference. | — |
 | B-2026-08-27-21 | 2026-08-27 | codegen | high | A borrowed element loses its method surface under codegen: `.clone()` through a `ref` binding SEGFAULTS, and every String method on one (`starts_with`, `substring`, `clone`) falls through dispatch, while the interpreter runs all of them. | — |
@@ -174,9 +173,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced
 
 </details>
 
-### Fixed (1608)
+### Fixed (1609)
 
-<details><summary>1608 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1609 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1788,6 +1787,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced
 | B-2026-08-27-15 | typecheck | low | THE PRELUDE-SHADOW LINT DOES NOT EXIST | e17ecdf |
 | B-2026-08-27-16 | codegen | high | `==` ON A GENERIC ENUM WHOSE ARGUMENT OVERFLOWS ITS ERASED PAYLOAD ALLOTMENT PANICS THE COMPILER, so `Box1[String] == Box1[String]` for `enum Box1[T]… | 752e0b9 |
 | B-2026-08-27-17 | codegen | high | `assert_eq` / `assert_ne` COMPARE AN ENUM'S PAYLOAD WORDS INSTEAD OF ITS CONTENTS, so a Kara test asserting two structurally-equal enums with heap pa… | 752e0b9 |
+| B-2026-08-27-18 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { . | 9b8d435 |
 
 </details>
 
