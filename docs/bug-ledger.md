@@ -98,11 +98,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 173 | 1 |
 | codegen-gap | 143 | 1 |
 | double-free | 141 | 1 |
-| diagnostics | 111 | 1 |
+| diagnostics | 111 | 0 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
 | other | 63 | 1 |
-| soundness | 62 | 1 |
+| soundness | 62 | 0 |
 | crash | 59 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1086 | 8 |
-| typecheck | 274 | 5 |
+| typecheck | 274 | 3 |
 | interp | 190 | 1 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1643 surfaced · 12 open · 1605 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1643 surfaced · 10 open · 1607 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,8 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1643 surfaced
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-10 | 2026-08-27 | typecheck+codegen | high | `Vec[T] == Vec[T]` IS ACCEPTED BY `karac check` AND `karac build`, EXECUTED BY BOTH COMPILED BACKENDS, AND REJECTED AT RUNTIME BY THE INTERPRETER -- which reports it as a type error the typechecker was supposed to have caught. Worse, the compiled answer is WRONG for heap elements: two `Vec[String]` with identical contents compare `false`. So the same program either dies on `--interp` or silently answers incorrectly under `karac build`. | — |
-| B-2026-08-27-14 | 2026-08-27 | typecheck | high | THE IMPL TABLE IS NAME-KEYED, so a user type that shadows a prelude name SILENTLY INHERITS THE STDLIB TYPE'S TRAIT IMPLS. A user `struct F64 { x: i64, tag: i64 }` with NO derives passes `karac check` and compiles `a == b`, while the identical `struct Other` is correctly rejected with "type 'Other' does not implement PartialEq; add #[derive(PartialEq)]". The compiler then attributes the borrowed impl TO THE USER: the Map-key diagnostic reads "you have written `impl Eq for F64`" for an impl they never wrote. | — |
-| B-2026-08-27-15 | 2026-08-27 | typecheck | low | THE PRELUDE-SHADOW LINT DOES NOT EXIST. design.md refers to it in three places as shipped behaviour -- "a lint warning flags the most-likely-unintended cases", "the standard prelude-shadow lint", "the lint flagged at § Module System — Prelude catches accidental shadowing" -- but declaring `struct F64`, `struct Map` or `struct Option` produces NO diagnostic: `karac check` prints "All checks passed." | — |
 | B-2026-08-27-18 | 2026-08-27 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { .. } == S3 { .. }` aborts `karac build` with an unwrap failure in `compile_string_binop`. `compile_binop` dispatches an aggregate by FIELD COUNT -- `field_count == vec_struct_type().count_fields()` -- and a `String`'s `{ptr, len, cap}` also has three, so any three-field struct is routed to the string comparator, which reads field 0 as a pointer. | — |
 | B-2026-08-27-19 | 2026-08-27 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder { W(TwoNarrow) }` with `struct TwoNarrow { a: i32, b: i32, s: String }` answers `false` for two structurally-equal values on the compiled backends and `true` on the interpreter. `enum_drop_kind_for_type_expr` requires `struct_payload_word_aligned` before classifying a struct payload `NestedStruct`, so a struct with two consecutive sub-word fields classifies `None`, and `enum_has_heap_payload` -- which gates the structural `==` path -- then reports false. | — |
 | B-2026-08-27-20 | 2026-08-27 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`) is clean and the interpreter is correct in both. One binding is the whole difference. | — |
@@ -173,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1643 surfaced
 
 </details>
 
-### Fixed (1605)
+### Fixed (1607)
 
-<details><summary>1605 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1607 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1782,6 +1780,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1643 surfaced
 | B-2026-08-27-11 | codegen | high | A USER STRUCT NAMED `F64` / `F32` / `F16` / `Bf16` SILENTLY INHERITS THE PRELUDE TOTAL-ORDER WRAPPER'S COMPARISON, which compares ONE float field and… | 374a8a3 |
 | B-2026-08-27-12 | codegen | medium | THE MAP/SET ENUM KEY COMPARATOR DECLINES TWO PAYLOAD SHAPES THAT `compile_enum_eq` ALREADY HANDLES ON THE `==` SIDE, so `Map[Option[String], V]` and… | 51d68e9 |
 | B-2026-08-27-13 | codegen | medium | `Vec.contains` COMPARES AN ENUM ELEMENT'S RAW PAYLOAD WORDS, reaching NEITHER of the compiler's two structural enum comparators, so `vec![E.A(f"yy")]… | 6aead97 |
+| B-2026-08-27-14 | typecheck | high | THE IMPL TABLE IS NAME-KEYED, so a user type that shadows a prelude name SILENTLY INHERITS THE STDLIB TYPE'S TRAIT IMPLS | e17ecdf |
+| B-2026-08-27-15 | typecheck | low | THE PRELUDE-SHADOW LINT DOES NOT EXIST | e17ecdf |
 | B-2026-08-27-16 | codegen | high | `==` ON A GENERIC ENUM WHOSE ARGUMENT OVERFLOWS ITS ERASED PAYLOAD ALLOTMENT PANICS THE COMPILER, so `Box1[String] == Box1[String]` for `enum Box1[T]… | 752e0b9 |
 | B-2026-08-27-17 | codegen | high | `assert_eq` / `assert_ne` COMPARE AN ENUM'S PAYLOAD WORDS INSTEAD OF ITS CONTENTS, so a Kara test asserting two structurally-equal enums with heap pa… | 752e0b9 |
 
