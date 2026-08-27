@@ -28785,6 +28785,34 @@ fn non_let_generic_binding_sites_dispatch_to_the_monomorph() {
     }
 }
 
+/// Interpreter ORACLE for B-2026-08-27-37: a generic struct destructured out
+/// of a by-value TUPLE param, with its heap field moved out and returned. The
+/// compiled backends DOUBLE-FREED this (the mono's tuple param got no
+/// entry-copy while the caller still dropped its temp, so both aliased one
+/// buffer); the interpreter was correct throughout, which is what made the
+/// run/build divergence visible at all.
+///
+/// Both element types run — this fired at `T = i64` as well as `T = String`,
+/// unlike the wrong-monomorph family where the scalar leg is silently fine.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_generic_struct_destructured_from_a_tuple_param_frees_once`, with the
+/// ASAN twin in `tests/memory_sanitizer.rs`.
+#[test]
+fn generic_struct_destructured_from_a_tuple_param_round_trips() {
+    let out = run(r#"
+struct Bag[T] { xs: Vec[T] }
+fn take[T](p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }
+fn main() {
+    let a = take((Bag { xs: ["x", "y"] }, 0));
+    println(f"{a.len()} {a[0]}");
+    let b = take((Bag { xs: [10, 20] }, 0));
+    println(f"{b.len()} {b[0]}");
+}
+"#);
+    assert_eq!(out, "2 x\n2 10\n");
+}
+
 #[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and

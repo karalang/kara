@@ -847,6 +847,97 @@ fn main() {
     /// Assert a program runs cleanly under ASAN and produces the expected
     /// stdout. Skips (prints a notice, passes the test) if the host can't
     /// support ASAN — see `asan_available` for the rationale.
+    /// B-2026-08-27-37 — a by-value TUPLE param of a MONOMORPH got neither an
+    /// entry-copy nor a scope-exit drop, while the caller's tuple-literal arm
+    /// registered its temp drop regardless, on the stated assumption that "the
+    /// callee now entry-copies a heap-bearing tuple param, so this caller temp
+    /// is an INDEPENDENT buffer". For a mono that was false: both sides aliased
+    /// one buffer, so moving the struct's heap field out handed the SAME `Vec`
+    /// to the result and still left the caller's temp to free it.
+    ///
+    /// `compile_mono_function`'s owned-param arm was gated `TypeKind::Path(_)`,
+    /// so tuples fell through it — the same "the two MUST stay paired" rule
+    /// B-2026-07-08-6 established for named aggregates, one param shape further.
+    ///
+    /// Both element types run: this fired at `T = i64` as well as `T = String`,
+    /// so it is NOT the wrong-monomorph family and a String-only test would not
+    /// have pinned the scalar half. The `(i64, Bag[T])` row is here because
+    /// tuple POSITION was an early wrong guess — it fails in either slot.
+    #[test]
+    fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
+        for (label, decl, arg) in [
+            (
+                "struct-first",
+                "(Bag[T], i64)",
+                "(Bag { xs: [\"x\", \"y\"] }, 0)",
+            ),
+            (
+                "struct-second",
+                "(i64, Bag[T])",
+                "(0, Bag { xs: [\"x\", \"y\"] })",
+            ),
+            (
+                "both-structs",
+                "(Bag[T], Bag[T])",
+                "(Bag { xs: [\"x\", \"y\"] }, Bag { xs: [\"q\"] })",
+            ),
+        ] {
+            let pat = if label == "struct-second" {
+                "(_n, b)"
+            } else {
+                "(b, _c)"
+            };
+            let src = format!(
+                "struct Bag[T] {{ xs: Vec[T] }}\n\
+                 fn take[T](p: {decl}) -> Vec[T] {{ let {pat} = p; b.xs }}\n\
+                 fn main() {{ let r = take({arg}); println(f\"len={{r.len()}} [{{r[0]}}]\"); }}\n"
+            );
+            assert_clean_asan_run(&src, &["len=2 [x]"], label);
+        }
+        // The scalar-element leg: `Vec[i64]` double-freed under the JIT even
+        // though AOT happened to survive it, so the element type is not what
+        // makes this a memory bug.
+        assert_clean_asan_run(
+            r#"
+struct Bag[T] { xs: Vec[T] }
+fn take[T](p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }
+fn main() { let r = take((Bag { xs: [10, 20] }, 0)); println(f"len={r.len()} [{r[0]}]"); }
+"#,
+            &["len=2 [10]"],
+            "scalar-element",
+        );
+        // The fix ADDS a callee-side entry-copy + scope-exit drop to the mono's
+        // tuple param, so these three are the shapes where that could leak or
+        // over-free rather than balance: the param RETURNED whole (its drop must
+        // be move-suppressed, else the copy the caller now owns is freed twice),
+        // a NAMED binding as the argument (the caller's binding owns the
+        // original), and a CALL TEMPORARY as the argument.
+        // TWO SHAPES ARE DELIBERATELY NOT GUARDED HERE, because they leak for a
+        // reason that is NOT this fix and is NOT new — the tuple value ESCAPES
+        // the caller's frame, so the caller registers no drop for its original:
+        //
+        //   fn passthru[T](p: (Bag[T], i64)) -> (Bag[T], i64) { p }   // returned whole
+        //   use2(mk(["x", "y"]))                                      // call-temporary arg
+        //
+        // Measured both ways: the identical NON-generic spelling of each leaks
+        // the same 48 bytes on an UNMODIFIED tree, and the non-generic path is
+        // untouched by this change. The generic spelling was clean before only
+        // BECAUSE of the aliasing this fix removes, so dropping the alias
+        // exposes the pre-existing defect on that spelling too — corruption
+        // traded for an already-present leak, and the two paths made
+        // consistent. Filed as its own row; when it is fixed, add both shapes
+        // here as further guards.
+        assert_clean_asan_run(
+            r#"
+struct Bag[T] { xs: Vec[T] }
+fn takes[T](p: (Bag[T], i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { let t = (Bag { xs: ["x", "y"] }, 7); println(f"{takes(t)}"); }
+"#,
+            &["9"],
+            "named-binding-arg",
+        );
+    }
+
     fn assert_clean_asan_run(src: &str, expected_stdout: &[&str], label: &str) {
         if !asan_available() {
             eprintln!("[{label}] ASAN unavailable on this host — skipping");

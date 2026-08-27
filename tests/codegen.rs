@@ -11720,30 +11720,50 @@ fn main() {
         }
     }
 
-    /// The third non-`let` site, the tuple destructure. Its DISPATCH is clean —
-    /// it reaches the same span fallback the for-loop binding does, and an
-    /// `nm` of the AOT binary shows the `$i64` / `$struct` monomorph siblings
-    /// rather than a bare prototype.
+    /// The third non-`let` site, the tuple destructure, through the SAME
+    /// consuming oracle as its for-loop and match siblings above.
     ///
-    /// It is pinned here through a NON-CONSUMING sibling chain rather than the
-    /// consuming `b.inner()` the two sites above use, because CONSUMING a
-    /// generic struct destructured out of a tuple PARAM double-frees — a
-    /// separate defect of a different class, filed as its own row. When that
-    /// lands, this should be rewritten to the consuming shape so the site is
-    /// covered by the same oracle as its two siblings.
+    /// It was pinned through a non-consuming chain when B-2026-08-27-36 landed,
+    /// because consuming a generic struct destructured out of a tuple PARAM
+    /// double-freed (B-2026-08-27-37: the mono got no entry-copy while the
+    /// caller still dropped its temp). That is fixed, so this now uses the
+    /// consuming shape the comment there asked for — the site is covered by one
+    /// oracle across all three bindings rather than a weaker stand-in.
     #[test]
     fn e2e_generic_tuple_destructure_binding_dispatches_to_the_monomorph() {
         let src = "struct Bag[=T] { xs: Vec[T] }\n\
                    impl[T: Ord] Bag[T] {\n    \
-                       fn inner_len(ref self) -> i64 { self.xs.len() }\n    \
-                       fn peek(ref self) -> i64 { self.inner_len() }\n    \
-                       fn mk(p: (Bag[T], i64)) -> i64 { let (b, _n) = p; b.peek() }\n\
+                       fn swap2(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }\n    \
+                       fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }\n    \
+                       fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }\n    \
+                       fn mk(p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.inner() }\n\
                    }\n\
                    fn main() {\n    \
-                       println(Bag.mk((Bag { xs: [\"x\", \"y\", \"z\"] }, 0)));\n    \
-                       println(Bag.mk((Bag { xs: [1, 2, 3] }, 0)));\n\
+                       let a = Bag.mk((Bag { xs: [\"x\", \"y\", \"z\"] }, 0)); println(a[0]);\n    \
+                       let b = Bag.mk((Bag { xs: [1, 2, 3] }, 0)); println(b[0]);\n\
                    }\n";
-        assert_eq!(run_program(src).as_deref(), Some("3\n3\n"));
+        assert_eq!(run_program(src).as_deref(), Some("z\n3\n"));
+    }
+
+    /// B-2026-08-27-37 — the run-vs-build half of that double free. A by-value
+    /// TUPLE param of a MONOMORPH got no entry-copy and no scope-exit drop
+    /// (`compile_mono_function`'s owned-param arm was gated `TypeKind::Path(_)`),
+    /// while the caller registered its tuple temp's drop regardless. Both sides
+    /// aliased one buffer, so moving the struct's heap field out handed the same
+    /// `Vec` to the result and still left the caller's temp to free it.
+    ///
+    /// Runs at BOTH element types: this fired at `T = i64` too, which is what
+    /// separates it from the wrong-monomorph family where the scalar leg is
+    /// silently correct. `tests/memory_sanitizer.rs` carries the ASAN twin.
+    #[test]
+    fn e2e_generic_struct_destructured_from_a_tuple_param_frees_once() {
+        let src = "struct Bag[T] { xs: Vec[T] }\n\
+                   fn take[T](p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }\n\
+                   fn main() {\n    \
+                       let a = take((Bag { xs: [\"x\", \"y\"] }, 0)); println(f\"{a.len()} {a[0]}\");\n    \
+                       let b = take((Bag { xs: [10, 20] }, 0)); println(f\"{b.len()} {b[0]}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("2 x\n2 10\n"));
     }
 
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a

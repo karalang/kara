@@ -2913,6 +2913,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
+            // B-2026-08-27-37 — the TUPLE leg of the pairing rule above. That
+            // arm is gated `TypeKind::Path(_)`, so a by-value TUPLE param fell
+            // through it and the mono got NO entry-copy and NO scope-exit drop,
+            // while `compile_function` gives a non-generic callee both (#21,
+            // `make_tuple_param_callee_owned`). The caller's tuple-literal arm
+            // is not gated on genericity and registers its temp drop either way,
+            // on the stated assumption that "the callee now entry-copies a
+            // heap-bearing tuple param, so this caller temp is an INDEPENDENT
+            // buffer". For a mono that assumption was false: caller temp and
+            // callee param aliased one buffer, so `let (b, _n) = p; b.xs` handed
+            // the SAME Vec out to the result AND left the caller's temp drop to
+            // free it — a double free at `T = i64` as well as `T = String`,
+            // with the interpreter correct. Same "the two MUST stay paired"
+            // rule as B-2026-07-08-6 above, one param shape further.
+            //
+            // The element types must be resolved through the active monomorph's
+            // substitution first: `type_expr_has_drop_heap(Bag[T])` reads the
+            // GENERIC form as heapless, so passing the declared elements would
+            // bail at the first gate and change nothing.
+            if let TypeKind::Tuple(elems) = &param.ty.kind {
+                if let BasicTypeEnum::StructType(agg_ty) = param_val.get_type() {
+                    let concrete: Vec<crate::ast::TypeExpr> = elems
+                        .iter()
+                        .map(|e| {
+                            self.concrete_generic_struct_inst(e)
+                                .unwrap_or_else(|| e.clone())
+                        })
+                        .collect();
+                    self.make_tuple_param_callee_owned(&concrete, agg_ty, alloca);
+                }
+            }
             // B-2026-07-03-23 layer 4: record the CONCRETE generic instantiation
             // of a generic-struct param (`self: (ref) Box[T]` with
             // `type_subst_names["T"] = "f64"` → `Box[f64]`) into the name-keyed
