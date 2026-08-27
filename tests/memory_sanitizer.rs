@@ -54857,6 +54857,42 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-6 — the MATCHING sibling of the two tests around it, and
+    /// the shape neither of them reached: both probe with keys that genuinely
+    /// differ from the inserted one, so the successful-lookup path through the
+    /// structural enum comparator never ran under ASAN at all.
+    ///
+    /// It matters here because a HIT and a MISS retire the inline temporary
+    /// differently — a hit borrows the temporary's `String` payload for the
+    /// comparison and then still has to discard the temporary, while the
+    /// returned value comes from the key the map owns. Comparing by content
+    /// rather than by payload words is what puts a hit on this path at all.
+    #[test]
+    fn asan_map_get_with_a_matching_inline_temporary_enum_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+enum Tag { Named { s: String }, Anon }
+fn main() {
+    let mut m: Map[Tag, i64] = Map.new();
+    m.insert(Tag.Named { s: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        match m.get(Tag.Named { s: f"a-padding-padding-padding" }) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["351"],
+            "map-get-matching-inline-temporary-enum-key",
+        );
+    }
+
     /// CONTROL for the enum leg's shape gate, and the reason it exists.
     /// `enum_name_of_expr` resolves a bare `Identifier` too, so a fix that
     /// consulted it without first checking the expression shape would free a

@@ -19,6 +19,13 @@ use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
+/// B-2026-08-27-6 — one `(discriminant, variant name, payload fields)` row for
+/// the structural ENUM-key walk, where each field is `(LLVM field index within
+/// the enum's `{tag, w0, w1, …}` area, the field's declared `TypeExpr`)`.
+/// Aliased because the inline tuple trips `clippy::type_complexity`, the same
+/// reason `synth_drop.rs` aliases `EnumPayloadBodyTargets`.
+type EnumKeyPlan = Vec<(u64, String, Vec<(u32, TypeExpr)>)>;
+
 impl<'ctx> super::Codegen<'ctx> {
     // ── Map codegen ───────────────────────────────────────────────
 
@@ -932,6 +939,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 let struct_name = p.segments[0].clone();
                 self.emit_hash_fn_for_struct(&struct_name)
             }
+            // B-2026-08-27-6 — the eq twin's sibling, on the same rule: a
+            // structural eq without a structural hash puts equal keys in
+            // different buckets, where they never meet to be compared.
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && !self.type_decls.shared_types.contains_key(&p.segments[0])
+                    && self.enum_structural_key_plan(&p.segments[0]).is_some() =>
+            {
+                let enum_name = p.segments[0].clone();
+                self.emit_hash_fn_for_enum(&enum_name)
+            }
             // B-2026-08-27-4 — the eq twin's sibling; the two must move
             // together or equal keys land in different buckets.
             TypeKind::Path(p)
@@ -992,6 +1010,17 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 let struct_name = p.segments[0].clone();
                 self.emit_eq_fn_for_struct(&struct_name)
+            }
+            // B-2026-08-27-6 — a plain (non-shared) ENUM key. Without this arm
+            // it fell to the byte-compare fallback below, which for a
+            // heap-bearing payload compares the payload's POINTER words.
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && !self.type_decls.shared_types.contains_key(&p.segments[0])
+                    && self.enum_structural_key_plan(&p.segments[0]).is_some() =>
+            {
+                let enum_name = p.segments[0].clone();
+                self.emit_eq_fn_for_enum(&enum_name)
             }
             // B-2026-08-27-4 — a `shared struct` / `shared enum` KEY. Without
             // this arm it fell to the byte-compare fallback below, which for a
@@ -1482,7 +1511,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // `shared_gep_layout` builds for a headerless object, and the byte
             // loop reads its SIZE rather than its field offsets.
             let area_ty = self.shared_user_area_type(info.heap_type, base);
-            let inner = self.emit_eq_fn_for_type(&format!("{name}__area"), area_ty.into());
+            let area_name = format!("karac_eq_{name}__area");
+            // B-2026-08-27-6 — the area of a shared enum has the same
+            // `{tag, w0, w1, …}` shape as a plain enum's value, so it takes the
+            // same structural walk. Keeping the byte compare here while the
+            // plain enum recursed would break the very parity this arm exists
+            // to hold: a heap-bearing payload would compare its POINTER words.
+            let inner = match self.enum_structural_key_plan(name) {
+                Some(plan) => self.emit_enum_area_eq_fn(&area_name, area_ty, &plan),
+                None => self.emit_eq_fn_for_type(&format!("{name}__area"), area_ty.into()),
+            };
             let aa = self
                 .builder
                 .build_struct_gep(info.heap_type, pa, base, "sh.eq.area.a")
@@ -1583,7 +1621,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // header would give two structurally-equal boxes different digests
             // and they would never meet in the table.
             let area_ty = self.shared_user_area_type(info.heap_type, base);
-            let inner = self.emit_hash_fn_for_type(&format!("{name}__area"), area_ty.into());
+            let area_name = format!(
+                "karac_hash_{name}__area{}",
+                self.hash_hasher.mangle_suffix()
+            );
+            // The eq twin's sibling, on the same rule as everywhere else here.
+            let inner = match self.enum_structural_key_plan(name) {
+                Some(plan) => self.emit_enum_area_hash_fn(&area_name, area_ty, &plan),
+                None => self.emit_hash_fn_for_type(&format!("{name}__area"), area_ty.into()),
+            };
             let ap = self
                 .builder
                 .build_struct_gep(info.heap_type, obj, base, "sh.h.area")
@@ -1835,6 +1881,474 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         eq_fn
+    }
+
+    /// Per-variant payload plan for the structural ENUM-key walk:
+    /// `(tag, variant, [(llvm field index, field TypeExpr)])`, sorted by
+    /// discriminant so the emitted block layout is reproducible run to run
+    /// (`layout.tags` is a `HashMap` and preserves no useful order).
+    ///
+    /// `None` means the enum must KEEP the byte-compare fallback. Two reasons,
+    /// neither of them about enums as such — both are about the payload-WORD
+    /// image being readable as the field's own type:
+    ///
+    /// * The enum is GENERIC. Its payload `TypeExpr` is the parameter itself
+    ///   and the layout is the erased all-i64 base, so there is no concrete
+    ///   type to recurse into; worse, the name would resolve against a USER
+    ///   type that happens to share it — the B-2026-08-03-5 hazard the drop
+    ///   walker guards the same way.
+    /// * A payload field's word image is not bit-identical to its LLVM value
+    ///   ([`Self::payload_words_match_llvm_layout`]), so a pointer into the
+    ///   words is not a pointer to that type.
+    ///
+    /// Declining is per-ENUM, never per-field: a walk that skipped one field it
+    /// could not read would answer `true` for two values differing only there,
+    /// which is a worse answer than the byte compare it replaces.
+    pub(super) fn enum_structural_key_plan(&self, enum_name: &str) -> Option<EnumKeyPlan> {
+        let layout = self.type_decls.enum_layouts.get(enum_name)?;
+        if !self.enum_generic_param_names(enum_name).is_empty() {
+            return None;
+        }
+        let variants = self.enum_variant_field_type_exprs(enum_name);
+        if variants.is_empty() {
+            return None;
+        }
+        let mut plan: EnumKeyPlan = Vec::with_capacity(variants.len());
+        for (tag, vname, tes) in variants {
+            let offsets = layout.field_word_offsets.get(&vname)?;
+            if offsets.len() != tes.len() {
+                return None;
+            }
+            let mut fields: Vec<(u32, TypeExpr)> = Vec::with_capacity(tes.len());
+            for (fi, te) in tes.iter().enumerate() {
+                if !self.payload_words_match_llvm_layout(te) {
+                    return None;
+                }
+                // The tag is LLVM field 0, so payload word `w` is field `w + 1`
+                // — the addressing `emit_enum_drop_switch` already uses.
+                fields.push(((offsets[fi].0 + 1) as u32, te.clone()));
+            }
+            plan.push((tag, vname, fields));
+        }
+        plan.sort_by_key(|(tag, _, _)| *tag);
+        Some(plan)
+    }
+
+    /// True when the payload-WORD image of `te` is bit-identical to its LLVM
+    /// value layout, so a pointer to the field's first payload word can be
+    /// handed to that type's own comparator unchanged.
+    ///
+    /// Payload words are a word-EXPANDED image, not a memcpy of the value:
+    /// `coerce_to_payload_words` writes one i64 stream per source field. Two
+    /// consequences pull in opposite directions, and the split is the whole
+    /// content of this predicate:
+    ///
+    /// * A narrow scalar arrives widened into a full word. Harmless — its
+    ///   comparator loads only its own width from the low end, and both sides
+    ///   were widened identically.
+    /// * A `struct { a: i32, b: i32 }` spends TWO words where its LLVM value is
+    ///   eight bytes, so every field after the first sits at the wrong offset
+    ///   and the child comparator would read `b` out of `a`'s padding. Hence
+    ///   the per-field offset check in the struct half below, rather than a
+    ///   size comparison that `{ a: i32, b: i64 }` would also pass.
+    ///
+    /// LITTLE-ENDIAN is assumed for the narrow-scalar case, as everywhere else
+    /// a payload word is read back (`reconstruct_payload_value` truncates the
+    /// word for exactly this reason). Every target karac emits for — x86-64,
+    /// aarch64, wasm32 — is little-endian.
+    fn payload_words_match_llvm_layout(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            // Tuples, arrays, fn types: not laid out by the word-stream rule
+            // this walk reads, so decline rather than guess.
+            return false;
+        };
+        let Some(name) = p.segments.first().map(|s| s.as_str()) else {
+            return false;
+        };
+        match name {
+            // Word-exact aggregates: the word stream IS the value.
+            // `String`/`Vec` are `{ptr,len,cap}` = 3, `Slice` `{ptr,len}` = 2,
+            // and the Map/Set family is one heap-handle word.
+            "String" | "Vec" | "Slice" | "Map" | "Set" | "SortedMap" | "SortedSet" => true,
+            // One word each; a narrow one sits in the word's low bytes.
+            // `i128`/`u128` take two, lo then hi — which is their LLVM image.
+            "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
+            | "f32" | "f64" | "bool" | "char" | "Unit" | "i128" | "u128" => true,
+            _ => {
+                // A `shared` payload is a single RC-pointer word, which is what
+                // that type's own comparator expects to be handed.
+                if self.type_decls.shared_types.contains_key(name) {
+                    return true;
+                }
+                // Enum-in-enum: `payload_word_count_for_type_expr` sizes it at
+                // ONE word while its real width is four or six, so
+                // `coerce_to_payload_words` heap-BOXES it and the word holds a
+                // box pointer rather than the value (`EnumDropKind::BoxedOptRes`).
+                if self.type_decls.enum_layouts.contains_key(name) {
+                    return false;
+                }
+                self.struct_payload_words_match_llvm_layout(name)
+            }
+        }
+    }
+
+    /// The user-struct half of [`Self::payload_words_match_llvm_layout`]: every
+    /// field must itself be word-faithful AND sit at the byte offset its word
+    /// position implies. Needs the real `TargetData` offsets — recomputing
+    /// LLVM's packing rules here would be a second source of truth for the one
+    /// question that matters.
+    fn struct_payload_words_match_llvm_layout(&self, name: &str) -> bool {
+        let Some(field_tes) = self.type_decls.struct_field_type_exprs.get(name).cloned() else {
+            return false;
+        };
+        let Some(struct_ty) = self.type_decls.struct_types.get(name).copied() else {
+            return false;
+        };
+        let Some(td) = self.target_data.as_ref() else {
+            return false;
+        };
+        // A layout block (SoA / field grouping) can give the LLVM type a shape
+        // the surface field list does not describe.
+        if field_tes.len() != struct_ty.count_fields() as usize {
+            return false;
+        }
+        let mut word = 0u64;
+        for (i, fte) in field_tes.iter().enumerate() {
+            if !self.payload_words_match_llvm_layout(fte) {
+                return false;
+            }
+            if td.offset_of_element(&struct_ty, i as u32) != Some(word * 8) {
+                return false;
+            }
+            word += self.payload_word_count_for_type_expr(fte, "", "") as u64;
+        }
+        // Trailing padding is never read by a per-field walk, so `<=` rather
+        // than `==`; an ABI size OVER the word budget would mean a field the
+        // stream never wrote.
+        td.get_abi_size(&struct_ty) <= word * 8
+    }
+
+    /// Structural EQ for a plain (non-shared) ENUM key: compare tags, then walk
+    /// the LIVE variant's declared payload fields through the same child
+    /// comparators the struct arm uses (B-2026-08-27-6).
+    ///
+    /// Without this arm an enum key fell to the byte-compare fallback over its
+    /// inline `{tag, w0, w1, …}` area. That is CORRECT while the whole value is
+    /// inline, which is why the scalar-payload enum key — the common one —
+    /// always worked and this went unnoticed; it is wrong the moment a payload
+    /// owns heap, because a `String` payload stores `{ptr,len,cap}` in those
+    /// words and the compare then reads two distinct heap POINTERS.
+    /// `m.contains_key(twin)` answered `false` on the compiled backends for a
+    /// key the interpreter matched.
+    ///
+    /// [`Self::emit_hash_fn_for_enum`] is the required twin: equal keys that
+    /// hash differently never meet in the same bucket, so an equality-only fix
+    /// would change nothing observable.
+    pub(super) fn emit_eq_fn_for_enum(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_eq_{enum_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        if let Some(f) = self.try_emit_user_impl_eq_fn(enum_name, &fn_name) {
+            return f;
+        }
+        let (Some(plan), Some(layout)) = (
+            self.enum_structural_key_plan(enum_name),
+            self.type_decls.enum_layouts.get(enum_name).cloned(),
+        ) else {
+            // Reached only if a caller skipped the dispatcher's plan guard.
+            let key_ty = self.context.i64_type().into();
+            return self.emit_eq_fn_for_type(enum_name, key_ty);
+        };
+        self.emit_enum_area_eq_fn(&fn_name, layout.llvm_type, &plan)
+    }
+
+    /// The tag-switch body shared by [`Self::emit_eq_fn_for_enum`] and the
+    /// shared-enum leg of [`Self::emit_eq_fn_for_shared`]. `area_ty` is the
+    /// struct to GEP through — the enum's value type for a plain enum, and the
+    /// rc-header-stripped user area for a shared one, which have the same
+    /// `{tag, w0, w1, …}` shape.
+    pub(super) fn emit_enum_area_eq_fn(
+        &mut self,
+        fn_name: &str,
+        area_ty: inkwell::types::StructType<'ctx>,
+        plan: &EnumKeyPlan,
+    ) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let saved_bb = self.builder.get_insert_block();
+
+        // DECLARED BEFORE the children are emitted, for the reason
+        // `emit_eq_fn_for_shared` documents: a `shared` payload whose own type
+        // names this enum back would otherwise re-enter the emitter forever.
+        let eq_fn = self.module.add_function(
+            fn_name,
+            bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let child_fns: Vec<Vec<FunctionValue<'ctx>>> = plan
+            .iter()
+            .map(|(_, _, fields)| {
+                fields
+                    .iter()
+                    .map(|(_, te)| self.emit_eq_fn_for_type_expr(te))
+                    .collect()
+            })
+            .collect();
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let neq_bb = self.context.append_basic_block(eq_fn, "eqe.neq");
+        let eq_bb = self.context.append_basic_block(eq_fn, "eqe.eq");
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+        self.builder.position_at_end(eq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let ta_p = self
+            .builder
+            .build_struct_gep(area_ty, a_ptr, 0, "eqe.ta.p")
+            .unwrap();
+        let tb_p = self
+            .builder
+            .build_struct_gep(area_ty, b_ptr, 0, "eqe.tb.p")
+            .unwrap();
+        let ta = self
+            .builder
+            .build_load(i64_t, ta_p, "eqe.ta")
+            .unwrap()
+            .into_int_value();
+        let tb = self
+            .builder
+            .build_load(i64_t, tb_p, "eqe.tb")
+            .unwrap()
+            .into_int_value();
+        let tags_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, ta, tb, "eqe.tag.eq")
+            .unwrap();
+        let dispatch_bb = self.context.append_basic_block(eq_fn, "eqe.dispatch");
+        self.builder
+            .build_conditional_branch(tags_eq, dispatch_bb, neq_bb)
+            .unwrap();
+
+        // One block per variant. A variant with no payload falls straight
+        // through to `eq` — its tag was the whole value.
+        let mut cases: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::with_capacity(plan.len());
+        let bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = plan
+            .iter()
+            .map(|(tag, vname, _)| {
+                let bb = self
+                    .context
+                    .append_basic_block(eq_fn, &format!("eqe.{vname}"));
+                cases.push((i64_t.const_int(*tag, false), bb));
+                bb
+            })
+            .collect();
+        self.builder.position_at_end(dispatch_bb);
+        // Default is `eq`: the tags already matched, so a tag outside the plan
+        // has nothing left to disagree about — the same answer the byte
+        // compare gave a payload-free value.
+        self.builder.build_switch(ta, eq_bb, &cases).unwrap();
+
+        for (vi, (bb, (_, vname, fields))) in bbs.into_iter().zip(plan.iter()).enumerate() {
+            self.builder.position_at_end(bb);
+            for (fi, ((idx, _), child)) in fields.iter().zip(child_fns[vi].iter()).enumerate() {
+                let fa = self
+                    .builder
+                    .build_struct_gep(area_ty, a_ptr, *idx, &format!("eqe.{vname}.a{fi}"))
+                    .unwrap();
+                let fb = self
+                    .builder
+                    .build_struct_gep(area_ty, b_ptr, *idx, &format!("eqe.{vname}.b{fi}"))
+                    .unwrap();
+                let ok = self
+                    .builder
+                    .build_call(
+                        *child,
+                        &[fa.into(), fb.into()],
+                        &format!("eqe.{vname}.r{fi}"),
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let next = self
+                    .context
+                    .append_basic_block(eq_fn, &format!("eqe.{vname}.n{fi}"));
+                self.builder
+                    .build_conditional_branch(ok, next, neq_bb)
+                    .unwrap();
+                self.builder.position_at_end(next);
+            }
+            self.builder.build_unconditional_branch(eq_bb).unwrap();
+        }
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
+    }
+
+    /// Structural HASH for a plain (non-shared) ENUM key — the twin of
+    /// [`Self::emit_eq_fn_for_enum`], and required to move WITH it. The tag
+    /// seeds the digest (as `emit_hash_fn_for_vec` seeds with `len`), then the
+    /// live variant's payload fields fold in through the same FxHash tail-mix
+    /// the struct and tuple combiners use.
+    pub(super) fn emit_hash_fn_for_enum(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_hash_{enum_name}{}", self.hash_hasher.mangle_suffix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        if let Some(f) = self.try_emit_user_impl_hash_fn(enum_name, &fn_name) {
+            return f;
+        }
+        let (Some(plan), Some(layout)) = (
+            self.enum_structural_key_plan(enum_name),
+            self.type_decls.enum_layouts.get(enum_name).cloned(),
+        ) else {
+            let key_ty = self.context.i64_type().into();
+            return self.emit_hash_fn_for_type(enum_name, key_ty);
+        };
+        self.emit_enum_area_hash_fn(&fn_name, layout.llvm_type, &plan)
+    }
+
+    /// The tag-switch body shared by [`Self::emit_hash_fn_for_enum`] and the
+    /// shared-enum leg of [`Self::emit_hash_fn_for_shared`]; the hash mirror of
+    /// [`Self::emit_enum_area_eq_fn`], including its `area_ty` contract.
+    pub(super) fn emit_enum_area_hash_fn(
+        &mut self,
+        fn_name: &str,
+        area_ty: inkwell::types::StructType<'ctx>,
+        plan: &EnumKeyPlan,
+    ) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let saved_bb = self.builder.get_insert_block();
+
+        // Declared before the children, same reason as the eq twin.
+        let hash_fn = self.module.add_function(
+            fn_name,
+            i64_t.fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let child_fns: Vec<Vec<FunctionValue<'ctx>>> = plan
+            .iter()
+            .map(|(_, _, fields)| {
+                fields
+                    .iter()
+                    .map(|(_, te)| self.emit_hash_fn_for_type_expr(te))
+                    .collect()
+            })
+            .collect();
+
+        let seed = i64_t.const_int(Self::FXHASH_SEED, false);
+        let rotate_amt = i64_t.const_int(Self::FXHASH_ROTATE, false);
+        let rotate_inv = i64_t.const_int(64 - Self::FXHASH_ROTATE, false);
+
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        let exit_bb = self.context.append_basic_block(hash_fn, "he.exit");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_p = self
+            .builder
+            .build_struct_gep(area_ty, key_ptr, 0, "he.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_p, "he.tag")
+            .unwrap()
+            .into_int_value();
+        // Seed with the tag: `rotate_left(0, 5) = 0`, so the tail-mix from a
+        // zero accumulator collapses to `tag * SEED` — the shape the Vec arm
+        // uses for `len`, and what keeps two variants with identical payload
+        // words hashing apart.
+        let init_state = self.builder.build_int_mul(tag, seed, "he.init").unwrap();
+
+        let mut cases: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::with_capacity(plan.len());
+        let bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = plan
+            .iter()
+            .map(|(t, vname, _)| {
+                let bb = self
+                    .context
+                    .append_basic_block(hash_fn, &format!("he.{vname}"));
+                cases.push((i64_t.const_int(*t, false), bb));
+                bb
+            })
+            .collect();
+        self.builder.build_switch(tag, exit_bb, &cases).unwrap();
+        let mut incoming: Vec<(IntValue<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            vec![(init_state, entry_bb)];
+
+        for (vi, (bb, (_, vname, fields))) in bbs.into_iter().zip(plan.iter()).enumerate() {
+            self.builder.position_at_end(bb);
+            let mut state = init_state;
+            for (fi, ((idx, _), child)) in fields.iter().zip(child_fns[vi].iter()).enumerate() {
+                let fp = self
+                    .builder
+                    .build_struct_gep(area_ty, key_ptr, *idx, &format!("he.{vname}.p{fi}"))
+                    .unwrap();
+                let fh = self
+                    .builder
+                    .build_call(*child, &[fp.into()], &format!("he.{vname}.h{fi}"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let shl = self
+                    .builder
+                    .build_left_shift(state, rotate_amt, &format!("he.{vname}.shl{fi}"))
+                    .unwrap();
+                let shr = self
+                    .builder
+                    .build_right_shift(state, rotate_inv, false, &format!("he.{vname}.shr{fi}"))
+                    .unwrap();
+                let rot = self
+                    .builder
+                    .build_or(shl, shr, &format!("he.{vname}.rot{fi}"))
+                    .unwrap();
+                let xored = self
+                    .builder
+                    .build_xor(rot, fh, &format!("he.{vname}.xor{fi}"))
+                    .unwrap();
+                state = self
+                    .builder
+                    .build_int_mul(xored, seed, &format!("he.{vname}.mul{fi}"))
+                    .unwrap();
+            }
+            // The predecessor is whatever block the last child call left us in.
+            let pred = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(exit_bb).unwrap();
+            incoming.push((state, pred));
+        }
+
+        self.builder.position_at_end(exit_bb);
+        let phi = self.builder.build_phi(i64_t, "he.state").unwrap();
+        for (val, bb) in &incoming {
+            phi.add_incoming(&[(val as &dyn inkwell::values::BasicValue, *bb)]);
+        }
+        let out = phi.as_basic_value().into_int_value();
+        self.builder.build_return(Some(&out)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
     }
 
     /// Structural `==` for a `shared struct` value (C1, ledger B-2026-06-19-9).

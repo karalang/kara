@@ -862,6 +862,115 @@ fn eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche() {
 }
 
 #[test]
+fn an_enum_key_with_a_heap_payload_is_matched_by_content() {
+    // B-2026-08-27-6 — a plain (non-shared) ENUM key with a heap-bearing
+    // payload was compared by its payload WORDS instead of recursing, so the
+    // compiled backends missed a structurally-equal key the interpreter found.
+    // `emit_eq_fn_for_type_expr` had arms for tuples, `Vec` and STRUCTS but
+    // none for enums, and the byte-compare fallback it fell to reads a
+    // `String` payload's two distinct heap POINTERS.
+    //
+    // THE SCALAR-PAYLOAD LEG IS THE CONTROL, and the reason this sat unseen:
+    // a byte compare IS correct when the whole value is inline, so the common
+    // enum key always worked.
+    //
+    // `Scalar(5)` and `Alt(5)` are the tag leg — identical payload words under
+    // different discriminants. They must not collide, which is what a walk
+    // that compared payloads without first gating on the tag would do.
+    //
+    // EQ AND HASH HAD TO MOVE TOGETHER; `dedup` and `removed` are what check
+    // it. Equal keys that hash differently never land in the same bucket, so
+    // an equality-only fix leaves every lookup missing exactly as before.
+    //
+    // THE LAST TWO LINES PIN THE TWO PATHS TOGETHER. `==` on an enum VALUE
+    // does not use this comparator at all — the operator site routes a
+    // heap-payload enum to `compile_enum_eq`, which has walked tags and
+    // rebuilt payloads structurally all along. That asymmetry IS this bug:
+    // `x == y` and `m.contains_key(y)` disagreed on the same two values,
+    // because only one of the two enum comparators in this compiler knew how
+    // to look past the payload words. They must keep agreeing.
+    //
+    // The `-ne` lines are not padding: a comparator that answered `true`
+    // unconditionally passes every positive assertion above them.
+    //
+    // `shared` closes the loop with B-2026-08-27-4, whose shared-enum leg was
+    // defined as "behaves as its non-shared twin does" and so inherited this
+    // defect. Fixing the plain enum without it would have broken that parity
+    // in the other direction.
+    //
+    // Codegen twin: `test_e2e_an_enum_key_with_a_heap_payload_is_matched_by_content`.
+    // The interpreter was already right, so this pins it as the oracle.
+    let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Inner { id: i64, tag: String }
+#[derive(Hash, Eq, PartialEq)]
+enum Shape {
+    Unit,
+    Scalar(i64),
+    Alt(i64),
+    Text { s: String },
+    Pair(i64, String),
+    Items(Vec[i64]),
+    Nested(Inner),
+    Narrow(u8, i64),
+}
+#[derive(Hash, Eq, PartialEq)]
+shared enum Node { Named { s: String }, Anon }
+fn main() {
+    let mut m: Map[Shape, i64] = Map.new();
+    m.insert(Shape.Unit, 1);
+    m.insert(Shape.Scalar(5), 2);
+    m.insert(Shape.Alt(5), 3);
+    m.insert(Shape.Text { s: f"hello" }, 4);
+    m.insert(Shape.Pair(9, f"pp"), 5);
+    m.insert(Shape.Items(vec![1, 2, 3]), 6);
+    m.insert(Shape.Nested(Inner { id: 7, tag: f"nn" }), 7);
+    m.insert(Shape.Narrow(200, 11), 8);
+    println(f"len={m.len()}");
+    println(f"unit={m.contains_key(Shape.Unit)}");
+    println(f"text={m.contains_key(Shape.Text { s: f"hello" })}");
+    println(f"text-ne={m.contains_key(Shape.Text { s: f"hellp" })}");
+    println(f"pair={m.contains_key(Shape.Pair(9, f"pp"))}");
+    println(f"pair-ne={m.contains_key(Shape.Pair(9, f"pq"))}");
+    println(f"items={m.contains_key(Shape.Items(vec![1, 2, 3]))}");
+    println(f"items-ne={m.contains_key(Shape.Items(vec![1, 2, 4]))}");
+    println(f"nested={m.contains_key(Shape.Nested(Inner { id: 7, tag: f"nn" }))}");
+    println(f"nested-ne={m.contains_key(Shape.Nested(Inner { id: 7, tag: f"nm" }))}");
+    println(f"narrow={m.contains_key(Shape.Narrow(200, 11))}");
+    println(f"narrow-ne={m.contains_key(Shape.Narrow(201, 11))}");
+    match m.get(Shape.Scalar(5)) { Some(v) => { println(f"tag-a={v}") } None => { println(f"tag-a=miss") } }
+    match m.get(Shape.Alt(5)) { Some(v) => { println(f"tag-b={v}") } None => { println(f"tag-b=miss") } }
+
+    let mut s: Set[Shape] = Set.new();
+    s.insert(Shape.Text { s: f"dup" });
+    s.insert(Shape.Text { s: f"dup" });
+    println(f"dedup={s.len()}");
+    m.remove(Shape.Text { s: f"hello" });
+    println(f"removed={m.len()}");
+
+    let mut n: Map[Node, i64] = Map.new();
+    n.insert(Node.Named { s: f"aa" }, 1);
+    println(f"shared={n.contains_key(Node.Named { s: f"aa" })}");
+    println(f"shared-ne={n.contains_key(Node.Named { s: f"ab" })}");
+
+    let p = Shape.Text { s: f"eq" };
+    let q = Shape.Text { s: f"eq" };
+    let r = Shape.Text { s: f"ne" };
+    println(f"eq={p == q}");
+    println(f"eq-ne={p == r}");
+}
+"#;
+    assert_eq!(
+        run_no_errors(src),
+        "len=8\nunit=true\ntext=true\ntext-ne=false\npair=true\n\
+         pair-ne=false\nitems=true\nitems-ne=false\nnested=true\n\
+         nested-ne=false\nnarrow=true\nnarrow-ne=false\ntag-a=2\n\
+         tag-b=3\ndedup=1\nremoved=7\nshared=true\n\
+         shared-ne=false\neq=true\neq-ne=false\n"
+    );
+}
+
+#[test]
 fn a_shared_key_is_matched_structurally_not_by_pointer_identity() {
     // B-2026-08-27-4. The compiled backends matched a `shared` map/set key by
     // POINTER IDENTITY: `contains_key` answered `false` for a structurally
