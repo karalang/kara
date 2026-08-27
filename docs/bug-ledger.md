@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 295 | 2 |
 | leak | 197 | 0 |
-| missing-feature | 184 | 3 |
+| missing-feature | 185 | 3 |
 | run-vs-build | 171 | 0 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1067 | 3 |
+| codegen | 1068 | 3 |
 | typecheck | 270 | 2 |
-| interp | 188 | 3 |
+| interp | 189 | 3 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1621 surfaced · 5 open · 1590 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1622 surfaced · 5 open · 1591 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1621 surfaced
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
-| B-2026-08-26-41 | 2026-08-26 | codegen+interp | medium | A USER `impl Drop` ON A MAP **KEY** TYPE NEVER FIRES, while the same impl on the VALUE type does. B-2026-07-30-11 shipped the Map-VALUES drop-body leg (`emit_map_val_user_drop_bodies_fn`); keys have only `emit_map_key_drop_fn_walk`, which reclaims memory and runs no user bodies. Identical under `--interp` and `build`, so it is a resource-cleanup gap for RAII key types rather than a run-vs-build divergence. | — |
 | B-2026-08-27-1 | 2026-08-27 | typecheck+interp+codegen | high | TWO `impl From[X] for T` FOR THE SAME TARGET SILENTLY RUN THE WRONG ONE: `?` and `.into()` resolve the conversion by target name only (`T.from`), so selection falls to impl ORDER -- interpreter takes the last, codegen the first, and the two backends disagree on the same program. Mismatched payloads give an interpreter `unreachable!` or a silent AOT type confusion that prints a raw heap pointer. This is the shape design.md's canonical `?` example teaches | — |
+| B-2026-08-27-2 | 2026-08-27 | codegen+interp | medium | `Map.remove(k)` DESTROYS AN ENTRY'S KEY IN PLACE AND RUNS NO `Drop` BODY FOR IT. B-2026-08-26-41 gave map keys their drop-bodies walk and wired it into every site that destroys an entry -- binding death, `clear()`, a map in a struct field, a map as a container element -- but `remove` was left out deliberately, as the one site whose fix is not the same shape. Identical on both backends, so it is a resource-cleanup gap rather than a parity break. | — |
 
 ### Relocated (2)
 
@@ -166,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1621 surfaced
 
 </details>
 
-### Fixed (1590)
+### Fixed (1591)
 
-<details><summary>1590 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1591 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1762,6 +1762,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1621 surfaced
 | B-2026-08-26-38 | codegen | medium | A `StringSlice` BOUND BY A MATCH PATTERN LOST EVERY METHOD BUT `to_string` under `karac build` -- `match head(s) { Some(v) => v.len() }` over an `Opt… | d5056cd |
 | B-2026-08-26-39 | codegen | medium | THE `Error return trace` SECTION IS NONDETERMINISTIC ON THE COMPILED BACKENDS: the same AOT binary, same input, same pinned `KARAC_HASH_SEED`, emits… | 7c10fdf |
 | B-2026-08-26-40 | typecheck | low | A WRONG-ARITY CALL TO AN ASSOCIATED FUNCTION IS REPORTED AS IF THE FUNCTION DID NOT EXIST: `String.with_capacity()` and `String.with_capacity(1i64, 2… | 9d530ad |
+| B-2026-08-26-41 | codegen+interp | medium | A USER `impl Drop` ON A MAP **KEY** TYPE NEVER FIRES, while the same impl on the VALUE type does | 34c3f54 |
 
 </details>
 
