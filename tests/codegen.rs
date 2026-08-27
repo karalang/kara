@@ -20547,7 +20547,7 @@ fn main() {
              let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
              let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
              let mut acc = 0i64; let m = out.len(); let mut j = 0i64;\n\
-             while j < m { let r = out[j]; let mut i = 0i64; let rl = r.len();\n\
+             while j < m { let r = ref out[j]; let mut i = 0i64; let rl = r.len();\n\
                  while i < rl { acc = acc + r[i]; i = i + 1i64; } j = j + 1i64; }\n\
              println(f\"{acc}\");\n\
              }",
@@ -20563,9 +20563,9 @@ fn main() {
              let mut b: Vec[i64] = Vec.new(); b.push(7i64);\n\
              let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
              let mut keep: Vec[Vec[i64]] = Vec.new();\n\
-             let mut j = 0i64; while j < out.len() { let r = out[j]; keep.push(r); j = j + 1i64; }\n\
+             let mut j = 0i64; while j < out.len() { let r = out[j].clone(); keep.push(r); j = j + 1i64; }\n\
              let mut acc = 0i64; let mut i = 0i64;\n\
-             while i < keep.len() { let z = keep[i]; acc = acc + z[0i64]; i = i + 1i64; }\n\
+             while i < keep.len() { let z = ref keep[i]; acc = acc + z[0i64]; i = i + 1i64; }\n\
              println(f\"{acc}\");\n\
              }",
         ) {
@@ -21033,7 +21033,7 @@ fn main() {
              \x20           Result.Err(e) => { return f\"err:{e}\"; }\n\
              \x20       }\n\
              \x20   }\n\
-             \x20   fn direct(ref self) -> String { let a = self.cells[0]; return a.describe(); }\n\
+             \x20   fn direct(ref self) -> String { let a = ref self.cells[0]; return a.describe(); }\n\
              }\n\
              fn main() {\n\
              \x20   let mut cs: Vec[i64] = Vec.new();\n\
@@ -22198,14 +22198,14 @@ fn main() {
              \x20   v.push(Rect { width: 1, height: 9 });\n\
              \x20   v.sort();\n\
              \x20   let mut i = 0;\n\
-             \x20   while i < v.len() { let r = v[i]; println(f\"{r.width},{r.height}\"); i = i + 1; };\n\
+             \x20   while i < v.len() { let r = ref v[i]; println(f\"{r.width},{r.height}\"); i = i + 1; };\n\
              \x20   let mut n: Vec[Named] = Vec.new();\n\
              \x20   n.push(Named { name: \"bob-long-payload-string-here\", age: 30 });\n\
              \x20   n.push(Named { name: \"amy-long-payload-string-here\", age: 99 });\n\
              \x20   n.push(Named { name: \"amy-long-payload-string-here\", age: 20 });\n\
              \x20   n.sort();\n\
              \x20   let mut j = 0;\n\
-             \x20   while j < n.len() { let p = n[j]; println(f\"{p.age}\"); j = j + 1; };\n\
+             \x20   while j < n.len() { let p = ref n[j]; println(f\"{p.age}\"); j = j + 1; };\n\
              }",
         ) {
             // Rect sorted by width: (1,9) (2,1). Named sorted by name then age:
@@ -22222,7 +22222,7 @@ fn main() {
         if let Some(out) = run_program(
             "#[derive(Eq, Ord)]\n\
              enum Shape { Circle(i64), Rect(i64, i64), Unit }\n\
-             fn stag(s: Shape) -> i64 {\n\
+             fn stag(s: ref Shape) -> i64 {\n\
              \x20   match s {\n\
              \x20       Shape.Circle(r) => 100 + r,\n\
              \x20       Shape.Rect(w, h) => 200 + w * 10 + h,\n\
@@ -22238,7 +22238,7 @@ fn main() {
              \x20   v.push(Shape.Circle(3));\n\
              \x20   v.sort();\n\
              \x20   let mut i = 0;\n\
-             \x20   while i < v.len() { let s = v[i]; println(f\"{stag(s)}\"); i = i + 1; };\n\
+             \x20   while i < v.len() { let s = ref v[i]; println(f\"{stag(s)}\"); i = i + 1; };\n\
              }",
         ) {
             // Circle(0) < Rect(1) < Unit(2); within: Circle 3<9, Rect (1,5)<(2,1).
@@ -88784,16 +88784,16 @@ fn main() {
 fn main() {
     let m: Tensor[f32, [2, 3]] = Tensor.from([[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]);
     let rows = m.iter_axis(0);
-    let r0 = rows[0];
-    let r1 = rows[1];
+    let r0 = ref rows[0];
+    let r1 = ref rows[1];
     println(r0.sum());
     println(r1.sum());
     let cols = m.iter_axis(1);
-    let c0 = cols[0];
+    let c0 = ref cols[0];
     println(c0.sum());
     let t: Tensor[i64, [2, 2, 2]] = Tensor.from([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);
     let planes = t.iter_axis(0);
-    let p1 = planes[1];
+    let p1 = ref planes[1];
     println(p1.sum().to_string());
 }
 "#;

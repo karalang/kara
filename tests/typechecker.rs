@@ -101,6 +101,47 @@ fn main() { let r = ref make(); println(f"{r}"); }
     );
 }
 
+/// B-2026-08-26-36 — borrowing an element of an SoA-laid-out container is
+/// rejected, because under a `layout` block the element has no contiguous
+/// storage: its fields live in one buffer per group and `entities[i]` is
+/// MATERIALIZED, not named.
+///
+/// Rejected in the typechecker because CODEGEN DOES NOT NOTICE. It emitted a
+/// borrow of the group base and read through it, giving a silently wrong
+/// answer rather than an error: against an AoS baseline of
+/// `40 / 500 / 5000 / 3 30 300 3000`, the borrowed SoA read produced
+/// `145 / 200 / 2000 / 0 0 0 0`. Only `test_e2e_soa_whole_element_matches_aos`
+/// caught it, and only because it runs one body under both layouts — which is
+/// exactly the kind of coincidence a rule should not depend on.
+#[test]
+fn ref_binding_rejects_an_soa_laid_out_element() {
+    let errs = typecheck_errors(
+        r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    cold { vx, vy }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 2, vx: 3, vy: 4 });
+    let e = ref entities[0];
+    println(e.x);
+}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_REF_OPERAND_UNSUPPORTED")
+                && e.message.contains("SoA-laid-out")),
+        "borrowing an SoA element must be a typecheck error; got {errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.kind.is_run_fatal()),
+        "the rejection must be run-fatal so `karac run` cannot execute it"
+    );
+}
+
 #[test]
 fn test_empty_program() {
     typecheck_ok("");

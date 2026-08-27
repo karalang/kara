@@ -3005,6 +3005,43 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
+                // An SoA-laid-out container has no contiguous element to point
+                // at: `layout entities: Vec[Entity] { group pos { x, y } … }`
+                // stores one buffer per group, so `entities[i]` is MATERIALIZED
+                // by reassembling those buffers rather than named in place.
+                // There is no address a borrow could hold.
+                //
+                // Rejected here because codegen does not notice. It emitted a
+                // borrow of the group base and read through it, which is
+                // silently WRONG rather than a compile failure: against an
+                // AoS baseline of `40 / 500 / 5000 / 3 30 300 3000` the
+                // borrowed SoA read returned `145 / 200 / 2000 / 0 0 0 0`.
+                // Only `test_e2e_soa_whole_element_matches_aos` caught it, and
+                // only because it runs the same body under both layouts.
+                let soa_by_type = matches!(
+                    &ty,
+                    Type::Named { name, args } if args.is_empty() && self.struct_has_soa_layout(name)
+                );
+                if let ExprKind::Index { object, .. } = &operand.kind {
+                    // By NAME (`layout entities: …` indexed as `entities[i]`) or
+                    // by TYPE — a parameter or returned collection carries its
+                    // own binding name, so the name match alone would miss
+                    // `fn f(es: Vec[Entity]) { let e = ref es[i]; }`, which has
+                    // exactly the same non-contiguous storage.
+                    if self.index_object_has_soa_layout(object) || soa_by_type {
+                        self.type_error(
+                            "error[E_REF_OPERAND_UNSUPPORTED]: cannot borrow an element \
+                             of an SoA-laid-out container: its fields live in one buffer \
+                             per `layout` group, so an element has no contiguous storage \
+                             to borrow. Bind it by value — that materialises the struct \
+                             — or read the field directly (`v[i].field`)"
+                                .to_string(),
+                            *span,
+                            TypeErrorKind::RefOperandUnsupported,
+                        );
+                        return Type::Error;
+                    }
+                }
                 match ty {
                     Type::Ref(_) => ty,
                     Type::MutRef(inner) => Type::Ref(inner),
@@ -3597,5 +3634,52 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Error
             }
         }
+    }
+    /// Whether an index expression's object is a collection carrying a
+    /// `layout` block — i.e. one stored as struct-of-arrays.
+    ///
+    /// A layout is declared against the collection BINDING
+    /// (`layout entities: Vec[Entity] { group pos { x, y } ... }`), so the
+    /// object's root identifier is the name to match.
+    pub(super) fn index_object_has_soa_layout(&self, object: &Expr) -> bool {
+        let mut e = object;
+        loop {
+            match &e.kind {
+                ExprKind::Identifier(n) => {
+                    return self
+                        .program
+                        .items
+                        .iter()
+                        .any(|it| matches!(it, Item::LayoutDef(l) if l.name == *n));
+                }
+                ExprKind::FieldAccess { object, .. } | ExprKind::Index { object, .. } => {
+                    e = object;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// Whether any `layout` block groups `Vec[<struct_name>]`.
+    pub(super) fn struct_has_soa_layout(&self, struct_name: &str) -> bool {
+        self.program.items.iter().any(|it| {
+            let Item::LayoutDef(l) = it else { return false };
+            let crate::ast::TypeKind::Path(p) = &l.collection_type.kind else {
+                return false;
+            };
+            p.segments.len() == 1
+                && p.segments[0] == "Vec"
+                && p.generic_args.as_ref().is_some_and(|ga| {
+                    ga.iter().any(|arg| match arg {
+                        crate::ast::GenericArg::Type(t) => match &t.kind {
+                            crate::ast::TypeKind::Path(ep) => {
+                                ep.segments.len() == 1 && ep.segments[0] == *struct_name
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    })
+                })
+        })
     }
 }

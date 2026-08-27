@@ -36,13 +36,12 @@ impl[T: Ord] Heap[T] {
         self.xs.len() == 0
     }
 
-    // Swap two slots by index. `T: Ord` implies comparable; the heap only ever
-    // holds `Copy`-or-cloned elements at its call sites here (i64), so the
-    // index-read `let t = self.xs[i]` is a value copy.
+    // Swap two slots by index. `Vec.swap` exchanges the two elements in place,
+    // so this works for ANY `T` — the older `let t = self.xs[i]; ...` spelling
+    // read an element out by value and so quietly required a `Copy`-or-cloned
+    // element, which is why the heap's callers here were all i64.
     fn swap(mut ref self, i: i64, j: i64) {
-        let t = self.xs[i];
-        self.xs[i] = self.xs[j];
-        self.xs[j] = t;
+        self.xs.swap(i, j);
     }
 
     // Insert, then sift the new leaf up until the min-heap property holds. The
