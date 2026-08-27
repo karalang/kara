@@ -80,28 +80,51 @@ impl<'a> super::TypeChecker<'a> {
         // resolves through the normal impl-table path. Mirrors the String `cmp`
         // handler (`stdlib_seq.rs`) and the primitive Ord builtin-impl
         // (`env_build.rs`). roadmap Phase 8 § Eq/Ord.
+        //
+        // B-2026-08-27-41 — a TUPLE receiver claims `cmp` on the same terms.
+        // `type_supports_ord` already recurses through `Type::Tuple`, and the
+        // `<`/`>` operators on a tuple already lower through the very same
+        // comparator (B-2026-08-27-33), so the only thing that kept
+        // `(1, 2).cmp((1, 3))` out was this arm's `Type::Named` gate — which
+        // rejected it with "no method 'cmp' on type '(i64, i64)'" while the
+        // operator spelling of the identical comparison compiled and ran.
+        //
+        // The derive gate does NOT carry over, and its absence is not an
+        // oversight: `!has_user_impl_ord` exists so a HAND-WRITTEN `impl Ord`
+        // is not silently overruled by the declaration-order comparator, and a
+        // tuple is structural — it has no name to hang an impl on, so there is
+        // no user ordering to overrule. Left-to-right IS the language's tuple
+        // order. Same reasoning the operator arm in `exprs.rs` records for
+        // skipping its own derive check on tuples.
         if method == "cmp" {
-            if let Type::Named { name, .. } = receiver_for_lookup {
-                let name = name.clone();
-                if self.type_supports_ord(receiver_for_lookup) && !self.has_user_impl_ord(&name) {
-                    if args.len() != 1 {
-                        self.type_error(
-                            format!("'cmp' expects 1 argument, found {}", args.len()),
-                            *span,
-                            TypeErrorKind::WrongNumberOfArgs,
-                        );
-                        for arg in args {
-                            self.infer_expr(&arg.value);
-                        }
-                    } else {
-                        let arg_ty = self.infer_expr(&args[0].value);
-                        self.check_assignable(receiver_for_lookup, &arg_ty, args[0].value.span);
-                    }
-                    return Some(Type::Named {
-                        name: "Ordering".to_string(),
-                        args: Vec::new(),
-                    });
+            let claims_cmp = match receiver_for_lookup {
+                // A hand-written `impl Ord` owns `.cmp` on its own type.
+                Type::Named { name, .. } => {
+                    self.type_supports_ord(receiver_for_lookup) && !self.has_user_impl_ord(name)
                 }
+                Type::Tuple(elems) => {
+                    !elems.is_empty() && self.type_supports_ord(receiver_for_lookup)
+                }
+                _ => false,
+            };
+            if claims_cmp {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'cmp' expects 1 argument, found {}", args.len()),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(receiver_for_lookup, &arg_ty, args[0].value.span);
+                }
+                return Some(Type::Named {
+                    name: "Ordering".to_string(),
+                    args: Vec::new(),
+                });
             }
         }
         // Opaque foreign types have no methods by definition — impl blocks
@@ -219,8 +242,9 @@ impl<'a> super::TypeChecker<'a> {
         // scalar-primitive arm below skips them entirely and EVERY call
         // poisoned to `Type::Error` — universally assignable, so
         // `let s: String = t.bogus()` type-checked clean and the program then
-        // died in the backend. Their whole surface is `to_string`, typed by the
-        // intercept directly above, so anything still here is a typo.
+        // died in the backend. Their whole surface is `to_string` (the intercept
+        // directly above) and `cmp` (B-2026-08-27-41, further up), so anything
+        // still here is a typo.
         //
         // This is placed AFTER every legitimate intercept rather than in the
         // arm below, because that arm is keyed on `method_callee_type_name`

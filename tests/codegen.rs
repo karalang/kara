@@ -106560,11 +106560,12 @@ fn main() {
     /// The bound and the OPERATOR are separate gates, and this fixture is the
     /// bound one. It deliberately does NOT order anything through `T`: a
     /// comparison written against the type PARAMETER (`fn beats(x: T, y: T)
-    /// { x < y }`) lowers to `T.cmp`, and tuples have no `cmp` on any surface
-    /// — the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both
-    /// backends fall through their method dispatch. That gap is what still
-    /// stands between this row and `PriorityQueue[(i64, i64)]`, whose entire
-    /// surface is `impl[T: Ord]` methods, and it is tracked separately.
+    /// { x < y }`) lowers to `T.cmp`. When this row landed, tuples had no
+    /// `cmp` on ANY surface — B-2026-08-27-41, since fixed
+    /// (`test_e2e_tuple_cmp_to_ordering` below). What still stands between
+    /// this row and `PriorityQueue[(i64, i64)]` is the remaining half: the
+    /// mono substitution channel drops a tuple type argument, so a receiver
+    /// typed as a bare `T` never learns it is one (B-2026-08-27-40).
     /// Ordering two tuples DIRECTLY is covered by
     /// `test_e2e_tuple_comparison_and_equality` above.
     ///
@@ -106602,6 +106603,152 @@ fn main() {
             ),
             // tuple len, then the scalar control that always worked.
             Some("2\n1\n".to_string())
+        );
+    }
+
+    /// `.cmp()` on a TUPLE, on every surface (B-2026-08-27-41).
+    ///
+    /// The operator spelling of this comparison has worked since
+    /// B-2026-08-27-33 — `(1, 2) < (1, 3)` lowers through `karac_cmp_<T>`, and
+    /// `Vec[(i64, i64)].sort()` has driven that same comparator far longer. The
+    /// METHOD spelling reached none of it: the typechecker's `cmp` intercept
+    /// was gated to `Type::Named`, so `(1, 2).cmp((1, 3))` was refused outright
+    /// with "no method 'cmp' on type '(i64, i64)'", and had it been admitted
+    /// both backends would have fallen through their method dispatch anyway
+    /// (the interpreter had no `Value::Tuple` arm; codegen's
+    /// `compile_user_cmp_to_ordering` was keyed by type NAME, which a tuple
+    /// does not have). Three arms, one missing dispatch each — every
+    /// comparator involved already existed.
+    ///
+    /// Which is why this is not merely about how the comparison is spelled: a
+    /// `<` written against a bounded type PARAMETER lowers to `T.cmp`, so the
+    /// method gap — not the operator — is what sits between B-2026-08-27-33's
+    /// bound fix and `PriorityQueue[(i64, i64)]`.
+    ///
+    /// Rows 10 and 11 are the NEIGHBOURS, and they are the point of the
+    /// fixture as much as the tuples are. The typechecker arm this widens is
+    /// the same one that gates `#[derive(Ord)]` structs behind
+    /// `!has_user_impl_ord`, and row 11's `Rev` — whose hand-written `cmp`
+    /// REVERSES the order — is the shape B-2026-08-26-10 filed when the
+    /// structural comparator answered for a user impl. It must still report
+    /// `Greater` for `1.cmp(2)`. No derive gate carries over to the tuple arm,
+    /// deliberately: a tuple is structural, there is no name to hang an `impl
+    /// Ord` on, so there is no user ordering to overrule.
+    ///
+    /// Arity is varied for the reason `test_e2e_tuple_comparison_and_equality`
+    /// varies it — a three-scalar tuple lowers to `{i64, i64, i64}`, the same
+    /// LLVM object as the `{ptr, i64, i64}` String/Vec header — and row 06
+    /// nests a three-tuple inside a two-tuple so the recursion has to be
+    /// driven by the element `TypeExpr` rather than by field count.
+    ///
+    /// Twinned against the interpreter rather than pinned to a literal, since
+    /// the whole defect was the two backends disagreeing about whether this
+    /// program exists at all.
+    #[test]
+    fn test_e2e_tuple_cmp_to_ordering() {
+        let src = r#"
+#[derive(Ord, Eq)]
+struct P { a: i64, b: i64 }
+
+struct Rev { v: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.v == other.v } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.v.cmp(self.v) } }
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"01 {tag((1, 2).cmp((1, 3)))}");
+    println(f"02 {tag((1, 2).cmp((1, 2)))}");
+    println(f"03 {tag((1, 2).cmp((0, 9)))}");
+    let a = ("b", 1);
+    let b = ("b", 2);
+    let c = ("c", 0);
+    println(f"04 {tag(a.cmp(b))} {tag(b.cmp(c))} {tag(c.cmp(a))}");
+    println(f"05 {tag((1, 2, 3).cmp((1, 2, 4)))} {tag((1, 2, 3).cmp((1, 2, 3)))}");
+    println(f"06 {tag((1, (2, 3)).cmp((1, (2, 4))))} {tag(((1, 2, 3), 4).cmp(((1, 2, 5), 4)))}");
+    println(f"07 {tag((true, 'z').cmp((true, 'a')))} {tag((false, 'a').cmp((true, 'a')))}");
+    match (5, 1).cmp((5, 1)) {
+        Ordering.Less => { println("08 Less"); }
+        Ordering.Equal => { println("08 Equal"); }
+        Ordering.Greater => { println("08 Greater"); }
+    }
+    let mut v = [(2, 1), (1, 5), (1, 2), (0, 9)];
+    v.sort_by(|x, y| x.cmp(y));
+    for e in v { println(f"09 {e.0}:{e.1}"); }
+    let p1 = P { a: 1, b: 2 };
+    let p2 = P { a: 1, b: 3 };
+    println(f"10 {tag(p1.cmp(p2))} {tag("abc".cmp("abd"))} {tag(7.cmp(3))} {tag('a'.cmp('b'))}");
+    let r1 = Rev { v: 1 };
+    let r2 = Rev { v: 2 };
+    println(f"11 {tag(r1.cmp(r2))}");
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity. The oracle must show the comparator actually ordering
+        // tuples (not answering Equal for everything, the shape a missing
+        // comparison arm degrades to) AND the hand-written `impl Ord` still
+        // winning — otherwise this asserts agreement on two wrong answers.
+        assert!(
+            expected.contains("01 0")
+                && expected.contains("03 2")
+                && expected.contains("09 0:9")
+                && expected.contains("11 2"),
+            "interpreter oracle is not ordering tuples: {expected:?}"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled `.cmp()` on a tuple must match the interpreter",
+        );
+    }
+
+    /// A tuple carrying a TYPE PARAMETER — `(T, i64)` at `T = i64` and
+    /// `T = String` — orders through `.cmp` in a monomorph (B-2026-08-27-41).
+    ///
+    /// This is the leg that makes codegen's substitution step load-bearing
+    /// rather than decorative. The receiver's static type is the tuple
+    /// `(T, i64)`, so it DOES reach the span-keyed operand table — but as
+    /// written, with `T` unresolved. Running it through the active monomorph
+    /// substitution is what turns it into `(i64, i64)` / `(String, i64)`;
+    /// without that step `te_is_totally_ordered` rejects the bare `T` leaf and
+    /// the call falls out of dispatch entirely (measured: "no handler for
+    /// method 'cmp' on variable 'a'"). Fails CLOSED, which is why the failure
+    /// is a build error rather than a comparison against the wrong layout.
+    ///
+    /// A receiver typed as a BARE `T` (`fn smaller[T: Ord](a: T, b: T)`) is
+    /// deliberately not here: it has no tuple in its written type at all, so
+    /// nothing reaches that table, and the mono channel that would carry the
+    /// binding drops tuple type arguments outright — B-2026-08-27-40, tracked
+    /// separately. The interpreter answers it today
+    /// (`tests/interpreter.rs::tuple_cmp_through_a_bare_type_parameter`);
+    /// both compiled backends still decline it, loudly.
+    #[test]
+    fn test_e2e_tuple_cmp_through_a_tuple_of_type_params() {
+        let src = r#"
+fn pick[T: Ord](a: (T, i64), b: (T, i64)) -> bool { return a.cmp(b).is_lt(); }
+
+fn main() {
+    println(f"{pick((1, 2), (1, 3))}");
+    println(f"{pick((5, 2), (1, 3))}");
+    println(f"{pick(("a", 2), ("b", 0))}");
+    println(f"{pick(("b", 2), ("b", 2))}");
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            // i64 leg less / greater, String leg less, then equal.
+            Some("true\nfalse\ntrue\nfalse\n")
         );
     }
 

@@ -3128,12 +3128,26 @@ impl<'a> super::Interpreter<'a> {
         // in the `Ordering` enum. The typechecker (`expr_method_call.rs`) admits
         // the call for a derived-Ord Named receiver; this makes it evaluate.
         // roadmap Phase 8 § Eq/Ord.
+        //
+        // B-2026-08-27-41 adds the TUPLE receiver, which `value_compare`
+        // already orders lexicographically (left to right, then by length) —
+        // the same order the `<`/`>` operators on a tuple use.
+        //
+        // Gated on `value_is_totally_ordered` so this arm claims EXACTLY the
+        // set the tuple operators claim. `value_compare` would happily answer
+        // for a tuple carrying a bare `Float` or a struct, but the operators
+        // decline both (a bare float has no total order; a struct leaf is out
+        // of scope for the structural comparator) and so does codegen's
+        // `te_is_totally_ordered`. Answering here for a shape the compiled
+        // backends refuse would manufacture a run-vs-build split out of a fix
+        // whose whole point is closing one.
         if method == "cmp"
             && args.len() == 1
-            && matches!(
-                &obj,
-                Value::Struct { .. } | Value::SharedStruct(_) | Value::EnumVariant { .. }
-            )
+            && match &obj {
+                Value::Struct { .. } | Value::SharedStruct(_) | Value::EnumVariant { .. } => true,
+                Value::Tuple(_) => Self::value_is_totally_ordered(&obj),
+                _ => false,
+            }
         {
             let other = self.eval_expr_inner(&args[0].value);
             let ord = value_compare(&obj, &other);

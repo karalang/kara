@@ -256,7 +256,7 @@ impl<'a> super::Interpreter<'a> {
     /// Deliberately narrow beyond that: `Vec` / struct / enum leaves decline
     /// here and keep whatever behaviour they have today, rather than being
     /// pulled into tuple ordering as a side effect of this fix.
-    fn value_is_totally_ordered(v: &Value) -> bool {
+    pub(super) fn value_is_totally_ordered(v: &Value) -> bool {
         match v {
             Value::Int(_)
             | Value::Bool(_)

@@ -5180,6 +5180,43 @@ impl<'ctx> super::Codegen<'ctx> {
                     let agg = self.builder.build_insert_value(agg, tag, 0, "ord").unwrap();
                     return Ok(agg.into_struct_value().into());
                 }
+                // B-2026-08-27-41 — a TUPLE receiver first, for the same
+                // reason the operator path takes tuples before its own
+                // name dispatch (B-2026-08-27-33): a tuple reaches here as a
+                // struct value like a user struct does, but it has no type
+                // NAME, so `inferred_receiver_type` below cannot see it and
+                // `(1, 2).cmp((1, 3))` fell out of method dispatch entirely
+                // ("no handler for method 'cmp'") — while `(1, 2) < (1, 3)`,
+                // the operator spelling of the identical comparison, already
+                // lowered through the very same `karac_cmp_<T>` comparator.
+                //
+                // The static type comes from the span-keyed operand table,
+                // run through the active monomorph substitution so a receiver
+                // written against a bounded type PARAMETER resolves once that
+                // channel carries tuples (it does not yet — B-2026-08-27-40 —
+                // which is why the generic spelling still declines here and
+                // falls through to the honest "no handler" error rather than
+                // to a wrong answer).
+                //
+                // `te_is_totally_ordered` is the gate rather than a derive
+                // check, exactly as on the operator path: a tuple has no name
+                // to hang an `impl Ord` on, so there is no user ordering for
+                // the declaration-order comparator to overrule. Gating on the
+                // same predicate is what keeps the two spellings accepting the
+                // same set — and matches the interpreter's
+                // `value_is_totally_ordered` twin.
+                if let Some(te) = self
+                    .seq_eq_operand_te(object)
+                    .map(|te| self.subst_monomorph_type_params(&te))
+                {
+                    if matches!(&te.kind, crate::ast::TypeKind::Tuple(elems) if !elems.is_empty())
+                        && self.te_is_totally_ordered(&te)
+                    {
+                        if let Some(v) = self.compile_cmp_to_ordering_te(&te, lhs, rhs)? {
+                            return Ok(v);
+                        }
+                    }
+                }
                 // A non-String struct pair reaching here is a user struct/enum
                 // whose `#[derive(Ord)]` the typechecker admitted for `.cmp`
                 // (`expr_method_call.rs`). Route through the same lexicographic

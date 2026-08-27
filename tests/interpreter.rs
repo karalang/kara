@@ -19279,6 +19279,73 @@ fn option_shared_arm_local_branch_leaf_survives_repeated_consumption() {
     );
 }
 
+/// `.cmp()` on a TUPLE under the tree-walker (B-2026-08-27-41).
+///
+/// `tests/codegen.rs` is entirely `#[cfg(feature = "llvm")]`, so without a
+/// test here this semantics has NO coverage on the default `cargo test` leg —
+/// the leg most contributors and the cheapest CI tier actually run.
+///
+/// The second half is the one that only exists here. A comparison written
+/// against a bounded type PARAMETER lowers to `T.cmp`, and the interpreter is
+/// untyped at runtime: `a` simply IS a `Value::Tuple`, so `smaller` answers
+/// for a tuple with no substitution channel involved. Both compiled backends
+/// still decline that spelling — the mono channel drops a tuple type argument
+/// (B-2026-08-27-40) — so it is loud-refused there rather than wrong, and
+/// cannot be twinned in `tests/codegen.rs` until that row lands.
+///
+/// `value_compare` has ordered `Value::Tuple` lexicographically all along;
+/// what was missing was the `cmp` dispatch arm reaching it.
+#[test]
+fn tuple_cmp_dispatches_through_value_compare() {
+    let out = run_no_errors(
+        r#"
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"{tag((1, 2).cmp((1, 3)))}");
+    println(f"{tag((1, 2).cmp((1, 2)))}");
+    println(f"{tag((1, 2).cmp((0, 9)))}");
+    println(f"{tag(("b", 1).cmp(("b", 2)))}");
+    println(f"{tag((1, 2, 3).cmp((1, 2, 4)))}");
+    println(f"{tag((1, (2, 3)).cmp((1, (2, 4))))}");
+    println(f"{tag((true, 'z').cmp((true, 'a')))}");
+}
+"#,
+    );
+    assert_eq!(out, "0\n1\n2\n0\n0\n0\n2\n");
+}
+
+/// The bare-`T` spelling, which only the interpreter answers today
+/// (B-2026-08-27-41; the compiled half waits on B-2026-08-27-40).
+///
+/// This is the shape the row was filed for: `fn smaller[T: Ord](a: T, b: T)
+/// -> bool { a < b }` does not lower to a comparison — it lowers to `T.cmp` —
+/// so a tuple argument used to die at "method 'cmp' not found on type
+/// 'unknown'" even though `(1, 2) < (1, 3)` written directly had worked since
+/// B-2026-08-27-33. `karac check` passed the whole time, which is what made it
+/// a run-vs-build hole rather than a rejection.
+#[test]
+fn tuple_cmp_through_a_bare_type_parameter() {
+    let out = run_no_errors(
+        r#"
+fn smaller[T: Ord](a: T, b: T) -> bool { return a < b; }
+
+fn main() {
+    println(f"{smaller((1, 2), (1, 3))}");
+    println(f"{smaller((1, 3), (1, 2))}");
+    println(f"{smaller((1, 2), (1, 2))}");
+    println(f"{smaller(("a", 9), ("b", 0))}");
+    println(f"{smaller(1, 2)}");
+}
+"#,
+    );
+    assert_eq!(out, "true\nfalse\nfalse\ntrue\ntrue\n");
+}
+
 #[test]
 fn test_mut_ref_option_shared_writeback() {
     // B-2026-07-12-3 — reassigning through a `mut ref Option[shared]` param

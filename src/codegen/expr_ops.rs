@@ -5830,7 +5830,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             span: crate::token::Span::default(),
         };
-        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(&te) else {
+        self.compile_cmp_to_ordering_te(&te, lhs, rhs)
+    }
+
+    /// The `TypeExpr`-keyed core of [`Self::compile_user_cmp_to_ordering`],
+    /// split out for the receiver that has no type NAME to look up: a TUPLE
+    /// (B-2026-08-27-41). Exactly the split `compile_ordered_user_cmp` /
+    /// [`Self::compile_ordered_cmp_te`] already carries for the OPERATOR
+    /// spelling of the same comparison, and for the same reason — the
+    /// comparator `emit_cmp_fn_for_type_expr` builds is structural, so it
+    /// needs the type, not a name.
+    ///
+    /// Callers own the decision that `te` SHOULD be ordered this way: the
+    /// derive check for a named type, `te_is_totally_ordered` for a tuple.
+    pub(super) fn compile_cmp_to_ordering_te(
+        &mut self,
+        te: &TypeExpr,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(te) else {
             return Ok(None);
         };
         let Some(cur_fn) = self.current_fn else {

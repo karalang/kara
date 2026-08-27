@@ -10255,6 +10255,55 @@ fn test_cmp_rejected_on_non_ord_struct() {
 }
 
 #[test]
+fn test_tuple_cmp_method_resolves_to_ordering() {
+    // B-2026-08-27-41 — the `cmp` intercept was gated to `Type::Named`, so a
+    // TUPLE receiver fell past it to the tuple no-method arm and was rejected
+    // with "no method 'cmp' on type '(i64, i64)'" — while `(1, 2) < (1, 3)`,
+    // the operator spelling of the identical comparison, typechecked and ran
+    // (B-2026-08-27-33). `type_supports_ord` has recursed through
+    // `Type::Tuple` all along; only the receiver gate was in the way.
+    //
+    // No `has_user_impl_ord` gate carries over from the Named arm: a tuple is
+    // structural, so there is no impl to be overruled by the declaration-order
+    // comparator — the concern that narrowed the Named dispatch cannot arise.
+    typecheck_ok(
+        "fn main() {\n\
+             let a = (1, 2);\n\
+             let b = (1, 3);\n\
+             let r: Ordering = a.cmp(b);\n\
+             let _eq: bool = r == Ordering.Less;\n\
+             let _s: Ordering = (\"x\", 1).cmp((\"y\", 0));\n\
+             let _n: Ordering = (1, (2, 3)).cmp((1, (2, 4)));\n\
+             let _w: Ordering = (1, 2, 3).cmp((1, 2, 4));\n\
+         }",
+    );
+}
+
+#[test]
+fn test_tuple_cmp_rejected_when_an_element_is_not_ord() {
+    // The gate is `type_supports_ord` on the WHOLE tuple, so one non-Ord leaf
+    // rejects the call. A bare `f64` is the leaf that matters: `value_compare`
+    // and `karac_cmp_<T>` are both the IEEE 754 TOTAL order (NaN last) because
+    // every other caller is a sort key, and that is not what ordering an `f64`
+    // means — so the method declines rather than inheriting sort-key
+    // semantics, matching the deliberate non-fix
+    // `test_e2e_tuple_comparison_and_equality` pins for the operator.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a = (1, 1.5);\n\
+             let b = (1, 2.5);\n\
+             let _ = a.cmp(b);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("cmp") && e.message.contains("f64")),
+        "expected no-method-'cmp' rejection naming the float element, got: {errors:?}"
+    );
+}
+
+#[test]
 fn test_redefining_one_stdlib_type_keeps_sibling_module_items() {
     // B-2026-06-30-11 regression guard. Redefining ONE always-injected stdlib
     // type (`struct Response`, exported by `http.kara`) must NOT drop that
