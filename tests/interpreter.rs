@@ -991,6 +991,88 @@ fn eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche() {
 }
 
 #[test]
+fn vec_contains_matches_an_enum_element_by_content() {
+    // B-2026-08-27-13 — `Vec.contains` compared an ENUM element by its raw
+    // payload words, reaching neither of the compiler's two structural enum
+    // comparators, so it answered `false` for an element that IS in the vector.
+    //
+    // WHY NEITHER WAS REACHABLE, which is the whole shape of the bug: the site
+    // loaded `data[i]` and the needle as VALUES and called `compile_binop`.
+    // `compile_enum_eq` is selected at the `==` OPERATOR site by running
+    // `enum_name_of_expr` over the operand EXPRESSIONS, which a loaded value does
+    // not carry; `emit_eq_fn_for_type_expr` — the one `Map`/`Set` use — takes
+    // pointers, not values. So the aggregate fell to `compile_struct_eq`, whose
+    // per-field recursion over an enum's `{tag, w0, w1, …}` compares payload words
+    // as i64s.
+    //
+    // THE STRING AND STRUCT LINES ARE THE CONTROLS, and they are why this looked
+    // fine almost everywhere: `compile_struct_eq` recurses per FIELD, so a
+    // `String` element and a struct with typed fields both compared by content
+    // already. An enum aggregate's fields are raw payload words, and recursing
+    // per field over those is a pointer compare wearing a field walk.
+    // `enum-unit` and `int` are the second kind of control — wholly inline, so
+    // the word compare was already right for them.
+    //
+    // EVERY PAYLOAD IS BUILT BY A FUNCTION CALL, never a literal. Two identical
+    // string literals can be folded to one global, which would let a pointer
+    // compare answer `true` and hide the defect; `mk(n)` forces distinct
+    // allocations, so a pointer compare must answer `false`.
+    //
+    // `generic` and `shared` are what the one-comparator routing buys beyond the
+    // filed shape: both now go through the same fixed path rather than needing
+    // their own arm here.
+    //
+    // Codegen twin: `test_e2e_vec_contains_matches_an_enum_element_by_content`.
+    // The interpreter was already right, so this pins it as the oracle.
+    let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+struct S { a: i64, s: String }
+#[derive(Hash, Eq, PartialEq)]
+enum E { A(String), Pair(i64, String), B }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Sh { id: i64, name: String }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let ve: Vec[E] = vec![E.A(mk(1)), E.Pair(2, mk(3)), E.B];
+    println(f"enum={ve.contains(E.A(mk(1)))}");
+    println(f"enum-ne={ve.contains(E.A(mk(2)))}");
+    println(f"enum-pair={ve.contains(E.Pair(2, mk(3)))}");
+    println(f"enum-pair-ne={ve.contains(E.Pair(2, mk(4)))}");
+    println(f"enum-unit={ve.contains(E.B)}");
+
+    let vo: Vec[Option[String]] = vec![Some(mk(5)), None];
+    println(f"generic={vo.contains(Some(mk(5)))}");
+    println(f"generic-ne={vo.contains(Some(mk(6)))}");
+    println(f"generic-none={vo.contains(None)}");
+
+    let vh: Vec[Sh] = vec![Sh { id: 1, name: mk(7) }];
+    println(f"shared={vh.contains(Sh { id: 1, name: mk(7) })}");
+    println(f"shared-ne={vh.contains(Sh { id: 1, name: mk(8) })}");
+
+    let vs: Vec[String] = vec![mk(9), mk(10)];
+    println(f"str={vs.contains(mk(9))}");
+    println(f"str-ne={vs.contains(mk(11))}");
+    let vt: Vec[S] = vec![S { a: 1, s: mk(12) }];
+    println(f"struct={vt.contains(S { a: 1, s: mk(12) })}");
+    println(f"struct-ne={vt.contains(S { a: 1, s: mk(13) })}");
+    let vi: Vec[i64] = vec![1, 2];
+    println(f"int={vi.contains(2)}");
+    println(f"int-ne={vi.contains(3)}");
+}
+"#;
+    assert_eq!(
+        run_no_errors(src),
+        "enum=true\nenum-ne=false\nenum-pair=true\n\
+         enum-pair-ne=false\nenum-unit=true\ngeneric=true\n\
+         generic-ne=false\ngeneric-none=true\nshared=true\n\
+         shared-ne=false\nstr=true\nstr-ne=false\nstruct=true\n\
+         struct-ne=false\nint=true\nint-ne=false\n"
+    );
+}
+
+#[test]
 fn a_generic_or_sub_word_enum_key_is_matched_by_content() {
     // B-2026-08-27-12 — the two payload shapes B-2026-08-27-6's structural enum
     // key walk DECLINED, so they kept the byte compare it replaced and stayed

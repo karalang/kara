@@ -8606,7 +8606,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 let needle_val =
                     self.coerce_literal_elem_to_type_from(needle_val, elem_ty, &args[0].value);
 
+                // B-2026-08-27-13 — compare through the ELEMENT'S OWN
+                // comparator, the one `Map`/`Set` already use, rather than
+                // `compile_binop` on two loaded aggregates.
+                //
+                // `compile_binop` cannot reach either structural enum path
+                // from here: `compile_enum_eq` is selected at the `==`
+                // OPERATOR site by running `enum_name_of_expr` over the
+                // operand EXPRESSIONS, which a loaded value does not carry,
+                // and `emit_eq_fn_for_type_expr` takes pointers, not values.
+                // So an enum element fell to `compile_struct_eq`, whose
+                // per-field recursion over an enum's `{tag, w0, w1, …}`
+                // compares payload WORDS as i64s — a heap-pointer compare for
+                // any payload that owns heap, and `vec![E.A(f"yy")]
+                // .contains(E.A(f"yy"))` answered `false`.
+                //
+                // Routing every element type through one comparator is what
+                // fixes it, rather than teaching `compile_struct_eq` to spot
+                // an enum: at that point it holds LLVM values with no type
+                // name and no variant list to walk. The element is already
+                // addressable inside the buffer, so only the NEEDLE needs a
+                // slot. Emitted BEFORE the loop blocks — synthesis moves the
+                // builder's insert point.
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
+                let elem_eq = elem_te.as_ref().map(|te| self.emit_eq_fn_for_type_expr(te));
+
                 let fn_val = self.current_fn.unwrap();
+                let needle_slot = elem_eq.map(|_| {
+                    let slot = self.create_entry_alloca(fn_val, "vct.needle", elem_ty);
+                    self.builder.build_store(slot, needle_val).unwrap();
+                    slot
+                });
                 let head_bb = self.context.append_basic_block(fn_val, "vct.head");
                 let body_bb = self.context.append_basic_block(fn_val, "vct.body");
                 let found_bb = self.context.append_basic_block(fn_val, "vct.found");
@@ -8645,13 +8675,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_gep(elem_ty, data, &[i], "vct.elem.ptr")
                         .unwrap()
                 };
-                let elem_val = self
-                    .builder
-                    .build_load(elem_ty, elem_ptr, "vct.elem")
-                    .unwrap();
-                let eq = self
-                    .compile_binop(&BinOp::Eq, elem_val, needle_val)?
-                    .into_int_value();
+                let eq = match (elem_eq, needle_slot) {
+                    (Some(eq_fn), Some(slot)) => self
+                        .builder
+                        .build_call(eq_fn, &[elem_ptr.into(), slot.into()], "vct.eq")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value(),
+                    // No recorded element TypeExpr (an untracked/opaque
+                    // element): keep the value-wise compare, which is what
+                    // this site did for every type before.
+                    _ => {
+                        let elem_val = self
+                            .builder
+                            .build_load(elem_ty, elem_ptr, "vct.elem")
+                            .unwrap();
+                        self.compile_binop(&BinOp::Eq, elem_val, needle_val)?
+                            .into_int_value()
+                    }
+                };
                 // `compile_binop` may have emitted its own blocks (e.g.
                 // struct element equality); branch from wherever it left
                 // the insert point, not the assumed `body_bb`.
