@@ -6375,19 +6375,19 @@ fn main() {
         let mut a: Vec[(i64, String)] = Vec.new();
         let mut i: i64 = 0i64;
         for x in w.iter() { a.push((i, x)); i = i + 1i64; }
-        let pa = a[2];
+        let pa = a[2].clone();
         let mut b: Vec[(String, i64)] = Vec.new();
         for y in w.iter() { b.push((y, 9i64)); }
-        let pb = b[0];
+        let pb = b[0].clone();
         let owned: Vec[String] = Vec[
             "delta-owned-element-payload-dddddddddddddddddddd".to_string(),
             "echo-owned-element-payload-eeeeeeeeeeeeeeeeeeeee".to_string()
         ];
         let mut c: Vec[(i64, String)] = Vec.new();
         for z in owned { c.push((0i64, z)); }
-        let pc = c[1];
+        let pc = c[1].clone();
         let d: Vec[(i64, String)] = wrap_param("param-element-payload-ffffffffffffffffffff".to_string(), 5i64);
-        let pd = d[0];
+        let pd = d[0].clone();
         println(f"{pa.0} {pa.1} {pb.0} {pb.1} {pc.0} {pc.1} {pd.0} {pd.1}");
         round = round + 1i64;
     }
@@ -6468,11 +6468,11 @@ fn main() {
         let sw: Vec[(i64, String)] = w.iter().enumerate().skip_while(|p| p.0 < 1i64).collect();
         let ft: Vec[(i64, String)] = w.iter().enumerate().filter(|p| p.0 > 0i64).take(1i64).collect();
         let ins: Vec[(i64, String)] = w.iter().enumerate().inspect(|p| p.0).collect();
-        let f0: (i64, String) = f[0];
-        let tw0: (i64, String) = tw[0];
-        let sw2: (i64, String) = sw[2];
-        let ft0: (i64, String) = ft[0];
-        let ins3: (i64, String) = ins[3];
+        let f0: (i64, String) = f[0].clone();
+        let tw0: (i64, String) = tw[0].clone();
+        let sw2: (i64, String) = sw[2].clone();
+        let ft0: (i64, String) = ft[0].clone();
+        let ins3: (i64, String) = ins[3].clone();
         println(f"{f.len()}:{f0.1} {tw.len()}:{tw0.1} {sw.len()}:{sw2.1} {ft.len()}:{ft0.1} {ins.len()}:{ins3.1}");
         round = round + 1i64;
     }
@@ -6672,7 +6672,7 @@ fn main() {
             "zip-heap-collect-right-delta-dddddddddddddd".to_string()
         ];
         let z: Vec[(String, String)] = a.iter().zip(b.iter()).collect();
-        let p: (String, String) = z[0i64];
+        let p: (String, String) = z[0i64].clone();
         println(f"{z.len()} {a.len()} {b.len()} {p.0} {p.1}");
         round = round + 1i64;
     }
@@ -6824,8 +6824,10 @@ fn main() {
             "nested-idx-bind-delta-dddddddddddddddddddd".to_string()
         ];
         let m: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
-        let a: String = m[0i64][0i64];
-        let b: String = m[1i64][1i64];
+        let r0: Vec[String] = m[0i64].clone();
+        let r1: Vec[String] = m[1i64].clone();
+        let a: String = r0[0i64].clone();
+        let b: String = r1[1i64].clone();
         println(f"{a} {b} {m.len()} {v.len()}");
         round = round + 1i64;
     }
@@ -7402,10 +7404,10 @@ fn main() {
     let mut round: i64 = 0i64;
     while round < 40i64 {
         let he: Vec[(i64, String)] = mk().iter().enumerate().collect();
-        let e0: (i64, String) = he[0];
-        let e1: (i64, String) = he[1];
+        let e0: (i64, String) = he[0].clone();
+        let e1: (i64, String) = he[1].clone();
         let hm: Vec[String] = mk().iter().enumerate().map(|p| p.1).collect();
-        let m1: String = hm[1];
+        let m1: String = hm[1].clone();
         let hl: Vec[i64] = mk().iter().map(|s| s.len()).collect();
         println(f"{he.len()} {e0.0} {e0.1} {e1.0} {e1.1} {m1} {hl[0]}");
         round = round + 1i64;
@@ -9372,6 +9374,7 @@ fn main() {
         assert_clean_asan_run(
             r#"
 enum Val { Nothing, Ident(String), Num(i64) }
+#[derive(Clone)]
 struct A { value: Option[Val] }
 fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Num(n) => n, Val.Nothing => 0 } }
 fn count(a: A) -> i64 { match a.value { Some(_) => 1, None => 0 } }
@@ -9392,7 +9395,8 @@ fn main() {
     for a in build() { t = t + use_wild(a); }
     for a in build() { t = t + via_match(a); }
     let xs: Vec[A] = build();
-    t = t + get_len(xs[0]);
+    let c0 = xs[0].clone();
+    t = t + get_len(c0);
     println(t);
 }
 "#,
@@ -10484,8 +10488,9 @@ fn sink(s: String) { println(s); }
 fn main() {
     let mut i = 0i64;
     while i < 3 {
-        sink(names()[0]);
-        sink(names()[2]);
+        let ns = names();
+        sink(ns[0].clone());
+        sink(ns[2].clone());
         i = i + 1;
     }
 }
@@ -22204,11 +22209,11 @@ enum Got { N(i64) }
 impl Doc { fn first(ref self) -> String { let g = self.lines[0].clone(); g } }
 fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
     match c {
-        Insert(at, text) => { d.lines.insert(at as usize, text); Cmd.Delete(at, d.lines[at as usize]) }
+        Insert(at, text) => { d.lines.insert(at as usize, text); Cmd.Delete(at, d.lines[at as usize].clone()) }
         Delete(at, _text) => { let gone = d.lines[at as usize].clone(); d.lines.remove(at as usize); Cmd.Insert(at, gone) }
     }
 }
-fn one(d: mut ref Doc, at: i64) -> Cmd { Cmd.Delete(at, d.lines[at as usize]) }
+fn one(d: mut ref Doc, at: i64) -> Cmd { Cmd.Delete(at, d.lines[at as usize].clone()) }
 fn scalar(n: ref Nums) -> Got { Got.N(n.xs[0]) }
 fn main() {
     let k = env.args().len() as i64;
@@ -22779,6 +22784,7 @@ fn main() {
         assert_clean_asan_run(
             r#"
 struct Pair { word: String, n: i64 }
+#[derive(Clone)]
 struct Deep { inner: Pair, tag: i64 }
 fn bump(d: Deep) -> Deep { Deep { inner: Pair { word: d.inner.word, n: d.inner.n + 1 }, tag: d.tag } }
 fn main() {
@@ -22788,8 +22794,10 @@ fn main() {
     while i < 20 {
         let mut ds: Vec[Deep] = Vec.new();
         ds.push(Deep { inner: Pair { word: f"seed{k + i}", n: 0 }, tag: 5 });
-        ds[0] = bump(ds[0]);
-        ds[0] = bump(ds[0]);
+        let d0 = ds[0].clone();
+        ds[0] = bump(d0);
+        let d1 = ds[0].clone();
+        ds[0] = bump(d1);
         acc = acc + ds[0].inner.n + ds[0].tag;
         i = i + 1;
     }
@@ -22834,7 +22842,9 @@ fn main() {
     fn asan_index_assign_call_rhs_carrying_container_heap_frees_displaced() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Pair { word: String, n: i64 }
+#[derive(Clone)]
 struct Bag { tags: Vec[String], n: i64 }
 fn passthru(p: Pair) -> Pair { p }
 fn takes(s: String) -> Pair { Pair { word: s, n: 1 } }
@@ -22848,7 +22858,8 @@ fn main() {
         let mut ps: Vec[Pair] = Vec.new();
         ps.push(Pair { word: f"alpha{k + i}", n: 1 });
         ps.push(Pair { word: f"beta{k + i}", n: 2 });
-        ps[0] = passthru(ps[0]);
+        let p0 = ps[0].clone();
+        ps[0] = passthru(p0);
         ps[0] = takes(ps[0].word);
         ps[0] = join(ps[0].word, ps[1].word);
         acc = acc + ps[0].word.len() + ps[0].n;
@@ -22856,7 +22867,8 @@ fn main() {
         let mut t: Vec[String] = Vec.new();
         t.push(f"tag{k + i}");
         bs.push(Bag { tags: t, n: 0 });
-        bs[0] = grow(bs[0]);
+        let b0 = bs[0].clone();
+        bs[0] = grow(b0);
         acc = acc + bs[0].n + bs[0].tags[0].len();
         i = i + 1;
     }
@@ -22901,6 +22913,7 @@ fn main() {
     fn asan_index_assign_elem_to_elem_no_leak() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Pair { word: String, n: i64 }
 fn main() {
     let k = env.args().len() as i64;
@@ -22910,25 +22923,25 @@ fn main() {
         let mut ps: Vec[Pair] = Vec.new();
         ps.push(Pair { word: f"alpha{k + i}", n: 1 });
         ps.push(Pair { word: f"beta{k + i}", n: 2 });
-        ps[0] = ps[1];
+        ps[0] = ps[1].clone();
         acc = acc + ps[0].word.len();
-        ps[0] = ps[0];
+        ps[0] = ps[0].clone();
         acc = acc + ps[0].word.len();
         let mut qs: Vec[Pair] = Vec.new();
         qs.push(Pair { word: f"gamma{k + i}", n: 3 });
         qs.push(Pair { word: f"delta{k + i}", n: 4 });
-        let t = qs[0]; qs[0] = qs[1]; qs[1] = t;
+        qs.swap(0, 1);
         acc = acc + qs[0].word.len() + qs[1].word.len();
         let mut rs: Vec[Pair] = Vec.new();
         rs.push(Pair { word: f"gamma{k + i}", n: 3 });
         rs.push(Pair { word: f"delta{k + i}", n: 4 });
-        let a = rs[0]; let b = rs[1]; rs[0] = b; rs[1] = a;
+        rs.swap(0, 1);
         acc = acc + rs[0].word.len() + rs[1].word.len();
         let j = 1i64;
         let mut ss: Vec[Pair] = Vec.new();
         ss.push(Pair { word: f"eps{k + i}", n: 5 });
         ss.push(Pair { word: f"zeta{k + i}", n: 6 });
-        ss[0] = ss[j];
+        ss[0] = ss[j].clone();
         acc = acc + ss[0].word.len();
         i = i + 1;
     }
@@ -31889,7 +31902,7 @@ fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
     while interval < k {
         let mut i = 0;
         while i + interval < k {
-            work[i] = merge_two(work[i], work[i + interval]);
+            work[i] = merge_two(work[i].clone(), work[i + interval].clone());
             i = i + 2 * interval;
         }
         interval = 2 * interval;
@@ -31939,7 +31952,7 @@ shared struct ListNode {
 
 fn probe(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
     let mut work = lists;
-    work[0] = work[1];
+    work[0] = work[1].clone();
     work[0]
 }
 
@@ -38586,7 +38599,7 @@ fn main() {
     while i < grid.len() {
         let r = grid[i].clone();
         let mut j = 0;
-        while j < r.len() { total = total + take(r[j]); j = j + 1; }
+        while j < r.len() { total = total + take(r[j].clone()); j = j + 1; }
         i = i + 1;
     }
     println(total);
@@ -38624,8 +38637,8 @@ fn count_nodes(node: Option[Node]) -> i64 {
 fn main() {
     let mut src: Vec[Option[Node]] = Vec.new();
     src.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
-    let l0 = clone_offset(src[0], 10);
-    let l1 = clone_offset(src[0], 20);
+    let l0 = clone_offset(src[0].clone(), 10);
+    let l1 = clone_offset(src[0].clone(), 20);
     println(count_nodes(l0) + count_nodes(l1));
 }
 "#,
@@ -38660,7 +38673,7 @@ fn mk() -> Vec[Vec[Option[Node]]] {
 fn main() {
     let shapes = mk();
     let lefts = shapes[0].clone();
-    println(count_nodes(lefts[0]));
+    println(count_nodes(lefts[0].clone()));
 }
 "#,
             &["2"], // the shared node + its child, dropped exactly once
@@ -38692,7 +38705,7 @@ fn count_nodes(node: Option[Node]) -> i64 {
 fn main() {
     let mut src: Vec[Option[Node]] = Vec.new();
     src.push(Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None }));
-    let s = src[0];
+    let s = src[0].clone();
     let l0 = clone_offset(s, 10);
     let l1 = clone_offset(s, 20);
     println(count_nodes(l0) + count_nodes(l1));
@@ -38722,7 +38735,7 @@ fn main() {
     let mut out: Vec[Option[Node]] = Vec.new();
     let orig = Some(Node { val: 1, left: Some(Node { val: 2, left: None, right: None }), right: None });
     out.push(orig);
-    println(count_nodes(out[0]));
+    println(count_nodes(out[0].clone()));
 }
 "#,
             &["2"],
@@ -38751,7 +38764,7 @@ fn main() {
     let mut cur: Vec[Option[Node]] = Vec.new();
     cur.push(Some(Node { val: 0, left: src[0], right: None }));
     cur.push(Some(Node { val: 9, left: src[0], right: None }));
-    println(count_nodes(cur[0]) + count_nodes(cur[1]));
+    println(count_nodes(cur[0].clone()) + count_nodes(cur[1].clone()));
 }
 "#,
             &["6"], // two 3-node trees sharing the same left subtree
@@ -39523,7 +39536,7 @@ fn main() {
     let mut total = 0;
     let mut rep = 0;
     while rep < 200 {
-        total = total + sum(pool[rep % 8]);
+        total = total + sum(pool[rep % 8].clone());
         rep = rep + 1;
     }
     println(total);
@@ -39551,7 +39564,7 @@ fn main() {
     pool.push(Some(Node { val: 9i64, left: None, right: None }));
     let mut t: i64 = 0i64;
     let mut rep: i64 = 0i64;
-    while rep < 200i64 { let idx = rep % 2i64; t = t + probe(pool[idx]); rep = rep + 1i64; }
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe(pool[idx].clone()); rep = rep + 1i64; }
     println(f"{t}")
 }
 "#,
@@ -39577,7 +39590,7 @@ fn main() {
     pool.push(Some(Node { val: 9i64, left: None, right: None }));
     let mut t: i64 = 0i64;
     let mut rep: i64 = 0i64;
-    while rep < 200i64 { let idx = rep % 2i64; t = t + probe2(pool[idx]); rep = rep + 1i64; }
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe2(pool[idx].clone()); rep = rep + 1i64; }
     println(f"{t}")
 }
 "#,
@@ -39602,7 +39615,7 @@ fn main() {
     pool.push(Some(Node { val: 9i64, left: None, right: None }));
     let mut t: i64 = 0i64;
     let mut rep: i64 = 0i64;
-    while rep < 200i64 { let idx = rep % 2i64; t = t + probe3(pool[idx]); rep = rep + 1i64; }
+    while rep < 200i64 { let idx = rep % 2i64; t = t + probe3(pool[idx].clone()); rep = rep + 1i64; }
     println(f"{t}")
 }
 "#,
@@ -39637,7 +39650,7 @@ fn main() {
     pool.push(root);
     let mut t: i64 = 0i64;
     let mut rep: i64 = 0i64;
-    while rep < 200i64 { let sym = is_symmetric(pool[0i64]); t = t + (if sym { 1i64 } else { 0i64 }); rep = rep + 1i64; }
+    while rep < 200i64 { let sym = is_symmetric(pool[0i64].clone()); t = t + (if sym { 1i64 } else { 0i64 }); rep = rep + 1i64; }
     println(f"{t}")
 }
 "#,
@@ -39684,7 +39697,7 @@ fn main() {
     let mut rep = 0i64;
     while rep < 200i64 {
         let tgt = if (rep % 2i64) == 0i64 { 7i64 } else { 6i64 };
-        let hit = has_path_sum(pool[0i64], tgt);
+        let hit = has_path_sum(pool[0i64].clone(), tgt);
         t = t + (if hit { 1i64 } else { 0i64 });
         rep = rep + 1i64;
     }
@@ -39733,7 +39746,7 @@ fn main() {
     pool.push(unb);
     let mut t = 0i64;
     let mut rep = 0i64;
-    while rep < 200i64 { let idx = rep % 2i64; if is_balanced(pool[idx]) { t = t + 1i64; } rep = rep + 1i64; }
+    while rep < 200i64 { let idx = rep % 2i64; if is_balanced(pool[idx].clone()) { t = t + 1i64; } rep = rep + 1i64; }
     println(f"{t}")
 }
 "#,
@@ -43343,11 +43356,11 @@ fn main() {
         // scope-exit free must stay suppressed — no double-free).
         assert_clean_asan_run(
             r#"
-fn largest[T: Ord](items: ref Vec[T]) -> T {
-    let mut best: T = items[0];
+fn largest[T: Ord + Clone](items: ref Vec[T]) -> T {
+    let mut best: T = items[0].clone();
     for i in 1..items.len() {
         if items[i] > best {
-            best = items[i];
+            best = items[i].clone();
         }
     }
     best
@@ -44791,7 +44804,7 @@ fn main() {
     let mut total = 0;
     let mut rep = 0;
     while rep < 1000 {
-        total = total + sum(pool[rep % 8]);
+        total = total + sum(pool[rep % 8].clone());
         rep = rep + 1;
     }
     println(total);
@@ -44836,7 +44849,7 @@ fn main() {
     while i < 60 {
         acc = acc + m.get(1).unwrap()[1];
         acc = acc + s.get(1).unwrap()[0].len();
-        acc = acc + takes(s.get(1).unwrap()[2]);
+        acc = acc + takes(s.get(1).unwrap()[2].clone());
         let w = s.get(1).unwrap()[1].clone();
         acc = acc + w.len();
         let inner = n.get(7).unwrap()[1].clone();
@@ -46182,7 +46195,7 @@ fn visit(
         let used = match cursor.get(airport) { Some(u) => u, None => 0i64 };
         if used >= dests.len() { break; }
         let _ = cursor.insert(airport, used + 1i64);
-        visit(adj, cursor, dests[used], route);
+        visit(adj, cursor, dests[used].clone(), route);
     }
     route.push(airport);
 }
@@ -49682,7 +49695,8 @@ fn main() {
         // Overwrite a heap leaf — the displaced buffer must be freed.
         o[j][0] = f"n{j}";
         // SELF-ALIAS — the release must not free the value being stored.
-        o[j][1] = o[j][1];
+        let row: Vec[String] = o[j].clone();
+        o[j][1] = row[1].clone();
         j = j + 1i64;
     }
     let mut k: i64 = 0i64;
@@ -52927,7 +52941,8 @@ fn main() {
     let mut last: String = "";
     let mut sum = 0i64;
     while i < 60i64 {
-        last = names.as_slice()[i % 3i64];
+        let sl = names.as_slice();
+        last = sl[i % 3i64].clone();
         sum = sum + s.bytes()[i % 5i64] as i64;
         i = i + 1i64;
     }
@@ -54489,13 +54504,62 @@ fn main() {
     /// released a buffer this rhs still points into: a double free, the one
     /// direction the displaced-element family documents as unacceptable.
     #[test]
+    /// B-2026-08-27-23 — `v[i] = v[j].clone()` must free the element it
+    /// displaces. It did not: the displaced-drop guard asks whether the RHS
+    /// could carry the container's heap out, saw the container MENTIONED in
+    /// `v[j].clone()`, and took the conservative branch — leaking `v[i]`'s old
+    /// buffer on every such store. A top-level `.clone()` is independent of its
+    /// receiver by definition, so it can never alias the buffer being freed.
+    ///
+    /// Neighbouring shapes were already clean and stayed so: `v[0] = mk(9)` (an
+    /// ordinary call RHS) and `let c = v[0].clone()`. Only the combination
+    /// leaked, which is why no existing fixture covered it.
+    #[test]
+    fn asan_index_store_from_clone_rhs_frees_displaced() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Clone)]
+struct It { id: i64, name: String }
+fn main() {
+    let mut v: Vec[It] = Vec.new();
+    v.push(It { id: 1, name: f"aa{1}" });
+    v.push(It { id: 2, name: f"bb{2}" });
+    v[0] = v[1].clone();
+    println(f"{v[0].id}");
+}
+"#,
+            &["2"],
+            "index-store-from-clone-rhs-frees-displaced",
+        );
+    }
+
+    #[test]
+    fn zzz_probe_fresh_temp_into_byvalue_param() {
+        assert_clean_asan_run(
+            r#"
+struct It { id: i64, name: String }
+fn mk() -> It { return It { id: 1, name: f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}" }; }
+fn take(x: It) -> i64 { return x.name.len(); }
+fn main() {
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 { t = t + take(mk()); i = i + 1i64; }
+    println(f"{t}");
+}
+"#,
+            &["660"],
+            "zzz-probe-fresh-temp-into-byvalue-param",
+        );
+    }
+
     fn asan_self_rooted_index_assign_from_sibling_element_is_not_double_freed() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Item { id: i64, name: String }
 struct Bag { xs: Vec[Item] }
 impl Bag {
-    fn go(mut ref self) { self.xs[0] = self.xs[1]; }
+    fn go(mut ref self) { self.xs.swap(0, 1); }
 }
 fn main() {
     let mut b = Bag { xs: Vec.new() };

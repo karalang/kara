@@ -12969,6 +12969,19 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Cast { expr, .. } => {
                 self.expr_cannot_carry_container_heap(expr, container, clone_log_mark)
             }
+            // A top-level `.clone()` is INDEPENDENT of its receiver by
+            // definition, so it cannot carry the container's heap out however
+            // the receiver reaches into it: `v[0] = v[1].clone()` stores a copy
+            // that shares nothing with `v`'s buffer, and the displaced element
+            // is therefore safe to free.
+            //
+            // Without this the mention guard saw `v` in the RHS, took the
+            // conservative branch, and skipped the displaced drop entirely —
+            // measured as a 3-byte LSan leak of `v[0]`'s old String on exactly
+            // that store, while `v[0] = mk(9)` (an ordinary call RHS) was clean
+            // and `let c = v[0].clone()` was clean. Only the combination leaked
+            // (B-2026-08-27-23's migration surfaced it).
+            ExprKind::MethodCall { method, .. } if method == "clone" => true,
             ExprKind::Call { callee, args } => args.iter().enumerate().all(|(i, a)| {
                 self.expr_cannot_carry_container_heap(&a.value, container, clone_log_mark)
                     || self.arg_deep_cloned_since(&a.value, clone_log_mark)
