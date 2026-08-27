@@ -34302,6 +34302,16 @@ fn test_main_result_error_nested_result_survives_question_propagation() {
 /// Measured when written, on x86_64: 215 consecutive builds of this program
 /// produced ONE distinct SHA-256, and 20,000 executions of the resulting binary
 /// all exited 101.
+///
+/// GATED ON `llvm` BECAUSE THERE IS NO CODEGEN TO BE REPRODUCIBLE WITHOUT IT.
+/// A no-llvm `karac build` exits SUCCESS and writes no artifact (it reports
+/// "requires the llvm feature" on stderr), so the read below failed with
+/// `NotFound` on every run of CI's default leg — the test landed verified on
+/// the `--features llvm` leg only. The 93 sibling `#[cfg(feature = "llvm")]`
+/// tests in this file are the established handling; the alternative sniff for
+/// that stderr marker (used by the tests that must exercise BOTH legs) buys
+/// nothing here, since this one has no no-llvm behaviour to assert.
+#[cfg(feature = "llvm")]
 #[test]
 fn build_output_is_byte_reproducible_across_processes() {
     let tmp = scratch_project("reproducible-codegen");
