@@ -894,6 +894,16 @@ pub enum TypeErrorKind {
     /// and never wired, so the spec sentence described behaviour that did not
     /// exist.
     RedundantSuffix,
+    /// `prelude_shadow` lint (B-2026-08-27-15) — a user `struct`/`enum`
+    /// declaration takes a prelude type's name. design.md § Module System
+    /// states the warning as shipped behaviour: prelude names are NOT
+    /// reserved, "though a lint warning flags the most-likely-unintended
+    /// cases", and § Raw Pointer Construction leans on it to justify making
+    /// `ptr` a shadowable prelude module name. The lint was described in three
+    /// places and never existed, so the shadowing that reaches built-in paths
+    /// keyed on the name arrived silently — the shape behind B-2026-08-02-13,
+    /// B-2026-08-15-12 and B-2026-08-27-11.
+    PreludeShadow,
     /// `module_mut_binding` lint (B-2026-08-21-2) — a module-level `let mut`
     /// binding under the default profile. design.md § Module-Level State >
     /// Profile gating gives `lib` (the default) a **Warning**, suppressible
@@ -1248,6 +1258,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ExpectOnUnfulfilled
         | TypeErrorKind::UnfulfilledLintExpectation
         | TypeErrorKind::RedundantSuffix
+        | TypeErrorKind::PreludeShadow
         | TypeErrorKind::ModuleMutBinding => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON

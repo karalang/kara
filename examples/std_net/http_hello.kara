@@ -6,6 +6,8 @@
 //
 // Build & run:  karac run examples/std_net/http_hello.kara
 //   then:       curl localhost:8080/hello   ->   /hello
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Response { status: i64, body: String }
 
 fn handle(req: Request) -> Response {

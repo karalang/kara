@@ -25,6 +25,61 @@ use super::{ConstEvalError, LocalTypeScope, TypeErrorKind};
 use crate::ast::narrow_literal_to_i64;
 
 impl<'a> super::TypeChecker<'a> {
+    /// `prelude_shadow` (B-2026-08-27-15) — warn when a user declaration takes
+    /// a prelude type's name.
+    ///
+    /// design.md § Module System states this as shipped behaviour: prelude
+    /// names are NOT reserved — "Users can shadow prelude names in their own
+    /// code (the language does not reserve them), though A LINT WARNING FLAGS
+    /// THE MOST-LIKELY-UNINTENDED CASES" — and § Raw Pointer Construction
+    /// leans on the lint's existence to justify making `ptr` a shadowable
+    /// prelude module name ("the lint flagged at § Module System — Prelude
+    /// catches accidental shadowing of prelude items"). It was referred to in
+    /// three places and never built.
+    ///
+    /// A WARNING, not an error, because the declaration is legal and stays so.
+    /// What it buys is a signal AT THE DECLARATION for a class of surprise
+    /// that has otherwise only ever been found by tripping over it: a built-in
+    /// path keyed on the name silently claiming the user's type —
+    /// B-2026-08-02-13 (an HTTP `Response` freed a `String` twice),
+    /// B-2026-08-15-12 (a shadowed enum), B-2026-08-27-11 (the total-order
+    /// float wrappers). Each is fixed at its own site; this is the general
+    /// notice that the class exists.
+    ///
+    /// Skips `stdlib_origin` declarations and stdlib self-compiles, or every
+    /// spliced prelude source would flag itself.
+    ///
+    /// The declaration's own `lint_overrides` are pushed as the innermost
+    /// cascade frame for the emit and popped immediately — the shape
+    /// `warn_module_mut_binding` uses, and what makes `#[allow(prelude_shadow)]`
+    /// suppress PER DECLARATION rather than module-wide. Without the push the
+    /// attribute parses and is simply ignored, which is worse than no lint: the
+    /// author writes the documented suppression and still gets the warning.
+    fn warn_prelude_shadow(
+        &mut self,
+        name: &str,
+        stdlib_origin: bool,
+        span: crate::token::Span,
+        lint_overrides: &[crate::lints::LintLevelOverride],
+    ) {
+        if stdlib_origin || self.compiling_stdlib || !crate::prelude::PRELUDE_TYPES.contains(&name)
+        {
+            return;
+        }
+        self.lint_override_stack.push(lint_overrides.to_vec());
+        self.type_lint_warning(
+            format!(
+                "declaration of '{name}' shadows the prelude type of the same name; \
+                 built-in paths keyed on '{name}' no longer apply to this type \
+                 (the declaration is legal — prelude names are not reserved)"
+            ),
+            span,
+            TypeErrorKind::PreludeShadow,
+            "prelude_shadow",
+        );
+        self.lint_override_stack.pop();
+    }
+
     pub(super) fn check_items(&mut self) {
         let items: &[Item] = &self.program.items;
         for item in items {
@@ -63,6 +118,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::ModuleBinding(b) => self.check_module_binding(b),
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
+                    self.warn_prelude_shadow(&s.name, s.stdlib_origin, s.span, &s.lint_overrides);
                     self.validate_all_bounds(&s.generic_params, &s.where_clause, &gp);
                     // Variance declarations (design.md § Variance):
                     // user-side `+`/`-` rejection, stdlib-side
@@ -76,6 +132,7 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Item::EnumDef(e) => {
                     let gp = Self::generic_param_names(&e.generic_params);
+                    self.warn_prelude_shadow(&e.name, e.stdlib_origin, e.span, &e.lint_overrides);
                     self.validate_all_bounds(&e.generic_params, &e.where_clause, &gp);
                     self.check_enum_variance(e);
                     self.check_repr_transparent_enum(e);

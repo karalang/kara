@@ -22,6 +22,8 @@ shared struct Cell {
 
 // A recorded edit: the shared cell, plus the values before/after. Holding the
 // cell here is the back-reference into shared state that makes undo possible.
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Command {
     cell: Cell,
     old_value: i64,

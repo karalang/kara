@@ -28,6 +28,8 @@ impl Display for Direction {
     }
 }
 
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 enum Request {
     // A passenger on a floor pressing the Up or Down call button.
     FloorCall { floor: i64, direction: Direction },

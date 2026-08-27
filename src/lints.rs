@@ -136,6 +136,11 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "A module-level `let mut` binding is mutable global state (default profile).",
     },
     LintInfo {
+        name: "prelude_shadow",
+        default_level: LintLevel::Warn,
+        description: "A user type declaration takes a prelude type's name; built-in paths keyed on that name no longer apply to it.",
+    },
+    LintInfo {
         name: "redundant_suffix",
         default_level: LintLevel::Warn,
         description: "A numeric literal's explicit suffix matches the context's inferred type.",

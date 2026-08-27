@@ -1406,59 +1406,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // contract is a TOTAL order (NaN sorts last, -0 < +0, bit-equality).
         // Intercept before the `is_primitive` reroute (which omits F32/F64
         // and would fall through to the const-0 unknown-callee tail).
-        // B-2026-08-27-11 — a lowered comparison on a USER-SHADOWED prelude
-        // name. `rewrite_binary` turns `a == b` into `T.eq(a, b)` whenever the
-        // impl table says `T: Eq`, and that table is NAME-keyed: the stdlib's
-        // own `#[derive(Eq, Ord, Hash, ...)] struct F64` answers for a user
-        // `struct F64`, so the rewrite fires for a type that has no such impl.
-        //
-        // Before the wrapper intercepts learned about shadowing, the arm below
-        // swallowed the call and applied the wrapper's single-float comparison
-        // — the false-positive equality this row is about. Declining there is
-        // correct but not sufficient: the call then reaches the unknown-callee
-        // tail and yields a const `i64` 0, which is the "compiled binary
-        // printed a raw `0` instead of `true`" failure `rewrite_binary`'s own
-        // comment records. Both halves were measured on this program.
-        //
-        // So the call is compiled as what the source actually said: an ordinary
-        // comparison between two values of the user's type, which is what an
-        // unlowered `a == b` would have produced. Keyed on the shadow set
-        // rather than on the four float names, because any prelude type whose
-        // stdlib declaration carries a comparison derive can reach here the
-        // same way.
-        if self
-            .type_decls
-            .user_shadowed_prelude_types
-            .contains(type_name)
-            && matches!(method, "gt" | "lt" | "ge" | "le" | "eq" | "ne")
-            && _args.len() == 2
-        {
-            let op = match method {
-                "eq" => crate::ast::BinOp::Eq,
-                "ne" => crate::ast::BinOp::NotEq,
-                "lt" => crate::ast::BinOp::Lt,
-                "le" => crate::ast::BinOp::LtEq,
-                "gt" => crate::ast::BinOp::Gt,
-                _ => crate::ast::BinOp::GtEq,
-            };
-            // Rebuild the BINARY EXPRESSION and compile that, rather than
-            // compiling both operands to values and calling `compile_binop`.
-            // The two are not equivalent: a `shared struct` comparison resolves
-            // its type from the OPERAND EXPRESSIONS (that is how it reaches
-            // `emit_shared_struct_eq_fn`), and two bare pointers carry no such
-            // name — measured, that spelling reported the "structural `==` on
-            // this reference type is not yet supported" gap for a shape the
-            // unlowered operator compiles fine.
-            let rebuilt = crate::ast::Expr {
-                kind: crate::ast::ExprKind::Binary {
-                    op,
-                    left: Box::new(_args[0].value.clone()),
-                    right: Box::new(_args[1].value.clone()),
-                },
-                span: _args[0].value.span,
-            };
-            return self.compile_expr(&rebuilt);
-        }
         if self.is_prelude_total_float_wrapper(type_name)
             && matches!(method, "gt" | "lt" | "ge" | "le" | "eq" | "ne")
             && _args.len() == 2

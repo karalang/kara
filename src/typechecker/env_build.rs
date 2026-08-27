@@ -1739,6 +1739,44 @@ impl<'a> super::TypeChecker<'a> {
         {
             self.register_builtin_impl("Not", target, vec![("not", unop(ty))]);
         }
+        // B-2026-08-27-14 — a wrapper name the USER has redeclared gets no
+        // builtin impls.
+        //
+        // These are seeded by NAME, and `F32`/`F64`/`F16`/`Bf16` are ordinary
+        // struct names a user may take: design.md § Module System says prelude
+        // names are not reserved. Seeded unconditionally, a user
+        // `struct F64 { x: i64, tag: i64 }` with NO derives answered
+        // `has_impl("Eq", "F64")` and compiled `a == b`, while an identical
+        // `struct Other` was correctly refused — and the Map-key diagnostic
+        // reported the borrowed impl back AS THE USER'S ("you have written
+        // `impl Eq for F64`"), sending them to look for source that does not
+        // exist.
+        //
+        // Skipping at the SEEDING, rather than filtering at lookup, is what
+        // makes the fix reach every consumer: `env.impls` feeds `has_impl`
+        // (the typecheck gate), `trait_impls` (the operator-lowering gate in
+        // `rewrite_binary`), `trait_impl_methods`, and method resolution. A
+        // lookup-time filter fixed the first and left `rewrite_binary` still
+        // rewriting `a == b` into a `T.eq(a, b)` nothing implements — measured,
+        // and it reaches codegen's unknown-callee tail as a const `i64` 0.
+        //
+        // Same rule and same recipe as `register_baked_stdlib`'s collision-skip
+        // ("the user's definition — and its impls — must own the name"),
+        // including its `compiling_stdlib` guard so a stdlib self-compile still
+        // registers the full prelude.
+        let user_shadowed_wrappers: std::collections::HashSet<&str> = if self.compiling_stdlib {
+            std::collections::HashSet::new()
+        } else {
+            self.program
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::StructDef(s) if !s.stdlib_origin => Some(s.name.as_str()),
+                    Item::EnumDef(e) if !e.stdlib_origin => Some(e.name.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
         // Eq + Ord on integers, bool, char, String, F32/F64 wrappers.
         // Floats (f32/f64) deliberately excluded — IEEE NaN breaks Eq/Ord.
         let eq_ord_targets: Vec<(&str, Type)> = all_ints
@@ -1747,7 +1785,12 @@ impl<'a> super::TypeChecker<'a> {
             .chain(std::iter::once(("bool", Type::Bool)))
             .chain(std::iter::once(("char", Type::Char)))
             .chain(std::iter::once(("String", Type::Str)))
-            .chain(f_wrappers.iter().cloned())
+            .chain(
+                f_wrappers
+                    .iter()
+                    .filter(|(n, _)| !user_shadowed_wrappers.contains(n))
+                    .cloned(),
+            )
             .collect();
         // `ne`/`lt`/`le`/`gt`/`ge` share the bool-returning shape that
         // `eq_sig` produces, so reuse it for them. `cmp` is the only Ord

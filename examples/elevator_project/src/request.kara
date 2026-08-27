@@ -20,6 +20,8 @@ impl Display for Direction {
     }
 }
 
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 pub enum Request {
     // A call button pressed on a floor landing.
     FloorCall { floor: i64, direction: Direction },

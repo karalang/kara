@@ -23,6 +23,8 @@
 // `Location`, so a redirect (this program's whole point) is
 // unexpressible. Response headers default to `content-type:
 // application/json` unless a pair overrides it.
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Response {
     status: i64,
     body: String,

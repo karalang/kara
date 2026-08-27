@@ -25,6 +25,8 @@
 
 // A JSON value. Recursion (Arr/Obj) is carried through Vec, so this is an
 // ordinary owned enum — no reference-counting.
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 enum Json {
     Null,
     Bool(bool),
@@ -36,6 +38,8 @@ enum Json {
 
 // One object member. Object order is preserved (a Vec, not a Map), so the
 // canonical serialization is deterministic and input-order-stable.
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Entry {
     key: String,
     val: Json,
@@ -47,6 +51,8 @@ struct Entry {
 // yields an `Iterator[char]`; `.collect()` materializes it into the indexable
 // `Vec[char]` the cursor random-accesses.
 
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Parser {
     cs: Vec[char],
     pos: i64,

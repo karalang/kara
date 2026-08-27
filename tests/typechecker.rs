@@ -46767,3 +46767,102 @@ fn conversion_impls_that_cannot_be_named_apart_are_refused() {
         errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_user_type_shadowing_a_prelude_name_does_not_inherit_its_builtin_impls() {
+    // B-2026-08-27-14. The builtin impl table is seeded BY NAME — `Eq`/`Ord`
+    // for the total-order float wrappers `F32`/`F64`/`F16`/`Bf16` alongside
+    // the primitives — so a user `struct F64` with NO derives answered
+    // `has_impl("Eq", "F64")` and compiled `a == b`, while an identical
+    // `struct Other` was correctly refused.
+    //
+    // The CONTROL is the whole test: the two declarations differ only in their
+    // NAME, so identical diagnostics are the property, and either one drifting
+    // is the bug returning.
+    let shadowed = "struct F64 { x: i64, tag: i64 }
+        fn main() {
+            let a = F64 { x: 1, tag: 1 };
+            let b = F64 { x: 1, tag: 2 };
+            println(f\"{a == b}\");
+        }";
+    let control = "struct Other { x: i64, tag: i64 }
+        fn main() {
+            let a = Other { x: 1, tag: 1 };
+            let b = Other { x: 1, tag: 2 };
+            println(f\"{a == b}\");
+        }";
+    for (src, name) in [(shadowed, "F64"), (control, "Other")] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e
+                .message
+                .contains(&format!("type '{name}' does not implement PartialEq"))),
+            "expected the PartialEq refusal for '{name}', got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn a_derive_on_the_shadowing_type_is_what_makes_it_comparable() {
+    // The other direction of B-2026-08-27-14: refusing the BORROWED impl must
+    // not refuse the user's own. Deriving `PartialEq` on the shadowing type
+    // makes `==` legal, exactly as it would on any other name.
+    let src = "#[derive(PartialEq)]
+        struct F64 { x: i64, tag: i64 }
+        fn main() {
+            let a = F64 { x: 1, tag: 1 };
+            let b = F64 { x: 1, tag: 2 };
+            println(f\"{a == b}\");
+        }";
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let resolved = resolve(&parsed.program);
+    let errs = typecheck(&parsed.program, &resolved).errors;
+    assert!(
+        errs.is_empty(),
+        "deriving PartialEq on a shadowing type must be enough; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn shadowing_a_prelude_type_name_warns_and_is_suppressible() {
+    // B-2026-08-27-15. design.md § Module System states this lint as shipped
+    // behaviour in three places — including once as the JUSTIFICATION for
+    // making `ptr` a shadowable prelude module name — and it did not exist.
+    //
+    // A WARNING, not an error: the declaration is legal and stays so
+    // ("the language does not reserve them"). What it buys is a signal at the
+    // declaration for the name-capture class behind B-2026-08-02-13,
+    // B-2026-08-15-12 and B-2026-08-27-11.
+    let src = "struct F64 { x: i64 }
+        enum Ordering2 { A, B }
+        struct Map { y: i64 }
+        fn main() { println(f\"{F64 { x: 1 }.x}\"); }";
+    let warns = type_warnings_of(src);
+    let shadow: Vec<&String> = warns
+        .iter()
+        .filter(|w| w.contains("shadows the prelude type"))
+        .collect();
+    assert_eq!(
+        shadow.len(),
+        2,
+        "expected exactly the two PRELUDE names to warn (not `Ordering2`); got: {shadow:?}"
+    );
+    assert!(shadow.iter().any(|m| m.contains("'F64'")));
+    assert!(shadow.iter().any(|m| m.contains("'Map'")));
+
+    // Suppressible PER DECLARATION. Without the override frame the attribute
+    // parses and is silently ignored, which is worse than no lint: the author
+    // writes the documented suppression and still gets the warning.
+    let allowed = "#[allow(prelude_shadow)]
+        struct F64 { x: i64 }
+        fn main() { println(f\"{F64 { x: 1 }.x}\"); }";
+    assert!(
+        type_warnings_of(allowed)
+            .iter()
+            .all(|w| !w.contains("shadows the prelude type")),
+        "#[allow(prelude_shadow)] must suppress the warning"
+    );
+}

@@ -16,6 +16,8 @@
 // an opaque handle.
 
 #[repr(C)]
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 pub struct Stats { sum: f64, count: i64 }
 
 // Simple scalar export.

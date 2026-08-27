@@ -31,6 +31,8 @@
 // stdlib structs (per `tests/http_server.rs` precedent on the handler
 // smoke tests).
 
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Response {
     status: i64,
     body: String,

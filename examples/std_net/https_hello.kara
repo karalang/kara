@@ -5,6 +5,8 @@
 // Replace the placeholder PEM strings with a real cert/key pair
 // (e.g. from `mkcert localhost`), then:
 //   karac run examples/std_net/https_hello.kara
+// Deliberately takes a prelude type's name; see `prelude_shadow`.
+#[allow(prelude_shadow)]
 struct Response { status: i64, body: String }
 
 fn handle(req: Request) -> Response {
