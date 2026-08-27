@@ -29891,6 +29891,63 @@ fn main() {
     }
 
     #[test]
+    fn asan_map_key_user_drop_bodies_fire_once() {
+        // B-2026-08-26-41 — keys twin of
+        // `asan_map_value_user_drop_bodies_fire_once`. A map key's MEMORY was
+        // already reclaimed by `emit_map_key_drop_fn_walk`; this row added the
+        // BODY walk on top of it, so the hazard is running a user body over a
+        // slot the memory walk is about to free, or freeing the key's heap
+        // field twice (once from the body's own field drops, once from the
+        // bucket teardown).
+        //
+        // The key carries a `String` so there is a real buffer behind each
+        // entry, and the map is built and torn down repeatedly so a
+        // double-free or UAF is immediate rather than probabilistic. The
+        // printed count is the oracle: 300 bodies, no more and no less — a
+        // double fire shows up as a wrong number, not just as an ASAN report.
+        let label = "map_key_user_drop_bodies";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { s: String }
+struct V { s: String }
+impl Drop for K { fn drop(mut ref self) { karac_bump() } }
+impl Drop for V { fn drop(mut ref self) { karac_bump() } }
+let mut FIRED: i64 = 0;
+fn karac_bump() { FIRED = FIRED + 1; }
+fn main() {
+    let mut round = 0;
+    while round < 30 {
+        let mut m: Map[K, V] = Map.new();
+        let mut i = 0;
+        while i < 5 {
+            let k = K { s: f"key-{i}-padding-padding" };
+            m.insert(k, V { s: f"val-{i}-padding-padding" });
+            i = i + 1;
+        }
+        round = round + 1;
+    }
+    println(f"fired={FIRED}");
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
+        );
+        // 30 rounds x 5 entries x 2 halves = 300 bodies. The COUNT is the
+        // oracle a sanitizer cannot provide: a double fire is not a memory
+        // error, so ASAN would pass it silently.
+        assert_eq!(stdout.trim(), "fired=300", "[{label}] stdout:\n{stdout}");
+    }
+
+    #[test]
     fn asan_match_bound_string_slice_is_not_freed() {
         // A `StringSlice` is a BORROW (`cap == 0`) — it must never be freed.
         // Registering a match-bound view for method dispatch meant touching

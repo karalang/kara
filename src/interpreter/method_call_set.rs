@@ -49,25 +49,38 @@ impl<'a> super::Interpreter<'a> {
             // the memory work in `Map.clear`.
             "clear" => {
                 if let Value::Map(ref entries) = obj {
-                    let removed: Vec<Value> = entries
-                        .read()
-                        .unwrap()
-                        .iter()
-                        .map(|(_, v)| v.clone())
-                        .collect();
+                    // B-2026-08-26-41 — the KEYS are destroyed here too, so
+                    // their bodies are owed exactly as the values' are. Keys
+                    // first, matching the binding-death order. Codegen twin:
+                    // the `emit_map_key_user_drop_bodies_fn` call in the
+                    // `clear` arm of `maps.rs`.
+                    let (removed_k, removed_v): (Vec<Value>, Vec<Value>) = {
+                        let g = entries.read().unwrap();
+                        (
+                            g.iter().map(|(k, _)| k.clone()).collect(),
+                            g.iter().map(|(_, v)| v.clone()).collect(),
+                        )
+                    };
                     // Shared storage: clear THIS map rather than rebinding the
                     // name to a fresh one, so a map reached through a field or
                     // an alias is cleared too.
                     entries.write().unwrap().clear();
-                    for v in removed {
+                    for k in removed_k {
+                        self.run_discarded_value_user_drops(k);
+                    }
+                    for v in removed_v {
                         self.run_discarded_value_user_drops(v);
                     }
                     return Some(Value::Unit);
                 }
                 if let Value::SortedMap(ref entries) = obj {
-                    let removed: Vec<Value> = entries.values().cloned().collect();
+                    let removed_k: Vec<Value> = entries.keys().map(|k| k.0.clone()).collect();
+                    let removed_v: Vec<Value> = entries.values().cloned().collect();
                     self.write_back_receiver(object, Value::SortedMap(BTreeMap::new()));
-                    for v in removed {
+                    for k in removed_k {
+                        self.run_discarded_value_user_drops(k);
+                    }
+                    for v in removed_v {
                         self.run_discarded_value_user_drops(v);
                     }
                     return Some(Value::Unit);

@@ -642,6 +642,81 @@ fn test_user_impl_display_dispatches_through_to_string() {
 }
 
 #[test]
+fn a_user_impl_drop_on_a_map_key_fires_like_one_on_a_value() {
+    // B-2026-08-26-41. `emit_map_val_user_drop_bodies_fn` had no key twin, so
+    // an `impl Drop` on a KEY type never ran at map teardown while the same
+    // impl on the VALUE type did. design.md § Drop owes it: "the compiler
+    // invokes `drop` at the end of each value's live range", and a key stored
+    // in a map is a value whose live range ends when the map is destroyed.
+    //
+    // Four destruction sites in one program, because the walk had to be added
+    // at each: binding death, `clear()`, a map held in a struct FIELD, and a
+    // map reached as a container element. Order within an entry is KEY then
+    // VALUE — an entry's halves drop in the order `Map[K, V]` declares them,
+    // the rule a struct's fields already follow. Codegen twin:
+    // `test_e2e_user_impl_drop_on_a_map_key_fires`.
+    let src = "#[derive(Hash, Eq, PartialEq)]
+        struct K { id: i64 }
+        struct V { id: i64 }
+        impl Drop for K { fn drop(mut ref self) { println(f\"dropK {self.id}\"); } }
+        impl Drop for V { fn drop(mut ref self) { println(f\"dropV {self.id}\"); } }
+        struct Holder { m: Map[K, V] }
+        fn main() {
+            let mut a: Map[K, V] = Map.new();
+            a.insert(K { id: 1 }, V { id: 1 });
+            println(\"--before-clear--\");
+            a.clear();
+            println(\"--after-clear--\");
+            { let mut b: Map[K, V] = Map.new();
+              b.insert(K { id: 2 }, V { id: 2 });
+              let h = Holder { m: b };
+              println(\"--field-in-scope--\"); }
+            println(\"--field-gone--\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "--before-clear--\ndropK 1\ndropV 1\n--after-clear--\n\
+         dropK 2\ndropV 2\n--field-in-scope--\n--field-gone--\n"
+    );
+}
+
+#[test]
+fn a_moved_map_key_runs_its_drop_body_exactly_once() {
+    // The half of B-2026-08-26-41 that had to move WITH the walk. Before it,
+    // a BOUND-LOCAL key moved into a map ran its body at the MOVE SITE — the
+    // row's repro used an inline temporary and so never saw this — and the
+    // compiled backend ran it over a moved-from slot, printing an empty field
+    // where `--interp` printed the value.
+    //
+    // `disarm_moved_value_arg_user_drops` documented the pairing: keys stayed
+    // on the container-only disarm precisely because no walk covered them. So
+    // the walk alone would double-fire this, and the disarm alone would stop
+    // an RAII key releasing at all. Both assertions below are needed: the
+    // COUNT (exactly one) and the CONTENT (the field survives, so the body did
+    // not run over a moved-from slot).
+    let src = "#[derive(Hash, Eq, PartialEq)]
+        struct K { s: String }
+        impl Drop for K { fn drop(mut ref self) { println(f\"dropK {self.s}\"); } }
+        fn main() {
+            let mut m: Map[K, i64] = Map.new();
+            let k = K { s: \"kk\" };
+            m.insert(k, 1);
+            println(\"--after-insert--\");
+            println(f\"len={m.len()}\");
+        }";
+    let out = run_no_errors(src);
+    assert_eq!(out.matches("dropK").count(), 1, "exactly one body: {out}");
+    assert!(
+        out.contains("dropK kk\n"),
+        "field must survive the move: {out}"
+    );
+    assert!(
+        out.find("dropK").unwrap() > out.find("len=1").unwrap(),
+        "the body belongs at teardown, not at the move site: {out}"
+    );
+}
+
+#[test]
 fn a_match_bound_string_slice_keeps_its_methods() {
     // Oracle twin of `test_e2e_match_bound_string_slice_keeps_method_dispatch`
     // in `tests/codegen.rs` — the two assert the same bytes. The interpreter

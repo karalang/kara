@@ -3547,6 +3547,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 ));
                 if is_table_field {
                     let fte = fte.clone();
+                    // Key bodies first, then value — B-2026-08-26-41, same
+                    // order as the binding-death drain.
+                    if let Some(kw) = self.emit_map_key_user_drop_bodies_fn(&fte) {
+                        self.builder
+                            .build_call(kw, &[field_ptr.into()], "")
+                            .unwrap();
+                    }
                     if let Some(w) = self.emit_map_val_user_drop_bodies_fn(&fte) {
                         self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
                     }
@@ -7272,6 +7279,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // check covers a moved-out element.
             "Map" | "SortedMap" | "Set" | "SortedSet" => {
                 let te = te.clone();
+                // Key bodies first, then value — B-2026-08-26-41.
+                if let Some(kw) = self.emit_map_key_user_drop_bodies_fn(&te) {
+                    self.builder.build_call(kw, &[ep.into()], "").unwrap();
+                }
                 if let Some(w) = self.emit_map_val_user_drop_bodies_fn(&te) {
                     self.builder.build_call(w, &[ep.into()], "").unwrap();
                 }
@@ -7685,6 +7696,37 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         map_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_map_half_user_drop_bodies_fn(map_te, false)
+    }
+
+    /// KEY-half twin of [`Self::emit_map_val_user_drop_bodies_fn`]
+    /// (B-2026-08-26-41). B-2026-07-30-11 shipped the values leg and keys
+    /// were left with `emit_map_key_drop_fn_walk`, which reclaims MEMORY and
+    /// runs no user bodies — so an `impl Drop` on a key type never fired at
+    /// map teardown, and design.md § Drop ("the compiler invokes `drop` at the
+    /// end of each value's live range") owes it: a key stored in a map is a
+    /// value whose live range ends when the map is destroyed.
+    ///
+    /// The walk itself needed no new machinery. `at_key_half` already existed
+    /// for `Set`/`SortedSet`, whose elements live in the key half, so a Map
+    /// key walk is that same configuration with the Map's own stride
+    /// (`key_size + val_size`, which the loop already computes).
+    pub(super) fn emit_map_key_user_drop_bodies_fn(
+        &mut self,
+        map_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_map_half_user_drop_bodies_fn(map_te, true)
+    }
+
+    /// Shared body of the two entry points above. `key_half` selects which
+    /// half of a `Map`/`SortedMap` blob the bodies run over; it is meaningless
+    /// for `Set`/`SortedSet` (whose single element already lives in the key
+    /// half) and declines there rather than emitting a duplicate walk.
+    fn emit_map_half_user_drop_bodies_fn(
+        &mut self,
+        map_te: &TypeExpr,
+        key_half: bool,
+    ) -> Option<FunctionValue<'ctx>> {
         let TypeKind::Path(p) = &map_te.kind else {
             return None;
         };
@@ -7693,7 +7735,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // generic arg 0 and the blob offset skips the +key_size step
         // (B-2026-07-30-11 Set-elements leg).
         let (elem_idx, at_key_half) = match p.segments.last().map(|s| s.as_str()) {
+            // Key mode walks generic arg 0 at offset 0; value mode walks arg 1
+            // past `key_size`. A Set has one element and it is already in the
+            // key half, so key mode would emit the same walk twice under a
+            // different name — decline instead (B-2026-08-26-41).
+            Some("Map") | Some("SortedMap") if key_half => (0usize, true),
             Some("Map") | Some("SortedMap") => (1usize, false),
+            Some("Set") | Some("SortedSet") if key_half => return None,
             Some("Set") | Some("SortedSet") => (0usize, true),
             _ => return None,
         };
@@ -7760,7 +7808,13 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
 
-        let fn_name = format!("__karac_dropelems_map_{}", Self::display_mangle_te(map_te));
+        // The two halves must not share a symbol: a Map with a dropping key
+        // AND a dropping value needs both walks live at once.
+        let fn_name = format!(
+            "__karac_drop{}_map_{}",
+            if key_half { "keys" } else { "elems" },
+            Self::display_mangle_te(map_te)
+        );
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }

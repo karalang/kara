@@ -488,8 +488,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // actions so no body fires over a moved-from slot).
             self.disarm_container_bodies_for_arg(k_expr);
             self.disarm_container_bodies_for_arg(v_expr);
-            // Value side: the moved binding's own body belongs to the map's
-            // value walk now.
+            // The moved binding's own body belongs to the map's walk now —
+            // BOTH halves since B-2026-08-26-41 gave keys their walk. Before
+            // it, the key stayed on the container-only disarm because nothing
+            // else would ever run its body; now leaving it armed fires the
+            // body twice (once at the source's NLL end over a MOVED-FROM slot,
+            // printing an emptied field, and once at the map's key walk).
+            self.disarm_moved_value_arg_user_drops(k_expr);
             self.disarm_moved_value_arg_user_drops(v_expr);
             self.builder.build_store(key_slot, k_val).unwrap();
             self.builder.build_store(val_slot, v_val).unwrap();
@@ -1738,6 +1743,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Container-bodies twin of the cap-zeros above.
                 self.disarm_container_bodies_for_arg(&args[0].value);
                 self.disarm_container_bodies_for_arg(&args[1].value);
+                // Key half too — see the same pair at the primary insert site.
+                self.disarm_moved_value_arg_user_drops(&args[0].value);
                 self.disarm_moved_value_arg_user_drops(&args[1].value);
                 self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
@@ -1940,6 +1947,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 if borrowed_key.is_none() {
                     self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                     self.disarm_container_bodies_for_arg(&args[0].value);
+                    // Only on the OWNING path: a borrowed key is not moved in,
+                    // so the source keeps its own body and the map's key walk
+                    // never sees it.
+                    self.disarm_moved_value_arg_user_drops(&args[0].value);
                 }
                 self.suppress_source_vec_cleanup_for_arg_ex(&args[1].value, !weak_val);
                 // Container-bodies twin of the cap-zero above.
@@ -2687,6 +2698,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Same walker the binding-death path registers; it frees
                 // nothing, and running it FIRST lets the bodies read the values
                 // the frees below invalidate.
+                // B-2026-08-26-41 — the KEY bodies too, and FIRST, matching the
+                // key-then-value order the binding-death path drains in.
+                // `m.clear()` destroys every entry, so it owes both halves
+                // exactly what teardown owes them; before this it ran the value
+                // bodies and silently skipped an RAII key's release.
+                if let Some(kb) = self
+                    .mapset
+                    .map_val_bodies_tes
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|te| self.emit_map_key_user_drop_bodies_fn(&te))
+                {
+                    self.builder
+                        .build_call(kb, &[handle_ptr.into()], "")
+                        .unwrap();
+                }
                 if let Some(bodies) = self
                     .mapset
                     .map_val_bodies_tes

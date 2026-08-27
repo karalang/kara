@@ -105084,6 +105084,90 @@ fn main() {
         );
     }
 
+    /// B-2026-08-26-41 — the compiled twin of
+    /// `a_user_impl_drop_on_a_map_key_fires_like_one_on_a_value`, asserting
+    /// the same bytes. A user `impl Drop` on a map KEY type never ran:
+    /// `emit_map_val_user_drop_bodies_fn` shipped for values (B-2026-07-30-11)
+    /// and keys were left with `emit_map_key_drop_fn_walk`, which reclaims
+    /// MEMORY and runs no bodies. So an RAII key — a handle, a lock guard, a
+    /// connection — silently never released, and no sanitizer could see it
+    /// because nothing leaked.
+    ///
+    /// The walk needed no new machinery: `at_key_half` already existed for
+    /// `Set`/`SortedSet`, whose elements live in the key half, so the Map key
+    /// walk is that configuration with the Map's own `key_size + val_size`
+    /// stride. What it needed was a distinct SYMBOL and admission to
+    /// `is_container_elem_bodies_fn`, without which it fired at scope exit
+    /// while the value walk fired at the binding's NLL end — a run-vs-build
+    /// divergence, since the interpreter fires both at the NLL point.
+    ///
+    /// THE SYMBOL NAME CARRIES THE HALF (`__karac_dropkeys_` vs
+    /// `__karac_dropelems_`) and must keep doing so. Both halves mangle the
+    /// same map `TypeExpr`, so a shared name makes `get_function` hand back the
+    /// VALUE walker for a key request — every value body then runs twice and no
+    /// key body runs at all, which is a double free for a heap-owning `V` and
+    /// silent under a sanitizer that never sees a second `Drop` as an error.
+    /// This test's exact expectation is what catches it: the collision shows up
+    /// as a repeated `dropV` with `dropK` missing.
+    #[test]
+    fn test_e2e_user_impl_drop_on_a_map_key_fires() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64 }
+struct V { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.id}") } }
+impl Drop for V { fn drop(mut ref self) { println(f"dropV {self.id}") } }
+struct Holder { m: Map[K, V] }
+fn main() {
+    let mut a: Map[K, V] = Map.new();
+    a.insert(K { id: 1 }, V { id: 1 });
+    println("--before-clear--")
+    a.clear();
+    println("--after-clear--")
+    { let mut b: Map[K, V] = Map.new();
+      b.insert(K { id: 2 }, V { id: 2 });
+      let h = Holder { m: b };
+      println("--field-in-scope--"); }
+    println("--field-gone--")
+}
+"#
+            ),
+            Some(
+                "--before-clear--\ndropK 1\ndropV 1\n--after-clear--\n\
+                 dropK 2\ndropV 2\n--field-in-scope--\n--field-gone--\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// The disarm half of B-2026-08-26-41, compiled. A bound-local key moved
+    /// into a map must run its body ONCE, at teardown, over live data — not at
+    /// the move site over a moved-from slot, which is what `karac build` did
+    /// (printing an empty field where `--interp` printed the value) and which
+    /// the walk alone would have turned into a double fire.
+    #[test]
+    fn test_e2e_moved_map_key_drop_body_fires_once() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { s: String }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.s}") } }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let k = K { s: "kk" };
+    m.insert(k, 1);
+    println("--after-insert--")
+    println(f"len={m.len()}")
+}
+"#
+            ),
+            Some("--after-insert--\nlen=1\ndropK kk\n".to_string())
+        );
+    }
+
     /// A `StringSlice` bound by a MATCH PATTERN lost its method dispatch under
     /// `karac build` — every method except `to_string` fell through with
     /// "no handler for method '<m>' on variable '<v>'", while `--interp` ran

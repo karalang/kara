@@ -879,8 +879,24 @@ impl<'a> super::Interpreter<'a> {
         if self.run_array_element_user_drops(name) {
             return;
         }
-        // Map-values leg: same treatment for a `Map` binding's stored values.
-        if self.run_map_val_user_drops(name) {
+        // Map-values leg: same treatment for a `Map` binding's stored values,
+        // plus the KEY half (B-2026-08-26-41).
+        //
+        // KEY FIRST, then value. An entry's two halves drop in the order they
+        // are declared — the rule a struct's fields already follow — and
+        // `Map[K, V]` declares the key first. It also happens to be what the
+        // compiled backend produces for free: its NLL drain fires a frame's
+        // actions in reverse-introduction order, and the value walk is
+        // registered before the key walk, so the key fires first there. The
+        // bodies are observable, so the two backends have to agree on this;
+        // design.md fixes no order, but it has to be fixed somewhere.
+        //
+        // Both are consulted before the early return — a map whose KEY drops
+        // and whose value does not must still short-circuit here rather than
+        // fall through to `drop_target`.
+        let ran_keys = self.run_map_key_user_drops(name);
+        let ran_vals = self.run_map_val_user_drops(name);
+        if ran_vals || ran_keys {
             return;
         }
         // Resolve the binding's type (and, for a shared struct, its Arc
@@ -1549,6 +1565,9 @@ impl<'a> super::Interpreter<'a> {
                 &field_value,
                 Value::Map(_) | Value::SortedMap(_) | Value::Set(_) | Value::SortedSet(_)
             ) {
+                // Key bodies first, then value — B-2026-08-26-41, matching the
+                // binding-death order.
+                self.run_field_map_key_user_drops(&field_value, &declared_te, &generic_param_names);
                 self.run_field_map_val_user_drops(&field_value, &declared_te, &generic_param_names);
                 continue;
             }
@@ -1634,22 +1653,54 @@ impl<'a> super::Interpreter<'a> {
         declared_te: &TypeExpr,
         generic_param_names: &[String],
     ) {
+        self.run_field_map_half_user_drops(field_value, declared_te, generic_param_names, false)
+    }
+
+    /// KEY-half twin of [`Self::run_field_map_val_user_drops`]
+    /// (B-2026-08-26-41), for a `Map` held in a struct FIELD. Codegen twin:
+    /// the `is_table_field` arm's `emit_map_key_user_drop_bodies_fn` call.
+    fn run_field_map_key_user_drops(
+        &mut self,
+        field_value: &Value,
+        declared_te: &TypeExpr,
+        generic_param_names: &[String],
+    ) {
+        self.run_field_map_half_user_drops(field_value, declared_te, generic_param_names, true)
+    }
+
+    fn run_field_map_half_user_drops(
+        &mut self,
+        field_value: &Value,
+        declared_te: &TypeExpr,
+        generic_param_names: &[String],
+        key_half: bool,
+    ) {
         let vals: Vec<Value> = match field_value {
             Value::Map(entries) => entries
                 .read()
                 .unwrap()
                 .iter()
-                .map(|(_, v)| v.clone())
+                .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
                 .collect(),
-            Value::SortedMap(entries) => entries.values().cloned().collect(),
-            Value::Set(items) => items.read().unwrap().items().to_vec(),
-            Value::SortedSet(items) => items.keys().map(|k| k.0.clone()).collect(),
+            Value::SortedMap(entries) => {
+                if key_half {
+                    entries.keys().map(|k| k.0.clone()).collect()
+                } else {
+                    entries.values().cloned().collect()
+                }
+            }
+            // A Set's element IS the key half — walked as the value; the key
+            // pass declines so it does not fire each element's body twice.
+            Value::Set(items) if !key_half => items.read().unwrap().items().to_vec(),
+            Value::SortedSet(items) if !key_half => items.keys().map(|k| k.0.clone()).collect(),
+            Value::Set(_) | Value::SortedSet(_) => return,
             _ => return,
         };
         let TypeKind::Path(p) = &declared_te.kind else {
             return;
         };
         let elem_idx = match p.segments.last().map(String::as_str) {
+            _ if key_half => 0usize,
             Some("Set") | Some("SortedSet") => 0usize,
             Some("Map") | Some("SortedMap") => 1usize,
             _ => return,
@@ -2595,21 +2646,30 @@ impl<'a> super::Interpreter<'a> {
             // ELEMENT arg (B-2026-07-30-11 Set-elements leg — a Set lowers
             // to the key half of the same table, so the walk is the
             // key-side sibling of the values walk).
-            let elem_idx = match p.segments.last().map(String::as_str) {
-                Some("Map") | Some("SortedMap") => 1usize,
-                Some("Set") | Some("SortedSet") => 0usize,
+            // B-2026-08-26-41 — a Map qualifies on EITHER half. The gate read
+            // the value arg alone, so `Map[K, i64]` with a dropping K never
+            // armed and the key walk had nothing to resolve: the walk was
+            // present and silent, the gate-before-walk shape B-2026-08-02-24
+            // and B-2026-08-03-1 both hit. Codegen needs no equivalent — its
+            // `register_map_val_bodies` tries both emitters and each declines
+            // on its own.
+            let elem_idxs: &[usize] = match p.segments.last().map(String::as_str) {
+                Some("Map") | Some("SortedMap") => &[0, 1],
+                Some("Set") | Some("SortedSet") => &[0],
                 _ => return false,
             };
-            matches!(
-                p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
-                Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
-                    || self.te_vec_elem_runs_user_drop(v)
-                    // B-2026-08-03-1 — an Option/Result-valued V. This is the
-                    // REGISTRATION gate, not the walk: without it the walk
-                    // (which now has its Option arm) never armed, the same
-                    // gate-before-walk shape as B-2026-08-02-24.
-                    || self.field_te_runs_user_drop(v, &mut Vec::new())
-            )
+            elem_idxs.iter().any(|&elem_idx| {
+                matches!(
+                    p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
+                    Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
+                        || self.te_vec_elem_runs_user_drop(v)
+                        // B-2026-08-03-1 — an Option/Result-valued V. This is the
+                        // REGISTRATION gate, not the walk: without it the walk
+                        // (which now has its Option arm) never armed, the same
+                        // gate-before-walk shape as B-2026-08-02-24.
+                        || self.field_te_runs_user_drop(v, &mut Vec::new())
+                )
+            })
         });
         if qualifies {
             self.map_val_bodies_tes
@@ -2677,6 +2737,18 @@ impl<'a> super::Interpreter<'a> {
     }
 
     fn run_map_val_user_drops(&mut self, name: &str) -> bool {
+        self.run_map_half_user_drops(name, false)
+    }
+
+    /// KEY-half twin of [`Self::run_map_val_user_drops`] (B-2026-08-26-41).
+    /// Codegen twin: `emit_map_key_user_drop_bodies_fn`. Declines for
+    /// `Set`/`SortedSet`, whose single element is already walked as the value
+    /// half — running it again here would fire each element's body twice.
+    fn run_map_key_user_drops(&mut self, name: &str) -> bool {
+        self.run_map_half_user_drops(name, true)
+    }
+
+    fn run_map_half_user_drops(&mut self, name: &str, key_half: bool) -> bool {
         // SortedMap shares the walk (same declared-V gate); its values come
         // out in key order vs the Map's insertion order — the same
         // ordered-vs-unordered difference `for (k, v) in m` already has, so
@@ -2686,13 +2758,21 @@ impl<'a> super::Interpreter<'a> {
                 .read()
                 .unwrap()
                 .iter()
-                .map(|(_, v)| v.clone())
+                .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
                 .collect(),
-            Some(Value::SortedMap(entries)) => entries.into_values().collect(),
+            Some(Value::SortedMap(entries)) => {
+                if key_half {
+                    entries.into_keys().map(|k| k.0).collect()
+                } else {
+                    entries.into_values().collect()
+                }
+            }
             // Set-elements leg (B-2026-07-30-11): the walked values are the
-            // ELEMENTS — the key half of the same table shape.
-            Some(Value::Set(items)) => items.read().unwrap().items().to_vec(),
-            Some(Value::SortedSet(items)) => items.into_keys().map(|k| k.0).collect(),
+            // ELEMENTS — the key half of the same table shape. So the key pass
+            // must decline, or each element's body fires twice.
+            Some(Value::Set(items)) if !key_half => items.read().unwrap().items().to_vec(),
+            Some(Value::SortedSet(items)) if !key_half => items.into_keys().map(|k| k.0).collect(),
+            Some(Value::Set(_)) | Some(Value::SortedSet(_)) => return true,
             _ => return false,
         };
         if self.moved_out_container_bodies_bindings.contains(name) {
@@ -2705,6 +2785,7 @@ impl<'a> super::Interpreter<'a> {
             return true;
         };
         let elem_idx = match p.segments.last().map(String::as_str) {
+            _ if key_half => 0usize,
             Some("Set") | Some("SortedSet") => 0usize,
             _ => 1usize,
         };

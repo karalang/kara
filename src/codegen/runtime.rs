@@ -7540,9 +7540,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// carrying `karac_drop_<T>` wrappers that intentionally drain at scope
     /// exit, and a type-based widening would retime those.
     fn is_container_elem_bodies_fn(f: FunctionValue<'ctx>) -> bool {
-        f.get_name()
-            .to_str()
-            .is_ok_and(|n| n.starts_with("__karac_dropelems_"))
+        f.get_name().to_str().is_ok_and(|n| {
+            n.starts_with("__karac_dropelems_")
+                // The Map KEY-half walk (B-2026-08-26-41). It is the same kind
+                // of function as `dropelems` — bodies only, frees nothing — and
+                // belongs on the NLL channel for the same reason, but it needs
+                // its own symbol prefix because a map whose key AND value both
+                // drop has both walks live at once. Matching only `dropelems`
+                // left the key walk on the scope-exit funnel while the value
+                // walk fired at the binding's last use, which is a run-vs-build
+                // divergence: the interpreter fires both at the NLL point.
+                || n.starts_with("__karac_dropkeys_")
+        })
     }
 
     /// Statement-end firing for FRESH TEMPORARIES' `UserDrop` actions
@@ -8141,6 +8150,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert(var_name.to_string(), te.clone());
             self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
         }
+        // B-2026-08-26-41 — the KEY half needs the same walk. Registered from
+        // the same resolved `te` and under the same side-table entry, because
+        // both walks are keyed on the MAP's type; a `Map[K, V]` where both K
+        // and V run a user drop gets two cleanup actions and both fire.
+        //
+        // Registered AFTER the values walk, which — because `fire_due_user_drops`
+        // drains a frame in reverse-introduction order — makes the KEY body run
+        // first and the value's second. That is the order an entry's halves are
+        // declared in (`Map[K, V]`), the same rule a struct's fields follow.
+        // design.md fixes no order, but the bodies are observable, so it has to
+        // be fixed somewhere and matched: the interpreter calls
+        // `run_map_key_user_drops` before `run_map_val_user_drops` to agree.
+        if let Some(key_bodies) = self.emit_map_key_user_drop_bodies_fn(&te) {
+            self.mapset
+                .map_val_bodies_tes
+                .insert(var_name.to_string(), te.clone());
+            self.track_user_drop_var_with_fn("", var_name, slot.ptr, key_bodies);
+        }
     }
 
     /// Consuming-ARG form of [`Self::disarm_container_bodies_move_sources`]:
@@ -8222,9 +8249,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// value — own `impl Drop` body included — now belongs to the container,
     /// whose element/value walk runs it. Leaving the source's own-body action
     /// armed printed the body twice on both backends (`let r = Res{..};
-    /// v.push(r);` fired at r's NLL end AND at the container walk). Key args
-    /// stay on the container-only disarm: no container walk covers keys, so
-    /// a key source's own body firing once is today's (leak-free) behavior.
+    /// v.push(r);` fired at r's NLL end AND at the container walk).
+    ///
+    /// Map KEY args take this too, as of B-2026-08-26-41. They previously
+    /// stayed on the container-only disarm for a stated reason — "no
+    /// container walk covers keys, so a key source's own body firing once is
+    /// today's (leak-free) behavior" — and that reason expired when
+    /// `emit_map_key_user_drop_bodies_fn` gave keys their walk. The two must
+    /// move together: the walk alone double-fires a bound-local key, and the
+    /// disarm alone stops an RAII key releasing at all.
     /// Interp twin: `record_ctor_arg_moves` at the same method sites.
     pub(super) fn disarm_moved_value_arg_user_drops(&mut self, e: &Expr) {
         match &e.kind {

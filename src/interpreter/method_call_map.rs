@@ -201,7 +201,14 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 if args.len() > 1 {
-                    self.record_ctor_arg_moves(&args[1..2]);
+                    // Both halves (B-2026-08-26-41): a bound-local KEY moved
+                    // into the map hands its own body to the map's key walk,
+                    // exactly as the value does. This was `&args[1..2]` — value
+                    // only — because no key walk existed to take ownership; now
+                    // one does, and leaving the key armed fires its body twice.
+                    // Codegen twin: `disarm_moved_value_arg_user_drops` on the
+                    // key expr at the three `Map.insert` sites.
+                    self.record_ctor_arg_moves(&args[..2]);
                     self.record_container_move_sources_in_aggregate_arg(&args[1].value);
                 }
                 // B-2026-08-02-20 (leg 2) — an aggregate-literal KEY/element
