@@ -11580,7 +11580,7 @@ fn main() {
             let src = format!(
                 "struct Bag[=T] {{ xs: Vec[T] }}\n\
                  impl[T: Ord] Bag[T] {{\n    \
-                     fn swap2(mut ref self, i: i64, j: i64) {{ let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }}\n    \
+                     fn swap2(mut ref self, i: i64, j: i64) {{ self.xs.swap(i, j); }}\n    \
                      fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
                      fn dup(ref self) -> Bag[T] {{ Bag {{ xs: self.xs }} }}\n    \
                      fn make(v: Vec[T]) -> Bag[T] {{ Bag {{ xs: v }} }}\n    \
@@ -11640,7 +11640,7 @@ fn main() {
             let src = format!(
                 "struct Bag[=T] {{ xs: Vec[T] }}\n\
                  impl[T: Ord] Bag[T] {{\n    \
-                     fn swap2(mut ref self, i: i64, j: i64) {{ let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }}\n    \
+                     fn swap2(mut ref self, i: i64, j: i64) {{ self.xs.swap(i, j); }}\n    \
                      fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
                      {impl_extra}\n\
                  }}\n\
@@ -11682,7 +11682,7 @@ fn main() {
 struct Bag[T] { xs: Vec[T] }
 impl[T: Ord] Bag[T] {
     fn swap2(mut ref self, i: i64, j: i64) {
-        let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t;
+        self.xs.swap(i, j);
     }
     fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
     fn build(v: Vec[T]) -> Bag[T] { let mut b = Bag { xs: v }; b.arrange(); b }
@@ -11691,7 +11691,7 @@ impl[T: Ord] Bag[T] {
 struct PlainBag { xs: Vec[String] }
 impl PlainBag {
     fn swap2(mut ref self, i: i64, j: i64) {
-        let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t;
+        self.xs.swap(i, j);
     }
     fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
     fn build(v: Vec[String]) -> PlainBag { let mut b = PlainBag { xs: v }; b.arrange(); b }
@@ -12407,7 +12407,7 @@ fn main() {
                      let names: Vec[String] = [f\"alpha\"];\n\
                      let mut out: String = f\"\";\n\
                      {\n\
-                         let n = names[0];\n\
+                         let n = names[0].clone();\n\
                          let _keep: String = n;\n\
                          out = n;\n\
                      }\n\
@@ -14771,7 +14771,7 @@ impl BuildHasher for SumBuild {\n\
     const B28_BAG: &str = "\
 struct Bag[=T] { xs: Vec[T] }
 impl[T: Ord] Bag[T] {
-    fn swap2(mut ref self, i: i64, j: i64) { let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }
+    fn swap2(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
     fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
     fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }
 ";
@@ -14828,7 +14828,7 @@ impl[T: Ord] Bag[T] {
         let src = "\
 struct Bag[=T] { xs: Vec[T] }
 impl[T: Ord] Bag[T] {
-    fn swap2(mut ref self, i: i64, j: i64) { let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }
+    fn swap2(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
     fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
     fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }
 }
@@ -20073,7 +20073,7 @@ fn main() {
     #[test]
     fn ref_param_nested_vec_row_binding_dispatches() {
         let src = "fn row_sum(m: ref Vec[Vec[i64]], i: i64) -> i64 {\n\
-                   \x20   let row = m[i];\n\
+                   \x20   let row = ref m[i];\n\
                    \x20   let mut s = 0i64;\n\
                    \x20   let mut j = 0i64;\n\
                    \x20   let n = row.len();\n\
@@ -20095,7 +20095,7 @@ fn main() {
     #[test]
     fn mut_ref_param_nested_vec_row_binding_dispatches() {
         let src = "fn first_len(m: mut ref Vec[Vec[i64]]) -> i64 {\n\
-                   \x20   let row = m[0i64];\n\
+                   \x20   let row = ref m[0i64];\n\
                    \x20   row.len()\n\
                    }\n\
                    fn main() {\n\
@@ -21112,7 +21112,7 @@ fn main() {
              fn choose[T: Ord](x: T, y: T) { if x > y { } else { } }\n\
              fn early[T: Ord](x: T, y: T) { if x > y { return; } }\n\
              fn cmp_swap[T: Ord](xs: mut ref Vec[T], i: i64, j: i64) {\n\
-             \x20   if xs[i] > xs[j] { let t = xs[i]; xs[i] = xs[j]; xs[j] = t; }\n\
+             \x20   if xs[i] > xs[j] { xs.swap(i, j); }\n\
              }\n\
              fn bigger[T: Ord](x: T, y: T) -> i64 { if x > y { 1 } else { 0 } }\n\
              fn to_u8[T](x: T) -> u8 { 255 }\n\
@@ -21194,14 +21194,12 @@ fn main() {
             "struct H { xs: Vec[String] }\n\
              impl H {\n\
              \x20   fn swap(mut ref self, i: i64, j: i64) {\n\
-             \x20       let t = self.xs[i];\n\
-             \x20       self.xs[i] = self.xs[j];\n\
-             \x20       self.xs[j] = t;\n\
+             \x20       self.xs.swap(i, j);\n\
              \x20   }\n\
              }\n\
              fn main() {\n\
              \x20   let mut v: Vec[String] = [f\"alpha\", f\"bravo\", f\"charlie\"];\n\
-             \x20   let t = v[0]; v[0] = v[1]; v[1] = t;\n\
+             \x20   v.swap(0, 1);\n\
              \x20   println(v[0]); println(v[1]); println(v[2]);\n\
              \x20   let mut h = H { xs: [f\"one\", f\"two\", f\"three\"] };\n\
              \x20   h.swap(0, 2);\n\
@@ -27223,7 +27221,7 @@ fn main() {
                              Cmd.Delete(at, d.lines[at as usize])\n\
                          }\n\
                          Delete(at, _text) => {\n\
-                             let gone = d.lines[at as usize];\n\
+                             let gone = d.lines[at as usize].clone();\n\
                              d.lines.remove(at as usize);\n\
                              Cmd.Insert(at, gone)\n\
                          }\n\
@@ -27994,7 +27992,7 @@ fn main() {
     let arr: Array[u8, 2] = [200u8, 201u8];
     let arrs: Array[i8, 2] = [-56i8, -57i8];
     println(f"06 {arr[0i64]} {arr[1i64]} {arrs[0i64]}");
-    let e = v[0i64];
+    let e = ref v[0i64];
     println(f"07 {e.a}");
 }
 "#;
@@ -35974,11 +35972,11 @@ fn main() {
     println(f"{ef.len()} {f0.0} {f0.1}");
     let hw: Vec[String] = Vec["red".to_string(), "green".to_string(), "blue".to_string()];
     let he: Vec[(i64, String)] = hw.iter().enumerate().collect();
-    let h0 = he[0];
-    let h2 = he[2];
+    let h0 = ref he[0];
+    let h2 = ref he[2];
     println(f"{he.len()} {h0.0} {h0.1} {h2.0} {h2.1}");
     let hf: Vec[(i64, String)] = hw.iter().filter(|s| s.len() > 3i64).enumerate().collect();
-    let hf0 = hf[0];
+    let hf0 = ref hf[0];
     println(f"{hf.len()} {hf0.0} {hf0.1}");
     let hm: Vec[String] = hw.iter().enumerate().map(|p| p.1).collect();
     println(f"{hm.len()} {hm[0]} {hm[2]}");
@@ -35987,10 +35985,10 @@ fn main() {
     let hs: Vec[String] = hw.iter().skip(1i64).enumerate().map(|p| p.1).collect();
     println(f"{hs.len()} {hs[0]}");
     let hef: Vec[(i64, String)] = hw.iter().enumerate().filter(|p| p.0 > 0i64).collect();
-    let hef0 = hef[0];
+    let hef0 = ref hef[0];
     println(f"{hef.len()} {hef0.0} {hef0.1}");
     let hetw: Vec[(i64, String)] = hw.iter().enumerate().take_while(|p| p.0 < 2i64).collect();
-    let hetw1 = hetw[1];
+    let hetw1 = ref hetw[1];
     println(f"{hetw.len()} {hetw1.0} {hetw1.1}");
     let htm: Vec[String] = hw.iter().enumerate().take(2i64).map(|p| p.1).collect();
     println(f"{htm.len()} {htm[0]} {htm[1]}");
@@ -36034,8 +36032,8 @@ fn nums() -> Vec[i64] {
 }
 fn main() {
     let he: Vec[(i64, String)] = mk().iter().enumerate().collect();
-    let e0 = he[0];
-    let e1 = he[1];
+    let e0 = ref he[0];
+    let e1 = ref he[1];
     println(f"{he.len()} {e0.0} {e0.1} {e1.0} {e1.1}");
     let hm: Vec[String] = mk().iter().enumerate().map(|p| p.1).collect();
     println(f"{hm.len()} {hm[0]} {hm[1]}");
@@ -67603,7 +67601,7 @@ fn main() {
     let mut out: Vec[Vec[i64]] = Vec.new();
     let mut path: Vec[i64] = Vec.new();
     rec(3i64, mut path, mut out);
-    let row = out[0];
+    let row = ref out[0];
     println(row.len());
     println(row[0]);
     println(row[1]);
@@ -68832,7 +68830,7 @@ fn main() {
 fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     let rows = m.len();
-    let first = m[0];
+    let first = ref m[0];
     let cols = first.len();
     let mut r = 0i64;
     while r < rows {
@@ -82468,7 +82466,7 @@ fn main() {
                  println(deep(o));\n\
                  let mut v: Vec[SpTok] = Vec.new();\n\
                  v.push(SpTok { tok: Tok.Ident(\"vec\".to_string()), n: 4 });\n\
-                 let t = v[0];\n\
+                 let t = ref v[0];\n\
                  println(render(t));\n\
              }",
         )
@@ -83212,11 +83210,11 @@ fn main() {
                  s.insert(1, [\"alpha\", \"beta\", \"gamma\"]);\n\
                  println(s.get(1).unwrap()[0]);\n\
                  println(s.get(1).unwrap()[2].len());\n\
-                 let w = s.get(1).unwrap()[1];\n\
+                 let w = s.get(1).unwrap()[1].clone();\n\
                  println(w);\n\
                  let mut n: Map[i64, Vec[Vec[i64]]] = Map.new();\n\
                  n.insert(7, [[1, 2], [3, 4, 5]]);\n\
-                 let inner = n.get(7).unwrap()[1];\n\
+                 let inner = n.get(7).unwrap()[1].clone();\n\
                  println(inner[2]);\n\
                  println(m.get(1).unwrap()[0]);\n\
              }",
@@ -104343,7 +104341,7 @@ fn main() {
                      let mut inner: Map[String, i64] = Map.new();\n\
                      let _ = inner.insert(\"n\", k);\n\
                      vms.push(inner);\n\
-                     let cur = vms[0];\n\
+                     let cur = vms[0].clone();\n\
                      match cur.get(\"n\") { Some(x) => println(x), None => println(-1) }\n\
                      println(cur.contains_key(\"n\"));\n\
                      println(cur.len());\n\
@@ -104689,7 +104687,7 @@ fn agg(entries: Vec[Entry]) -> Vec[Stat] {
     let mut stats: Vec[Stat] = Vec.new();
     let mut i = 0;
     while i < entries.len() {
-        let e = entries[i];
+        let e = ref entries[i];
         let _ = index.insert(e.service, 0 as usize);
         stats.push(Stat { service: e.service });
         i = i + 1;
@@ -104730,7 +104728,7 @@ fn main() {
     let mut stats: Vec[Stat] = Vec.new();
     let mut i = 0;
     while i < es.len() {
-        let e = es[i];
+        let e = ref es[i];
         let _ = index.insert(e.service, 0 as usize);
         stats.push(Stat { service: e.service });
         i = i + 1;

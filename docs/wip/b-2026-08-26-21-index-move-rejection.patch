@@ -140,10 +140,10 @@ index 874d255..26b46b8 100644
                              name: "Option".to_string(),
                              args: vec![(**inner).clone()],
 diff --git a/src/typechecker/items.rs b/src/typechecker/items.rs
-index b644b05..aa46459 100644
+index b644b05..a366a9a 100644
 --- a/src/typechecker/items.rs
 +++ b/src/typechecker/items.rs
-@@ -4171,6 +4171,174 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4171,6 +4171,186 @@ impl<'a> super::TypeChecker<'a> {
          self.check_stmt_inner(stmt)
      }
  
@@ -278,6 +278,18 @@ index b644b05..aa46459 100644
 +        if matches!(ty, Type::Shared(_)) {
 +            return;
 +        }
++        // A function value is a fat pointer, and reading one out of a
++        // container copies the pointer pair — the container keeps its own.
++        // `Vec[Fn(i64) -> i64]` holding a bare `fn` is the plain case, and
++        // rejecting it also steered toward a `.clone()` that does not exist:
++        // codegen has no `clone` arm for an indexed fn element, so the
++        // rule's own fix-it produced `no handler for method 'clone'`.
++        // Exempted rather than declared `Copy`, because a CAPTURING closure
++        // shares the same type and may carry an RC'd environment — widening
++        // `is_copy_type_during_check` would reach far past this rule.
++        if matches!(ty, Type::Function { .. }) {
++            return;
++        }
 +        let has_clone = self.type_supports_clone(ty);
 +        let message = if has_clone {
 +            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: ".to_owned()
@@ -318,7 +330,7 @@ index b644b05..aa46459 100644
      fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
          if let StmtKind::Expr(expr) = &stmt.kind {
              return self.infer_expr(expr);
-@@ -4199,6 +4367,10 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4199,6 +4379,10 @@ impl<'a> super::TypeChecker<'a> {
                      self.record_uninferrable_binding_origin(pattern, &inferred, value);
                      inferred
                  };
@@ -329,7 +341,7 @@ index b644b05..aa46459 100644
                  // B-2026-07-31-20 — record the result type of a
                  // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                  // (read as an implicit binding annotation). The intercept in
-@@ -4357,6 +4529,15 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4357,6 +4541,15 @@ impl<'a> super::TypeChecker<'a> {
                  self.in_defer = prev;
              }
              StmtKind::Assign { target, value } => {
