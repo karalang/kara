@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 305 | 2 |
+| miscompile | 305 | 1 |
 | leak | 200 | 0 |
 | missing-feature | 186 | 1 |
 | run-vs-build | 176 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1090 | 6 |
+| codegen | 1090 | 5 |
 | typecheck | 276 | 3 |
 | interp | 191 | 2 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced · 7 open · 1615 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced · 6 open · 1616 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-21 | 2026-08-27 | codegen | high | A borrowed element loses its method surface under codegen: `.clone()` through a `ref` binding SEGFAULTS, and every String method on one (`starts_with`, `substring`, `clone`) falls through dispatch, while the interpreter runs all of them. | — |
-| B-2026-08-27-22 | 2026-08-27 | codegen | high | `.clone()` on an element of an SoA-laid-out container returns the wrong data under codegen — element 5 reads back the cold group at indices 1 and 2 (`100 1000 200 2000` for `5 50 500 5000`). The interpreter and the AoS build are both correct. | — |
 | B-2026-08-27-24 | 2026-08-27 | typecheck+interp+codegen | medium | `Slice[T] == Slice[T]` IS ACCEPTED BY `karac check`, DIES IN THE INTERPRETER WITH A DIAGNOSTIC THAT BLAMES THE TYPECHECKER, AND IS REFUSED BY CODEGEN AS "a reference type" -- the same three-way disagreement B-2026-08-27-10 fixed for `Vec`, on the sibling type, and unfixed by that work. | — |
 | B-2026-08-27-25 | 2026-08-27 | typecheck+codegen | medium | `Array[T, N] == Array[T, N]` IS ACCEPTED BY `karac check`, ANSWERS CORRECTLY UNDER THE INTERPRETER, AND FAILS TO COMPILE: codegen reports "left operand has non-comparable type ArrayType" and blames a typechecker gap that is not one. | — |
 
@@ -168,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced
 
 </details>
 
-### Fixed (1615)
+### Fixed (1616)
 
-<details><summary>1615 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1616 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1785,6 +1784,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced
 | B-2026-08-27-18 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { . | 9b8d435 |
 | B-2026-08-27-19 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder {… | 8d2eb56 |
 | B-2026-08-27-20 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`)… | c5bb992 |
+| B-2026-08-27-22 | codegen | high | `.clone()` on an element of an SoA-laid-out container returns the wrong data under codegen — element 5 reads back the cold group at indices 1 and 2 (… | d01aea8 |
 | B-2026-08-27-23 | typecheck | high | A tuple (`(i64, String)`) and `Option[T]` have NO `.clone()`, so the index-move rejection outlaws reading such an element by value with no replacemen… | 94711002536753 |
 | B-2026-08-27-26 | codegen | medium | `free_fresh_owned_str_arg` FREES A FRESH TEMPORARY OPERAND'S BUFFER BUT NOT ITS ELEMENTS, so a `Vec[String]` temporary compared with `==` leaks every… | e57bc89 |
 | B-2026-08-27-27 | effect+cli | high | `karac check` ON A PROJECT DOES NOT RUN THE MULTI-FILE EFFECT CHECK THAT `karac build` RUNS, so a project prints "All checks passed." and then fails… | dc939a8 |
