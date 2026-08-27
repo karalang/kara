@@ -92,27 +92,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 306 | 0 |
+| miscompile | 307 | 1 |
 | leak | 205 | 0 |
-| missing-feature | 186 | 0 |
-| run-vs-build | 176 | 0 |
+| missing-feature | 187 | 1 |
+| run-vs-build | 178 | 1 |
 | codegen-gap | 143 | 0 |
 | double-free | 142 | 1 |
 | diagnostics | 111 | 0 |
-| false-positive | 99 | 1 |
+| false-positive | 99 | 0 |
 | perf | 84 | 0 |
 | other | 63 | 0 |
 | soundness | 62 | 0 |
-| crash | 59 | 0 |
+| crash | 60 | 0 |
 | use-after-free | 21 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1098 | 2 |
-| typecheck | 277 | 1 |
-| interp | 191 | 0 |
+| codegen | 1103 | 5 |
+| typecheck | 278 | 1 |
+| interp | 194 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,15 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1657 surfaced · 3 open · 1628 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1662 surfaced · 5 open · 1631 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-27-33 | 2026-08-27 | typecheck | medium | A `T: Ord` bound on a GENERIC IMPL rejects a tuple that the IDENTICAL bound on a free fn accepts: `impl[T: Ord] W[T]` refuses `W[(i64, i64)]` with "`(i64, i64)` does not implement `Ord`", while `fn pick[T: Ord](a: T, b: T)` takes the same tuple and may even call `.cmp()` on it | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-27-34 | 2026-08-27 | codegen | high | 3454927 (B-2026-08-26-12) EMITS THE BRANCH-LEAF RETAIN ONCE PER BINDING, NOT ONCE PER USE, so the THIRD consumption of an `Option[shared]` selected by a value-position branch reads through a freed box. Eight lines, no loop: `let t = if true { a } else { b };` then three `show(t)` calls prints `1 1 1` under `--interp` and `1 1 <garbage>` under `karac build` -- WHICH EXITS 0. Two uses are balanced and green; the boundary is exactly the third. The fix's own fixtures all consume the value once, so the axis was never covered. | — |
 | B-2026-08-27-37 | 2026-08-27 | codegen | high | Destructuring a GENERIC struct out of a TUPLE PARAM and consuming its heap-carrying field DOUBLE-FREES under JIT and AOT while the interpreter is correct: `fn take[T](p: (Bag[T], i64)) -> Vec[T] { let (b, _n) = p; b.xs }` aborts with `free(): double free detected in tcache 2`. Not the wrong-monomorph family -- it fires at `T = i64` too and `nm` confirms the right monomorph was selected. A non-generic struct, a LOCAL tuple, and a direct non-tuple param are all clean; the JIT is strictly more sensitive than AOT | — |
+| B-2026-08-27-40 | 2026-08-27 | codegen | high | A TUPLE TYPE ARGUMENT does not survive the monomorphization substitution channel, which is keyed by type NAME. A nested generic call silently loses the binding and erases `T` to the i64 default -- SILENT WRONG ANSWER on the compiled backend, correct under the interpreter -- and two distinct tuple instantiations of one generic collide on a single mono symbol | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
+| B-2026-08-27-41 | 2026-08-27 | typecheck+interp+codegen | medium | `.cmp()` on a tuple has no dispatch on ANY surface -- the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both backends fall through their method dispatch. This is what a comparison written against a bounded type PARAMETER lowers to, so `fn beats[T: Ord](x: T, y: T) -> bool { x < y }` fails at a tuple even though `(1, 2) < (1, 3)` now works directly | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
+| B-2026-08-27-42 | 2026-08-27 | interp+codegen | low | `Array[T, N]` ORDERING operators never lower, while `karac check` accepts them: `a < b` on two `Array[i64, 2]` passes the typechecker and then fails on both backends. `Array` EQUALITY was fixed by B-2026-08-27-25; the `<` family is the half that was left | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (2)
 
@@ -164,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1657 surfaced
 
 </details>
 
-### Fixed (1628)
+### Fixed (1631)
 
-<details><summary>1628 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1631 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1796,8 +1798,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1657 surfaced
 | B-2026-08-27-30 | codegen | medium | A fresh `Array[String, N]` TEMPORARY compared with `==` leaks every element -- 26 bytes in 4 allocations under LSan, the same signature B-2026-08-27-… | c1c1f35 |
 | B-2026-08-27-31 | codegen | medium | An INDEXED `Array[String, N]` temporary leaks its elements -- `mk(4)[0]` loses 13 bytes in 2 allocations -- a different position from B-2026-08-27-30… | 9c06c13 |
 | B-2026-08-27-32 | codegen | medium | A struct FIELD of type `Array[T, N]` with heap elements is never dropped: `struct Holder { a: Array[String, 2] }` leaks 13 bytes in 2 allocations wit… | 9c06c13 |
+| B-2026-08-27-33 | typecheck | medium | A `T: Ord` bound on a GENERIC IMPL rejects a tuple that the IDENTICAL bound on a free fn accepts: `impl[T: Ord] W[T]` refuses `W[(i64, i64)]` with "`… | 01d6784 |
 | B-2026-08-27-35 | codegen | medium | An array LITERAL temporary leaks ALL of its elements -- indexed (`Array[f"a{n}", f"b{n}"][0]`, 7 bytes in 2 allocations) and as an `==` operand (16 b… | 5313f90 |
 | B-2026-08-27-36 | codegen | high | A MATCH-ARM payload binding inside a generic impl recorded the PRE-monomorphization `Bag[T]` into the name-keyed instantiation table, poisoning the F… | ce72041 |
+| B-2026-08-27-38 | interp+codegen | medium | Tuple comparison operators NEVER LOWERED on either backend, while `karac check` accepted them: `let a = (1, 2); let b = (1, 3); a < b` passed the typ… | 01d6784 |
+| B-2026-08-27-39 | codegen | medium | A THREE-element tuple `==` PANICS THE COMPILER: `(1, 2, 3) == (1, 2, 4)` lowers to `{i64, i64, i64}`, structurally the same LLVM object as the `{ptr,… | 01d6784 |
 
 </details>
 
