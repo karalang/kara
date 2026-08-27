@@ -27842,6 +27842,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-34 — the LEAK half of the branch-leaf retain fix, and the
+    /// reason this fixture exists at all: the bug itself is INVISIBLE here.
+    ///
+    /// Its fault is a stray refcount dec through a freed box, which writes
+    /// `-1` over the freed chunk rather than calling `free` twice, and the
+    /// sanitizer is linked in rather than compiled in (see
+    /// `link_executable_with_sanitizer`), so nothing at the allocator boundary
+    /// sees it. `option_shared_from_every_branch_leaf_form_survives_repeated_consumption`
+    /// in `tests/codegen.rs` is what gates the use-after-free.
+    ///
+    /// What LSan DOES gate is the obvious wrong fix. The defect is a missing
+    /// `+1`, so retaining harder makes the symptom go away — and a retain
+    /// applied at the phi, or applied to an arm whose producer already carries
+    /// its own `+1`, leaks instead of double-freeing. The mixed-arm leg here
+    /// takes each direction on alternating iterations, so an over-retain on
+    /// either side accumulates across the loop into a leak LSan reports. Same
+    /// for the `if let` leg, whose then-arm hook this fix added.
+    #[test]
+    fn asan_option_shared_branch_leaf_repeated_consumption_is_clean() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64 }
+
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+
+fn show(t: Option[Node]) -> i64 {
+    match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+
+fn main() {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 5 {
+        // Plain `if`, alternating which arm is taken.
+        let a = make(i);
+        let b = make(i + 100);
+        let t = if i % 2 == 0 { a } else { b };
+        s = s + show(t) + show(t) + show(t);
+        // MIXED arms: a borrowed binding against a fresh producer. The
+        // over-retaining wrong fix leaks here, which is what LSan catches.
+        let c = make(i + 1000);
+        let u = if i % 2 == 0 { c } else { make(7) };
+        s = s + show(u) + show(u) + show(u);
+        // `if let`, alternating THEN and ELSE arms.
+        let d = make(i + 10000);
+        let e = make(i + 20000);
+        let o = if i % 2 == 0 { Some(1) } else { None };
+        let w = if let Some(z) = o { d } else { e };
+        s = s + show(w) + show(w) + show(w);
+        i = i + 1;
+    }
+    println(s);
+}
+"#,
+            &["219720"],
+            "option_shared_branch_leaf_repeated_consumption",
+        );
+    }
+
     #[test]
     fn asan_option_shared_walk_unwrap_cursor_repeat() {
         // Regression for the walk-cursor refcount pair (2026-06-05):

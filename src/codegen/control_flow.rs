@@ -335,6 +335,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // like `v.pop()`, not just the Map.get borrow class).
             if let Some(fe) = then_block.final_expr.as_deref() {
                 self.suppress_source_vec_cleanup_for_arg(fe);
+                // B-2026-08-27-34 — the `Option[shared T]` sibling of the
+                // suppressor above, and the THIRD leaf hook of the family
+                // B-2026-08-26-12 introduced. That fix placed the retain in
+                // `compile_block_with_frame` and `compile_match`'s arm tail,
+                // and its message claims the first of those covers "if/if let
+                // arms". It covers `if` — and an `if let`'s ELSE branch, which
+                // routes through `compile_block_with_frame` a few lines below
+                // — but NOT an `if let`'s THEN arm, which hand-rolls the frame
+                // drain here against a plain `compile_block` and so never
+                // reaches that hook.
+                //
+                // The asymmetry was invisible while the consuming `let` left
+                // the binding unregistered: no retain and no dec is still
+                // balanced-by-accident for one use. Registering the binding
+                // (the B-2026-08-27-34 fix in `control_flow_owned_option_shared`)
+                // makes the missing `+1` load-bearing — the new owner's
+                // scope-exit `RcDecOption` would free a box the leaf never
+                // retained, and the source's own dec would then run through it.
+                // Gated on `tail.is_none()` for the same reason the match hook
+                // is: when this `if let` IS the function's tail return,
+                // `compile_tail_final_expr` already inc'd the leaf.
+                if tail.is_none() {
+                    self.share_option_shared_ref_for_arg(fe);
+                }
                 if let ExprKind::Identifier(nm) = &fe.kind {
                     let nm = nm.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&nm);

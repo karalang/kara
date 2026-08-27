@@ -19105,6 +19105,67 @@ fn main() {
     assert_eq!(output, "zero\nneg\nsmall\nbig\n1 2 3\n");
 }
 
+/// Interpreter oracle for B-2026-08-27-34 — the branch-leaf `Option[shared]`
+/// family, each selected value consumed three times (five on leg 11).
+///
+/// The interpreter was CORRECT throughout this bug: it has no refcount to get
+/// wrong, so it is the oracle rather than a second suspect. This test pins
+/// that side independently of the codegen twin, which lives in
+/// `tests/codegen.rs` behind `#[cfg(feature = "llvm")]` and so does not run
+/// under a plain `cargo test` at all — without this, the semantics the fix
+/// restores would have no coverage on the default leg.
+#[test]
+fn option_shared_branch_leaf_survives_repeated_consumption() {
+    let src = "shared struct Node { val: i64 }\n\
+            fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+            fn show(t: Option[Node]) -> i64 {\n\
+                match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+            }\n\
+            fn main() {\n\
+                let a1 = make(1); let b1 = make(2);\n\
+                let t1 = if true { a1 } else { b1 };\n\
+                println(f\"{show(t1)} {show(t1)} {show(t1)}\");\n\
+                let a2 = make(3); let b2 = make(4);\n\
+                let t2 = if false { a2 } else { b2 };\n\
+                println(f\"{show(t2)} {show(t2)} {show(t2)}\");\n\
+                let a3 = make(5); let b3 = make(6); let o3 = Some(1);\n\
+                let t3 = if let Some(x) = o3 { a3 } else { b3 };\n\
+                println(f\"{show(t3)} {show(t3)} {show(t3)}\");\n\
+                let a4 = make(7); let b4 = make(8); let o4: Option[i64] = None;\n\
+                let t4 = if let Some(y) = o4 { a4 } else { b4 };\n\
+                println(f\"{show(t4)} {show(t4)} {show(t4)}\");\n\
+                let a5 = make(9); let b5 = make(10); let k5 = 0;\n\
+                let t5 = match k5 { 0 => a5, _ => b5 };\n\
+                println(f\"{show(t5)} {show(t5)} {show(t5)}\");\n\
+                let a6 = make(11);\n\
+                let t6 = { a6 };\n\
+                println(f\"{show(t6)} {show(t6)} {show(t6)}\");\n\
+                let a7 = make(12); let b7 = make(13); let c7 = make(14); let k7 = 1;\n\
+                let t7 = if k7 == 0 { a7 } else if k7 == 1 { b7 } else { c7 };\n\
+                println(f\"{show(t7)} {show(t7)} {show(t7)}\");\n\
+                let a8 = make(15); let b8 = make(16);\n\
+                let t8 = if true { if true { a8 } else { b8 } } else { make(99) };\n\
+                println(f\"{show(t8)} {show(t8)} {show(t8)}\");\n\
+                let a9 = make(17);\n\
+                let t9 = if true { a9 } else { make(99) };\n\
+                println(f\"{show(t9)} {show(t9)} {show(t9)}\");\n\
+                let a10 = make(18);\n\
+                let t10 = if false { a10 } else { make(19) };\n\
+                println(f\"{show(t10)} {show(t10)} {show(t10)}\");\n\
+                let a11 = make(20); let b11 = make(21);\n\
+                let t11 = if true { a11 } else { b11 };\n\
+                println(f\"{show(t11)} {show(t11)} {show(t11)} {show(t11)} {show(t11)}\");\n\
+                let a12 = make(22);\n\
+                let t12 = if false { a12 } else { None };\n\
+                println(f\"{show(t12)} {show(t12)} {show(t12)}\");\n\
+            }";
+    assert_eq!(
+        run_no_errors(src),
+        "1 1 1\n4 4 4\n5 5 5\n8 8 8\n9 9 9\n11 11 11\n13 13 13\n15 15 15\n17 17 17\n19 19 19\n20 20 20 20 20\n0 0 0\n",
+        "every read of a branch-leaf `Option[shared]` must see the same value"
+    );
+}
+
 #[test]
 fn test_mut_ref_option_shared_writeback() {
     // B-2026-07-12-3 — reassigning through a `mut ref Option[shared]` param

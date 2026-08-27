@@ -2975,6 +2975,48 @@ impl<'ctx> super::Codegen<'ctx> {
         match &e.kind {
             // `None` literal — owns a null Option; no inner type.
             ExprKind::Identifier(n) if n == "None" => Some(None),
+            // A bare `Option[shared T]` BINDING handed out as a branch leaf
+            // (`let t = if c { a } else { b };`). This owns a `+1` for exactly
+            // the same reason the producers below do — B-2026-08-26-12 taught
+            // the leaf itself to retain, via `share_option_shared_ref_for_arg`
+            // in `compile_block_with_frame`'s tail hook and `compile_match`'s
+            // arm-tail sibling — so the value reaching the `let` carries an
+            // independent ref that the new binding becomes the owner of.
+            //
+            // Without this arm the leaf retain was the binding's ONLY
+            // accounting: case (g) declined, so `t` got neither a scope-exit
+            // `RcDecOption` nor the per-USE call-site retains that
+            // `share_option_shared_ref_for_arg` emits for a registered
+            // binding. One `+1` standing in for every use balances exactly
+            // TWO consumptions — `show(t)` twice is green, and the THIRD reads
+            // through a box already freed by the second callee's param dec
+            // (B-2026-08-27-34). Registering `t` restores the invariant the
+            // other cases rely on: each use incs and the callee decs, so the
+            // count is independent of how many times the binding is consumed.
+            //
+            // The predicate is deliberately the SAME one the emission uses —
+            // `var_option_shared_heap`, which is also what
+            // `share_option_shared_ref_for_arg` self-gates on — so the
+            // registration cannot drift from whether the retain was actually
+            // emitted. It is read AFTER the RHS compiles (the `let` arm
+            // compiles `value` well above case (g)), so an arm-LOCAL tail has
+            // already been reverted out of the env by then and correctly does
+            // not qualify: that leaf's own scope-exit dec cancels its retain
+            // inside the arm, leaving nothing for `t` to own.
+            ExprKind::Identifier(n) => {
+                let heap_type = self
+                    .borrow_vars
+                    .var_option_shared_heap
+                    .get(n.as_str())
+                    .copied()?;
+                let info = self
+                    .type_decls
+                    .shared_types
+                    .values()
+                    .find(|i| i.heap_type == heap_type)
+                    .cloned()?;
+                Some(Some(info))
+            }
             // `Some(<shared>)` literal, or a free-fn call returning `Option[shared]`.
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Identifier(c) = &callee.kind {
