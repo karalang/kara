@@ -12788,6 +12788,43 @@ fn main() {
     /// either side reintroduces the run-vs-build divergence of
     /// B-2026-08-26-21, which is the whole reason the borrow aliases rather
     /// than snapshots.
+    /// B-2026-08-26-36 — INDEXING THROUGH a `ref` binding: `let r = ref vv[i]`
+    /// over a `Vec[Vec[T]]`, then `r[j]`.
+    ///
+    /// Two registrations were missing and BOTH were needed. The value-based
+    /// index path (`inline_index_recv_vec_te` → `compile_inline_temp_vec_index_ex`)
+    /// claimed the shim identifier, but a `ref` binding's name loads a POINTER
+    /// rather than the `{ptr, len, cap}` struct that path materialises — and
+    /// that path may free its temporary, which a borrow must never be. With it
+    /// excluded, the borrow then sailed PAST the named-Vec path too, because
+    /// that one gates on `vec_elem_types.contains_key(name)` and the shim had
+    /// never registered the inner element type; it landed in the generic tail,
+    /// which handles only Array/Vector LLVM types.
+    ///
+    /// Both failure modes reported the same "Index operator applied to
+    /// non-array type" while `--interp` read the element correctly, so the
+    /// message alone could not tell them apart — the second was found by
+    /// tagging all three emit sites and re-running, not by inspection.
+    #[test]
+    fn test_e2e_index_through_a_ref_binding() {
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut vv: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10);
+    a.push(20);
+    vv.push(a);
+    let r = ref vv[0];
+    println(f"{r[1]}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "20\n", "index through a borrow; got: {out:?}");
+    }
+
     #[test]
     fn test_e2e_ref_binding_is_a_live_alias() {
         let Some(out) = run_program(

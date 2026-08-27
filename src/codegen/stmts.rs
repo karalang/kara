@@ -12195,6 +12195,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         .insert(name.clone(), head.clone());
                 }
             }
+            // When the BORROWED ELEMENT is itself a Vec (`let r = ref vv[i]`
+            // over a `Vec[Vec[T]]`), register its inner element type too.
+            // `compile_index`'s named-Vec dispatch gates on
+            // `vec_elem_types.contains_key(name)`, so without this the borrow
+            // falls past that path to the generic tail, which handles only
+            // Array/Vector LLVM types and reports "Index operator applied to
+            // non-array type" — while `--interp` reads the element fine.
+            // `compile_vec_index` itself needs no change: it is name-keyed and
+            // reaches the buffer through `get_data_ptr`, which already loads
+            // through a `ref_params` shim.
+            if let Some(inner_te) = super::helpers::vec_inner_type_expr(&te) {
+                let inner_ll = self.llvm_type_for_type_expr(&inner_te);
+                self.var_types.vec_elem_types.insert(name.clone(), inner_ll);
+            }
             self.var_types.var_elem_type_exprs.insert(name.clone(), te);
         }
         Ok(true)

@@ -2871,7 +2871,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm never matches a `.unwrap()` method chain anyway; keeping it
         // first documents the borrow-vs-owned split at the dispatch site.
         if let Some((vec_te, owns_temp)) = self.inline_index_recv_vec_te(object) {
-            return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, owns_temp);
+            // NOT for a `ref` binding (B-2026-08-26-36). `let r = ref vv[i]`
+            // registers `r` in `ref_params` with a shim alloca holding a
+            // POINTER to the element, so `compile_expr(r)` yields that pointer
+            // rather than the `{ptr, len, cap}` struct this path materializes —
+            // which is exactly the shape its own guard rejects with "Index
+            // operator applied to non-array type". The identifier path below
+            // handles it correctly, because `get_data_ptr` already loads
+            // through a `ref_params` shim. Falling through is the fix; the
+            // borrow is not a temporary and must never be synthesised or freed
+            // as one.
+            let is_ref_shim = matches!(
+                &object.kind,
+                ExprKind::Identifier(n) if self.borrow_vars.ref_params.contains_key(n)
+            );
+            if !is_ref_shim {
+                return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, owns_temp);
+            }
         }
 
         // B-2026-08-20-40 — the `Slice[T]` sibling of the arm above: an inline
