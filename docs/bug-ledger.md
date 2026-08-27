@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 307 | 1 |
+| miscompile | 308 | 2 |
 | leak | 206 | 1 |
-| missing-feature | 187 | 1 |
-| run-vs-build | 179 | 1 |
+| missing-feature | 187 | 0 |
+| run-vs-build | 180 | 2 |
 | codegen-gap | 143 | 0 |
 | double-free | 142 | 0 |
 | diagnostics | 111 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1106 | 4 |
-| typecheck | 278 | 1 |
-| interp | 195 | 2 |
+| codegen | 1107 | 4 |
+| typecheck | 278 | 0 |
+| interp | 196 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,16 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1665 surfaced · 4 open · 1635 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1667 surfaced · 5 open · 1636 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-40 | 2026-08-27 | codegen | high | A TUPLE TYPE ARGUMENT does not survive the monomorphization substitution channel, which is keyed by type NAME. A nested generic call silently loses the binding and erases `T` to the i64 default -- SILENT WRONG ANSWER on the compiled backend, correct under the interpreter -- and two distinct tuple instantiations of one generic collide on a single mono symbol | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
-| B-2026-08-27-41 | 2026-08-27 | typecheck+interp+codegen | medium | `.cmp()` on a tuple has no dispatch on ANY surface -- the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both backends fall through their method dispatch. This is what a comparison written against a bounded type PARAMETER lowers to, so `fn beats[T: Ord](x: T, y: T) -> bool { x < y }` fails at a tuple even though `(1, 2) < (1, 3)` now works directly | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-27-44 | 2026-08-27 | codegen | medium | A heap-bearing TUPLE argument whose value ESCAPES the caller's frame LEAKS the caller's original buffer, because the callee entry-copies but the caller registers no orphan-free: `fn passthru(p: (Bag, i64)) -> (Bag, i64) { p }` and `use2(mk([...]))` each leak 48 bytes under LSan while printing the right answer. The enum sibling of this arm got the `arg_escapes_frame` orphan-free in B-2026-08-01-14; the tuple arm never did. Pre-existing on the NON-generic path, and unmasked on the generic one by B-2026-08-27-37 | — |
 | B-2026-08-27-45 | 2026-08-27 | interp+codegen | low | `Slice[T]` ORDERING operators never lower, while `karac check` accepts them -- the last member of the tuple/array family: `a < b` on two `Slice[i64]` passes the typechecker, then dies on the interpreter's catch-all and on `karac build`'s "Unsupported struct binary op: Lt". Slice EQUALITY was fixed by B-2026-08-27-24; the `<` family is the half that was left | — |
+| B-2026-08-27-46 | 2026-08-27 | interp | high | `.cmp()` WITH AN ENUM-VARIANT LITERAL AS THE RECEIVER answers a CONSTANT under the interpreter, independent of both operands -- `E.A.cmp(E.B)`, `E.B.cmp(E.A)` and `E.A.cmp(E.A)` all return the SAME `Ordering`, while both compiled backends return Less/Greater/Equal correctly. Silent wrong answer, no diagnostic on any surface. Binding the receiver first (`let a = E.A; a.cmp(E.B)`) is correct, and so is the `<` operator in either spelling, so only the literal-receiver method spelling is affected. | — |
+| B-2026-08-27-47 | 2026-08-27 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { .. }.cmp(q)`), a CALL-RESULT receiver (`mk(1).cmp(mk(2))`) and an `Option[T]` receiver (`x.cmp(y)`) all pass `karac check` and run correctly under `--interp`, and all three refuse to build. Loud, not silent -- `karac build` errors -- but a run-vs-build split in a shape the checker calls legal. | — |
 
 ### Relocated (2)
 
@@ -165,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1665 surfaced
 
 </details>
 
-### Fixed (1635)
+### Fixed (1636)
 
-<details><summary>1635 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1636 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1804,6 +1805,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1665 surfaced
 | B-2026-08-27-37 | codegen | high | Destructuring a GENERIC struct out of a TUPLE PARAM and consuming its heap-carrying field DOUBLE-FREES under JIT and AOT while the interpreter is cor… | bd5dbc2 |
 | B-2026-08-27-38 | interp+codegen | medium | Tuple comparison operators NEVER LOWERED on either backend, while `karac check` accepted them: `let a = (1, 2); let b = (1, 3); a < b` passed the typ… | 01d6784 |
 | B-2026-08-27-39 | codegen | medium | A THREE-element tuple `==` PANICS THE COMPILER: `(1, 2, 3) == (1, 2, 4)` lowers to `{i64, i64, i64}`, structurally the same LLVM object as the `{ptr,… | 01d6784 |
+| B-2026-08-27-41 | typecheck+interp+codegen | medium | `.cmp()` on a tuple has no dispatch on ANY surface -- the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both backends fall through their met… | 31cf904 |
 | B-2026-08-27-42 | interp+codegen | low | `Array[T, N]` ORDERING operators never lower, while `karac check` accepts them: `a < b` on two `Array[i64, 2]` passes the typechecker and then fails… | 2955b94 |
 | B-2026-08-27-43 | codegen | high | AN ARM-LOCAL BINDING HANDED OUT OF A BRANCH LEAF LOSES ITS OWNER, so the FIRST consumption of the selected `Option[shared]` reads through a freed box | 9f62ac6 |
 
