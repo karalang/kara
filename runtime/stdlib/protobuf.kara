@@ -1293,7 +1293,7 @@ comptime fn proto_tokenize(src: String) -> Vec[String] {
 }
 
 // Parse a run of ASCII digits into an i64 (proto field numbers).
-comptime fn proto_atoi(s: String) -> i64 {
+comptime fn proto_atoi(s: ref String) -> i64 {
     let mut v = 0;
     let b = s.bytes();
     let mut i = 0;
@@ -1323,7 +1323,7 @@ comptime fn proto_collect_messages(toks: Vec[String], n: i64) -> Vec[String] {
 // Convert a proto `UPPER_SNAKE` enum constant to Kāra's required PascalCase
 // variant name (`HTTP_GET` → `HttpGet`). Underscores delimit words; each word
 // is capitalized, the rest lowercased. ASCII identifiers only (proto names).
-comptime fn proto_pascal_case(s: String) -> String {
+comptime fn proto_pascal_case(s: ref String) -> String {
     let mut out = "";
     let mut at_word_start = true;
     let mut j = 0;
@@ -1624,7 +1624,7 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                                 bad = true;
                                 j = n;
                             } else {
-                                let ck = proto_resolve_type(toks[j], msgs);
+                                let ck = proto_resolve_type(toks[j].clone(), msgs);
                                 if ck == "" {
                                     compiler.error(
                                         "proto oneof '" + ename + "': unsupported case type '"
@@ -1662,8 +1662,8 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                             bad = true;
                             i = n;
                         } else {
-                            let kk = proto_resolve_type(toks[i + 2], msgs);
-                            let vv = proto_resolve_type(toks[i + 4], msgs);
+                            let kk = proto_resolve_type(toks[i + 2].clone(), msgs);
+                            let vv = proto_resolve_type(toks[i + 4].clone(), msgs);
                             if kk == "" or vv == "" {
                                 compiler.error(
                                     "proto message '" + name

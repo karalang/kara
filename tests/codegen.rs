@@ -27254,7 +27254,7 @@ fn main() {
                      match c {\n\
                          Insert(at, text) => {\n\
                              d.lines.insert(at as usize, text);\n\
-                             Cmd.Delete(at, d.lines[at as usize])\n\
+                             Cmd.Delete(at, d.lines[at as usize].clone())\n\
                          }\n\
                          Delete(at, _text) => {\n\
                              let gone = d.lines[at as usize].clone();\n\
@@ -28414,7 +28414,8 @@ fn main() {
         // It still leaks (its own row); what it must not do is change value.
         assert_eq!(
             run_program(
-                "struct Pair { word: String, n: i64 }\n\
+                "#[derive(Clone)]\n\
+                 struct Pair { word: String, n: i64 }\n\
                  fn passthru(p: Pair) -> Pair { p }\n\
                  fn takes(s: String) -> Pair { Pair { word: s + \"!\", n: 1 } }\n\
                  fn join(a: String, b: String) -> Pair { Pair { word: a + b, n: 2 } }\n\
@@ -28424,7 +28425,7 @@ fn main() {
                      let mut ps: Vec[Pair] = Vec.new();\n\
                      ps.push(Pair { word: f\"a{k}\", n: 7 });\n\
                      ps.push(Pair { word: f\"b{k}\", n: 8 });\n\
-                     ps[0] = passthru(ps[0]);\n\
+                     ps[0] = passthru(ps[0].clone());\n\
                      println(f\"{ps[0].word} {ps[0].n}\");\n\
                      ps[0] = takes(ps[0].word);\n\
                      println(f\"{ps[0].word} {ps[0].n}\");\n\

@@ -281,7 +281,7 @@ fn stream_band(coll: ref Vec[LbmNode], y0: i64, y1: i64, u0: f64, s: f64) -> Vec
             } else if is_solid(x, y, s) {
                 out.push(equil(0.0, 0.0, 1.0));
             } else {
-                let c = ref coll[idx(x, y, w)];
+                let c = coll[idx(x, y, w)];
                 let f1 = if is_solid(x - 1, y, s) { c.f3 } else { coll[idx(x - 1, y, w)].f1 };
                 let f2 = if is_solid(x, y + 1, s) { c.f4 } else { coll[idx(x, y + 1, w)].f2 };
                 let f3 = if is_solid(x + 1, y, s) { c.f1 } else { coll[idx(x + 1, y, w)].f3 };
@@ -308,7 +308,7 @@ fn velocities(grid: ref Vec[LbmNode]) -> Vec[Vel] {
     let mut out: Vec[Vel] = Vec.new();
     let mut c = 0;
     while c < n {
-        let node = ref grid[c];
+        let node = grid[c];
         let rho = node.f0 + node.f1 + node.f2 + node.f3 + node.f4
             + node.f5 + node.f6 + node.f7 + node.f8;
         let ux = if rho > 0.0 {
