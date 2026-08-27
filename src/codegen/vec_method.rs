@@ -8870,9 +8870,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 top: u64,
             },
             Str,
+            /// A `{ptr, len, ...}` sequence header — `Vec`/`VecDeque`'s
+            /// `{ptr, len, cap}` or a `Slice`'s `{ptr, len}` (B-2026-08-27-45).
+            /// The walk reads fields 0 and 1 only, so ONE body serves both once
+            /// the header type is a parameter; that is the same
+            /// parameterization `emit_eq_fn_for_ptr_len_header` performs for
+            /// equality, and it is what keeps the slice's ordering and its
+            /// equality reading the header the same way.
             VecLike {
                 child: FunctionValue<'c>,
                 elem_llvm: BasicTypeEnum<'c>,
+                header_llvm: inkwell::types::StructType<'c>,
             },
             Tuple {
                 children: Vec<FunctionValue<'c>>,
@@ -8949,15 +8957,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         // Both String spellings (the 3p discipline).
                         "String" | "str" => Body::Str,
-                        "Vec" | "VecDeque" => {
+                        // `Slice[T]` shares the walk (B-2026-08-27-45); only
+                        // the header differs, and only in a field the walk
+                        // never reads. Reached with the CANONICAL `Slice[T]`
+                        // spelling: `compile_slice_ord` rebuilds one from the
+                        // element rather than passing the operand's own type
+                        // through, because a `mut Slice[T]` operand is a
+                        // `TypeKind::MutSlice` and `display_mangle_te` renders
+                        // that "unknown" — every element type would then share
+                        // one `karac_cmp_unknown` symbol, the same collision
+                        // B-2026-08-27-25 records for a bare `"Array"` name.
+                        "Vec" | "VecDeque" | "Slice" => {
                             let elem_te = match p.generic_args.as_ref()?.first()? {
                                 GenericArg::Type(t) => t.clone(),
                                 _ => return None,
                             };
                             let child = self.emit_cmp_fn_for_type_expr(&elem_te)?;
+                            let header_llvm = if head == "Slice" {
+                                self.slice_struct_type()
+                            } else {
+                                self.vec_struct_type()
+                            };
                             Body::VecLike {
                                 child,
                                 elem_llvm: self.llvm_type_for_type_expr(&elem_te),
+                                header_llvm,
                             }
                         }
                         _ => return None,
@@ -9190,8 +9214,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap_basic();
                 self.builder.build_return(Some(&r)).unwrap();
             }
-            Body::VecLike { child, elem_llvm } => {
-                let vec_ty = self.vec_struct_type();
+            Body::VecLike {
+                child,
+                elem_llvm,
+                header_llvm: vec_ty,
+            } => {
                 // Load both headers.
                 let a_hdr = self
                     .builder

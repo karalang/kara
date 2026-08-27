@@ -623,6 +623,37 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-27-45 — ordered comparison on a `Slice[T]`,
+                    // the last member of the tuple / array / slice family
+                    // whose `<` family `karac check` admitted and neither
+                    // backend lowered (`type_supports_ord` carries a
+                    // `Type::Slice` arm beside the other two).
+                    //
+                    // Ahead of the array block below because a slice reaches
+                    // here as a bare `ptr` — neither `is_array_value()` nor
+                    // `is_struct_value()` — when it is a local, so it would
+                    // otherwise fall past every ordered arm to
+                    // `compile_binop`'s "Unsupported struct binary op: Lt".
+                    // `compile_slice_ord` normalizes the pointer/by-value
+                    // split the same way `compile_slice_eq` does.
+                    //
+                    // Gated on the ELEMENT, the rule B-2026-08-27-42 settled
+                    // on and the reason it is reused rather than re-derived:
+                    // the interpreter's `Value::Slice` gate can only ask its
+                    // elements, so asking the container here would let the two
+                    // backends accept different sets.
+                    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
+                        if let Some(elem_te) = self
+                            .slice_elem_te_of_operand(left)
+                            .or_else(|| self.slice_elem_te_of_operand(right))
+                        {
+                            if self.te_is_totally_ordered(&elem_te) {
+                                if let Some(r) = self.compile_slice_ord(op, &elem_te, lhs, rhs)? {
+                                    return Ok(r);
+                                }
+                            }
+                        }
+                    }
                     // B-2026-08-27-42 — ordered comparison on an
                     // `Array[T, N]`. Its own block rather than a line inside
                     // the struct-operand block below, because an array does

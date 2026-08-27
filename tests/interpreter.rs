@@ -898,6 +898,67 @@ fn array_ordering_in_the_interpreter() {
 }
 
 #[test]
+fn slice_ordering_in_the_interpreter() {
+    // B-2026-08-27-45 -- the last member of the tuple / array / slice family,
+    // and the same shape as the other two: `type_supports_ord` carries a
+    // `Type::Slice` arm, so `karac check` printed "All checks passed." while
+    // the interpreter died on the catch-all whose message claims the
+    // typechecker reports this as a hard error. It does not, and did not.
+    //
+    // `value_compare` has had a `Slice` arm (comparing the viewed ranges) as
+    // long as its `Vec` one, so this side needed only the dispatch -- unlike
+    // codegen, which needed the `Vec` comparator's header made a parameter.
+    // Both order by the same rule, which is what makes this the oracle for
+    // `test_e2e_slice_ordering`.
+    //
+    // The prefix row (`p < a`) pins the length tiebreak after a common
+    // prefix compares equal; the `heap` rows pin per-element CONTENT
+    // comparison, with element 0 content-equal but separately built so a
+    // pointer-word comparison could not pass them by accident.
+    //
+    // The last two rows are the deliberate NON-fix, pinned so a later widening
+    // has to be deliberate and has to move both backends together: a slice of
+    // `Vec`s and a slice of bare floats each decline here and on the compiled
+    // backend. The float case is the carve-out the tuple row records
+    // (`value_compare` orders a float by `total_cmp`, a sort key's order, not
+    // `<`'s); the `Vec` case is what the per-element gate exists to decline.
+    let src = "fn build(p: String) -> String {
+            let mut s = String.new();
+            s.push_str(p);
+            s.push_str(\"x\");
+            return s;
+        }
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1); v.push(2); v.push(1); v.push(3);
+            let a: Slice[i64] = v[0..2];
+            let b: Slice[i64] = v[2..4];
+            let c: Slice[i64] = v[0..2];
+            println(f\"{a < b}\");
+            println(f\"{b < a}\");
+            println(f\"{a < c}\");
+            println(f\"{a <= c}\");
+            println(f\"{b > a}\");
+            let p: Slice[i64] = v[0..1];
+            println(f\"{p < a}\");
+            println(f\"{a < p}\");
+            let mut w: Vec[String] = Vec.new();
+            w.push(build(\"a\")); w.push(\"m\");
+            w.push(build(\"a\")); w.push(\"n\");
+            let x: Slice[String] = w[0..2];
+            let y: Slice[String] = w[2..4];
+            println(f\"{x < y}\");
+            println(f\"{y < x}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "true\nfalse\nfalse\ntrue\ntrue\n\
+         true\nfalse\n\
+         true\nfalse\n"
+    );
+}
+
+#[test]
 fn slice_equality_is_content_equality_in_the_interpreter() {
     // B-2026-08-27-24 -- the `Vec` sibling's bug one type over, and unfixed by
     // that work. The interpreter had no `Value::Slice` arm in its binop

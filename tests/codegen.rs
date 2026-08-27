@@ -106547,6 +106547,117 @@ fn main() {
         );
     }
 
+    /// `Slice[T]` ordering on the compiled backend (B-2026-08-27-45) — the
+    /// last member of the tuple / array / slice family, all three of which
+    /// `karac check` admitted (`type_supports_ord` carries an arm for each)
+    /// and none of which either backend lowered.
+    ///
+    /// The comparator is the `Vec` one with its HEADER made a parameter: the
+    /// walk reads fields 0 and 1, which a `{ptr, len, cap}` and a `{ptr, len}`
+    /// share, so one body serves both. That is the same parameterization slice
+    /// EQUALITY already uses (`emit_eq_fn_for_ptr_len_header`,
+    /// B-2026-08-27-24), which is what makes the two operations read a slice
+    /// header the same way rather than by two separate conventions.
+    ///
+    /// Rows chosen for what each pins:
+    ///
+    ///   * `p < a` is the PREFIX row: `[1]` against `[1, 2]`, decided by the
+    ///     length tiebreak after the shared element compares equal. Deleting
+    ///     that tiebreak — the obvious simplification when adapting the array
+    ///     comparator, whose extent is fixed — makes two slices of different
+    ///     length compare EQUAL, and every other row here still passes.
+    ///   * The `show(...)` rows pass slices as PARAMETERS. A slice local
+    ///     compiles to the address of its header slot while a parameter
+    ///     arrives as the fat struct by value, and the operator sees both;
+    ///     `compile_slice_ord` normalizes them exactly as `compile_slice_eq`
+    ///     does. Without that the parameter form stores a pointer word and
+    ///     compares addresses.
+    ///   * The `heap` rows are the sharp test for per-element comparison, and
+    ///     are built rather than written as literals on purpose: element 0 of
+    ///     each slice is content-EQUAL but a DISTINCT allocation, so a
+    ///     comparator reading the header's pointer word would return at
+    ///     element 0 with an arbitrary answer instead of walking on to the
+    ///     element that actually differs. Two string literals would likely
+    ///     share one rodata address and let that bug pass.
+    ///   * The `mut Slice[i64]` rows exercise the other surface spelling. It
+    ///     is a `TypeKind::MutSlice`, which `display_mangle_te` renders
+    ///     "unknown", so the comparator is keyed on a canonical `Slice[T]`
+    ///     rebuilt from the element — otherwise every element type collapses
+    ///     onto one `karac_cmp_unknown`, the collision B-2026-08-27-25
+    ///     records for the bare `"Array"` name.
+    ///   * Both element types appear in ONE program, so a collision between
+    ///     their comparators would show up as a wrong answer here rather than
+    ///     as a link error: both take `(ptr, ptr) -> i64`, so sharing a symbol
+    ///     is silent.
+    ///
+    /// Twinned against the interpreter, whose `value_compare` has had a
+    /// `Slice` arm as long as its `Vec` one — so that side needed only the
+    /// dispatch.
+    #[test]
+    fn test_e2e_slice_ordering() {
+        let src = r#"
+fn show(s: Slice[i64], t: Slice[i64]) -> bool { return s < t; }
+fn cmp2(s: mut Slice[i64], t: mut Slice[i64]) -> bool { return s < t; }
+fn build(p: String) -> String {
+    let mut s = String.new();
+    s.push_str(p);
+    s.push_str("x");
+    return s;
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(1); v.push(3);
+    let a: Slice[i64] = v[0..2];
+    let b: Slice[i64] = v[2..4];
+    let c: Slice[i64] = v[0..2];
+    println(f"{a < b}");
+    println(f"{b < a}");
+    println(f"{a < c}");
+    println(f"{a <= c}");
+    println(f"{a >= c}");
+    println(f"{b > a}");
+    println(f"{a == c}");
+
+    let p: Slice[i64] = v[0..1];
+    println(f"{p < a}");
+    println(f"{a < p}");
+
+    println(f"{show(a, b)}");
+    println(f"{show(b, a)}");
+
+    let mut m: Vec[i64] = Vec.new(); m.push(1); m.push(2);
+    let mut n: Vec[i64] = Vec.new(); n.push(1); n.push(3);
+    println(f"{cmp2(mut m[0..2], mut n[0..2])}");
+    println(f"{cmp2(mut n[0..2], mut m[0..2])}");
+
+    let mut w: Vec[String] = Vec.new();
+    w.push(build("a")); w.push("m");
+    w.push(build("a")); w.push("n");
+    let x: Slice[String] = w[0..2];
+    let y: Slice[String] = w[2..4];
+    println(f"{x < y}");
+    println(f"{y < x}");
+    println(f"{x <= x}");
+}
+"#;
+        let expected = "true\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\n\
+                        true\nfalse\n\
+                        true\nfalse\n\
+                        true\nfalse\n\
+                        true\nfalse\ntrue\n";
+        assert_eq!(run_program(src), Some(expected.to_string()));
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored on the twin: {interp_errs:?}"
+        );
+        assert_eq!(
+            interp_out.join(""),
+            expected,
+            "interpreter twin must agree with the compiled backend"
+        );
+    }
+
     /// A `T: Ord` bound on a GENERIC IMPL admits a tuple, as the identical
     /// bound on a free fn always has (B-2026-08-27-33).
     ///

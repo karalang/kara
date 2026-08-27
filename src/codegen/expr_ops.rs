@@ -8160,6 +8160,72 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(out.into())
     }
 
+    /// `a < b` / `<=` / `>` / `>=` on two `Slice[T]` values, routed to
+    /// `karac_cmp_Slice_<T>` (B-2026-08-27-45) — the ORDERING sibling of
+    /// [`Self::compile_slice_eq`], and the last member of the tuple / array /
+    /// slice family whose operators `karac check` admitted and neither backend
+    /// lowered.
+    ///
+    /// Two things make it its own function rather than a call to
+    /// `compile_ordered_cmp_te`, and both are properties of a slice rather
+    /// than choices:
+    ///
+    ///   * A slice operand reaches the operator as a bare `ptr` when it is a
+    ///     local (the address of its `{ptr, len}` slot) and as the fat struct
+    ///     BY VALUE when it is a parameter. `operand_as_ptr` normalizes the
+    ///     two, exactly as the equality path does; `compile_ordered_cmp_te`
+    ///     deliberately declines a pointer operand, since for every OTHER
+    ///     shape that reaches it a pointer would mean comparing addresses.
+    ///   * The comparator is keyed on a CANONICAL `Slice[T]` type expression
+    ///     rebuilt from the element, not on the operand's own type. A `mut
+    ///     Slice[T]` operand is a `TypeKind::MutSlice`, which
+    ///     `display_mangle_te` renders "unknown" — so every element type would
+    ///     collapse onto one `karac_cmp_unknown` symbol, the collision
+    ///     B-2026-08-27-25 records for the bare `"Array"` name. Rebuilding
+    ///     makes both spellings name the same function, which is also what
+    ///     makes `v[0..2] < s` agree with `s < v[0..2]`.
+    pub(super) fn compile_slice_ord(
+        &mut self,
+        op: &BinOp,
+        elem_te: &TypeExpr,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let canonical = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Slice".to_string()],
+                generic_args: Some(vec![crate::ast::GenericArg::Type(elem_te.clone())]),
+                span: crate::token::Span::default(),
+            }),
+            span: crate::token::Span::default(),
+        };
+        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(&canonical) else {
+            return Ok(None);
+        };
+        let l_slot = self.operand_as_ptr(lhs, "sliceord.l");
+        let r_slot = self.operand_as_ptr(rhs, "sliceord.r");
+        let ord = self
+            .builder
+            .build_call(cmp_fn, &[l_slot.into(), r_slot.into()], "sliceord.call")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let zero = self.context.i64_type().const_zero();
+        let pred = match op {
+            BinOp::Lt => inkwell::IntPredicate::SLT,
+            BinOp::LtEq => inkwell::IntPredicate::SLE,
+            BinOp::Gt => inkwell::IntPredicate::SGT,
+            BinOp::GtEq => inkwell::IntPredicate::SGE,
+            _ => return Ok(None),
+        };
+        let r = self
+            .builder
+            .build_int_compare(pred, ord, zero, "sliceord.res")
+            .unwrap();
+        Ok(Some(r.into()))
+    }
+
     /// `a == b` / `a != b` on two `Array[T, N]` values, routed to the shared
     /// content comparator `karac_eq_Array_<T>_<N>` (B-2026-08-27-25) — the
     /// same function a `#[derive(PartialEq)]` struct with an array field

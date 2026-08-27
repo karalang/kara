@@ -295,6 +295,34 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `true` when every element in a slice's VIEWED range carries a total
+    /// order (B-2026-08-27-45) — the `Slice` sibling of
+    /// [`Self::array_elems_totally_ordered`], and the twin of codegen's
+    /// `te_is_totally_ordered(<element>)`.
+    ///
+    /// Only the viewed range is asked, not the whole backing store: the range
+    /// is what the comparison reads, and a slice over part of a mixed
+    /// container should be judged on what it actually sees.
+    fn slice_elems_totally_ordered(v: &Value) -> bool {
+        match v {
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } => storage
+                .read()
+                .map(|xs| {
+                    xs.iter()
+                        .skip(*start)
+                        .take(*len)
+                        .all(Self::value_is_totally_ordered)
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Q4 literal promotion for the tree-walker (B-2026-07-04-12): when one
     /// operand is a *direct, unsuffixed integer literal* (`ExprKind::Integer(_,
     /// None)`) and the other evaluates to a `Float`, promote the literal's
@@ -937,6 +965,40 @@ impl<'a> super::Interpreter<'a> {
                 l @ Value::Array(_),
                 r @ Value::Array(_),
             ) if Self::array_elems_totally_ordered(&l) && Self::array_elems_totally_ordered(&r) => {
+                let ord = super::helpers::value_compare(&l, &r);
+                Value::Bool(match op {
+                    BinOp::Lt => ord.is_lt(),
+                    BinOp::LtEq => ord.is_le(),
+                    BinOp::Gt => ord.is_gt(),
+                    _ => ord.is_ge(),
+                })
+            }
+            // `Slice[T]` ordering (B-2026-08-27-45): lexicographic over the
+            // VIEWED range, then by length — `value_compare`'s `Slice` arm,
+            // which has existed as long as its `Vec` one, so this side is a
+            // dispatch line. The last member of the tuple / array / slice
+            // family whose `<` the typechecker admitted (`type_supports_ord`
+            // carries a `Type::Slice` arm) and neither backend lowered: this
+            // arm's absence sent it to the `_` arm below, whose message claims
+            // the typechecker rejects this — it does not, and did not — while
+            // `karac build` refused with "Unsupported struct binary op: Lt".
+            //
+            // Codegen's twin is `karac_cmp_Slice_<T>`, the `Vec` comparator
+            // with the header type made a parameter, since the walk reads only
+            // the `ptr` and `len` fields both headers share. That is the same
+            // parameterization the slice EQUALITY comparator already uses, so
+            // the two operations read a slice header the same way.
+            //
+            // Gated PER ELEMENT, the rule B-2026-08-27-42 settled on: the
+            // container gate cannot be used here (a `Value::Slice` over a
+            // `Vec` of `Vec`s must decline, and codegen's element-keyed gate
+            // declines the same shape), so asking the elements is what keeps
+            // the two backends accepting the same set.
+            (
+                BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
+                l @ Value::Slice { .. },
+                r @ Value::Slice { .. },
+            ) if Self::slice_elems_totally_ordered(&l) && Self::slice_elems_totally_ordered(&r) => {
                 let ord = super::helpers::value_compare(&l, &r);
                 Value::Bool(match op {
                     BinOp::Lt => ord.is_lt(),
