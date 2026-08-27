@@ -314,9 +314,9 @@ pub fn emit_program(items: Vec[Item], stdout_sym: String) -> String with panics 
                 if (tk >= 10 and tk < 1000) or (tk >= 1000 and tk < 2000) {
                     let mut tn = "".to_string();
                     if tk < 1000 {
-                        tn = e.st_names[tk - 10];
+                        tn = e.st_names[tk - 10].clone();
                     } else {
-                        tn = e.en_names[tk - 1000];
+                        tn = e.en_names[tk - 1000].clone();
                     }
                     for m in methods {
                         let FnDefNode {
@@ -674,9 +674,9 @@ impl Emitter {
                     if (tk >= 10 and tk < 1000) or (tk >= 1000 and tk < 2000) {
                         let mut tn = "".to_string();
                         if tk < 1000 {
-                            tn = self.st_names[tk - 10];
+                            tn = self.st_names[tk - 10].clone();
                         } else {
-                            tn = self.en_names[tk - 1000];
+                            tn = self.en_names[tk - 1000].clone();
                         }
                         let mcnt = ib.methods.len();
                         let mut mi = 0;
@@ -4671,7 +4671,7 @@ impl Emitter {
                 TupleVariantPat(tvp) => {
                     let TupleVariantPattern { segments, elems, span: tsp } = tvp;
                     let li = segments.len() - 1;
-                    let vn = segments[li];
+                    let vn = segments[li].clone();
                     pat_name = vn.clone();
                     pat_variantish = true;
                     let mut pei = 0;
@@ -6135,7 +6135,7 @@ impl Emitter {
     fn emit_ref_temp_frees(mut ref self, ops: Vec[String], kinds: Vec[i64]) {
         let mut i = 0;
         while i < ops.len() {
-            let op = ops[i];
+            let op = ops[i].clone();
             let k = kinds[i];
             if k == 2 {
                 self.emit_free_val(op);
@@ -7945,12 +7945,12 @@ impl Emitter {
                 let mut cur = "undef".to_string();
                 let mut fi = 0;
                 while fi < cnt {
-                    let want = self.st_field_names[off + fi];
+                    let want = self.st_field_names[off + fi].clone();
                     let mut fop = "0".to_string();
                     let mut li = 0;
                     while li < lit_names.len() {
                         if lit_names[li] == want {
-                            fop = lit_ops[li];
+                            fop = lit_ops[li].clone();
                         }
                         li = li + 1;
                     }
@@ -8047,7 +8047,7 @@ impl Emitter {
         let mlen = method.len();
         let mut si2 = 0;
         while si2 < self.sig_names.len() {
-            let sn4 = self.sig_names[si2];
+            let sn4 = self.sig_names[si2].clone();
             if sn4.len() > mlen + 1 {
                 let dot = sn4.substring(sn4.len() - mlen - 1, sn4.len() - mlen);
                 let tail = sn4.substring(sn4.len() - mlen, sn4.len());
@@ -8081,10 +8081,10 @@ impl Emitter {
             }
             let mut tn = "".to_string();
             if rck < 1000 {
-                tn = self.st_names[rck - 10];
+                tn = self.st_names[rck - 10].clone();
             } else {
                 // Enum receiver (Slice 31).
-                tn = self.en_names[rck - 1000];
+                tn = self.en_names[rck - 1000].clone();
             }
             let key = tn.clone() + "." + method.clone();
             let si = self.sig_index(key);

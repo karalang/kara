@@ -11630,15 +11630,21 @@ fn main() {
               fn mk(v: Vec[T]) -> Vec[T] { let q = Bag { xs: v }; let mut b = q.dup(); b.arrange(); b.xs }", ""),
             ("block expression",
              "fn mk(v: Vec[T]) -> Vec[T] { let mut b = { Bag { xs: v } }; b.arrange(); b.xs }", ""),
+            // `bs[0]` reads a non-`Copy` element out of a container, so it is
+            // spelled `.clone()` now (B-2026-08-26-21) and `Bag` derives
+            // `Clone` above for it. Kept rather than dropped: an index RHS
+            // resolves its span differently from the other six forms, which is
+            // the entire point of sweeping them.
             ("index into Vec[Bag[T]]",
-             "fn mk(v: Vec[T]) -> Vec[T] { let bs = [Bag { xs: v }]; let mut b = bs[0]; b.arrange(); b.xs }", ""),
+             "fn mk(v: Vec[T]) -> Vec[T] { let bs = [Bag { xs: v }]; let mut b = bs[0].clone(); b.arrange(); b.xs }", ""),
             ("named binding, then consuming method",
              "fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }\n    \
               fn mk(v: Vec[T]) -> Vec[T] { let q = Bag { xs: v }; q.inner() }", ""),
         ];
         for (name, impl_extra, free_extra) in forms {
             let src = format!(
-                "struct Bag[=T] {{ xs: Vec[T] }}\n\
+                "#[derive(Clone)]\n\
+                 struct Bag[=T] {{ xs: Vec[T] }}\n\
                  impl[T: Ord] Bag[T] {{\n    \
                      fn swap2(mut ref self, i: i64, j: i64) {{ self.xs.swap(i, j); }}\n    \
                      fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
@@ -12718,10 +12724,7 @@ fn main() {
              \x20   let mut ps: Vec[Pair] = Vec.new();\n\
              \x20   ps.push(Pair { word: f\"alpha{k}\", n: 1 });\n\
              \x20   ps.push(Pair { word: f\"beta{k}\", n: 2 });\n\
-             \x20   let t = ps[0];\n\
-             \x20   let u = ps[1];\n\
-             \x20   ps[0] = u;\n\
-             \x20   ps[1] = t;\n\
+             \x20   ps.swap(0, 1);\n\
              \x20   println(ps[0].word + \" \" + ps[1].word);\n\
              \x20   let c = Pair { word: f\"gamma{k}\", n: 3 };\n\
              \x20   ps[0] = c;\n\
@@ -12944,9 +12947,7 @@ fn main() {
     b.xs.push(Item { id: 1i64, tag: "first_payload_long_enough_to_heap".to_string() });
     b.xs.push(Item { id: 2i64, tag: "second_payload_long_enough_to_heap".to_string() });
     println("built");
-    let t = b.xs[0];
-    b.xs[0] = b.xs[1];
-    b.xs[1] = t;
+    b.xs.swap(0, 1);
     println(f"{b.xs[0].id}{b.xs[1].id}");
 }
 "#,
@@ -27178,7 +27179,7 @@ fn main() {
                      let mut o7 = String.new(); o7 = t7.0.region;\n\
                      let mut s8 = String.new(); s8.push_str(\"flat\");\n\
                      let mut a8: Vec[String] = Vec.new(); a8.push(s8);\n\
-                     let mut o8 = String.new(); o8 = a8[0];\n\
+                     let mut o8 = String.new(); o8 = a8[0].clone();\n\
                      println(f\"{o1} {o2.len()} {pre} {o3} {o4} {o5} {o6} {o7} {o8}\");\n\
                  }\n"
             )
@@ -27682,7 +27683,8 @@ fn main() {
     fn test_e2e_let_rebinding_is_a_copy_not_an_alias() {
         assert_eq!(
             run_program(
-                "struct A { mut lines: Vec[String] }\n\
+                "#[derive(Clone)]
+struct A { mut lines: Vec[String] }\n\
                  struct B { mut a: A }\n\
                  fn main() {\n\
                      let mut a1 = A { lines: Vec.new() };\n\
@@ -27705,7 +27707,7 @@ fn main() {
                      let mut v4: Vec[A] = Vec.new();\n\
                      v4.push(A { lines: Vec.new() });\n\
                      v4[0].lines.push(f\"x\");\n\
-                     let mut r4 = v4[0];\n\
+                     let mut r4 = v4[0].clone();\n\
                      r4.lines.push(f\"y\");\n\
                      println(f\"{r4.lines.len()} {v4[0].lines.len()}\");\n\
                      let mut m6: Map[i64, Vec[i64]] = Map.new();\n\
@@ -28979,14 +28981,12 @@ fn main() {
                      let mut qs: Vec[Pair] = Vec.new();\n\
                      qs.push(Pair { word: f\"a{k}\", n: 1 });\n\
                      qs.push(Pair { word: f\"b{k}\", n: 2 });\n\
-                     let t = qs[0];\n\
-                     qs[0] = qs[1];\n\
-                     qs[1] = t;\n\
+                     qs.swap(0, 1);\n\
                      println(qs[0].word + \" \" + qs[1].word);\n\
                      println(qs[0].n + qs[1].n * 10);\n\
                      let mut ps: Vec[Pair] = Vec.new();\n\
                      ps.push(Pair { word: f\"x{k}\", n: 7 });\n\
-                     ps[0] = ps[0];\n\
+                     ps.swap(0, 0);\n\
                      println(ps[0].word);\n\
                      println(ps[0].n);\n\
                  }"
@@ -35702,9 +35702,11 @@ fn main() {
     v.push("row-bravo".to_string());
     v.push("row-charlie".to_string());
     let m: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
-    let a: String = m[0i64][0i64];
-    let b: String = m[0i64][1i64];
-    let c: String = m[1i64][0i64];
+    let r0: Vec[String] = m[0i64].clone();
+    let r1: Vec[String] = m[1i64].clone();
+    let a: String = r0[0i64].clone();
+    let b: String = r0[1i64].clone();
+    let c: String = r1[0i64].clone();
     println(f"{a} {b} {c} {m.len()} {v.len()}");
 }
 "#,
@@ -49216,11 +49218,19 @@ fn main() {
         // (compile_soa_index_read) AND the previously-untestable
         // push/growth decomposition — 6 pushes cross the cap 0→4→8
         // realloc boundary for every group buffer, so a mis-reallocated
-        // group would surface as a read mismatch here. Uses whole-element
-        // binding (not direct `entities[i].field`) so the AoS baseline is
-        // valid: direct field-access on an Index receiver is a separate
-        // pre-existing gap for plain-struct Vecs, exercised SoA-side in
-        // `test_e2e_soa_indexed_field_access` below.
+        // group would surface as a read mismatch here.
+        //
+        // Reads FIELDS off the index directly (`entities[i].x`). It bound the
+        // whole element until direct field access on an Index receiver worked
+        // for plain-struct Vecs; that gap is gone (verified in both layouts on
+        // both backends), and the whole-element form is not available any more
+        // regardless, since it moves a non-`Copy` element out of a container
+        // (B-2026-08-26-21). NEITHER replacement for it works here: `ref` cannot
+        // borrow what has no contiguous storage, and `entities[i].clone()`
+        // MISCOMPILES under SoA — element 5 reads back `100 1000 200 2000`
+        // instead of `5 50 500 5000`, the cold group at the wrong indices,
+        // because a method call on an index receiver lowers to a single element
+        // pointer that an SoA layout does not have.
         let body = r#"
 struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
 LAYOUT
@@ -49232,18 +49242,14 @@ fn main() {
         i = i + 1;
     }
     println(entities.len());
-    let a = entities[0];
-    println(a.x);
-    let b = entities[4];
-    println(b.y);
-    let c = entities[5];
-    println(c.vx);
-    println(c.vy);
-    let e = entities[3];
-    println(e.x);
-    println(e.y);
-    println(e.vx);
-    println(e.vy);
+    println(entities[0].x);
+    println(entities[4].y);
+    println(entities[5].vx);
+    println(entities[5].vy);
+    println(entities[3].x);
+    println(entities[3].y);
+    println(entities[3].vx);
+    println(entities[3].vy);
 }
 "#;
         let soa_src = body.replace(
@@ -51198,6 +51204,15 @@ fn main() {
             Some("zz bb\n")
         );
         // 3. SELF-ALIAS — releasing before storing must not free the source.
+        //
+        // Spelled without an element-to-element store, which reads a non-`Copy`
+        // element out of a container and is rejected now (B-2026-08-26-21). The
+        // property under test is unchanged and both halves survive: `swap(0, 0)`
+        // is the degenerate same-slot case that must not free anything, and the
+        // clone-then-store still makes slot 1 hold slot 0's value while slot 0
+        // stays alive — which is what "releasing before storing must not free
+        // the source" means. The row goes through a temporary because
+        // `d[0][0].clone()` is a chained indexed receiver, deferred in codegen.
         assert_eq!(
             run_program(
                 "fn main() {\n\
@@ -51205,8 +51220,9 @@ fn main() {
                      r.push(f\"aa\"); r.push(f\"bb\");\n\
                      let mut d: Vec[Vec[String]] = Vec.new();\n\
                      d.push(r);\n\
-                     d[0][0] = d[0][0];\n\
-                     d[0][1] = d[0][0];\n\
+                     d[0].swap(0, 0);\n\
+                     let row: Vec[String] = d[0].clone();\n\
+                     d[0][1] = row[0].clone();\n\
                      println(f\"{d[0][0]} {d[0][1]}\");\n\
                  }"
             )

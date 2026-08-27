@@ -79,8 +79,8 @@ let p = Pair { first: "hello", second: 42 };
 Constrain what types are allowed:
 
 ```kara
-fn largest[T: Ord](items: Vec[T]) -> T {
-    let mut best = items[0];
+fn largest[T: Ord + Clone](items: Vec[T]) -> T {
+    let mut best = items[0].clone();
     for item in items {
         if item > best {
             best = item;
@@ -90,7 +90,11 @@ fn largest[T: Ord](items: Vec[T]) -> T {
 }
 ```
 
-`T: Ord` means "T must implement the Ord trait" — so we know `>` works. Multiple bounds use `+`:
+`T: Ord` means "T must implement the Ord trait" — so we know `>` works, and
+`+ Clone` is what lets `items[0].clone()` take a copy: `items[0]` is a
+BORROW of an element, and a container cannot be left with a hole in it, so
+a non-`Copy` element has to be cloned (or borrowed) rather than moved out.
+As shown here, multiple bounds use `+`:
 
 ```kara
 fn print_sorted[T: Ord + Display](items: Vec[T]) {

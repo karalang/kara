@@ -185,8 +185,11 @@ Each row is an **independent** copy — writing `dp[0][0] = 9` leaves `dp[1][0]`
 untouched. (Collections have value semantics; the inner `Vec.filled` is copied
 into each slot, not shared.)
 
-Traverse a grid by index. Pull each row out with `let row = g[i]`, then walk its
-cells — exactly the shape the inner loop wants:
+Traverse a grid by index. Borrow each row with `let row = ref g[i]`, then walk
+its cells — exactly the shape the inner loop wants. The `ref` matters: `g[i]`
+is a borrow of a row that the grid still owns, so binding it by value would
+mean moving a row out of `g`, which a container has no way to represent.
+Borrowing costs nothing and reads the row in place:
 
 ```kara
 fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {
@@ -194,7 +197,7 @@ fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {
     let mut total = 0i64;
     let mut i = 0i64;
     while i < rows {
-        let row = g[i];
+        let row = ref g[i];
         let cols = row.len();
         let mut j = 0i64;
         while j < cols {
