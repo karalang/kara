@@ -584,6 +584,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0281",
         ty("ModuleMutBinding", Some(DiagnosticClass::LintWarning)),
     ),
+    (
+        "W0282",
+        ty("PreludeShadow", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0282",
+        ty("PreludeShadow", Some(DiagnosticClass::LintWarning)),
+    ),
     // The catch-all arm of the warning emitter: any `TypeErrorKind` that
     // reaches the warning loop without a code of its own lands here, so this
     // row names the bucket rather than one variant. A warning that deserves
