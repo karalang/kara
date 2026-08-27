@@ -10255,6 +10255,144 @@ fn test_cmp_rejected_on_non_ord_struct() {
 }
 
 #[test]
+fn test_generic_aggregate_ordering_rejected_on_both_spellings() {
+    // B-2026-08-27-47 — a GENERIC aggregate's derived ordering is lowered by
+    // NEITHER backend, so admitting it here produced a run-vs-build split on
+    // the `.cmp` spelling: check-green, correct under `--interp` (the
+    // tree-walker has runtime values, so `value_compare` can order what no
+    // static comparator can), and a hard `karac build` failure.
+    //
+    // The reason neither backend can is structural, not an oversight.
+    // Codegen's `emit_cmp_fn_for_enum` reads payload `TypeExpr`s by enum NAME,
+    // so inside `Option` it sees the parameter `T` and never the
+    // instantiation; the interpreter's own `aggregate_is_orderable` requires
+    // `generic_params.is_empty()` for that stated reason, which is why the `<`
+    // spelling was already refused by BOTH backends and so never split.
+    //
+    // All four shapes below reproduce identically on the unfixed compiler:
+    // the two prelude generics, a user generic enum, and a user generic
+    // struct.
+    for src in [
+        "fn main() {\n\
+             let x: Option[i64] = Some(1);\n\
+             let y: Option[i64] = Some(2);\n\
+             let _ = x.cmp(y);\n\
+         }",
+        "fn main() {\n\
+             let x: Result[i64, i64] = Ok(1);\n\
+             let y: Result[i64, i64] = Ok(2);\n\
+             let _ = x.cmp(y);\n\
+         }",
+        "#[derive(Ord, Eq)]\n\
+         enum MyOpt[T] { Val(T), Nil }\n\
+         fn main() {\n\
+             let x: MyOpt[i64] = MyOpt.Val(1);\n\
+             let y: MyOpt[i64] = MyOpt.Val(2);\n\
+             let _ = x.cmp(y);\n\
+         }",
+        "#[derive(Ord, Eq)]\n\
+         struct Pair[T] { a: T }\n\
+         fn main() {\n\
+             let x: Pair[i64] = Pair { a: 1 };\n\
+             let y: Pair[i64] = Pair { a: 2 };\n\
+             let _ = x.cmp(y);\n\
+         }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains("cmp")),
+            "expected the generic `.cmp` to be rejected, got: {errors:?}\nsrc: {src}"
+        );
+    }
+
+    // The OPERATOR spelling is rejected too, and with a message that does not
+    // send the reader after a derive that is already present: the prelude's
+    // `Option` carries `#[derive(Ord, PartialOrd)]`, so the general "add
+    // #[derive(PartialOrd)]" advice would be wrong here.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let x: Option[i64] = Some(1);\n\
+             let y: Option[i64] = Some(2);\n\
+             let _ = x < y;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("generic") && !e.message.contains("add #[derive")),
+        "expected the generic-specific ordering message, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_generic_ordering_gate_spares_what_both_backends_lower() {
+    // The other half of B-2026-08-27-47's gate: it must narrow ONLY the case
+    // both backends decline. These four all lower on both, so a gate that
+    // caught them would be a regression, not a fix.
+    //
+    // The `impl[T] Ord for W[T]` row is the load-bearing one. A hand-written
+    // ordering on a generic type is a declared function, so it dispatches
+    // through the ordinary user-impl path and was measured working on BOTH
+    // backends — the escape hatch is real behaviour being preserved, not a
+    // defensive clause.
+    typecheck_ok(
+        "#[derive(Ord, Eq)]\n\
+         struct P { a: i64, b: i64 }\n\
+         #[derive(Ord, Eq)]\n\
+         enum Suit { Clubs, Spades }\n\
+         fn main() {\n\
+             let p1 = P { a: 1, b: 2 };\n\
+             let p2 = P { a: 1, b: 3 };\n\
+             let _a: bool = p1 < p2;\n\
+             let _b: Ordering = p1.cmp(p2);\n\
+             let _c: bool = Suit.Clubs < Suit.Spades;\n\
+             let _d: Ordering = Suit.Clubs.cmp(Suit.Spades);\n\
+         }",
+    );
+    typecheck_ok(
+        "struct W[T] { a: i64 }\n\
+         impl[T] PartialEq for W[T] { fn eq(ref self, other: ref W[T]) -> bool { self.a == other.a } }\n\
+         impl[T] Eq for W[T] {}\n\
+         impl[T] PartialOrd for W[T] { fn partial_cmp(ref self, other: ref W[T]) -> Option[Ordering] { Some(self.a.cmp(other.a)) } }\n\
+         impl[T] Ord for W[T] { fn cmp(ref self, other: ref W[T]) -> Ordering { self.a.cmp(other.a) } }\n\
+         fn main() {\n\
+             let x: W[i64] = W { a: 1 };\n\
+             let y: W[i64] = W { a: 2 };\n\
+             let _o: Ordering = x.cmp(y);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_derive_ord_rejected_when_a_field_is_a_generic_aggregate() {
+    // The TRANSITIVE half (B-2026-08-27-47). A non-generic struct that derives
+    // `Ord` and holds an `Option[i64]` field was check-green and interp-green
+    // and failed to build with "Unsupported struct binary op: Lt" — the same
+    // split one level up, since the derived comparator has to order the field.
+    //
+    // Both derives are asserted because `register_ord_orderable_types` admits
+    // `#[derive(PartialOrd)]` into codegen's comparator family on equal
+    // footing with `Ord`; narrowing only the `Ord` spelling would move the
+    // split one derive over rather than close it.
+    for (derive, trait_name) in [("Ord, Eq", "Ord"), ("PartialOrd, PartialEq", "PartialOrd")] {
+        let src = format!(
+            "#[derive({derive})]\n\
+             struct S {{ x: Option[i64], y: i64 }}\n\
+             fn main() {{\n\
+                 let _a = S {{ x: Some(1), y: 0 }};\n\
+             }}"
+        );
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains(trait_name) && e.message.contains("Option[i64]")),
+            "expected the derive to be rejected for its Option field, got: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn test_tuple_cmp_method_resolves_to_ordering() {
     // B-2026-08-27-41 — the `cmp` intercept was gated to `Type::Named`, so a
     // TUPLE receiver fell past it to the tuple no-method arm and was rejected

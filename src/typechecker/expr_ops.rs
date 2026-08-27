@@ -2796,6 +2796,7 @@ impl<'a> super::TypeChecker<'a> {
                         // `#[derive(PartialOrd)]` alone compiles, on a
                         // struct/enum and on a distinct type alike.
                         self.comparison_impl_written_but_undispatched(cmp_left, false)
+                            .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
                             .unwrap_or_else(|| {
                                 format!(
                                     "type '{}' does not implement PartialOrd; add \
@@ -2862,6 +2863,7 @@ impl<'a> super::TypeChecker<'a> {
                         // `#[derive(PartialOrd)]` alone compiles, on a
                         // struct/enum and on a distinct type alike.
                         self.comparison_impl_written_but_undispatched(cmp_left, false)
+                            .or_else(|| self.ordering_unsupported_because_generic(cmp_left))
                             .unwrap_or_else(|| {
                                 format!(
                                     "type '{}' does not implement PartialOrd; add \

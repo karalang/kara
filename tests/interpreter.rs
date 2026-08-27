@@ -19409,6 +19409,64 @@ fn option_shared_arm_local_branch_leaf_survives_repeated_consumption() {
     );
 }
 
+/// `.cmp()` on a receiver with no name to look up, under the tree-walker
+/// (B-2026-08-27-47).
+///
+/// The defect this guards was codegen's, but the ORACLE for it lives here:
+/// `tests/codegen.rs` twins the compiled answer against the interpreter's, so
+/// if the tree-walker ever stops ordering these receivers the E2E fixture
+/// keeps passing — both backends would simply agree on a new wrong answer.
+/// That is the failure mode a twinned test cannot see by itself, and it is why
+/// this half pins literal expected output instead of comparing backends.
+///
+/// It is also the only coverage of this semantics on the default `cargo test`
+/// leg, since `tests/codegen.rs` is entirely `#[cfg(feature = "llvm")]`.
+///
+/// The `Rev` row is the anti-hijack guard: its hand-written `cmp` reverses the
+/// order, so a structural declaration-order comparator would print `0` where
+/// the user impl prints `2`.
+#[test]
+fn cmp_on_a_non_identifier_receiver_under_the_tree_walker() {
+    let out = run_no_errors(
+        r#"
+#[derive(Ord, Eq)]
+struct P { a: i64, b: i64 }
+
+#[derive(Ord, Eq)]
+enum Suit { Clubs, Hearts, Spades }
+
+struct Rev { v: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.v == other.v } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.v.cmp(self.v) } }
+
+fn mk(a: i64) -> P { return P { a: a, b: 0 }; }
+fn suit() -> Suit { return Suit.Clubs; }
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"{tag(P { a: 1, b: 2 }.cmp(P { a: 1, b: 3 }))}");
+    println(f"{tag(P { a: 1, b: 2 }.cmp(P { a: 1, b: 2 }))}");
+    println(f"{tag(P { a: 9, b: 0 }.cmp(P { a: 1, b: 0 }))}");
+    println(f"{tag(mk(1).cmp(mk(2)))}");
+    println(f"{tag(suit().cmp(Suit.Spades))}");
+    let v = [P { a: 1, b: 2 }, P { a: 1, b: 3 }];
+    println(f"{tag(v[0].cmp(v[1]))}");
+    let t = (P { a: 5, b: 0 }, P { a: 1, b: 0 });
+    println(f"{tag(t.0.cmp(t.1))}");
+    println(f"{tag(Rev { v: 1 }.cmp(Rev { v: 2 }))}");
+}
+"#,
+    );
+    assert_eq!(out, "0\n1\n2\n0\n0\n0\n2\n2\n");
+}
+
 /// `.cmp()` on a TUPLE under the tree-walker (B-2026-08-27-41).
 ///
 /// `tests/codegen.rs` is entirely `#[cfg(feature = "llvm")]`, so without a

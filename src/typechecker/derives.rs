@@ -410,6 +410,117 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// A tailored message for the aggregate that DOES carry the ordering derive
+    /// but is generic, so [`Self::derived_ord_is_lowerable`] declined it
+    /// (B-2026-08-27-47).
+    ///
+    /// Without this the generic case inherits the general "add
+    /// `#[derive(PartialOrd)]`" advice, which is actively wrong here: the
+    /// prelude's `Option` already carries `#[derive(Ord, PartialOrd)]`, so a
+    /// reader who follows that hint finds the derive present and has been sent
+    /// looking in the wrong place. Say what is actually true instead — the
+    /// derive is there and the ordering is what is unsupported — and name the
+    /// escape hatch that does work, since a hand-written `impl Ord` on a
+    /// generic type lowers on both backends.
+    pub(super) fn ordering_unsupported_because_generic(&self, ty: &Type) -> Option<String> {
+        let name = match ty {
+            Type::Named { name, .. } | Type::Shared(name) => name,
+            _ => return None,
+        };
+        if self.has_user_impl_ord(name) {
+            return None;
+        }
+        let (generic_params, derived) = if let Some(info) = self.env.structs.get(name) {
+            (&info.generic_params, &info.derived_traits)
+        } else if let Some(info) = self.env.enums.get(name) {
+            (&info.generic_params, &info.derived_traits)
+        } else {
+            return None;
+        };
+        if generic_params.is_empty() || !(derived.contains("Ord") || derived.contains("PartialOrd"))
+        {
+            return None;
+        }
+        Some(format!(
+            "type '{}' derives an ordering but '{}' is generic, and a derived \
+             comparator cannot order a type-parameter payload; write an \
+             `impl Ord for {}` to order it explicitly",
+            type_display(ty),
+            name,
+            name,
+        ))
+    }
+
+    /// Whether a named aggregate's DERIVED ordering is one both backends can
+    /// actually lower — the typechecker's half of the parity rule the two
+    /// backends already enforce independently (B-2026-08-27-47).
+    ///
+    /// A GENERIC aggregate is the case that splits. Its derived comparator has
+    /// to order a payload whose type is a type PARAMETER, and neither backend
+    /// can do that from the declaration alone: codegen's
+    /// `emit_cmp_fn_for_type_expr` refuses a `Path` carrying `generic_args` and
+    /// its `emit_cmp_fn_for_enum` reads payload `TypeExpr`s by enum NAME (so it
+    /// sees `T`, never the instantiation), and the interpreter's
+    /// `aggregate_is_orderable` requires `generic_params.is_empty()` for the
+    /// same stated reason. Both therefore reject `<` on `Option[i64]` —
+    /// agreeing, so `<` never split.
+    ///
+    /// `.cmp` DID split, because it never consulted that gate on either side:
+    /// the typechecker admitted it here (this arm asked only about the derive,
+    /// never about the arguments) and the interpreter answered it straight out
+    /// of `value_compare`, which has runtime values and so can order what no
+    /// static comparator can. Codegen had nothing to answer with and failed the
+    /// build. Measured on the unfixed compiler, all check-green and
+    /// interp-green and build-refused: `Option[i64]`, `Result[i64, i64]`, a
+    /// user `enum MyOpt[T]`, a user `struct Pair[T]`, and — transitively — a
+    /// non-generic `#[derive(Ord)]` struct holding an `Option[i64]` field.
+    ///
+    /// Rejecting here rather than teaching codegen the instantiation is the
+    /// narrow move, and it is the direction this file already takes for exactly
+    /// this shape: `type_supports_display` rejects `Type::Unit` so that a
+    /// meaningless interpolation cannot render differently per backend. Making
+    /// the generic case WORK is a real feature (a monomorphized comparator per
+    /// instantiation) and belongs on the roadmap, not in a run-vs-build fix;
+    /// when it lands, this gate widens and nothing else has to move.
+    ///
+    /// A user `impl Ord` always wins, generic or not, and that escape hatch is
+    /// load-bearing rather than defensive: a hand-written `impl[T] Ord for
+    /// W[T]` is a declared function, so it dispatches through the normal
+    /// user-impl path and was measured working on BOTH backends. Gating it out
+    /// would break code that compiles today.
+    fn derived_ord_is_lowerable(
+        &self,
+        name: &str,
+        generic_params: &[String],
+        derived: &std::collections::HashSet<String>,
+    ) -> bool {
+        if self.has_user_impl_ord(name) {
+            return true;
+        }
+        generic_params.is_empty() && derived.contains("Ord")
+    }
+
+    /// The `PartialOrd` twin of [`Self::derived_ord_is_lowerable`], carrying the
+    /// same rule for the same reason.
+    ///
+    /// Kept in step deliberately. `register_ord_orderable_types` admits a
+    /// `#[derive(PartialOrd)]` aggregate into codegen's comparator family on
+    /// equal footing with `Ord`, so a generic one reaches the identical dead
+    /// end; letting only the `Ord` spelling narrow would leave
+    /// `#[derive(PartialOrd)] struct S { x: Option[i64] }` accepted at check and
+    /// refused at build — the very split being closed, moved one derive over.
+    fn derived_partial_ord_is_lowerable(
+        &self,
+        name: &str,
+        generic_params: &[String],
+        derived: &std::collections::HashSet<String>,
+    ) -> bool {
+        if self.has_user_impl_ord(name) {
+            return true;
+        }
+        generic_params.is_empty() && (derived.contains("PartialOrd") || derived.contains("Ord"))
+    }
+
     pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
         if let Some(ok) = self.distinct_derive_supported(ty, &["Ord"]) {
             return ok;
@@ -425,9 +536,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
                 } else {
                     true
                 }
@@ -435,9 +546,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_ord(inner),
             Type::Shared(name) => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
+                    self.derived_ord_is_lowerable(name, &info.generic_params, &info.derived_traits)
                 } else {
                     true
                 }
@@ -577,11 +688,17 @@ impl<'a> super::TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_ord(inner),
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("PartialOrd")
-                        || info.derived_traits.contains("Ord")
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("PartialOrd")
-                        || info.derived_traits.contains("Ord")
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
                 } else {
                     true
                 }
@@ -589,11 +706,17 @@ impl<'a> super::TypeChecker<'a> {
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_partial_ord(inner),
             Type::Shared(name) => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("PartialOrd")
-                        || info.derived_traits.contains("Ord")
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("PartialOrd")
-                        || info.derived_traits.contains("Ord")
+                    self.derived_partial_ord_is_lowerable(
+                        name,
+                        &info.generic_params,
+                        &info.derived_traits,
+                    )
                 } else {
                     true
                 }

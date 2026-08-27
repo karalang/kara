@@ -5222,7 +5222,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`expr_method_call.rs`). Route through the same lexicographic
                 // comparator the `<`/`>` operators use, converting its i64 sign
                 // to an `Ordering` tag. roadmap Phase 8 § Eq/Ord.
-                if let Some(type_name) = self.inferred_receiver_type(object) {
+                //
+                // B-2026-08-27-47 — `inferred_receiver_type` resolves only an
+                // IDENTIFIER / `self` receiver (it reads `var_type_names`), so
+                // a receiver with no binding to name had no type here and fell
+                // out of dispatch entirely: `P { a: 1, b: 2 }.cmp(q)` and
+                // `mk(1).cmp(mk(2))` both typechecked, ran correctly under
+                // `--interp`, and failed to BUILD with "no handler for method
+                // 'cmp' on non-identifier receiver". Binding first
+                // (`let p = P { .. }; p.cmp(q)`) compiled and was correct, which
+                // is what localises the gap to receiver RESOLUTION rather than
+                // to the comparator or the lowering.
+                //
+                // `type_name_of_expr` is the wider sibling that already types a
+                // struct LITERAL (its `StructLiteral` arm) and a CALL result
+                // (its `Call` arm, via `fn_return_type_names`) — the two shapes
+                // the row measured — so this is a fallback onto an existing
+                // resolver, not a new one. It runs SECOND because
+                // `inferred_receiver_type` carries a `Slice` fallback of its own
+                // that the wider helper lacks; trying the narrow one first keeps
+                // every receiver that resolves today on exactly its current path.
+                //
+                // Additive by construction: the name only reaches
+                // `compile_user_cmp_to_ordering`, which routes to
+                // `emit_cmp_fn_for_struct` / `_enum` and both decline unless the
+                // type is in `ord_orderable_types`. A name that is not an
+                // orderable aggregate yields `None` and falls through to the
+                // same "no handler" error as before, so no program that builds
+                // today changes path. The `user_owns_cmp` guard above already
+                // consults `type_name_of_expr`, so a user `impl Ord` on either
+                // shape still wins over this builtin, as it does for a bound
+                // receiver.
+                if let Some(type_name) = self
+                    .inferred_receiver_type(object)
+                    .or_else(|| self.type_name_of_expr(object))
+                {
                     if let Some(v) = self.compile_user_cmp_to_ordering(&type_name, lhs, rhs)? {
                         return Ok(v);
                     }

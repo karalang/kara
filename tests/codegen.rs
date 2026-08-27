@@ -107153,6 +107153,117 @@ fn main() {
         );
     }
 
+    /// `.cmp()` on a receiver with NO NAME TO LOOK UP — a struct literal, a
+    /// call result, an index, a tuple element (B-2026-08-27-47).
+    ///
+    /// Codegen resolved the `.cmp` receiver through `inferred_receiver_type`,
+    /// which reads `var_type_names` and so answers only for an `Identifier` or
+    /// `self`. Every other receiver had no type here and fell out of method
+    /// dispatch entirely: `P { a: 1, b: 2 }.cmp(q)` and `mk(1).cmp(mk(2))` both
+    /// typechecked, ran correctly under `--interp`, and failed to BUILD with
+    /// "no handler for method 'cmp' on non-identifier receiver".
+    ///
+    /// Row 08 is what localises the defect, and it is why this is a receiver
+    /// bug rather than a comparator bug: binding the identical value first
+    /// (`let p = P { .. }; p.cmp(q)`) compiled and answered correctly the whole
+    /// time. The comparator and the lowering were never involved.
+    ///
+    /// Row 09 is the guard that the fix cannot hijack a user ordering. `Rev`'s
+    /// hand-written `cmp` REVERSES the order, so the structural
+    /// declaration-order comparator would answer `Less` for `1.cmp(2)` where
+    /// the user impl answers `Greater` — the B-2026-08-26-10 shape, which is a
+    /// SILENT wrong answer in compiled output only. It must read `2` on both
+    /// backends, from the LITERAL receiver as much as from the bound one: the
+    /// `user_owns_cmp` guard consults `type_name_of_expr`, the same widened
+    /// resolver this fix falls back to, so widening one without the other is
+    /// exactly how a user impl would start losing to the builtin.
+    ///
+    /// Rows 05-07 vary the receiver shape rather than the type, because that
+    /// is the axis that broke: an enum through a call result, a field chain,
+    /// an index, and a tuple element each reach a different arm of
+    /// `type_name_of_expr` and none of them has a `var_type_names` entry.
+    ///
+    /// Twinned against the interpreter rather than pinned to a literal, for
+    /// the reason the tuple sibling above gives: the defect WAS the two
+    /// backends disagreeing about whether the program exists.
+    #[test]
+    fn test_e2e_cmp_on_a_non_identifier_receiver() {
+        let src = r#"
+#[derive(Ord, Eq)]
+struct P { a: i64, b: i64 }
+
+#[derive(Ord, Eq)]
+enum Suit { Clubs, Hearts, Spades }
+
+struct Holder { p: P }
+
+struct Rev { v: i64 }
+impl PartialEq for Rev { fn eq(ref self, other: ref Rev) -> bool { self.v == other.v } }
+impl Eq for Rev {}
+impl PartialOrd for Rev { fn partial_cmp(ref self, other: ref Rev) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Rev { fn cmp(ref self, other: ref Rev) -> Ordering { other.v.cmp(self.v) } }
+
+fn mk(a: i64) -> P { return P { a: a, b: 0 }; }
+fn suit() -> Suit { return Suit.Clubs; }
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    // 01-03: struct LITERAL receiver, all three answers.
+    println(f"01 {tag(P { a: 1, b: 2 }.cmp(P { a: 1, b: 3 }))}");
+    println(f"02 {tag(P { a: 1, b: 2 }.cmp(P { a: 1, b: 2 }))}");
+    println(f"03 {tag(P { a: 9, b: 0 }.cmp(P { a: 1, b: 0 }))}");
+    // 04: CALL-RESULT receiver, and a call result against a literal.
+    println(f"04 {tag(mk(1).cmp(mk(2)))} {tag(mk(5).cmp(P { a: 5, b: 0 }))}");
+    // 05: call result on a derived-Ord ENUM (variant declaration order).
+    println(f"05 {tag(suit().cmp(Suit.Spades))} {tag(suit().cmp(Suit.Clubs))}");
+    // 06: FIELD-CHAIN receiver.
+    let h = Holder { p: P { a: 1, b: 2 } };
+    println(f"06 {tag(h.p.cmp(P { a: 1, b: 3 }))}");
+    // 07: INDEX receiver and TUPLE-ELEMENT receiver.
+    let v = [P { a: 1, b: 2 }, P { a: 1, b: 3 }];
+    let t = (P { a: 5, b: 0 }, P { a: 1, b: 0 });
+    println(f"07 {tag(v[0].cmp(v[1]))} {tag(t.0.cmp(t.1))}");
+    // 08: the BOUND control, which compiled correctly before the fix.
+    let p = P { a: 1, b: 2 };
+    println(f"08 {tag(p.cmp(P { a: 1, b: 3 }))}");
+    // 09: a user `impl Ord` still wins, from a literal receiver as well as a
+    // bound one. Structural order would say 0 here; the user impl says 2.
+    println(f"09 {tag(Rev { v: 1 }.cmp(Rev { v: 2 }))}");
+    let r = Rev { v: 1 };
+    println(f"10 {tag(r.cmp(Rev { v: 2 }))}");
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity. The oracle has to show the comparator genuinely
+        // ORDERING (a missing comparison arm degrades to Equal everywhere, and
+        // two backends agreeing on `1` for every row would still pass an
+        // equality-only assertion) AND the hand-written `impl Ord` winning from
+        // both receiver spellings.
+        assert!(
+            expected.contains("01 0")
+                && expected.contains("02 1")
+                && expected.contains("03 2")
+                && expected.contains("09 2")
+                && expected.contains("10 2"),
+            "interpreter oracle is not ordering these receivers: {expected:?}"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled `.cmp()` on a non-identifier receiver must match the interpreter",
+        );
+    }
+
     /// A tuple carrying a TYPE PARAMETER — `(T, i64)` at `T = i64` and
     /// `T = String` — orders through `.cmp` in a monomorph (B-2026-08-27-41).
     ///
