@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 1 |
 | perf | 84 | 0 |
-| other | 64 | 2 |
+| other | 64 | 1 |
 | soundness | 62 | 0 |
 | crash | 59 | 0 |
 | use-after-free | 21 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1097 | 4 |
+| codegen | 1097 | 3 |
 | typecheck | 277 | 1 |
 | interp | 191 | 0 |
 | other | 70 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced · 5 open · 1625 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced · 4 open · 1626 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-33 | 2026-08-27 | typecheck | medium | A `T: Ord` bound on a GENERIC IMPL rejects a tuple that the IDENTICAL bound on a free fn accepts: `impl[T: Ord] W[T]` refuses `W[(i64, i64)]` with "`(i64, i64)` does not implement `Ord`", while `fn pick[T: Ord](a: T, b: T)` takes the same tuple and may even call `.cmp()` on it | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-27-34 | 2026-08-27 | codegen | high | 3454927 (B-2026-08-26-12) EMITS THE BRANCH-LEAF RETAIN ONCE PER BINDING, NOT ONCE PER USE, so the THIRD consumption of an `Option[shared]` selected by a value-position branch reads through a freed box. Eight lines, no loop: `let t = if true { a } else { b };` then three `show(t)` calls prints `1 1 1` under `--interp` and `1 1 <garbage>` under `karac build` -- WHICH EXITS 0. Two uses are balanced and green; the boundary is exactly the third. The fix's own fixtures all consume the value once, so the axis was never covered. | — |
 | B-2026-08-27-35 | 2026-08-27 | codegen | medium | An indexed array LITERAL temporary leaks the element it hands back -- `Array[f"a{n}", f"b{n}"][0]` loses 2 bytes in 1 allocation -- a different mechanism from B-2026-08-27-31 and not covered by its fix. | — |
@@ -166,9 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced
 
 </details>
 
-### Fixed (1625)
+### Fixed (1626)
 
-<details><summary>1625 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1626 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1773,6 +1772,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced
 | B-2026-08-27-5 | codegen | medium | `==` ON A `shared struct` WITH A NICHE-ENCODED `Option[shared T]` FIELD COMPARES RAW POINTERS, so two structurally-equal values answer `false` on the… | 41b233c |
 | B-2026-08-27-6 | codegen | medium | A PLAIN (non-shared) ENUM USED AS A MAP/SET KEY WITH A HEAP-BEARING PAYLOAD COMPARES ITS PAYLOAD WORDS INSTEAD OF RECURSING, so `Map[S, V]` where `en… | a35c3f5 |
 | B-2026-08-27-7 | codegen+interp | medium | CONTAINER ELEMENT `Drop` BODIES FIRE IN A DIFFERENT ORDER ON THE TWO BACKENDS: the interpreter walks INSERTION order (deterministic across seeds and… | 478fef6 |
+| B-2026-08-27-8 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX | a74acc3 |
 | B-2026-08-27-9 | codegen | medium | A FLOAT FIELD OF A `shared struct` IS COMPARED BY BITS, NOT BY IEEE SEMANTICS, so `==` is wrong in BOTH directions on the compiled backends: `0.0` vs… | cac21aa |
 | B-2026-08-27-10 | typecheck+codegen | high | `Vec[T] == Vec[T]` IS ACCEPTED BY `karac check` AND `karac build`, EXECUTED BY BOTH COMPILED BACKENDS, AND REJECTED AT RUNTIME BY THE INTERPRETER --… | a7512aa |
 | B-2026-08-27-11 | codegen | high | A USER STRUCT NAMED `F64` / `F32` / `F16` / `Bf16` SILENTLY INHERITS THE PRELUDE TOTAL-ORDER WRAPPER'S COMPARISON, which compares ONE float field and… | 374a8a3 |
