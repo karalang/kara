@@ -12910,6 +12910,39 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-23 — `.clone()` on a TUPLE and on `Option[shared T]`, the
+    /// two element shapes B-2026-08-26-21's rejection had no remedy for.
+    ///
+    /// Both read the element THROUGH AN INDEX, which is the shape that matters:
+    /// the same tuple in a local already cloned correctly, and it was only the
+    /// index-read receiver that had no dispatch. Values are asserted, not just
+    /// compilation — the tuple emitter was reached before this by a path that
+    /// double-freed a `Vec` component and silently miscompiled a nested tuple,
+    /// so "it built" proves nothing here.
+    #[test]
+    fn test_e2e_clone_tuple_and_option_shared_elements() {
+        let Some(out) = run_program(
+            r#"
+shared struct N { mut v: i64 }
+fn main() {
+    let mut ts: Vec[(i64, String)] = Vec.new();
+    ts.push((7, "payload_long_enough_to_be_heap_allocated".to_string()));
+    let t = ts[0].clone();
+    println(f"{t.0} {t.1.len()} {ts[0].1.len()}");
+
+    let mut os: Vec[Option[N]] = Vec.new();
+    os.push(Some(N { v: 41 }));
+    let o = os[0].clone();
+    match o { Some(n) => { println(n.v); } None => { println("none"); } }
+    match os[0] { Some(n) => { println(n.v + 1); } None => { println("none"); } }
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "7 40 40\n41\n42\n", "got: {out:?}");
+    }
+
     #[test]
     fn test_e2e_vec_swap_relocates_without_running_drop_bodies() {
         let Some(out) = run_program(
@@ -29838,7 +29871,7 @@ fn main() {
                  let mut total = 0;\n\
                  let mut rep = 0;\n\
                  while rep < 1000 {\n\
-                     total = total + sum(pool[rep % 8]);\n\
+                     total = total + sum(pool[rep % 8].clone());\n\
                      rep = rep + 1;\n\
                  }\n\
                  println(total);\n\
@@ -100088,7 +100121,7 @@ fn merge_k(lists: Vec[Option[ListNode]]) -> Option[ListNode] {
     while interval < k {
         let mut i = 0;
         while i + interval < k {
-            work[i] = pick(work[i], work[i + interval]);
+            work[i] = pick(work[i].clone(), work[i + interval].clone());
             i = i + 2 * interval;
         }
         interval = 2 * interval;

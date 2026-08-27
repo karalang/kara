@@ -17659,8 +17659,13 @@ fn test_tuple_receiver_gets_method_existence_checking() {
     // `Type::Error` — universally assignable, hence the second half here.
     for src in [
         "fn main() { let t = (7, 8); let _ = t.completely_bogus(); }",
+        // Was `.clone()`, chosen because a tuple had NO methods at all. Tuples
+        // clone as of B-2026-08-27-23, so that spelling now type-checks and
+        // stopped testing anything; the point here is that an ABSENT method on
+        // a tuple receiver is REPORTED rather than silently poisoned to
+        // `Type::Error`, so it needs a method that is still absent.
         "fn main() { let mut v: Vec[(i64,i64)] = Vec.new(); v.push((7,8)); \
-         let _ = v.get(0).unwrap().clone(); }",
+         let _ = v.get(0).unwrap().no_such_method(); }",
     ] {
         let errors = typecheck_errors(src);
         assert!(

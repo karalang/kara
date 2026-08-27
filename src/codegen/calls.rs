@@ -459,6 +459,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // An `Option[T]` element: record the FULL instantiated type expr, which
+        // is the first thing `aggregate_clone_receiver_type_expr` consults. Its
+        // other route needs `var_option_payload_te`, and
+        // `register_var_from_type_expr` only fills that in for a payload it can
+        // RECONSTRUCT FOR DISPLAY — a `shared struct` payload fails that gate,
+        // so `Vec[Option[TreeNode]]`'s element had no resolvable type at all and
+        // `pool[i].clone()` died at "no handler for method 'clone'".
+        if let TypeKind::Path(path) = &elem_te.kind {
+            if path.segments.first().map(String::as_str) == Some("Option")
+                && path.generic_args.is_some()
+            {
+                self.type_decls
+                    .enum_inst_var_types
+                    .insert(synth.clone(), elem_te.clone());
+            }
+        }
 
         // Build a fresh Identifier expr at the original call site's span and
         // recursively dispatch. The recursive call will skip this arm
@@ -476,6 +492,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+        // The TUPLE registrations were missing here. A synth whose element
+        // type is a tuple stayed registered as one past its lifetime, and the
+        // scope-end walk then dropped `__indexed_elem_N` — freeing an element
+        // the outer container still owns. Measured as a DOUBLE FREE on
+        // `v[0].clone()` over a `Vec[(i64, Vec[i64])]`, i.e. only once a tuple
+        // element could reach a method at all (B-2026-08-27-23). Every other
+        // registration these arms make was already removed here; these three
+        // had simply never been added.
+        self.var_types.tuple_var_elem_type_exprs.remove(&synth);
+        self.var_types.tuple_var_elem_type_names.remove(&synth);
+        self.var_types.tuple_var_elem_tes.remove(&synth);
+        self.type_decls.enum_inst_var_types.remove(&synth);
         self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
@@ -1063,6 +1091,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+        // The TUPLE registrations were missing here. A synth whose element
+        // type is a tuple stayed registered as one past its lifetime, and the
+        // scope-end walk then dropped `__indexed_elem_N` — freeing an element
+        // the outer container still owns. Measured as a DOUBLE FREE on
+        // `v[0].clone()` over a `Vec[(i64, Vec[i64])]`, i.e. only once a tuple
+        // element could reach a method at all (B-2026-08-27-23). Every other
+        // registration these arms make was already removed here; these three
+        // had simply never been added.
+        self.var_types.tuple_var_elem_type_exprs.remove(&synth);
+        self.var_types.tuple_var_elem_type_names.remove(&synth);
+        self.var_types.tuple_var_elem_tes.remove(&synth);
+        self.type_decls.enum_inst_var_types.remove(&synth);
         self.var_types.var_type_names.remove(&synth);
         self.atomic_var_inner_is_bool.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
@@ -1178,6 +1218,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+        // The TUPLE registrations were missing here. A synth whose element
+        // type is a tuple stayed registered as one past its lifetime, and the
+        // scope-end walk then dropped `__indexed_elem_N` — freeing an element
+        // the outer container still owns. Measured as a DOUBLE FREE on
+        // `v[0].clone()` over a `Vec[(i64, Vec[i64])]`, i.e. only once a tuple
+        // element could reach a method at all (B-2026-08-27-23). Every other
+        // registration these arms make was already removed here; these three
+        // had simply never been added.
+        self.var_types.tuple_var_elem_type_exprs.remove(&synth);
+        self.var_types.tuple_var_elem_type_names.remove(&synth);
+        self.var_types.tuple_var_elem_tes.remove(&synth);
+        self.type_decls.enum_inst_var_types.remove(&synth);
         result
     }
 
@@ -1344,6 +1396,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+        // The TUPLE registrations were missing here. A synth whose element
+        // type is a tuple stayed registered as one past its lifetime, and the
+        // scope-end walk then dropped `__indexed_elem_N` — freeing an element
+        // the outer container still owns. Measured as a DOUBLE FREE on
+        // `v[0].clone()` over a `Vec[(i64, Vec[i64])]`, i.e. only once a tuple
+        // element could reach a method at all (B-2026-08-27-23). Every other
+        // registration these arms make was already removed here; these three
+        // had simply never been added.
+        self.var_types.tuple_var_elem_type_exprs.remove(&synth);
+        self.var_types.tuple_var_elem_type_names.remove(&synth);
+        self.var_types.tuple_var_elem_tes.remove(&synth);
+        self.type_decls.enum_inst_var_types.remove(&synth);
         result
     }
 
@@ -1613,6 +1677,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+        // The TUPLE registrations were missing here. A synth whose element
+        // type is a tuple stayed registered as one past its lifetime, and the
+        // scope-end walk then dropped `__indexed_elem_N` — freeing an element
+        // the outer container still owns. Measured as a DOUBLE FREE on
+        // `v[0].clone()` over a `Vec[(i64, Vec[i64])]`, i.e. only once a tuple
+        // element could reach a method at all (B-2026-08-27-23). Every other
+        // registration these arms make was already removed here; these three
+        // had simply never been added.
+        self.var_types.tuple_var_elem_type_exprs.remove(&synth);
+        self.var_types.tuple_var_elem_type_names.remove(&synth);
+        self.var_types.tuple_var_elem_tes.remove(&synth);
+        self.type_decls.enum_inst_var_types.remove(&synth);
         self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);
@@ -1747,6 +1823,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.vec_elem_types.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+        // The TUPLE registrations were missing here. A synth whose element
+        // type is a tuple stayed registered as one past its lifetime, and the
+        // scope-end walk then dropped `__indexed_elem_N` — freeing an element
+        // the outer container still owns. Measured as a DOUBLE FREE on
+        // `v[0].clone()` over a `Vec[(i64, Vec[i64])]`, i.e. only once a tuple
+        // element could reach a method at all (B-2026-08-27-23). Every other
+        // registration these arms make was already removed here; these three
+        // had simply never been added.
+        self.var_types.tuple_var_elem_type_exprs.remove(&synth);
+        self.var_types.tuple_var_elem_type_names.remove(&synth);
+        self.var_types.tuple_var_elem_tes.remove(&synth);
+        self.type_decls.enum_inst_var_types.remove(&synth);
         self.var_types.var_type_names.remove(&synth);
         self.mapset.map_key_types.remove(&synth);
         self.mapset.map_val_types.remove(&synth);

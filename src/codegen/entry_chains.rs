@@ -226,6 +226,17 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
     ) -> Option<(TypeExpr, FunctionValue<'ctx>)> {
         let te = self.aggregate_clone_receiver_type_expr(name)?;
+        // A TUPLE receiver, before the `Path` guard below turns it away.
+        // `emit_clone_fn_for_type_expr` already dispatches `TypeKind::Tuple` to
+        // `emit_tuple_clone_fn`, which clones each component with that
+        // component's own clone fn — so nothing needed inventing here, only
+        // reaching it. Without this the `Path`-only guard returned `None` and
+        // `(1, "x").clone()` died at "no handler for method 'clone'" while the
+        // interpreter ran it (B-2026-08-27-23).
+        if matches!(&te.kind, TypeKind::Tuple(elems) if !elems.is_empty()) {
+            let f = self.emit_clone_fn_for_type_expr(&te);
+            return Some((te, f));
+        }
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };
@@ -327,6 +338,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if head != "Option" || p.generic_args.is_some() {
                     return Some(te.clone());
                 }
+            }
+        }
+        // A TUPLE binding has no nominal name, so the `var_type_names` lookup
+        // below cannot see it. Rebuild its `TypeExpr` from the per-element
+        // types codegen already tracks; `emit_clone_fn_for_type_expr` takes it
+        // from there (B-2026-08-27-23).
+        if let Some(elem_tes) = self.tuple_var_elem_tes(name) {
+            if !elem_tes.is_empty() {
+                return Some(TypeExpr {
+                    kind: TypeKind::Tuple(elem_tes),
+                    span: span_zero,
+                });
             }
         }
         let type_name = self.var_types.var_type_names.get(name)?;

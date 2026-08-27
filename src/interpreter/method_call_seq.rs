@@ -2080,7 +2080,15 @@ impl<'a> super::Interpreter<'a> {
                     | Value::Map(_)
                     | Value::Set(_)
                     | Value::SortedSet(_)
-                    | Value::SortedMap(_) => return Some(deep_clone_value(&obj)),
+                    | Value::SortedMap(_)
+                    // A TUPLE joins them for the same reason: it can CONTAIN a
+                    // collection, so a one-level copy would bump the inner
+                    // `Arc` instead of copying storage. `deep_clone_value`
+                    // already had the `Value::Tuple` arm; only this dispatch
+                    // list was missing it, so `(1, "x").clone()` reported
+                    // "method 'clone' not found on type 'unknown'"
+                    // (B-2026-08-27-23).
+                    | Value::Tuple(_) => return Some(deep_clone_value(&obj)),
                     // No interior mutability to share.
                     Value::String(s) => return Some(Value::String(s.clone())),
                     _ => {}

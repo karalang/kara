@@ -672,6 +672,18 @@ impl<'a> super::TypeChecker<'a> {
             // `Rc[T]` / `Arc[T]` / a `shared struct` handle: `clone` is the
             // refcount bump (the canonical RC surface).
             Type::Rc(_) | Type::Arc(_) => Some(ty.clone()),
+            // A TUPLE clones when every component does — the same
+            // structural rule `type_supports_clone` has always applied to
+            // `Type::Tuple`, which is why a `T: Clone` bound already discharged
+            // against one. Only METHOD RESOLUTION was missing, so
+            // `fn f[T: Clone](x: T)` accepted a tuple while `t.clone()` on the
+            // same value reported `no method 'clone' on type '(i64, String)'`.
+            // The bound was decorative here in exactly the way B-2026-08-17-33
+            // describes for user types (B-2026-08-27-23).
+            Type::Tuple(elems) => elems
+                .iter()
+                .all(Self::tuple_component_clone_codegen_safe)
+                .then(|| ty.clone()),
             Type::Shared(name) => {
                 if self.user_clone_method_exists(name, &[]) {
                     return None;
@@ -750,6 +762,43 @@ impl<'a> super::TypeChecker<'a> {
     /// never let a silent-alias miscompile through.
     fn result_halves_clone_codegen_safe(args: &[Type]) -> bool {
         args.len() == 2 && args.iter().all(Self::result_half_clone_codegen_safe)
+    }
+
+    /// Which tuple COMPONENTS `emit_tuple_clone_fn` provably clones correctly.
+    ///
+    /// A strict subset, and deliberately narrower than
+    /// `result_half_clone_codegen_safe` (which admits `Vec`), because the tuple
+    /// emitter was measured against each shape rather than assumed. Reading a
+    /// tuple element out of a container and cloning it:
+    ///
+    ///   (i64, String)          ok      (String, String)  ok
+    ///   (i64, i64)             ok      (i64, Option[T])  ok for a safe T
+    ///   (i64, Vec[i64])        DOUBLE FREE, once the Vec actually owns heap
+    ///   (i64, (i64, String))   SILENT MISCOMPILE — printed `94711002536753`
+    ///                          where the interpreter printed `32`
+    ///   (i64, SomeStruct)      loud codegen error (already rejected)
+    ///
+    /// The two bad shapes only fail through an INDEX-READ receiver — the same
+    /// tuple in a local clones correctly — and the typechecker cannot see the
+    /// receiver's shape, so the component class has to exclude them outright.
+    /// Admitting them would trade a clean "no method 'clone'" for a double free
+    /// and a wrong number, which is the trade this whole line of work exists to
+    /// refuse (B-2026-08-27-23).
+    fn tuple_component_clone_codegen_safe(ty: &Type) -> bool {
+        match ty {
+            Type::Refinement { base, .. } => Self::tuple_component_clone_codegen_safe(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Unit
+            | Type::Str => true,
+            Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                Self::tuple_component_clone_codegen_safe(&args[0])
+            }
+            _ => false,
+        }
     }
 
     fn result_half_clone_codegen_safe(ty: &Type) -> bool {
@@ -873,15 +922,17 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_clone(inner),
-            Type::Shared(name) => {
-                if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Clone")
-                } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Clone")
-                } else {
-                    true
-                }
-            }
+            // A `shared` handle always clones: `clone` on one is the REFCOUNT
+            // BUMP, not a deep copy, which is exactly what
+            // `clone_receiver_self_type` already answers for the same type
+            // (unconditionally, no derive consulted). This arm used to demand
+            // `#[derive(Clone)]` and so disagreed with it: `n.clone()` on a
+            // `shared struct` compiled, while `Option[N]` holding the same
+            // handle reported `no method 'clone' on type 'Option'`, because the
+            // payload check came through here. The two answers have to match —
+            // a derive cannot be what decides whether a refcount can be
+            // incremented (B-2026-08-27-23).
+            Type::Shared(_) => true,
             Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
                 true
             }
