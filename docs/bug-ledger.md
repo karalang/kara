@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 305 | 1 |
-| leak | 200 | 0 |
-| missing-feature | 186 | 1 |
+| miscompile | 305 | 0 |
+| leak | 201 | 1 |
+| missing-feature | 186 | 0 |
 | run-vs-build | 176 | 2 |
 | codegen-gap | 143 | 1 |
 | double-free | 141 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1090 | 5 |
-| typecheck | 276 | 3 |
-| interp | 191 | 2 |
+| codegen | 1091 | 5 |
+| typecheck | 276 | 2 |
+| interp | 191 | 1 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,18 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced · 6 open · 1616 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1649 surfaced · 5 open · 1618 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
-| B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-21 | 2026-08-27 | codegen | high | A borrowed element loses its method surface under codegen: `.clone()` through a `ref` binding SEGFAULTS, and every String method on one (`starts_with`, `substring`, `clone`) falls through dispatch, while the interpreter runs all of them. | — |
 | B-2026-08-27-24 | 2026-08-27 | typecheck+interp+codegen | medium | `Slice[T] == Slice[T]` IS ACCEPTED BY `karac check`, DIES IN THE INTERPRETER WITH A DIAGNOSTIC THAT BLAMES THE TYPECHECKER, AND IS REFUSED BY CODEGEN AS "a reference type" -- the same three-way disagreement B-2026-08-27-10 fixed for `Vec`, on the sibling type, and unfixed by that work. | — |
 | B-2026-08-27-25 | 2026-08-27 | typecheck+codegen | medium | `Array[T, N] == Array[T, N]` IS ACCEPTED BY `karac check`, ANSWERS CORRECTLY UNDER THE INTERPRETER, AND FAILS TO COMPILE: codegen reports "left operand has non-comparable type ArrayType" and blames a typechecker gap that is not one. | — |
+| B-2026-08-27-29 | 2026-08-27 | codegen | high | A `.clone()` result passed DIRECTLY as a call argument is never freed — `take(a.clone())` leaks one allocation per call, while `take(mk())` and `let c = a.clone(); take(c)` are both clean. Not index-specific; a plain local leaks identically, and it reproduces on a clean checkout. | — |
 
 ### Relocated (2)
 
@@ -167,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced
 
 </details>
 
-### Fixed (1616)
+### Fixed (1618)
 
-<details><summary>1616 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1618 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1746,6 +1745,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced
 | B-2026-08-26-18 | codegen | medium | A `PriorityQueue[T]` whose element T is a STRUCT CARRYING A HEAP FIELD leaks that field's buffer -- 31 bytes in 8 allocations on the three-push fixtu… | 54c5421 |
 | B-2026-08-26-19 | typecheck | low | A `ref T`-returning method is accepted in a plain value position but REJECTED as a closure tail against `Fn() -> T`: `\|\| cell.get_or_init(\|\| 7)` fail… | fa5e169 |
 | B-2026-08-26-20 | codegen | medium | A `char` returned through a CLOSURE prints as its integer code point under both compiled backends while the interpreter prints the character: `let c:… | d3b3053 |
+| B-2026-08-26-21 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being mo… | 6a73afd |
 | B-2026-08-26-22 | typecheck+codegen | medium | The fallible-allocation table's REMAINING gaps, after B-2026-08-25-20 landed the Vec capacity family: `try_resize` / `try_append` have panicking base… | 4c3da28 |
 | B-2026-08-26-23 | codegen | medium | `Ordering`'s PREDICATE METHODS (`is_lt` / `is_le` / `is_gt` / `is_ge` / `is_eq`) fail to BUILD whenever codegen cannot name the receiver's type -- a… | 4e75708 |
 | B-2026-08-26-24 | codegen+interp | medium | A COMPARISON OPERATOR INSIDE A GENERIC BODY never dispatches to the element's user `impl Ord`: operator lowering resolves only CONCRETE operand types… | 191dc02 |
@@ -1761,6 +1761,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1648 surfaced
 | B-2026-08-26-34 | codegen | medium | `Vec.swap` HAD NO CODEGEN ARM: `karac build` hard-errored "Vec/String method 'swap' is not yet supported in codegen" on a program `karac run` execute… | 4d75c59 |
 | B-2026-08-26-35 | interp | medium | `Vec.swap` with an out-of-range index SILENTLY DID NOTHING in the interpreter: `v.swap(0, 99)` on a two-element Vec left the vector untouched and exi… | 4d75c59 |
 | B-2026-08-26-36 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let… | 0eb4e2f |
+| B-2026-08-26-37 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silentl… | 6a73afd |
 | B-2026-08-26-38 | codegen | medium | A `StringSlice` BOUND BY A MATCH PATTERN LOST EVERY METHOD BUT `to_string` under `karac build` -- `match head(s) { Some(v) => v.len() }` over an `Opt… | d5056cd |
 | B-2026-08-26-39 | codegen | medium | THE `Error return trace` SECTION IS NONDETERMINISTIC ON THE COMPILED BACKENDS: the same AOT binary, same input, same pinned `KARAC_HASH_SEED`, emits… | 7c10fdf |
 | B-2026-08-26-40 | typecheck | low | A WRONG-ARITY CALL TO AN ASSOCIATED FUNCTION IS REPORTED AS IF THE FUNCTION DID NOT EXIST: `String.with_capacity()` and `String.with_capacity(1i64, 2… | 9d530ad |
