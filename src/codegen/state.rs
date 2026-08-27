@@ -446,6 +446,58 @@ pub(crate) struct MapElemDrop<'ctx> {
 /// Tagged kind for per-scope destructor actions emitted at scope exit.
 /// The `scope_cleanup_actions` stack holds one `Vec` per scope frame;
 /// each frame accumulates these in push order and drains in reverse.
+/// What KIND of drop function a [`CleanupAction::UserDrop`] carries
+/// (B-2026-08-27-8).
+///
+/// This is a property of the REGISTRATION — the registrar built the function
+/// and knows for certain what it walks — so it is recorded here rather than
+/// re-derived downstream. It replaces a pair of predicates that tested the
+/// emitted LLVM symbol's NAME (`__karac_dropelems_` / `__karac_dropkeys_` /
+/// `__karac_dropbodies_`) to answer the same question.
+///
+/// Why the name test had to go. NLL drop PLACEMENT was dispatched on it:
+/// `fire_due_user_drops` admits a bodies-only walk to its binding's live-range
+/// end (design.md § Drop — "destructors fire at each binding's live-range end,
+/// not lexical scope end"), and a bodies walker whose emitter chose any other
+/// spelling was silently demoted to scope exit. That is a run-vs-build
+/// divergence with no error, no warning and no failing test — the drop still
+/// fires exactly once, and every walker test asserts COUNTS rather than
+/// sequence, deliberately, because container order is unspecified
+/// (B-2026-08-27-7). Measured on the map key-half walk: renaming
+/// `__karac_dropkeys_map_*` to `__karac_dropkbodies_map_*` — six characters, no
+/// behavioural edit — moved `dropK` from before the marker to after it under
+/// `karac build` while the interpreter stayed put. That is the shape that cost
+/// a session on B-2026-08-26-41, where the demoted walk was read as evidence of
+/// a deep ownership problem and a two-part patch was parked unlanded behind a
+/// blocker that did not exist.
+///
+/// Widening the prefix list (34c3f54's fix) is the same mistake with a longer
+/// list: `src/codegen` spells eighteen distinct `__karac_drop*` symbol families
+/// and the admitted set was two of them. The kind is a REQUIRED argument of every
+/// registrar rather than a defaulted one, because the failure mode of
+/// forgetting it is the demotion this exists to prevent — and a required
+/// argument is exactly what a name-prefix test cannot be.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum UserDropKind {
+    /// The binding's OWN `impl Drop` wrapper (`karac_drop_<T>` / `<T>.drop`),
+    /// or drop glue that frees memory as well as running bodies. Firing it
+    /// early would free early, so it stays at scope exit unless
+    /// `fire_due_user_drops`'s type-keyed clauses admit it.
+    OwnWrapper,
+    /// A CONTAINER ELEMENT-bodies walk: `Vec` / `Map` / `Set` / tuple /
+    /// enum-payload / `Option` / `Result` element bodies — historically
+    /// `__karac_dropelems_*` and `__karac_dropkeys_*`. Bodies only: it frees
+    /// nothing, which is what makes firing it early safe and therefore what
+    /// admits it to NLL placement. Retracted as a family by
+    /// `suppress_container_elem_bodies_for_var`.
+    ContainerElemBodies,
+    /// A STRUCT FIELD-bodies walk — historically `__karac_dropbodies_*`. Also
+    /// bodies-only, but a separate retraction family: a moved-out field is
+    /// masked by `suppress_struct_field_bodies_for_var`, and this kind counts
+    /// as "own" for `has_armed_own_user_drop`.
+    StructFieldBodies,
+}
+
 pub(crate) enum CleanupAction<'ctx> {
     /// Unconditionally free an RC-elided `shared struct` binding
     /// (ownership phase-A elision — `src/ownership/elision.rs`; design
@@ -1108,6 +1160,10 @@ pub(crate) enum CleanupAction<'ctx> {
         /// registered with a complementary `EnumDrop` payload walk) and
         /// par-branch registrations (empty name) stay at scope exit.
         type_name: String,
+        /// What this action's `drop_fn` actually is (B-2026-08-27-8). Set by
+        /// the registrar, which built the function and therefore knows; never
+        /// inferred from the symbol's name. See [`UserDropKind`].
+        kind: UserDropKind,
     },
     /// User-source `errdefer { ... }` block to compile on error-exit
     /// paths only. Pushed in program order at the `errdefer` statement's
@@ -1358,8 +1414,13 @@ pub(crate) enum SlotOwnership<'ctx> {
     Enum { drop_fn: FunctionValue<'ctx> },
     /// `StructDrop` — the cached `__karac_drop_struct_<Name>` fn.
     Struct { drop_fn: FunctionValue<'ctx> },
-    /// `UserDrop` — the cached `karac_drop_<Type>` wrapper.
-    User { drop_fn: FunctionValue<'ctx> },
+    /// `UserDrop` — the cached `karac_drop_<Type>` wrapper, an element-bodies
+    /// walk, or a field-bodies walk; `kind` says which, carried over from the
+    /// sampled action so re-registration cannot retime it (B-2026-08-27-8).
+    User {
+        drop_fn: FunctionValue<'ctx>,
+        kind: UserDropKind,
+    },
     /// `FreeSoaGroups` — per-group buffer frees for SoA-laid-out Vecs.
     Soa {
         soa_struct_ty: StructType<'ctx>,

@@ -580,15 +580,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 struct_alloca: parent_alloca,
                 drop_fn,
             },
-            SlotOwnership::User { drop_fn } => CleanupAction::UserDrop {
+            SlotOwnership::User { drop_fn, kind } => CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),
                 binding_ptr: parent_alloca,
                 drop_fn,
                 // Par-branch write-back registration: no Kāra type name in
                 // scope here. The empty name keeps this entry out of the NLL
-                // early-fire gate (`fire_due_user_drops` requires a known
-                // non-shared struct name) — it drains at scope exit as before.
+                // early-fire gate's TYPE-keyed clauses (`fire_due_user_drops`
+                // requires a known non-shared struct or enum name).
                 type_name: String::new(),
+                // Carried over from the action this slot was sampled from
+                // rather than assumed: a container element-bodies walk is
+                // admitted to NLL placement on its own, without a type name,
+                // so re-registering one as `OwnWrapper` here would retime it
+                // (B-2026-08-27-8).
+                kind,
             },
             SlotOwnership::Soa {
                 soa_struct_ty,
@@ -2523,10 +2529,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             CleanupAction::UserDrop {
                                 binding_name,
                                 drop_fn,
+                                kind,
                                 ..
-                            } if *binding_name == slot.binding_name => {
-                                Some(SlotOwnership::User { drop_fn: *drop_fn })
-                            }
+                            } if *binding_name == slot.binding_name => Some(SlotOwnership::User {
+                                drop_fn: *drop_fn,
+                                kind: *kind,
+                            }),
                             CleanupAction::FreeSoaGroups {
                                 soa_alloca,
                                 soa_struct_ty,

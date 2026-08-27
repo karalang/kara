@@ -17,7 +17,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
-use super::state::{CleanupAction, VarSlot};
+use super::state::{CleanupAction, UserDropKind, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Allocate a new RC heap object: `malloc(sizeof(heap_type))`, store refcount = 1.
@@ -7488,7 +7488,15 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(f) => *f,
             None => return,
         };
-        self.track_user_drop_var_with_fn(type_name, binding_name, binding_ptr, drop_fn);
+        // Sourced from `user_drop_wrapper_fns`, so it is by construction the
+        // binding's own `karac_drop_<Type>` wrapper.
+        self.track_user_drop_var_with_fn(
+            type_name,
+            binding_name,
+            binding_ptr,
+            drop_fn,
+            UserDropKind::OwnWrapper,
+        );
     }
 
     /// [`Self::track_user_drop_var`] with the drop fn supplied by the caller
@@ -7503,12 +7511,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `UserDrop` entries are fired at their binding's NLL live-range end — the
     /// placement the interpreter uses, and therefore the one run/build parity
     /// requires once the drop became observable.
+    ///
+    /// `kind` says what `drop_fn` IS — an own wrapper, a container
+    /// element-bodies walk, or a struct field-bodies walk. It is a required
+    /// argument, not a default: it decides NLL drop placement and retraction
+    /// family, and until B-2026-08-27-8 it was inferred downstream from the
+    /// emitted symbol's name, so a walker spelled outside the admitted prefixes
+    /// was silently demoted to scope exit. See [`UserDropKind`].
     pub(super) fn track_user_drop_var_with_fn(
         &mut self,
         type_name: &str,
         binding_name: &str,
         binding_ptr: PointerValue<'ctx>,
         drop_fn: FunctionValue<'ctx>,
+        kind: UserDropKind,
     ) {
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
@@ -7516,6 +7532,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 binding_ptr,
                 drop_fn,
                 type_name: type_name.to_string(),
+                kind,
             });
         }
     }
@@ -7540,11 +7557,14 @@ impl<'ctx> super::Codegen<'ctx> {
             binding_ptr,
             drop_fn,
             type_name: type_name.to_string(),
+            // The method's whole purpose is re-arming a container element
+            // walk, so the kind is not a caller's choice.
+            kind: UserDropKind::ContainerElemBodies,
         };
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             let own_idx = frame.iter().position(|a| {
-                matches!(a, CleanupAction::UserDrop { binding_name: bn, drop_fn: f, .. }
-                    if bn == binding_name && !Self::is_container_elem_bodies_fn(*f))
+                matches!(a, CleanupAction::UserDrop { binding_name: bn, kind: k, .. }
+                    if bn == binding_name && *k != UserDropKind::ContainerElemBodies)
             });
             if let Some(idx) = own_idx {
                 frame.insert(idx, action);
@@ -7554,55 +7574,6 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(action);
         }
-    }
-
-    /// NLL live-range-end firing for user-`impl Drop` bindings
-    /// (B-2026-07-21-1). design.md § Drop ordering: "Destructors fire at
-    /// each binding's live-range end, not lexical scope end … a value whose
-    /// last use is mid-scope is dropped at that use and does not appear in
-    /// the end-of-scope stack at all." Codegen previously ran EVERY user
-    /// drop body at scope exit — observationally divergent from the
-    /// interpreter (which implements NLL placement) whenever the drop body
-    /// has side effects. Called by `compile_block` after each statement
-    /// with the block's precomputed last-use map (the same
-    /// `compute_block_last_use` analysis the interpreter uses, so both
-    /// backends agree statement-for-statement); fires every due entry in
-    /// LIFO order (reverse introduction — the §867 single-stack rule) and
-    /// removes it from the frame so the scope-exit drain never re-fires it.
-    ///
-    /// Gated to non-shared STRUCT user-drops: their let-path registration
-    /// is mutually exclusive with every other cleanup action (the wrapper
-    /// runs field cleanup internally), so early-firing + removal is
-    /// complete. Enum user-drops (dual-registered with a complementary
-    /// `EnumDrop` payload walk) and par-branch registrations (empty
-    /// `type_name`) stay at scope exit — a conservative residual, never a
-    /// double-fire. Memory-only drops (no user body) also stay at scope
-    /// exit: with no observable side effects, scope-exit free is
-    /// equivalent to NLL free.
-    /// B-2026-07-30-11 — is this `UserDrop` action a CONTAINER element-bodies
-    /// walk (`__karac_dropelems_<T>`)?
-    ///
-    /// The NLL filter below is keyed on `type_name` naming a struct, which a
-    /// container binding never does — so a `Vec[T]` binding's bodies action
-    /// would sit in the frame and drain at scope exit, printing at a different
-    /// time than the interpreter. Keyed on the SYMBOL PREFIX rather than by
-    /// widening the `type_name` test, for the same reason SHAPE 1's note gives:
-    /// enum- and struct-typed `UserDrop` entries already exist on this channel
-    /// carrying `karac_drop_<T>` wrappers that intentionally drain at scope
-    /// exit, and a type-based widening would retime those.
-    fn is_container_elem_bodies_fn(f: FunctionValue<'ctx>) -> bool {
-        f.get_name().to_str().is_ok_and(|n| {
-            n.starts_with("__karac_dropelems_")
-                // The Map KEY-half walk (B-2026-08-26-41). It is the same kind
-                // of function as `dropelems` — bodies only, frees nothing — and
-                // belongs on the NLL channel for the same reason, but it needs
-                // its own symbol prefix because a map whose key AND value both
-                // drop has both walks live at once. Matching only `dropelems`
-                // left the key walk on the scope-exit funnel while the value
-                // walk fired at the binding's last use, which is a run-vs-build
-                // divergence: the interpreter fires both at the NLL point.
-                || n.starts_with("__karac_dropkeys_")
-        })
     }
 
     /// Statement-end firing for FRESH TEMPORARIES' `UserDrop` actions
@@ -7668,8 +7639,36 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Fire the drops due at `stmt_idx` — see the NLL-placement notes above
-    /// `is_container_elem_bodies_fn` for the value tier's rules.
+    /// NLL live-range-end firing for user-`impl Drop` bindings
+    /// (B-2026-07-21-1). design.md § Drop ordering: "Destructors fire at
+    /// each binding's live-range end, not lexical scope end … a value whose
+    /// last use is mid-scope is dropped at that use and does not appear in
+    /// the end-of-scope stack at all." Codegen previously ran EVERY user
+    /// drop body at scope exit — observationally divergent from the
+    /// interpreter (which implements NLL placement) whenever the drop body
+    /// has side effects. Called by `compile_block` after each statement
+    /// with the block's precomputed last-use map (the same
+    /// `compute_block_last_use` analysis the interpreter uses, so both
+    /// backends agree statement-for-statement); fires every due entry in
+    /// LIFO order (reverse introduction — the §867 single-stack rule) and
+    /// removes it from the frame so the scope-exit drain never re-fires it.
+    ///
+    /// Gated to non-shared STRUCT user-drops: their let-path registration
+    /// is mutually exclusive with every other cleanup action (the wrapper
+    /// runs field cleanup internally), so early-firing + removal is
+    /// complete. Enum user-drops (dual-registered with a complementary
+    /// `EnumDrop` payload walk) and par-branch registrations (empty
+    /// `type_name`) stay at scope exit — a conservative residual, never a
+    /// double-fire. Memory-only drops (no user body) also stay at scope
+    /// exit: with no observable side effects, scope-exit free is
+    /// equivalent to NLL free.
+    ///
+    /// A CONTAINER element-bodies walk is admitted too, and cannot be reached
+    /// by the `type_name` clauses above: a container binding never names a
+    /// struct or enum. It qualifies because it frees nothing, so firing it
+    /// early frees nothing early — see [`UserDropKind::ContainerElemBodies`],
+    /// which the action now carries (B-2026-08-27-8); this used to be a test on
+    /// the emitted symbol's name.
     ///
     /// B-2026-08-09-3 — the RC tier rides this same channel, via `RcDec`
     /// rather than `UserDrop`. A `shared struct` / `shared enum` binding
@@ -7761,8 +7760,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         binding_ptr,
                         drop_fn,
                         type_name,
+                        kind,
                     } if last_use.get(binding_name.as_str()).copied() == Some(stmt_idx)
-                        && (Self::is_container_elem_bodies_fn(*drop_fn)
+                        // B-2026-07-30-11 / B-2026-08-27-8 — see the container
+                        // paragraph in this method's doc.
+                        && (*kind == UserDropKind::ContainerElemBodies
                             || (self.type_decls.struct_types.contains_key(type_name.as_str())
                                 && !self.type_decls.shared_types.contains_key(type_name.as_str()))
                             // B-2026-07-31-5 — a value ENUM's own `impl Drop`
@@ -7996,8 +7998,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         binding_name,
                         binding_ptr,
                         drop_fn,
+                        kind,
                         ..
-                    } if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn) => {
+                    } if binding_name == name && *kind == UserDropKind::ContainerElemBodies => {
                         Some((*binding_ptr, *drop_fn))
                     }
                     _ => None,
@@ -8008,8 +8011,8 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn has_armed_container_elem_bodies(&self, name: &str) -> bool {
         self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
-                matches!(action, CleanupAction::UserDrop { binding_name, drop_fn, .. }
-                    if binding_name == name && Self::is_container_elem_bodies_fn(*drop_fn))
+                matches!(action, CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == name && *kind == UserDropKind::ContainerElemBodies)
             })
         })
     }
@@ -8020,24 +8023,10 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn has_armed_own_user_drop(&self, name: &str) -> bool {
         self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
-                matches!(action, CleanupAction::UserDrop { binding_name, drop_fn, .. }
-                    if binding_name == name && !Self::is_container_elem_bodies_fn(*drop_fn))
+                matches!(action, CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == name && *kind != UserDropKind::ContainerElemBodies)
             })
         })
-    }
-
-    /// B-2026-08-03-8 — the STRUCT-FIELD-bodies analogue of
-    /// [`Self::is_container_elem_bodies_fn`]. A struct binding's field-bodies
-    /// action is registered under `__karac_dropbodies_<S>`, NOT the
-    /// `__karac_dropelems_` prefix the container matcher tests for, so the
-    /// container retraction below matches nothing for it — the reason the first
-    /// attempt at masking a moved-out field silently added an action instead of
-    /// replacing one. Deliberately does NOT match the struct's OWN body wrapper
-    /// (`karac_drop_<S>` / `<S>.drop`), which a field move-out must leave armed.
-    fn is_struct_field_bodies_fn(f: FunctionValue<'ctx>) -> bool {
-        f.get_name()
-            .to_str()
-            .is_ok_and(|n| n.starts_with("__karac_dropbodies_"))
     }
 
     /// B-2026-08-05-3 — downgrade `name`'s `BoxedEnumDrop` to a BOX-ONLY free
@@ -8074,11 +8063,13 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
+                // B-2026-08-03-8 — a struct binding's field-bodies walk is its
+                // own retraction family, distinct from the container walk
+                // below and from the struct's OWN body wrapper, which a field
+                // move-out must leave armed.
                 CleanupAction::UserDrop {
-                    binding_name,
-                    drop_fn,
-                    ..
-                } => binding_name != name || !Self::is_struct_field_bodies_fn(*drop_fn),
+                    binding_name, kind, ..
+                } => binding_name != name || *kind != UserDropKind::StructFieldBodies,
                 _ => true,
             });
         }
@@ -8088,10 +8079,8 @@ impl<'ctx> super::Codegen<'ctx> {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop {
-                    binding_name,
-                    drop_fn,
-                    ..
-                } => binding_name != name || !Self::is_container_elem_bodies_fn(*drop_fn),
+                    binding_name, kind, ..
+                } => binding_name != name || *kind != UserDropKind::ContainerElemBodies,
                 _ => true,
             });
         }
@@ -8199,7 +8188,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset
                 .map_val_bodies_tes
                 .insert(var_name.to_string(), te.clone());
-            self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
+            self.track_user_drop_var_with_fn(
+                "",
+                var_name,
+                slot.ptr,
+                bodies,
+                UserDropKind::ContainerElemBodies,
+            );
         }
         // B-2026-08-26-41 — the KEY half needs the same walk. Registered from
         // the same resolved `te` and under the same side-table entry, because
@@ -8217,7 +8212,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset
                 .map_val_bodies_tes
                 .insert(var_name.to_string(), te.clone());
-            self.track_user_drop_var_with_fn("", var_name, slot.ptr, key_bodies);
+            self.track_user_drop_var_with_fn(
+                "",
+                var_name,
+                slot.ptr,
+                key_bodies,
+                UserDropKind::ContainerElemBodies,
+            );
         }
     }
 

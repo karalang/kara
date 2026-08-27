@@ -22,7 +22,7 @@ use inkwell::{AddressSpace, IntPredicate};
 
 use super::declarations::KARAC_PARK_ON_FD;
 use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call, match_with_span_call};
-use super::state::LayoutId;
+use super::state::{LayoutId, UserDropKind};
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Call ──────────────────────────────────────────────────────
@@ -3189,7 +3189,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // both backends and no memory free moves. `None` means no
             // variant carries a Drop-bearing payload: nothing to run.
             match self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name) {
-                Some(f) => Some(f),
+                Some(f) => Some((f, UserDropKind::ContainerElemBodies)),
                 None => return,
             }
         } else {
@@ -3197,7 +3197,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 return;
             }
             match self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
-                Some(f) => Some(f),
+                Some(f) => Some((f, UserDropKind::StructFieldBodies)),
                 None => return,
             }
         };
@@ -3236,8 +3236,14 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             self.track_struct_var(&ret_ty_name, slot);
         }
+        // The kind travels WITH the function from the branch that built it:
+        // this site registers an enum-payload container walk on one leg and a
+        // struct field-bodies walk on the other, so there is no single answer
+        // to hard-code here (B-2026-08-27-8).
         match bodies_fn {
-            Some(f) => self.track_user_drop_var_with_fn(&ret_ty_name, "__owned_agg_tmp", slot, f),
+            Some((f, kind)) => {
+                self.track_user_drop_var_with_fn(&ret_ty_name, "__owned_agg_tmp", slot, f, kind)
+            }
             None => self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot),
         }
     }
@@ -3545,6 +3551,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     "__owned_agg_tmp",
                                     slot,
                                     bodies_fn,
+                                    UserDropKind::StructFieldBodies,
                                 );
                             }
                             return;
@@ -3631,7 +3638,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_enum_var(&enum_name, slot);
                 }
                 if let Some(w) = walker {
-                    self.track_user_drop_var_with_fn("", "__owned_agg_tmp", slot, w);
+                    self.track_user_drop_var_with_fn(
+                        "",
+                        "__owned_agg_tmp",
+                        slot,
+                        w,
+                        UserDropKind::ContainerElemBodies,
+                    );
                 }
                 if user_drop {
                     self.track_user_drop_var(&enum_name, "__owned_agg_tmp", slot);
@@ -3928,7 +3941,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     if let Some(bodies_fn) = field_bodies_fn {
-                        self.track_user_drop_var_with_fn(&name, "__owned_agg_tmp", slot, bodies_fn);
+                        self.track_user_drop_var_with_fn(
+                            &name,
+                            "__owned_agg_tmp",
+                            slot,
+                            bodies_fn,
+                            UserDropKind::StructFieldBodies,
+                        );
                     }
                 }
             }
@@ -6555,7 +6574,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         if has_own_drop {
                             self.track_user_drop_var(&tn, "__refarg_tmp", slot);
                         } else if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&tn) {
-                            self.track_user_drop_var_with_fn(&tn, "__refarg_tmp", slot, w);
+                            self.track_user_drop_var_with_fn(
+                                &tn,
+                                "__refarg_tmp",
+                                slot,
+                                w,
+                                UserDropKind::ContainerElemBodies,
+                            );
                         }
                         if self.enum_has_heap_payload(&tn) {
                             self.track_enum_var(&tn, slot);
@@ -6565,7 +6590,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_user_drop_var(&tn, "__refarg_tmp", slot);
                         } else if self.type_runs_user_drop(&tn, &mut Vec::new()) {
                             if let Some(f) = self.field_bodies_fn_for_owned_temp(&tn) {
-                                self.track_user_drop_var_with_fn(&tn, "__refarg_tmp", slot, f);
+                                self.track_user_drop_var_with_fn(
+                                    &tn,
+                                    "__refarg_tmp",
+                                    slot,
+                                    f,
+                                    UserDropKind::StructFieldBodies,
+                                );
                             }
                             self.track_struct_var(&tn, slot);
                         } else {

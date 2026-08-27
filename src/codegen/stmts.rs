@@ -22,7 +22,7 @@ use super::helpers::{
     array_inner_type_expr, map_kv_type_exprs, set_inner_type_expr, slice_inner_type_expr,
     vec_inner_type_expr,
 };
-use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
+use super::state::{B2Role, ReturnSlot, SharedTypeInfo, UserDropKind, VarSlot};
 
 /// B-2026-08-08-3 — the `Type.method` keys (as the typechecker spells them in
 /// `method_callee_types`) whose result is unconditionally `i64`. Used to size a
@@ -6899,7 +6899,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                         )
                                     {
                                         self.track_user_drop_var_with_fn(
-                                            &en, var_name, slot_ptr, bodies,
+                                            &en,
+                                            var_name,
+                                            slot_ptr,
+                                            bodies,
+                                            UserDropKind::ContainerElemBodies,
                                         );
                                     }
                                 } else if let Some(te) = elem_te.as_ref() {
@@ -6919,7 +6923,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                             _ => "Vec".to_string(),
                                         };
                                         self.track_user_drop_var_with_fn(
-                                            &label, var_name, slot_ptr, bodies,
+                                            &label,
+                                            var_name,
+                                            slot_ptr,
+                                            bodies,
+                                            UserDropKind::ContainerElemBodies,
                                         );
                                     }
                                 }
@@ -6996,7 +7004,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             //    before the fields it reads are freed.
                             if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&name)
                             {
-                                self.track_user_drop_var_with_fn("", var_name, alloca, bodies);
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    var_name,
+                                    alloca,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
+                                );
                             }
                             // B-2026-07-05-2: a for-loop heap-ENUM element moved
                             // WHOLE into a new owner (`for a in items { let x = a
@@ -7280,7 +7294,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                         self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes)
                                     {
                                         self.track_user_drop_var_with_fn(
-                                            "", var_name, slot.ptr, bodies,
+                                            "",
+                                            var_name,
+                                            slot.ptr,
+                                            bodies,
+                                            UserDropKind::ContainerElemBodies,
                                         );
                                     }
                                 }
@@ -7673,7 +7691,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .optres_var_payload_tes
                                         .insert(var_name.clone(), te.clone());
                                     self.track_user_drop_var_with_fn(
-                                        "", var_name, slot.ptr, bodies,
+                                        "",
+                                        var_name,
+                                        slot.ptr,
+                                        bodies,
+                                        UserDropKind::ContainerElemBodies,
                                     );
                                 }
                             }
@@ -8160,6 +8182,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         var_name,
                                         alloca,
                                         bodies_fn,
+                                        UserDropKind::StructFieldBodies,
                                     );
                                 }
                                 self.track_struct_var_inst(&struct_name, alloca, inst);
@@ -13928,7 +13951,13 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let slot = self.create_entry_alloca(cur_fn, "__disc_optres_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        self.track_user_drop_var_with_fn("", "__disc_optres_tmp", slot, bodies);
+        self.track_user_drop_var_with_fn(
+            "",
+            "__disc_optres_tmp",
+            slot,
+            bodies,
+            UserDropKind::ContainerElemBodies,
+        );
     }
 
     /// B-2026-07-30-11 (discarded-temp leg) — the wildcard-let literal tail:
@@ -14034,7 +14063,21 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let slot = self.create_entry_alloca(cur_fn, "__disc_tup_tmp", val.get_type());
         self.builder.build_store(slot, val).unwrap();
-        self.track_user_drop_var_with_fn("", "__disc_tup_tmp", slot, bodies);
+        // `emit_discarded_tuple_elem_bodies_fn` spells its symbol
+        // `__karac_dropbodies_tuple_te_*`, i.e. in the STRUCT-field family
+        // rather than the `__karac_dropelems_` one its tuple-element siblings
+        // use — so before B-2026-08-27-8 the name test classified it here, and
+        // this argument preserves that exactly. It is inert either way: the
+        // action registers under a statement-temporary name that
+        // `drain_statement_temp_user_drops` retires at statement end, so it
+        // never reaches an NLL last-use map nor either retraction helper.
+        self.track_user_drop_var_with_fn(
+            "",
+            "__disc_tup_tmp",
+            slot,
+            bodies,
+            UserDropKind::StructFieldBodies,
+        );
     }
 
     /// Element-`TypeExpr` derivation for the discarded-tuple bodies walk:

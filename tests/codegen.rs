@@ -105689,6 +105689,103 @@ fn main() {
         );
     }
 
+    /// EVERY container element-bodies walker fires at its binding's NLL
+    /// live-range end, not at scope exit (B-2026-08-27-8).
+    ///
+    /// design.md § Drop: "destructors fire at each binding's live-range end,
+    /// not lexical scope end … a value whose last use is mid-scope is dropped
+    /// at that use and does not appear in the end-of-scope stack at all." The
+    /// interpreter implements that; codegen admits a walker to the same
+    /// placement through `CleanupAction::UserDrop`'s `kind`.
+    ///
+    /// WHY THIS TEST HAS TO ASSERT SEQUENCE, when every other walker test in
+    /// this file deliberately asserts COUNTS. Counting is the right convention
+    /// for container walks because iteration order is unspecified
+    /// (B-2026-08-27-7) — but it is exactly what let this class hide: a walker
+    /// demoted to scope exit still fires each body exactly once, so a
+    /// count-asserting test stays green while `karac build` prints in a
+    /// different order than `karac run`. The `|marker` after each binding's
+    /// last use is what separates the two placements; nothing else in the tree
+    /// does.
+    ///
+    /// Order-safety is bought by having ONE entry per container rather than by
+    /// sorting: with a single element there is one permutation, so the
+    /// unspecified-order rule is not in play and the sequence assertion is
+    /// still legitimate. The `K`/`V` split covers the map's two halves, which
+    /// are separate walkers registered under one binding.
+    ///
+    /// Placement per case, all measured: `v`/`t`/`o`/`m`/`s` are last used by
+    /// the `[..]` line, so their bodies land between it and the marker; `e` is
+    /// never used after its `let`, so its body lands BEFORE `[enum]` — still
+    /// the live-range end, and still distinguishable from scope exit, which
+    /// would put it after `|enum`.
+    #[test]
+    fn test_e2e_container_bodies_walks_fire_at_the_nll_point() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq)]
+struct K { id: i64 }
+struct V { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"K{self.id}"); } }
+impl Drop for V { fn drop(mut ref self) { println(f"V{self.id}"); } }
+enum Payload { Wrap(V), Empty }
+
+fn vec_case() {
+    let mut v: Vec[V] = Vec.new();
+    v.push(V { id: 1 });
+    println(f"[vec {v.len()}]");
+    println("|vec");
+}
+fn tuple_case() {
+    let t: (V, i64) = (V { id: 2 }, 7);
+    println(f"[tup {t.1}]");
+    println("|tup");
+}
+fn enum_case() {
+    let e: Payload = Payload.Wrap(V { id: 3 });
+    println("[enum]");
+    println("|enum");
+}
+fn opt_case() {
+    let o: Option[V] = Some(V { id: 4 });
+    println(f"[opt {o.is_some()}]");
+    println("|opt");
+}
+fn map_case() {
+    let mut m: Map[K, V] = Map.new();
+    m.insert(K { id: 5 }, V { id: 5 });
+    println(f"[map {m.len()}]");
+    println("|map");
+}
+fn set_case() {
+    let mut s: Set[K] = Set.new();
+    s.insert(K { id: 6 });
+    println(f"[set {s.len()}]");
+    println("|set");
+}
+fn main() {
+    vec_case();
+    tuple_case();
+    enum_case();
+    opt_case();
+    map_case();
+    set_case();
+}
+"#,
+            ),
+            Some(
+                "[vec 1]\nV1\n|vec\n\
+                 [tup 7]\nV2\n|tup\n\
+                 V3\n[enum]\n|enum\n\
+                 [opt true]\nV4\n|opt\n\
+                 [map 1]\nK5\nV5\n|map\n\
+                 [set 1]\nK6\n|set\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// `Slice[T] == Slice[T]` compares CONTENTS over the viewed range
     /// (B-2026-08-27-24).
     ///

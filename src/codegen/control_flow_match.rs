@@ -20,6 +20,7 @@
 use crate::ast::*;
 use crate::codegen::helpers::vec_inner_type_expr;
 
+use super::state::UserDropKind;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -7606,7 +7607,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bodies) =
             self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip)
         {
-            self.track_user_drop_var_with_fn(&struct_name, var_name, slot.ptr, bodies);
+            self.track_user_drop_var_with_fn(
+                &struct_name,
+                var_name,
+                slot.ptr,
+                bodies,
+                UserDropKind::StructFieldBodies,
+            );
         }
     }
 
@@ -7638,7 +7645,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(bodies) =
             self.emit_tuple_elem_user_drop_bodies_fn_skipping(tuple_ty, &elem_tes, &skip)
         {
-            self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
+            self.track_user_drop_var_with_fn(
+                "",
+                var_name,
+                slot.ptr,
+                bodies,
+                UserDropKind::ContainerElemBodies,
+            );
         }
     }
 

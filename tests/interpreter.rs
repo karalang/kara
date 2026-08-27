@@ -40735,3 +40735,80 @@ fn main() {
 "#);
     assert_eq!(out, "3 A CCC\nok 3\n");
 }
+
+#[test]
+fn container_bodies_walks_fire_at_the_nll_point() {
+    // The INTERPRETER half of the oracle for B-2026-08-27-8's codegen twin
+    // (`test_e2e_container_bodies_walks_fire_at_the_nll_point`). design.md
+    // § Drop: "destructors fire at each binding's live-range end, not lexical
+    // scope end … a value whose last use is mid-scope is dropped at that use
+    // and does not appear in the end-of-scope stack at all."
+    //
+    // The pairing is the point. Codegen decides a container walker's placement
+    // per registration, and until B-2026-08-27-8 it decided it by testing the
+    // emitted LLVM symbol's NAME — so a walker spelled outside the admitted
+    // prefixes was demoted to scope exit, silently. Nothing failed: the body
+    // still ran exactly once, and every other walker test here asserts COUNTS
+    // rather than sequence, deliberately, because container iteration order is
+    // unspecified (B-2026-08-27-7). Only a marker printed between the
+    // binding's last use and scope end separates the two placements, and only
+    // an interpreter twin makes the compiled result checkable against
+    // something.
+    //
+    // Order-safety comes from ONE entry per container: a single element has a
+    // single permutation, so pinning the sequence here does not pin an
+    // unspecified order. `e` is never used after its `let`, so its body lands
+    // before `[enum]` — its live-range end, and still distinct from scope
+    // exit, which would put it after `|enum`.
+    let src = "#[derive(Hash, Eq)]
+        struct K { id: i64 }
+        struct V { id: i64 }
+        impl Drop for K { fn drop(mut ref self) { println(f\"K{self.id}\"); } }
+        impl Drop for V { fn drop(mut ref self) { println(f\"V{self.id}\"); } }
+        enum Payload { Wrap(V), Empty }
+        fn vec_case() {
+            let mut v: Vec[V] = Vec.new();
+            v.push(V { id: 1 });
+            println(f\"[vec {v.len()}]\");
+            println(\"|vec\");
+        }
+        fn tuple_case() {
+            let t: (V, i64) = (V { id: 2 }, 7);
+            println(f\"[tup {t.1}]\");
+            println(\"|tup\");
+        }
+        fn enum_case() {
+            let e: Payload = Payload.Wrap(V { id: 3 });
+            println(\"[enum]\");
+            println(\"|enum\");
+        }
+        fn opt_case() {
+            let o: Option[V] = Some(V { id: 4 });
+            println(f\"[opt {o.is_some()}]\");
+            println(\"|opt\");
+        }
+        fn map_case() {
+            let mut m: Map[K, V] = Map.new();
+            m.insert(K { id: 5 }, V { id: 5 });
+            println(f\"[map {m.len()}]\");
+            println(\"|map\");
+        }
+        fn set_case() {
+            let mut s: Set[K] = Set.new();
+            s.insert(K { id: 6 });
+            println(f\"[set {s.len()}]\");
+            println(\"|set\");
+        }
+        fn main() {
+            vec_case(); tuple_case(); enum_case(); opt_case(); map_case(); set_case();
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "[vec 1]\nV1\n|vec\n\
+         [tup 7]\nV2\n|tup\n\
+         V3\n[enum]\n|enum\n\
+         [opt true]\nV4\n|opt\n\
+         [map 1]\nK5\nV5\n|map\n\
+         [set 1]\nK6\n|set\n"
+    );
+}

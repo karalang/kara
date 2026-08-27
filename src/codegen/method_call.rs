@@ -12,6 +12,7 @@
 
 use crate::ast::*;
 
+use super::state::UserDropKind;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum};
 use inkwell::AddressSpace;
@@ -9811,7 +9812,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_user_drop_var(&type_name, "__urecv_drop_tmp", slot);
                 } else if bodies_eligible && self.type_runs_user_drop(&type_name, &mut Vec::new()) {
                     if let Some(f) = self.field_bodies_fn_for_owned_temp(&type_name) {
-                        self.track_user_drop_var_with_fn(&type_name, "__urecv_drop_tmp", slot, f);
+                        self.track_user_drop_var_with_fn(
+                            &type_name,
+                            "__urecv_drop_tmp",
+                            slot,
+                            f,
+                            UserDropKind::StructFieldBodies,
+                        );
                     }
                     self.track_struct_var_inst(&type_name, slot, recv_inst.clone());
                 } else {

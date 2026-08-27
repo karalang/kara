@@ -17,7 +17,7 @@ use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
-use super::state::VarSlot;
+use super::state::{UserDropKind, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// B-2026-07-13-3: populate `mono_payload_binding_type_exprs` for a
@@ -1187,6 +1187,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                         &name_owned,
                                         src_ptr,
                                         src_fn,
+                                        // Both producers of `rehome_src` build
+                                        // a container walk:
+                                        // `scrutinee_armed_payload_bodies_action`
+                                        // samples one off the frame via
+                                        // `armed_container_elem_bodies_action`,
+                                        // and `freshtemp_payload_bodies_action`
+                                        // emits an Option/Result payload walk.
+                                        UserDropKind::ContainerElemBodies,
                                     );
                                 } else {
                                     let tn_owned = tn.to_string();
@@ -1199,6 +1207,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             &name_owned,
                                             alloca,
                                             f,
+                                            UserDropKind::StructFieldBodies,
                                         );
                                     }
                                 }
