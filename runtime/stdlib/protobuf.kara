@@ -693,7 +693,7 @@ comptime fn proto_wire_override(attrs: Vec[String]) -> String {
     let mut found = "";
     let mut i = 0;
     while i < attrs.len() {
-        let a = attrs[i];
+        let a = ref attrs[i];
         if a.starts_with("karac::proto(") and a.substring(a.len() - 1, a.len()) == ")" {
             found = a.substring(13, a.len() - 1);
         }
@@ -763,7 +763,7 @@ comptime fn proto_field_number_override(attrs: Vec[String]) -> i64 {
     let mut found = 0;
     let mut i = 0;
     while i < attrs.len() {
-        let a = attrs[i];
+        let a = ref attrs[i];
         if a.starts_with("karac::field(") and a.substring(a.len() - 1, a.len()) == ")" {
             found = proto_atoi(a.substring(13, a.len() - 1));
         }
@@ -1589,13 +1589,13 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
     let mut items = Vec.new();
     let mut i = 0;
     while i < n {
-        let t = toks[i];
+        let t = ref toks[i];
         if t == "message" {
             if i + 2 >= n {
                 compiler.error("proto: truncated `message` declaration");
                 i = n;
             } else {
-                let name = toks[i + 1];
+                let name = toks[i + 1].clone();
                 i = i + 3;
                 let mut fnums = Vec.new();
                 let mut fdecls = Vec.new();
@@ -1610,7 +1610,7 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                         // `oneof NAME { TYPE field = N; ... }` → a Kāra enum
                         // `<Msg><Name>` with a `NotSet` default + one payload
                         // variant per case, and a struct field of that enum.
-                        let oneof_name = toks[i + 1];
+                        let oneof_name = toks[i + 1].clone();
                         let ename = name + proto_pascal_case(oneof_name);
                         let mut j = i + 3;
                         let mut onums = Vec.new();
@@ -1686,9 +1686,9 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                             bad = true;
                             i = n;
                         } else {
-                            let ptype = toks[base];
-                            let fname = toks[base + 1];
-                            let numtok = toks[base + 3];
+                            let ptype = toks[base].clone();
+                            let fname = ref toks[base + 1];
+                            let numtok = toks[base + 3].clone();
                             // A wire-override scalar (`sint*` / `fixed*` /
                             // `sfixed*`) lowers to its base int type plus a
                             // `#[karac::proto(<wire>)]` attribute. Only on plain
@@ -1739,7 +1739,7 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                 compiler.error("proto: truncated `enum` declaration");
                 i = n;
             } else {
-                let ename = toks[i + 1];
+                let ename = toks[i + 1].clone();
                 i = i + 3;
                 let mut vals = Vec.new();
                 let mut vnames = Vec.new();

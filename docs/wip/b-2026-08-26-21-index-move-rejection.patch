@@ -1,23 +1,41 @@
 diff --git a/src/cli/diag_json.rs b/src/cli/diag_json.rs
-index 0208c37..32635dc 100644
+index 8544afb..39b16c9 100644
 --- a/src/cli/diag_json.rs
 +++ b/src/cli/diag_json.rs
-@@ -1812,6 +1812,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
-                 crate::typechecker::TypeErrorKind::StringNotIndexable => "E0268",
-                 crate::typechecker::TypeErrorKind::IteratorNotIndexable => "E0274",
+@@ -1814,6 +1814,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                  crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
+                 crate::typechecker::TypeErrorKind::RefOperandUnsupported => "E0283",
+                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
 +                crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E0282",
                  crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
                  crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
                  // B-2026-06-30-3 — reassignment of a non-`mut` field on a
+diff --git a/src/cli/explain.rs b/src/cli/explain.rs
+index 50aebd1..8fd4e75 100644
+--- a/src/cli/explain.rs
++++ b/src/cli/explain.rs
+@@ -521,6 +521,13 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
+         "E0275",
+         ty("TypeNotIndexable", Some(DiagnosticClass::TypeMismatch)),
+     ),
++    // B-2026-08-26-21 — `let t = v[i]` where the element is not `Copy`.
++    // An index expression is a BORROW (`fn index(ref self, ..) -> ref T`),
++    // so reading it in value position obeys the `*r` rule: `T: Copy`.
++    (
++        "E0282",
++        ty("IndexMoveNonCopy", Some(DiagnosticClass::TypeMismatch)),
++    ),
+     (
+         "E0283",
+         ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
 diff --git a/src/typechecker.rs b/src/typechecker.rs
-index a3325bb..4418127 100644
+index 7ad9f31..42fe264 100644
 --- a/src/typechecker.rs
 +++ b/src/typechecker.rs
-@@ -630,6 +630,22 @@ pub enum TypeErrorKind {
-     /// (design.md § Character type). Run-fatal: the interpreter has no
-     /// `Value::String[Value::Int]` lowering, so a downgrade-and-run
-     /// would hit an `unreachable!` rather than emit a clean diagnostic.
+@@ -644,6 +644,22 @@ pub enum TypeErrorKind {
+     RefOperandUnsupported,
+     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
+     LazyLockRuntimeCapture,
 +    /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
 +    ///
 +    /// design.md § "The index operator (`expr[i]`)": `Index.index` is
@@ -37,18 +55,18 @@ index a3325bb..4418127 100644
      StringNotIndexable,
      /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
      /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
-@@ -1151,6 +1167,7 @@ impl TypeErrorKind {
-         matches!(
+@@ -1166,6 +1182,7 @@ impl TypeErrorKind {
              self,
              TypeErrorKind::InvalidCast
+                 | TypeErrorKind::RefOperandUnsupported
 +                | TypeErrorKind::IndexMoveNonCopy
                  | TypeErrorKind::StringNotIndexable
                  | TypeErrorKind::IteratorNotIndexable
                  | TypeErrorKind::TypeNotIndexable
-@@ -1189,6 +1206,7 @@ pub(crate) fn class_for_type_error_kind(
-         | TypeErrorKind::ImplTraitMultipleWitnesses
+@@ -1205,6 +1222,7 @@ pub(crate) fn class_for_type_error_kind(
          | TypeErrorKind::AtomicInvalidInnerType
          | TypeErrorKind::InvalidTupleIndex
+         | TypeErrorKind::RefOperandUnsupported
 +        | TypeErrorKind::IndexMoveNonCopy
          | TypeErrorKind::StringNotIndexable
          | TypeErrorKind::IteratorNotIndexable
