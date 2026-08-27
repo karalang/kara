@@ -959,7 +959,7 @@ fn main() {
     let s = S { grads: Vec.new() };
     let z: Tensor[f32, [?]] = Tensor.zeros([2]);
     s.grads.push(z);
-    let r = s.grads[0];
+    let r = ref s.grads[0];
     println(r[0]);
 }
 "#,
@@ -1717,13 +1717,13 @@ fn go(s: S) {
     let z: Tensor[f32, [?]] = Tensor.zeros([2]);
     s.grads.push(z);
     let g: Tensor[f32, [?]] = Tensor.ones([2]);
-    let old = s.grads[0];
+    let old = ref s.grads[0];
     s.grads[0] = old + g;
 }
 fn main() {
     let s = S { grads: Vec.new() };
     go(s);
-    let r = s.grads[0];
+    let r = ref s.grads[0];
     println(r[0]);
 }
 "#,
@@ -1752,12 +1752,12 @@ fn main() {
     }
     let mut i = 1;
     while i < 4 {
-        let g = t.grads[i];
-        let acc = t.grads[0];
+        let g = ref t.grads[i];
+        let acc = ref t.grads[0];
         t.grads[0] = acc + g;
         i = i + 1;
     }
-    let r = t.grads[0];
+    let r = ref t.grads[0];
     println(r[0]);
 }
 "#,
@@ -6210,8 +6210,8 @@ fn main() {
         let a: Vec[String] = w.iter().enumerate().map(|p| p.1).collect();
         let b: Vec[i64] = w.iter().enumerate().map(|p| p.0 + p.1.len()).collect();
         let c: Vec[String] = w.iter().skip(1i64).enumerate().map(|p| p.1).collect();
-        let a2: String = a[2];
-        let c0: String = c[0];
+        let a2: String = a[2].clone();
+        let c0: String = c[0].clone();
         println(f"{a.len()} {a2} {b[0]} {b[2]} {c.len()} {c0}");
         round = round + 1i64;
     }
@@ -6294,9 +6294,9 @@ fn main() {
         let fm: Vec[String] = w.iter().enumerate().filter(|p| p.0 > 0i64).map(|p| p.1).collect();
         let tm: Vec[String] = w.iter().enumerate().take(2i64).map(|p| p.1).collect();
         let sm: Vec[String] = w.iter().enumerate().skip(1i64).map(|p| p.1).collect();
-        let fm2: String = fm[2];
-        let tm0: String = tm[0];
-        let sm2: String = sm[2];
+        let fm2: String = fm[2].clone();
+        let tm0: String = tm[0].clone();
+        let sm2: String = sm[2].clone();
         println(f"{fm.len()}:{fm2} {tm.len()}:{tm0} {sm.len()}:{sm2}");
         round = round + 1i64;
     }
@@ -6338,8 +6338,8 @@ fn main() {
         ];
         let a: Vec[String] = w.iter().collect();
         let ft: Vec[String] = mk().iter().collect();
-        let a1: String = a[1i64];
-        let ft0: String = ft[0i64];
+        let a1: String = a[1i64].clone();
+        let ft0: String = ft[0i64].clone();
         println(f"{a.len()} {w.len()} {a1} {ft.len()} {ft0}");
         round = round + 1i64;
     }
@@ -6372,7 +6372,7 @@ fn main() {
             "into-iter-collect-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()
         ];
         let r: Vec[String] = w.into_iter().collect();
-        let r1: String = r[1i64];
+        let r1: String = r[1i64].clone();
         println(f"{r.len()} {w.len()} {r1}");
         round = round + 1i64;
     }
@@ -7045,7 +7045,7 @@ fn main() {
         ];
         let mapped: Vec[String] = w.iter().map(tag).collect();
         let lens: Vec[i64] = w.iter().map(nlen).collect();
-        let m1: String = mapped[1i64];
+        let m1: String = mapped[1i64].clone();
         println(f"{mapped.len()} {lens[0]} {lens[2]} {w.len()} {m1}");
         round = round + 1i64;
     }
@@ -7079,7 +7079,7 @@ fn main() {
             "destructure-map-payload-charlie-cccccccccccccc".to_string()
         ];
         let kept: Vec[String] = w.iter().enumerate().map(|(i, s)| s).collect();
-        let k1: String = kept[1i64];
+        let k1: String = kept[1i64].clone();
         println(f"{kept.len()} {w.len()} {k1}");
         round = round + 1i64;
     }
@@ -7114,7 +7114,7 @@ fn main() {
             "chain-collect-payload-charlie-cccccccccccccccc".to_string()
         ];
         let r: Vec[String] = a.iter().chain(b.iter()).collect();
-        let r2: String = r[2i64];
+        let r2: String = r[2i64].clone();
         println(f"{r.len()} {a.len()} {b.len()} {r2}");
         round = round + 1i64;
     }
@@ -7147,7 +7147,7 @@ fn main() {
             Vec["flat-map-payload-charlie-cccccccccccccccccc".to_string()]
         ];
         let r: Vec[String] = xs.iter().flat_map(|v| v.iter()).collect();
-        let r2: String = r[2i64];
+        let r2: String = r[2i64].clone();
         println(f"{r.len()} {xs.len()} {r2}");
         round = round + 1i64;
     }
@@ -8456,7 +8456,7 @@ fn main() {
     let m = out.len();
     let mut j = 0i64;
     while j < m {
-        let r = out[j];
+        let r = out[j].clone();
         let mut i = 0i64;
         let rl = r.len();
         while i < rl { acc = acc + r[i]; i = i + 1i64; }
@@ -9207,14 +9207,14 @@ fn main() {
     let mut keep: Vec[Vec[i64]] = Vec.new();
     let mut j = 0i64;
     while j < out.len() {
-        let r = out[j];
+        let r = out[j].clone();
         keep.push(r);
         j = j + 1i64;
     }
     let mut acc = 0i64;
     let mut i = 0i64;
     while i < keep.len() {
-        let z = keep[i];
+        let z = keep[i].clone();
         acc = acc + z[0i64];
         i = i + 1i64;
     }
@@ -21823,7 +21823,9 @@ fn main() {
     fn asan_index_assign_named_struct_source_freed_once() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Pair { word: String, n: i64 }
+#[derive(Clone)]
 struct Bag { xs: Vec[i64], n: i64 }
 struct Holder { ps: Vec[Pair] }
 fn mk(k: i64) -> Pair { return Pair { word: f"call{k}", n: k }; }
@@ -21836,7 +21838,7 @@ fn main() {
         ps.push(Pair { word: f"alpha{k + i}", n: 1 });
         ps.push(Pair { word: f"beta{k + i}", n: 2 });
         // elem: the filed repro.
-        let b = ps[1];
+        let b = ps[1].clone();
         ps[0] = b;
         acc = acc + ps[0].word.len() + ps[1].word.len();
         // lit: a fresh literal bound to a name first.
@@ -21851,8 +21853,8 @@ fn main() {
         let mut qs: Vec[Pair] = Vec.new();
         qs.push(Pair { word: f"one{k + i}", n: 1 });
         qs.push(Pair { word: f"two{k + i}", n: 2 });
-        let t = qs[0];
-        let u = qs[1];
+        let t = qs[0].clone();
+        let u = qs[1].clone();
         qs[0] = u;
         qs[1] = t;
         acc = acc + qs[0].word.len() + qs[1].word.len();
@@ -21860,7 +21862,7 @@ fn main() {
         let mut h = Holder { ps: Vec.new() };
         h.ps.push(Pair { word: f"hx{k + i}", n: 1 });
         h.ps.push(Pair { word: f"hy{k + i}", n: 2 });
-        let hb = h.ps[1];
+        let hb = h.ps[1].clone();
         h.ps[0] = hb;
         acc = acc + h.ps[0].word.len();
         // veck: the heap field is a Vec rather than a String.
@@ -21871,7 +21873,7 @@ fn main() {
         let mut bs: Vec[Bag] = Vec.new();
         bs.push(Bag { xs: v1, n: 1 });
         bs.push(Bag { xs: v2, n: 2 });
-        let bb = bs[1];
+        let bb = bs[1].clone();
         bs[0] = bb;
         acc = acc + bs[0].xs[0] + bs[1].xs[0];
         i = i + 1;
@@ -21983,11 +21985,11 @@ enum Cmd { Insert(i64, String), Delete(i64, String) }
 struct Doc { lines: Vec[String] }
 struct Nums { xs: Vec[i64] }
 enum Got { N(i64) }
-impl Doc { fn first(ref self) -> String { let g = self.lines[0]; g } }
+impl Doc { fn first(ref self) -> String { let g = self.lines[0].clone(); g } }
 fn apply(d: mut ref Doc, c: Cmd) -> Cmd {
     match c {
         Insert(at, text) => { d.lines.insert(at as usize, text); Cmd.Delete(at, d.lines[at as usize]) }
-        Delete(at, _text) => { let gone = d.lines[at as usize]; d.lines.remove(at as usize); Cmd.Insert(at, gone) }
+        Delete(at, _text) => { let gone = d.lines[at as usize].clone(); d.lines.remove(at as usize); Cmd.Insert(at, gone) }
     }
 }
 fn one(d: mut ref Doc, at: i64) -> Cmd { Cmd.Delete(at, d.lines[at as usize]) }
@@ -28916,8 +28918,8 @@ fn main() {
     while i < 300 {
         let m: Tensor[f32, [2, 3]] = Tensor.from([[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]);
         let rows = m.iter_axis(0);
-        let r0 = rows[0];
-        let r1 = rows[1];
+        let r0 = ref rows[0];
+        let r1 = ref rows[1];
         total = total + r0.sum() + r1.sum();
         i = i + 1;
     }
@@ -32455,7 +32457,7 @@ fn main() {
     let mut total = 0i64;
     let mut j = 0i64;
     while j < 4000 {
-        let w = v[j & 7i64];          // deep-clone bind; v[j&7] stays valid
+        let w = v[j & 7i64].clone();          // deep-clone bind; v[j&7] stays valid
         total = total + w.bytes().len();
         j = j + 1i64;
     }
@@ -32485,7 +32487,9 @@ fn main() {
         // synthesized clone + suppression paths thousands of times.
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 enum Tok { Word(String), End }
+#[derive(Clone)]
 struct Pair { name: String, n: i64 }
 fn main() {
     let mut es: Vec[Tok] = Vec.new();
@@ -32499,9 +32503,9 @@ fn main() {
     let mut total = 0i64;
     let mut j = 0i64;
     while j < 4000 {
-        let e = es[j & 7i64];            // deep-clone bind of enum element
+        let e = es[j & 7i64].clone();            // deep-clone bind of enum element
         match e { Tok.Word(s) => { total = total + s.bytes().len(); }, Tok.End => {} }
-        let p = ps[j & 7i64];            // deep-clone bind of struct element
+        let p = ps[j & 7i64].clone();            // deep-clone bind of struct element
         total = total + p.name.bytes().len() + p.n;
         j = j + 1i64;
     }
@@ -37208,7 +37212,7 @@ fn main() {
     let mut a: Vec[Vec[i64]] = Vec.new();
     a.push(Vec[2]);
     v.push(a);
-    let first = v[0];
+    let first = v[0].clone();
     println(first.len());
 }
 "#,
@@ -38364,7 +38368,7 @@ fn main() {
     let mut total = 0;
     let mut i = 0;
     while i < grid.len() {
-        let r = grid[i];
+        let r = grid[i].clone();
         let mut j = 0;
         while j < r.len() { total = total + take(r[j]); j = j + 1; }
         i = i + 1;
@@ -38439,7 +38443,7 @@ fn mk() -> Vec[Vec[Option[Node]]] {
 }
 fn main() {
     let shapes = mk();
-    let lefts = shapes[0];
+    let lefts = shapes[0].clone();
     println(count_nodes(lefts[0]));
 }
 "#,
@@ -38564,8 +38568,8 @@ fn main() {
             r#"
 fn main() {
     let mut v: Vec[String] = [f"alpha-padding", f"bravo-padding", f"charlie-pad"];
-    let t = v[0];
-    v[0] = v[1];
+    let t = v[0].clone();
+    v[0] = v[1].clone();
     v[1] = t;
     println(v[0]);
     println(v[1]);
@@ -38586,8 +38590,8 @@ fn main() {
             r#"
 fn main() {
     let mut v: Vec[Vec[i64]] = [[10, 11], [20, 21], [30, 31]];
-    let t = v[0];
-    v[0] = v[1];
+    let t = v[0].clone();
+    v[0] = v[1].clone();
     v[1] = t;
     println(v[0][0]);
     println(v[1][0]);
@@ -38610,7 +38614,7 @@ fn main() {
 fn main() {
     let mut v: Vec[String] = [f"aa-padding", f"bb-padding"];
     let mut s: String = f"old-padding";
-    s = v[1];
+    s = v[1].clone();
     println(s);
     println(v[0]);
     println(v[1]);
@@ -44617,9 +44621,9 @@ fn main() {
         acc = acc + m.get(1).unwrap()[1];
         acc = acc + s.get(1).unwrap()[0].len();
         acc = acc + takes(s.get(1).unwrap()[2]);
-        let w = s.get(1).unwrap()[1];
+        let w = s.get(1).unwrap()[1].clone();
         acc = acc + w.len();
-        let inner = n.get(7).unwrap()[1];
+        let inner = n.get(7).unwrap()[1].clone();
         acc = acc + inner[2];
         i = i + 1;
     }
@@ -46043,7 +46047,7 @@ fn main() {
     let mut adj: Map[String, Vec[String]] = Map.new();
     let mut j = 0i64;
     while j < froms.len() {
-        let k = froms[j];
+        let k = froms[j].clone();
         let present = match adj.get(k) { Some(_) => true, None => false };
         if not present {
             let empty: Vec[String] = Vec.new();
@@ -46255,7 +46259,7 @@ struct N { ns: Vec[i64] }
 impl S {
     fn get(ref self, i: i64) -> String { return self.xs[i]; }
     fn tail(ref self, i: i64) -> String { self.xs[i] }
-    fn via_let(ref self, i: i64) -> String { let t = self.xs[i]; return t; }
+    fn via_let(ref self, i: i64) -> String { let t = self.xs[i].clone(); return t; }
     fn concat(ref self, i: i64) -> String { return self.xs[i] + "!"; }
 }
 impl G { fn get(ref self, i: i64) -> Vec[String] { return self.g[i]; } }
@@ -50564,7 +50568,7 @@ fn main() {
     let mut inner: Map[String, i64] = Map.new();
     let _ = inner.insert("n", k);
     vms.push(inner);
-    let cur = vms[0];
+    let cur = vms[0].clone();
     let mut tot = 0i64;
     match cur.get("n") { Some(x) => { tot = tot + x; }, None => {} }
     if cur.contains_key("n") { tot = tot + 10; }
@@ -50908,7 +50912,7 @@ fn main() {
 fn spiral(m: ref Vec[Vec[i64]]) -> Vec[i64] {
     let mut out: Vec[i64] = Vec.new();
     let rows = m.len();
-    let first = m[0];
+    let first = m[0].clone();
     let cols = first.len();
     let mut r = 0i64;
     while r < rows {
@@ -51962,6 +51966,7 @@ fn main() {
         assert_clean_asan_run(
             r#"
 struct Stat { service: String }
+#[derive(Clone)]
 struct Entry { service: String }
 struct Bag { tags: Vec[String] }
 
@@ -51970,7 +51975,7 @@ fn agg(entries: Vec[Entry]) -> Vec[Stat] {
     let mut stats: Vec[Stat] = Vec.new();
     let mut i = 0;
     while i < entries.len() {
-        let e = entries[i];
+        let e = entries[i].clone();
         let _ = index.insert(e.service, 0 as usize);
         stats.push(Stat { service: e.service });
         i = i + 1;
@@ -52086,22 +52091,23 @@ fn main() {
     fn asan_autopar_joined_vec_element_struct_binding_no_double_free() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Entry { service: String, weight: i64 }
 fn agg(entries: Vec[Entry]) -> String {
     let mut index: Map[String, usize] = Map.new();
-    let e = entries[0];
+    let e = entries[0].clone();
     return e.service;
 }
 fn agg_two(entries: Vec[Entry]) -> String {
     let mut index: Map[String, usize] = Map.new();
-    let a = entries[0];
-    let b = entries[1];
+    let a = entries[0].clone();
+    let b = entries[1].clone();
     return a.service + "-" + b.service;
 }
 fn agg_nested(rows: Vec[Vec[Entry]]) -> String {
     let mut index: Map[String, usize] = Map.new();
-    let inner = rows[0];
-    let e = inner[1];
+    let inner = rows[0].clone();
+    let e = inner[1].clone();
     return e.service;
 }
 fn main() {
@@ -52741,7 +52747,7 @@ fn main() {
         let interp: Vec[String] = Vec.from_fn(4, |i| f"n{i}");
         let built: Vec[String] = Vec.from_fn(4, |i| i.to_string());
         total = total + interp.len() + built.len();
-        last = built[3];
+        last = built[3].clone();
         round = round + 1i64;
     }
     println(last);
@@ -54460,6 +54466,7 @@ fn main() {
     fn asan_local_moved_into_struct_elem_slot_is_not_double_freed() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Item { id: i64, tag: String }
 struct Bag { xs: Vec[Item] }
 fn main() {
@@ -54467,7 +54474,7 @@ fn main() {
     b.xs.push(Item { id: 1i64, tag: f"payload_one_{1}" });
     b.xs.push(Item { id: 2i64, tag: f"payload_two_{2}" });
     b.xs.push(Item { id: 3i64, tag: f"payload_three_{3}" });
-    let t = b.xs[0];
+    let t = b.xs[0].clone();
     b.xs[2] = t;
     println(f"{b.xs[0].id}{b.xs[1].id}{b.xs[2].id}");
 }
@@ -54493,15 +54500,14 @@ fn main() {
     fn asan_swap_rotation_over_heap_bearing_elements_is_clean() {
         assert_clean_asan_run(
             r#"
+#[derive(Clone)]
 struct Item { id: i64, tag: String }
 struct Bag { xs: Vec[Item] }
 fn main() {
     let mut b = Bag { xs: Vec.new() };
     b.xs.push(Item { id: 1i64, tag: f"payload_one_{1}" });
     b.xs.push(Item { id: 2i64, tag: f"payload_two_{2}" });
-    let t = b.xs[0];
-    b.xs[0] = b.xs[1];
-    b.xs[1] = t;
+    b.xs.swap(0, 1);
     println(f"{b.xs[0].id}{b.xs[1].id}");
 }
 "#,
