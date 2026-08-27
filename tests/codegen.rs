@@ -11766,6 +11766,53 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("2 x\n2 10\n"));
     }
 
+    /// B-2026-08-27-44 — a heap-bearing TUPLE argument whose value ESCAPES the
+    /// caller's frame. The callee entry-copies the tuple param and the COPY is
+    /// what flows onward, so the caller's ORIGINAL is orphaned; unfixed, each
+    /// of these leaked (48 bytes for the `Bag` shapes, 3 for the bare `String`,
+    /// 72 over two blocks for the double-call).
+    ///
+    /// Two independent gaps, which is why the shapes come in pairs. The
+    /// PASSTHRU shapes never reached the caller-side registrar at all: the
+    /// admission test had entry-copy siblings for a struct and an enum argument
+    /// and none for a tuple. The CALL-TEMPORARY shapes did reach it and then
+    /// matched no arm, because the tuple arm tested `ExprKind::Tuple` — a
+    /// literal — while a call that RETURNS a tuple is an `ExprKind::Call` whose
+    /// return type has no name for the named-struct arm to key on.
+    ///
+    /// Output correctness is the weaker half of this test; `tests/memory_sanitizer.rs`
+    /// carries the LSan twin that actually sees the leak. What this pins is that
+    /// adding the caller-side free did not disturb the VALUE — an over-free
+    /// would corrupt these strings rather than merely leak.
+    #[test]
+    fn e2e_heap_tuple_arg_escaping_the_frame_is_freed_once() {
+        // The param returned whole, generic and non-generic.
+        let generic_passthru = "struct Bag[T] { xs: Vec[T] }\n\
+             fn passthru[T](p: (Bag[T], i64)) -> (Bag[T], i64) { p }\n\
+             fn main() { let (b, n) = passthru((Bag { xs: [\"x\", \"y\"] }, 7)); println(f\"{n} {b.xs.len()} {b.xs[0]}\"); }\n";
+        assert_eq!(run_program(generic_passthru).as_deref(), Some("7 2 x\n"));
+        let plain_passthru = "struct Bag { xs: Vec[String] }\n\
+             fn passthru(p: (Bag, i64)) -> (Bag, i64) { p }\n\
+             fn main() { let (b, n) = passthru((Bag { xs: [\"x\", \"y\"] }, 7)); println(f\"{n} {b.xs.len()} {b.xs[0]}\"); }\n";
+        assert_eq!(run_program(plain_passthru).as_deref(), Some("7 2 x\n"));
+        // A call temporary as the argument, generic and non-generic.
+        let generic_temp = "struct Bag[T] { xs: Vec[T] }\n\
+             fn mk[T](v: Vec[T]) -> (Bag[T], i64) { (Bag { xs: v }, 3) }\n\
+             fn use2[T](p: (Bag[T], i64)) -> i64 { let (b, n) = p; b.xs.len() + n }\n\
+             fn main() { println(f\"{use2(mk([\"x\", \"y\"]))}\"); }\n";
+        assert_eq!(run_program(generic_temp).as_deref(), Some("5\n"));
+        let plain_temp = "struct Bag { xs: Vec[String] }\n\
+             fn mk(v: Vec[String]) -> (Bag, i64) { (Bag { xs: v }, 3) }\n\
+             fn use2(p: (Bag, i64)) -> i64 { let (b, n) = p; b.xs.len() + n }\n\
+             fn main() { println(f\"{use2(mk([\"x\"])) + use2(mk([\"y\", \"z\"]))}\"); }\n";
+        assert_eq!(run_program(plain_temp).as_deref(), Some("9\n"));
+        // A bare `String` element — the predicate keys on drop-bearing heap,
+        // not on a named struct type.
+        let string_elem = "fn passthru(p: (String, i64)) -> (String, i64) { p }\n\
+             fn main() { let (s, n) = passthru((f\"abc\", 7)); println(f\"{n} {s}\"); }\n";
+        assert_eq!(run_program(string_elem).as_deref(), Some("7 abc\n"));
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

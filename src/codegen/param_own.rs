@@ -747,7 +747,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    fn field_copy_supported(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
+    pub(super) fn field_copy_supported(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
         match &fte.kind {
             TypeKind::Tuple(elems) => elems.iter().all(|e| self.field_copy_supported(e, stack)),
             // Borrows carry no owned heap — the struct drop never frees them.

@@ -2106,6 +2106,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // must still be freed caller-side (memory only, inside
                 // the registrar's enum arm).
                 || self.arg_is_entry_copied_heap_enum(&a.value)
+                // B-2026-08-27-44 — and so is a whole TUPLE
+                // (`make_tuple_param_callee_owned`). Without this third
+                // sibling `passthru((Bag { .. }, 7))` never reached the
+                // registrar AT ALL on the escape path — not a gate that
+                // declined inside it, an admission test that excluded it —
+                // so the caller's orphaned original leaked 48 bytes.
+                || self.arg_is_entry_copied_heap_tuple(&a.value, &name, i)
             {
                 self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
             }
@@ -3650,18 +3657,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_user_drop_var(&enum_name, "__owned_agg_tmp", slot);
                 }
             }
-        } else if let ExprKind::Tuple(tuple_elems) = &arg.kind {
-            // #21 — a tuple LITERAL arg. The callee now entry-copies a
-            // heap-bearing tuple param (`make_tuple_param_callee_owned`), so this
-            // caller temp is an INDEPENDENT buffer that must free its own heap.
-            // The LLVM-type `track_tuple_var` is enum-blind, so derive the
-            // element `TypeExpr`s from the literal and register a `TypeExpr`-driven
-            // drop when any leaf is an enum / nested struct; fall back to the
-            // enum-blind path for a pure Vec/String tuple (its layout is visible).
-            let elem_tes: Vec<TypeExpr> = tuple_elems
-                .iter()
-                .map(|e| self.infer_arg_elem_te(e))
-                .collect();
+        } else if let Some(elem_tes) = self.tuple_arg_elem_type_exprs(arg) {
+            // #21 — a tuple-shaped arg. The callee entry-copies a heap-bearing
+            // tuple param (`make_tuple_param_callee_owned`), so this caller temp
+            // is an INDEPENDENT buffer that must free its own heap. The
+            // LLVM-type `track_tuple_var` is enum-blind, so derive the element
+            // `TypeExpr`s and register a `TypeExpr`-driven drop when any leaf is
+            // an enum / nested struct; fall back to the enum-blind path for a
+            // pure Vec/String tuple (its layout is visible).
+            //
+            // B-2026-08-27-44 widened this from a tuple LITERAL to any
+            // tuple-shaped arg. `use2(mk(..))` — a CALL returning a tuple — DID
+            // reach this registrar (it does not escape, so the admission gate
+            // let it through) and then matched NO arm at all: not the enum arm,
+            // not this one while it tested `ExprKind::Tuple`, and not the
+            // named-struct arm below, whose `owned_struct_temp_arg_name` answers
+            // only for a struct literal or a `.clone()`. So it registered
+            // nothing and leaked. The literal's behaviour is unchanged —
+            // `tuple_arg_elem_type_exprs` returns exactly the old
+            // `infer_arg_elem_te` vector for that spelling.
             if elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
@@ -3689,12 +3703,23 @@ impl<'ctx> super::Codegen<'ctx> {
             // and off the passthrough path (a returned tuple's bodies belong
             // to the result's consumer). Interp twin:
             // `run_fresh_temp_arg_drops`' tuple arm.
-            if !arg_escapes_frame
-                && tuple_elems
-                    .iter()
-                    .all(|e| self.discard_tuple_elem_is_fresh_expr(e))
-            {
-                self.track_discarded_tuple_elem_bodies(tuple_elems, val);
+            //
+            // B-2026-08-27-44: LITERAL-ONLY, and deliberately so. The gate is
+            // per-ELEMENT freshness, which needs the element EXPRESSIONS; a call
+            // that returns a tuple has none to inspect, so there is no way to
+            // tell a fresh element from a place element whose body belongs to
+            // its own binding. Memory-only there matches what the interpreter
+            // twin (`run_fresh_temp_arg_drops`) already does for that spelling,
+            // so widening the memory registration above does not open a
+            // run-vs-build divergence here.
+            if let ExprKind::Tuple(tuple_elems) = &arg.kind {
+                if !arg_escapes_frame
+                    && tuple_elems
+                        .iter()
+                        .all(|e| self.discard_tuple_elem_is_fresh_expr(e))
+                {
+                    self.track_discarded_tuple_elem_bodies(tuple_elems, val);
+                }
             }
         } else if let Some(name) = self.owned_struct_temp_arg_name(arg) {
             {
@@ -4268,6 +4293,134 @@ impl<'ctx> super::Codegen<'ctx> {
                 && !self.type_decls.shared_types.contains_key(en.as_str())
                 && self.enum_has_heap_payload(&en)
         })
+    }
+
+    /// B-2026-08-27-44 — the element `TypeExpr`s of a TUPLE-shaped argument,
+    /// for the two spellings that hand a whole tuple to an owned param: a tuple
+    /// LITERAL (`use2((Bag { .. }, 7))`) and a CALL that RETURNS a tuple
+    /// (`use2(mk(..))`). `None` for anything else, which is what keeps this out
+    /// of the way of the named-struct and enum arms.
+    ///
+    /// The call leg reads `fn_return_type_exprs` rather than
+    /// `fn_return_type_names` on purpose: a tuple return has no NAME, which is
+    /// exactly why the registrar's literal-only arm let `use2(mk(..))` fall
+    /// through every arm and register nothing at all.
+    pub(super) fn tuple_arg_elem_type_exprs(&self, arg: &Expr) -> Option<Vec<TypeExpr>> {
+        match &arg.kind {
+            ExprKind::Tuple(elems) => {
+                Some(elems.iter().map(|e| self.infer_arg_elem_te(e)).collect())
+            }
+            ExprKind::Call { callee, .. } => {
+                let ExprKind::Identifier(fn_name) = &callee.kind else {
+                    return None;
+                };
+                // Same two-map lookup as `callee_tuple_param_elem_type_exprs`,
+                // and for the same measured reason: a GENERIC callee is absent
+                // from the `fn_sig` maps, so `mk[T]` resolved to nothing here
+                // and `use2(mk(..))` kept leaking after the non-generic
+                // spelling was fixed.
+                let ret = self.fn_sig.fn_return_type_exprs.get(fn_name).or_else(|| {
+                    self.mono_state
+                        .generic_fns
+                        .get(fn_name)?
+                        .return_type
+                        .as_ref()
+                })?;
+                match &ret.kind {
+                    TypeKind::Tuple(elems) => Some(elems.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The callee's DECLARED tuple-param element types, for
+    /// [`Self::arg_is_entry_copied_heap_tuple`]'s fill-in.
+    ///
+    /// `fn_asts` alone is not enough: a GENERIC callee is not registered there
+    /// at all (measured — `passthru[T]` reports `in_fn_asts=false`), so the
+    /// fill-in silently missed on exactly the monomorph path this row is about.
+    /// `mono_state.generic_fns` carries every generic callee, stdlib included —
+    /// the same two-map lookup `mono_call_arg_moves_into_self` already performs.
+    fn callee_tuple_param_elem_type_exprs(
+        &self,
+        callee: &str,
+        idx: usize,
+    ) -> Option<Vec<TypeExpr>> {
+        let f = self
+            .fn_sig
+            .fn_asts
+            .get(callee)
+            .or_else(|| self.mono_state.generic_fns.get(callee))?;
+        match &f.params.get(idx)?.ty.kind {
+            TypeKind::Tuple(elems) => Some(elems.clone()),
+            _ => None,
+        }
+    }
+
+    /// B-2026-08-27-44 — the TUPLE sibling of
+    /// [`Self::arg_is_entry_copied_heap_struct`] and
+    /// [`Self::arg_is_entry_copied_heap_enum`]: does this tuple-shaped argument
+    /// have a type the callee ENTRY-COPIES? True exactly when
+    /// `make_tuple_param_callee_owned` (the callee's own gate) would copy — some
+    /// element owns drop-bearing heap AND every element is copy-supported — so
+    /// caller and callee stay in the lockstep B-2026-07-08-6 requires: the
+    /// callee returns its COPY and the caller's original is orphaned, so the
+    /// return-passthrough guard must NOT suppress the caller's drop.
+    ///
+    /// The declared-type FILL-IN is not a refinement, it is what makes the
+    /// predicate answer at all. `infer_arg_elem_te` names an element by
+    /// resolving an EXPRESSION, and it cannot name an integer literal: the `7`
+    /// in `passthru((Bag { .. }, 7))` infers to an empty path, which
+    /// `field_copy_supported` rejects. So the `all(..)` conjunct failed on the
+    /// SCALAR and the whole predicate read `false`, while the callee — which
+    /// sees the declared `(Bag, i64)` — entry-copied. The lockstep this exists
+    /// to maintain was being broken by an artifact of inference rather than by
+    /// any property of the program. Measured, not reasoned about: the probe
+    /// printed `elem Path([""]) drop_heap=false copy_sup=false` for that literal.
+    ///
+    /// Filling only the UNRESOLVED positions keeps the caller's view
+    /// authoritative wherever it has one — it is the view that carries the
+    /// concrete instantiation at a generic call site, which the declared
+    /// `(Bag[T], i64)` does not.
+    ///
+    /// Fail-CLOSED either way: when neither view resolves an element it stays an
+    /// empty path, which reads as no-drop and not-copyable, so the predicate
+    /// declines and the shape degrades to the pre-existing leak rather than to a
+    /// caller drop of a buffer the callee took, which would be a double free.
+    pub(super) fn arg_is_entry_copied_heap_tuple(
+        &self,
+        arg: &Expr,
+        callee: &str,
+        idx: usize,
+    ) -> bool {
+        let Some(inferred) = self.tuple_arg_elem_type_exprs(arg) else {
+            return false;
+        };
+        let declared = self.callee_tuple_param_elem_type_exprs(callee, idx);
+        let is_unresolved = |te: &TypeExpr| match &te.kind {
+            TypeKind::Path(p) => p.segments.iter().all(|s| s.is_empty()),
+            _ => false,
+        };
+        let resolved: Vec<TypeExpr> = inferred
+            .iter()
+            .enumerate()
+            .map(|(j, e)| {
+                if is_unresolved(e) {
+                    declared
+                        .as_ref()
+                        .and_then(|d| d.get(j).cloned())
+                        .unwrap_or_else(|| e.clone())
+                } else {
+                    e.clone()
+                }
+            })
+            .collect();
+        resolved.iter().any(|e| self.type_expr_has_drop_heap(e))
+            && resolved
+                .iter()
+                .all(|e| self.field_copy_supported(e, &mut Vec::new()))
     }
 
     /// #21 — best-effort `TypeExpr` for a tuple-literal arg ELEMENT, so its

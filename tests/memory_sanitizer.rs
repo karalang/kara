@@ -912,21 +912,78 @@ fn main() { let r = take((Bag { xs: [10, 20] }, 0)); println(f"len={r.len()} [{r
         // be move-suppressed, else the copy the caller now owns is freed twice),
         // a NAMED binding as the argument (the caller's binding owns the
         // original), and a CALL TEMPORARY as the argument.
-        // TWO SHAPES ARE DELIBERATELY NOT GUARDED HERE, because they leak for a
-        // reason that is NOT this fix and is NOT new — the tuple value ESCAPES
-        // the caller's frame, so the caller registers no drop for its original:
-        //
-        //   fn passthru[T](p: (Bag[T], i64)) -> (Bag[T], i64) { p }   // returned whole
-        //   use2(mk(["x", "y"]))                                      // call-temporary arg
-        //
-        // Measured both ways: the identical NON-generic spelling of each leaks
-        // the same 48 bytes on an UNMODIFIED tree, and the non-generic path is
-        // untouched by this change. The generic spelling was clean before only
-        // BECAUSE of the aliasing this fix removes, so dropping the alias
-        // exposes the pre-existing defect on that spelling too — corruption
-        // traded for an already-present leak, and the two paths made
-        // consistent. Filed as its own row; when it is fixed, add both shapes
-        // here as further guards.
+        // The two ESCAPE shapes, guarded here as B-2026-08-27-44 asked when it
+        // was filed. Both leaked 48 bytes under LSan — the caller entry-copies
+        // and the callee returns the COPY, so the caller's ORIGINAL is orphaned
+        // — and both are covered in the GENERIC and NON-generic spellings,
+        // because the non-generic one leaked on an unmodified tree while the
+        // generic one was clean only by aliasing the buffer it should have
+        // copied. Fixing -37 unmasked the generic half; -44 fixed both.
+        for (label, prog, want) in [
+            (
+                "escape-passthru-generic",
+                r#"
+struct Bag[T] { xs: Vec[T] }
+fn passthru[T](p: (Bag[T], i64)) -> (Bag[T], i64) { p }
+fn main() { let (b, n) = passthru((Bag { xs: ["x", "y"] }, 7)); println(f"{n} {b.xs.len()} {b.xs[0]}"); }
+"#,
+                "7 2 x",
+            ),
+            (
+                "escape-passthru-plain",
+                r#"
+struct Bag { xs: Vec[String] }
+fn passthru(p: (Bag, i64)) -> (Bag, i64) { p }
+fn main() { let (b, n) = passthru((Bag { xs: ["x", "y"] }, 7)); println(f"{n} {b.xs.len()} {b.xs[0]}"); }
+"#,
+                "7 2 x",
+            ),
+            (
+                "escape-call-temp-generic",
+                r#"
+struct Bag[T] { xs: Vec[T] }
+fn mk[T](v: Vec[T]) -> (Bag[T], i64) { (Bag { xs: v }, 3) }
+fn use2[T](p: (Bag[T], i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x", "y"]))}"); }
+"#,
+                "5",
+            ),
+            (
+                "escape-call-temp-plain",
+                r#"
+struct Bag { xs: Vec[String] }
+fn mk(v: Vec[String]) -> (Bag, i64) { (Bag { xs: v }, 3) }
+fn use2(p: (Bag, i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x", "y"]))}"); }
+"#,
+                "5",
+            ),
+            // A bare `String` element rather than a struct: the predicate keys
+            // on drop-bearing heap, not on a NAMED type, and this spelling
+            // leaked 3 bytes on the unfixed tree.
+            (
+                "escape-passthru-string-elem",
+                r#"
+fn passthru(p: (String, i64)) -> (String, i64) { p }
+fn main() { let (s, n) = passthru((f"abc", 7)); println(f"{n} {s}"); }
+"#,
+                "7 abc",
+            ),
+            // TWO call temporaries in one expression — 72 bytes over 2 blocks
+            // unfixed, so the registration is per-argument and not once-per-fn.
+            (
+                "escape-two-call-temps",
+                r#"
+struct Bag { xs: Vec[String] }
+fn mk(v: Vec[String]) -> (Bag, i64) { (Bag { xs: v }, 3) }
+fn use2(p: (Bag, i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x"])) + use2(mk(["y", "z"]))}"); }
+"#,
+                "9",
+            ),
+        ] {
+            assert_clean_asan_run(prog, &[want], label);
+        }
         assert_clean_asan_run(
             r#"
 struct Bag[T] { xs: Vec[T] }

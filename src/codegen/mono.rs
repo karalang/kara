@@ -1769,7 +1769,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // `PriorityQueue[Item].push` actually takes.
             let escapes_frame =
                 flows_into_return || self.call_arg_moves_into_outliving_place(name, i, true);
-            if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
+            // B-2026-08-27-44 — the monomorph leg of the same admission test.
+            // The tuple sibling is needed here for the same reason as on the
+            // free-fn path: a generic `passthru[T](p: (Bag[T], i64)) -> ..`
+            // entry-copies its tuple param (B-2026-08-27-37 gave the mono path
+            // that copy), so on the escape path the caller's original is
+            // orphaned unless it is admitted to the registrar.
+            //
+            // NOTE the ENUM sibling (`arg_is_entry_copied_heap_enum`) is absent
+            // here and stays absent: B-2026-08-01-14 added it only to the
+            // free-fn gate, so whether a generic enum arg leaks the same way is
+            // an unmeasured question, and guessing a caller-side free onto an
+            // unmeasured path is how a leak fix becomes a double free.
+            if !flows_into_return
+                || self.arg_is_entry_copied_heap_struct(&a.value)
+                || self.arg_is_entry_copied_heap_tuple(&a.value, name, i)
+            {
                 self.track_inline_owned_aggregate_arg_inst(
                     val,
                     &a.value,

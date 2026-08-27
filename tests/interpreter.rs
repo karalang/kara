@@ -28995,6 +28995,58 @@ fn main() {
     assert_eq!(out, "2 x\n2 10\n");
 }
 
+/// Interpreter oracle for B-2026-08-27-44's escape shapes — the twin of
+/// `tests/codegen.rs`'s `e2e_heap_tuple_arg_escaping_the_frame_is_freed_once`.
+///
+/// The defect itself was codegen-only (a missing caller-side free), so what
+/// this pins is the ORACLE: these five programs' values, against which the
+/// compiled backends must agree. The interpreter was already correct on all of
+/// them, which is exactly what makes it a usable oracle here.
+#[test]
+fn heap_tuple_arg_escaping_the_frame_round_trips() {
+    assert_eq!(
+        run(r#"
+struct Bag[T] { xs: Vec[T] }
+fn passthru[T](p: (Bag[T], i64)) -> (Bag[T], i64) { p }
+fn main() { let (b, n) = passthru((Bag { xs: ["x", "y"] }, 7)); println(f"{n} {b.xs.len()} {b.xs[0]}"); }
+"#),
+        "7 2 x\n"
+    );
+    assert_eq!(
+        run(r#"
+struct Bag { xs: Vec[String] }
+fn passthru(p: (Bag, i64)) -> (Bag, i64) { p }
+fn main() { let (b, n) = passthru((Bag { xs: ["x", "y"] }, 7)); println(f"{n} {b.xs.len()} {b.xs[0]}"); }
+"#),
+        "7 2 x\n"
+    );
+    assert_eq!(
+        run(r#"
+struct Bag[T] { xs: Vec[T] }
+fn mk[T](v: Vec[T]) -> (Bag[T], i64) { (Bag { xs: v }, 3) }
+fn use2[T](p: (Bag[T], i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x", "y"]))}"); }
+"#),
+        "5\n"
+    );
+    assert_eq!(
+        run(r#"
+struct Bag { xs: Vec[String] }
+fn mk(v: Vec[String]) -> (Bag, i64) { (Bag { xs: v }, 3) }
+fn use2(p: (Bag, i64)) -> i64 { let (b, n) = p; b.xs.len() + n }
+fn main() { println(f"{use2(mk(["x"])) + use2(mk(["y", "z"]))}"); }
+"#),
+        "9\n"
+    );
+    assert_eq!(
+        run(r#"
+fn passthru(p: (String, i64)) -> (String, i64) { p }
+fn main() { let (s, n) = passthru((f"abc", 7)); println(f"{n} {s}"); }
+"#),
+        "7 abc\n"
+    );
+}
+
 #[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and
