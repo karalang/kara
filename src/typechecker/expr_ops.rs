@@ -3545,13 +3545,18 @@ impl<'a> super::TypeChecker<'a> {
                         return Type::Error;
                     }
                 };
-                if self
+                // Record the RESOLVED impl's dispatch segment, not the bare
+                // target: two `impl From[X] for T` share the name `T.from`, and
+                // handing the backends that name is what let them each pick a
+                // different one (B-2026-08-27-1).
+                let from_impl_span = self
                     .env
                     .find_from_impl(inner_err, &target_name, &[])
-                    .is_some()
-                {
+                    .map(|imp| imp.target_span);
+                if let Some(target_span) = from_impl_span {
+                    let seg = self.resolved_impl_dispatch_segment(target_span, &target_name);
                     self.question_conversions
-                        .insert(SpanKey::from_span(span), target_name.clone());
+                        .insert(SpanKey::from_span(span), seg);
                     return inner_args[0].clone();
                 }
                 self.type_error(

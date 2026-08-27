@@ -46605,3 +46605,124 @@ fn lazylock_init_closure_accepts_module_bindings_and_shadows() {
         );
     }
 }
+
+/// A direct `T.from(x)` resolves by the ARGUMENT's type when `T` has more than
+/// one `From` impl. B-2026-08-27-1.
+///
+/// `resolve_path_type` returned the FIRST impl whose target matched and that
+/// declared `from`, with no argument context at all. With two impls the second
+/// was unreachable: `AppError.from(db_err)` was rejected as "expected
+/// 'ParseError', found 'DbError'" — a diagnostic naming a type the author never
+/// wrote, about a call the language permits — while `AppError.from(parse_err)`
+/// typechecked.
+///
+/// The METHOD-call spelling already resolved this correctly by argument type,
+/// so the two spellings of one call disagreed; only the PATH spelling (which is
+/// what a capitalized receiver parses as) was broken.
+#[test]
+fn a_direct_from_call_resolves_by_argument_across_two_impls() {
+    let src = "struct ParseError { code: i64 }\n\
+               struct DbError { code: i64 }\n\
+               enum AppError { Parse(ParseError), Db(DbError) }\n\
+               impl From[ParseError] for AppError { fn from(e: ParseError) -> AppError { return AppError.Parse(e); } }\n\
+               impl From[DbError] for AppError { fn from(e: DbError) -> AppError { return AppError.Db(e); } }\n\
+               fn main() {\n\
+                   let a = AppError.from(ParseError { code: 1 });\n\
+                   let b = AppError.from(DbError { code: 2 });\n\
+                   println(1);\n\
+               }";
+    typecheck_ok(src);
+}
+
+/// The same, for `TryFrom` — which carries the defect identically because
+/// `find_tryfrom_impl` is `find_from_impl`'s twin and both had their resolved
+/// choice discarded downstream. Measured before the fix: `T.try_from(b)` was
+/// rejected with "expected 'A', found 'B'".
+#[test]
+fn a_direct_try_from_call_resolves_by_argument_across_two_impls() {
+    let src = "struct A { v: i64 }\n\
+               struct B { v: i64 }\n\
+               struct T { v: i64 }\n\
+               impl TryFrom[A] for T {\n\
+                   type Error = String;\n\
+                   fn try_from(x: A) -> Result[T, String] { return Ok(T { v: x.v }); }\n\
+               }\n\
+               impl TryFrom[B] for T {\n\
+                   type Error = String;\n\
+                   fn try_from(x: B) -> Result[T, String] { return Ok(T { v: x.v }); }\n\
+               }\n\
+               fn main() {\n\
+                   let ra = T.try_from(A { v: 1 });\n\
+                   let rb = T.try_from(B { v: 2 });\n\
+                   println(1);\n\
+               }";
+    typecheck_ok(src);
+}
+
+/// A source type with NO impl is still rejected — and the message now names the
+/// types that DO convert instead of asserting the first impl's parameter.
+///
+/// This is the half that keeps the fix from being a hole: widening resolution
+/// to consider every impl must not make it accept anything, and the pre-fix
+/// message ("expected 'ParseError', found 'Other'") was actively misleading
+/// because it presented one arbitrary impl as the only one.
+#[test]
+fn a_from_call_with_no_matching_impl_names_the_types_that_do_convert() {
+    let src = "struct ParseError { code: i64 }\n\
+               struct DbError { code: i64 }\n\
+               struct Other { code: i64 }\n\
+               enum AppError { Parse(ParseError), Db(DbError) }\n\
+               impl From[ParseError] for AppError { fn from(e: ParseError) -> AppError { return AppError.Parse(e); } }\n\
+               impl From[DbError] for AppError { fn from(e: DbError) -> AppError { return AppError.Db(e); } }\n\
+               fn main() {\n\
+                   let bad = AppError.from(Other { code: 3 });\n\
+                   println(1);\n\
+               }";
+    let errs = typecheck_errors(src);
+    let joined = errs
+        .iter()
+        .map(|e| e.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains("no `impl From[Other] for AppError`"),
+        "expected a rejection naming the absent impl, got: {joined}"
+    );
+    assert!(
+        joined.contains("`DbError`") && joined.contains("`ParseError`"),
+        "the rejection should list BOTH source types that do convert, so the \
+         author can see what is available rather than one arbitrary impl's \
+         parameter; got: {joined}"
+    );
+}
+
+/// Two conversion impls that no axis can name apart are REFUSED, not guessed
+/// at. B-2026-08-27-1's conservative corner.
+///
+/// `impl From[Array[i64, 3]] for T` and `impl From[Array[i64, 5]] for T` share
+/// a target, and their trait arguments carry a const (a size) that the dispatch
+/// renderer cannot spell faithfully. Neither the target axis nor the trait-args
+/// axis can separate them, so both would own one `T.from`.
+///
+/// Measured before this was closed: an `Array[i64, 3]` value silently converted
+/// through the `Array[i64, 5]` impl, with `karac check` reporting nothing. A
+/// refusal an author can act on is the correct outcome — the same call the
+/// sibling `E_IMPL_TARGET_NOT_DISTINGUISHABLE` makes on the target axis.
+#[test]
+fn conversion_impls_that_cannot_be_named_apart_are_refused() {
+    let src = "struct T { v: i64 }\n\
+               impl From[Array[i64, 3]] for T { fn from(x: Array[i64, 3]) -> T { return T { v: 1 }; } }\n\
+               impl From[Array[i64, 5]] for T { fn from(x: Array[i64, 5]) -> T { return T { v: 2 }; } }\n\
+               fn main() { println(1); }";
+    let errs = typecheck_errors(src);
+    let hits = errs
+        .iter()
+        .filter(|e| e.message.contains("E_IMPL_TARGET_NOT_DISTINGUISHABLE"))
+        .count();
+    assert_eq!(
+        hits,
+        2,
+        "both impls must be pointed at, not just whichever is second; got: {:?}",
+        errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}

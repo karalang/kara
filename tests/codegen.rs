@@ -28455,6 +28455,66 @@ fn main() {
         );
     }
 
+    /// Source for [`test_e2e_two_from_impls_dispatch_by_source_type`], with the
+    /// two `From` impls emitted in the given order. See the interpreter twin
+    /// `two_from_impls_dispatch_by_source_type` for why order is a parameter.
+    fn two_from_impls_src(parse_impl_first: bool) -> String {
+        let p = "impl From[ParseError] for AppError { fn from(e: ParseError) -> AppError { return AppError.Parse(e); } }";
+        let d = "impl From[DbError] for AppError { fn from(e: DbError) -> AppError { return AppError.Db(e); } }";
+        let (a, b) = if parse_impl_first { (p, d) } else { (d, p) };
+        format!(
+            "struct ParseError {{ tag: String }}\n\
+             struct DbError {{ code: i64 }}\n\
+             enum AppError {{ Parse(ParseError), Db(DbError) }}\n\
+             {a}\n\
+             {b}\n\
+             fn label(a: AppError) -> String {{\n\
+                 match a {{\n\
+                     AppError.Parse(p) => return f\"PARSE:{{p.tag}}\",\n\
+                     AppError.Db(d) => return f\"DB:{{d.code}}\",\n\
+                 }}\n\
+             }}\n\
+             fn fails_parse() -> Result[i64, ParseError] {{ return Err(ParseError {{ tag: \"p\" }}); }}\n\
+             fn fails_db() -> Result[i64, DbError] {{ return Err(DbError {{ code: 7 }}); }}\n\
+             fn q_parse() -> Result[i64, AppError] {{ let n = fails_parse()?; return Ok(n); }}\n\
+             fn q_db() -> Result[i64, AppError] {{ let n = fails_db()?; return Ok(n); }}\n\
+             fn main() {{\n\
+                 match q_parse() {{ Ok(_) => println(\"ok\"), Err(e) => println(label(e)), }}\n\
+                 match q_db() {{ Ok(_) => println(\"ok\"), Err(e) => println(label(e)), }}\n\
+                 println(label(AppError.from(ParseError {{ tag: \"p\" }})));\n\
+                 println(label(AppError.from(DbError {{ code: 7 }})));\n\
+                 let a: AppError = (ParseError {{ tag: \"p\" }}).into();\n\
+                 let b: AppError = (DbError {{ code: 7 }}).into();\n\
+                 println(label(a));\n\
+                 println(label(b));\n\
+             }}"
+        )
+    }
+
+    #[test]
+    fn test_e2e_two_from_impls_dispatch_by_source_type() {
+        // B-2026-08-27-1 — the CODEGEN half, and the one that made this severe.
+        // Two `impl From[X] for AppError` both wanted the symbol
+        // `AppError.from`; LLVM renamed the second, so `get_function` handed
+        // the FIRST to every conversion site. The interpreter kept the LAST, so
+        // the backends ran different functions on the same program — and
+        // `karac check` accepted it, because `find_from_impl` had already
+        // matched on the source type. Only the NAME was lossy.
+        //
+        // The payloads have deliberately different shapes (`String` vs `i64`),
+        // which is what turns a wrong dispatch into a type confusion: feeding a
+        // `ParseError` to the `DbError` impl made the compiled program read the
+        // `String`'s three words as three `i64` fields and print a raw heap
+        // pointer — an ASLR disclosure, with exit status 0 and no diagnostic.
+        //
+        // Both impl ORDERS run, because a single-order fixture passes on one
+        // backend by luck: the two backends were wrong in OPPOSITE directions,
+        // so whichever order suits the backend under test hides the bug.
+        let expect = Some("PARSE:p\nDB:7\nPARSE:p\nDB:7\nPARSE:p\nDB:7\n");
+        assert_eq!(run_program(&two_from_impls_src(true)).as_deref(), expect);
+        assert_eq!(run_program(&two_from_impls_src(false)).as_deref(), expect);
+    }
+
     #[test]
     fn test_e2e_same_head_impls_dispatch_through_a_chain() {
         // B-2026-08-13-8 — the chained-receiver case, which is where a

@@ -587,6 +587,34 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-08-27-1 — a DIRECT `T.from(x)` / `T.try_from(x)` where `T` has
+        // MORE THAN ONE impl of that conversion trait.
+        //
+        // `resolve_path_type` picks the FIRST impl whose target matches and that
+        // declares the member, with no argument context at all — its own comment
+        // says as much. With two impls that made the second unreachable:
+        // `AppError.from(db_err)` was rejected as "expected 'ParseError', found
+        // 'DbError'", naming a type the author never wrote, while
+        // `AppError.from(parse_err)` typechecked.
+        //
+        // The METHOD-call spelling already resolves this correctly by argument
+        // type (`try_identifier_receiver_method`'s `from` arm, which exists for
+        // exactly this reason). A CAPITALIZED receiver parses as a two-segment
+        // PATH call and never reaches that arm, so the two spellings of one call
+        // disagreed. This gives the path spelling the same argument-directed
+        // lookup — and records which impl won, since the group's members no
+        // longer share a name.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && args.len() == 1 {
+                if let Some(ty) =
+                    self.infer_multi_impl_conversion_call(&segments[0], &segments[1], args, span)
+                {
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+            }
+        }
+
         // Fallible-allocation constructor companions (phase-8-stdlib-floor
         // item 2). `Type.try_with_capacity(n)` / `Vec.try_from_slice(src)` type
         // identically to their panicking `Type.<base>(...)` constructor but
@@ -2903,5 +2931,89 @@ fn builtin_assoc_fn_arity_mismatch(ty: &str, member: &str, found: usize) -> Opti
         None
     } else {
         Some(arities.to_vec())
+    }
+}
+
+impl super::TypeChecker<'_> {
+    /// Resolve a direct `T.from(x)` / `T.try_from(x)` by the ARGUMENT's type
+    /// when `T` carries more than one impl of that conversion trait, and record
+    /// the winning impl's dispatch segment for lowering. B-2026-08-27-1.
+    ///
+    /// Returns `None` — leaving the call on exactly the path it takes today —
+    /// unless the `(target, member)` group genuinely collides. That gate is what
+    /// keeps this additive: a single-impl program is untouched, and so is every
+    /// BUILTIN `from` surface (numeric widening, `char.try_from`, `F64.from`,
+    /// enum `from_tag`), none of which registers two user impls on one target.
+    fn infer_multi_impl_conversion_call(
+        &mut self,
+        type_name: &str,
+        member: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        let trait_name = match member {
+            "from" => "From",
+            "try_from" => "TryFrom",
+            _ => return None,
+        };
+        // Collect first (owned), so the immutable borrow of `env` ends before
+        // `infer_expr` needs `&mut self`.
+        let sources: Vec<Type> = self
+            .env
+            .impls
+            .iter()
+            .filter(|imp| {
+                imp.target_type == type_name
+                    && imp.trait_name.as_deref() == Some(trait_name)
+                    && imp.methods.contains_key(member)
+            })
+            .filter_map(|imp| imp.methods.get(member)?.params.first().cloned())
+            .collect();
+        if sources.len() < 2 {
+            return None;
+        }
+        let arg_ty = self.infer_expr(&args[0].value);
+        if arg_ty == Type::Error {
+            return Some(Type::Error);
+        }
+        let resolved = if trait_name == "From" {
+            self.env.find_from_impl(&arg_ty, type_name, &[])
+        } else {
+            self.env.find_tryfrom_impl(&arg_ty, type_name, &[])
+        }
+        .map(|imp| {
+            (
+                imp.target_span,
+                imp.methods.get(member).map(|s| s.return_type.clone()),
+            )
+        });
+        let Some((target_span, ret)) = resolved else {
+            // Name every source type that DOES convert. The pre-fix message
+            // reported the first impl's parameter as if it were the only one,
+            // which is what made a legal call look like a type error.
+            let mut available: Vec<String> = sources.iter().map(type_display).collect();
+            available.sort();
+            self.type_error(
+                format!(
+                    "no `impl {}[{}] for {}` is in scope; `{}` converts from {}",
+                    trait_name,
+                    type_display(&arg_ty),
+                    type_name,
+                    type_name,
+                    available
+                        .iter()
+                        .map(|s| format!("`{s}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return Some(Type::Error);
+        };
+        let seg = self.resolved_impl_dispatch_segment(target_span, type_name);
+        self.assoc_conversion_dispatch
+            .insert(SpanKey::from_span(span), seg);
+        Some(ret.unwrap_or(Type::Error))
     }
 }

@@ -1185,6 +1185,7 @@ impl<'a> Lowerer<'a> {
         // The direct-terminal desugar below keys `method_callee_types` by the
         // method-call span (== the receiver's span in this AST) — capture it
         // before the kind borrow.
+        let self_span = expr.span;
         // Recurse into sub-expressions first.
         match &mut expr.kind {
             ExprKind::Binary { left, right, .. } => {
@@ -1206,6 +1207,24 @@ impl<'a> Lowerer<'a> {
                 self.lower_expr(right);
             }
             ExprKind::Call { callee, args } => {
+                // B-2026-08-27-1 — retarget a direct `T.from(x)` /
+                // `T.try_from(x)` onto the impl its ARGUMENT selected. With two
+                // `impl From[_] for T`, the group is qualified and neither
+                // member owns the bare `T.from` symbol any more, so the written
+                // path resolves to nothing; the typechecker recorded which impl
+                // won, and this is where that choice becomes the callee.
+                if let Some(seg) = self
+                    .tc
+                    .assoc_conversion_dispatch
+                    .get(&SpanKey::from_span(&self_span))
+                    .cloned()
+                {
+                    if let ExprKind::Path { segments, .. } = &mut callee.kind {
+                        if segments.len() == 2 {
+                            segments[0] = seg;
+                        }
+                    }
+                }
                 self.lower_expr(callee);
                 // `collect_all` auto-thunking (design.md § Concurrency
                 // Semantics — "closure wrappers optional"): wrap each

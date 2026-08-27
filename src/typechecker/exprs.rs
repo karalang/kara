@@ -3279,13 +3279,16 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, &Type::Error);
             return Some(Type::Error);
         }
-        if self
+        // The resolved impl's dispatch segment, not the bare target — see
+        // `resolved_impl_dispatch_segment` (B-2026-08-27-1).
+        let from_impl_span = self
             .env
             .find_from_impl(&src_ty, &target_name, &[])
-            .is_some()
-        {
+            .map(|imp| imp.target_span);
+        if let Some(target_span) = from_impl_span {
+            let seg = self.resolved_impl_dispatch_segment(target_span, &target_name);
             self.into_conversions
-                .insert(SpanKey::from_span(&expr.span), target_name);
+                .insert(SpanKey::from_span(&expr.span), seg);
             self.record_expr_type(&expr.span, expected);
             return Some(expected.clone());
         }
@@ -3396,13 +3399,16 @@ impl<'a> super::TypeChecker<'a> {
             self.record_expr_type(&expr.span, &Type::Error);
             return Some(Type::Error);
         }
-        if self
+        // The resolved impl's dispatch segment, not the bare target — see
+        // `resolved_impl_dispatch_segment` (B-2026-08-27-1).
+        let tryfrom_impl_span = self
             .env
             .find_tryfrom_impl(&src_ty, &target_name, &[])
-            .is_some()
-        {
+            .map(|imp| imp.target_span);
+        if let Some(target_span) = tryfrom_impl_span {
+            let seg = self.resolved_impl_dispatch_segment(target_span, &target_name);
             self.try_into_conversions
-                .insert(SpanKey::from_span(&expr.span), target_name);
+                .insert(SpanKey::from_span(&expr.span), seg);
             self.record_expr_type(&expr.span, expected);
             return Some(expected.clone());
         }

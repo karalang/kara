@@ -26031,6 +26031,76 @@ fn main() {
     assert_eq!(out, "VEC-I64\n1\nVEC-STR\nVEC-I64\nBOX-I64\nBOX-STR\n");
 }
 
+/// The source program for [`two_from_impls_dispatch_by_source_type`], with the
+/// two `From` impls emitted in the given order.
+///
+/// The ORDER is a parameter because order was the whole bug: with the impls
+/// collapsed onto one `AppError.from` name, each backend answered with a
+/// different member of the group, so ANY single-order fixture passes on one
+/// backend by luck. Only running both orders and demanding identical output
+/// distinguishes "resolved correctly" from "happened to pick the right one".
+fn two_from_impls_src(parse_impl_first: bool) -> String {
+    let p = "impl From[ParseError] for AppError { fn from(e: ParseError) -> AppError { return AppError.Parse(e); } }";
+    let d = "impl From[DbError] for AppError { fn from(e: DbError) -> AppError { return AppError.Db(e); } }";
+    let (a, b) = if parse_impl_first { (p, d) } else { (d, p) };
+    format!(
+        r#"
+struct ParseError {{ tag: String }}
+struct DbError {{ code: i64 }}
+enum AppError {{ Parse(ParseError), Db(DbError) }}
+{a}
+{b}
+fn label(a: AppError) -> String {{
+    match a {{
+        AppError.Parse(p) => return f"PARSE:{{p.tag}}",
+        AppError.Db(d) => return f"DB:{{d.code}}",
+    }}
+}}
+fn fails_parse() -> Result[i64, ParseError] {{ return Err(ParseError {{ tag: "p" }}); }}
+fn fails_db() -> Result[i64, DbError] {{ return Err(DbError {{ code: 7 }}); }}
+fn q_parse() -> Result[i64, AppError] {{ let n = fails_parse()?; return Ok(n); }}
+fn q_db() -> Result[i64, AppError] {{ let n = fails_db()?; return Ok(n); }}
+fn main() {{
+    match q_parse() {{ Ok(_) => println("ok"), Err(e) => println(label(e)), }}
+    match q_db() {{ Ok(_) => println("ok"), Err(e) => println(label(e)), }}
+    println(label(AppError.from(ParseError {{ tag: "p" }})));
+    println(label(AppError.from(DbError {{ code: 7 }})));
+    let a: AppError = (ParseError {{ tag: "p" }}).into();
+    let b: AppError = (DbError {{ code: 7 }}).into();
+    println(label(a));
+    println(label(b));
+}}
+"#
+    )
+}
+
+#[test]
+fn two_from_impls_dispatch_by_source_type() {
+    // B-2026-08-27-1 — two `impl From[X] for AppError` both wanted the name
+    // `AppError.from`. The interpreter's env kept the LAST registered and
+    // codegen's module handed out the FIRST, so `--interp` and `karac build`
+    // ran DIFFERENT conversion functions on the same program.
+    //
+    // The two error payloads have DIFFERENT SHAPES here (a `String` field
+    // against an `i64` field) on purpose. With matching shapes a wrong
+    // dispatch is merely a wrong answer; with these, feeding a `ParseError` to
+    // the `DbError` impl was a type confusion — the interpreter hit
+    // `unreachable!` ("field 'code' not found on struct 'ParseError'") and AOT
+    // silently read the `String`'s words as an `i64`, printing a raw heap
+    // pointer and exiting 0.
+    //
+    // All THREE spellings are exercised, because they are three different
+    // resolution paths that happened to share one broken name: `?`
+    // (question_conversions), `.into()` (into_conversions via the blanket
+    // lowering), and a direct `AppError.from(x)` (a two-segment path call,
+    // which additionally used to be REJECTED outright for the second source
+    // type — "expected 'ParseError', found 'DbError'", naming a type the
+    // author never wrote).
+    let expect = "PARSE:p\nDB:7\nPARSE:p\nDB:7\nPARSE:p\nDB:7\n";
+    assert_eq!(run_no_errors(&two_from_impls_src(true)), expect);
+    assert_eq!(run_no_errors(&two_from_impls_src(false)), expect);
+}
+
 #[test]
 fn user_trait_impl_over_slice_dispatches() {
     // B-2026-08-13-7 — the INTERPRETER half, which is the piece that had to land

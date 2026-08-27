@@ -1376,6 +1376,13 @@ pub struct TypeCheckResult {
     /// this side-table to know whether to call `<target>.from(err)` on the
     /// propagated Err value.
     pub question_conversions: FxHashMap<SpanKey, String>,
+    /// B-2026-08-27-1. A direct `T.from(x)` / `T.try_from(x)` call whose target
+    /// has more than one impl of that conversion trait, keyed by the CALL span
+    /// → the dispatch segment of the impl the ARGUMENT selected. Lowering
+    /// rewrites the path head to it; without that the call reaches whichever
+    /// impl happens to own the bare `T.from` symbol, which is nobody once the
+    /// group is qualified.
+    pub assoc_conversion_dispatch: FxHashMap<SpanKey, String>,
     /// For each `?` expression, the UNWRAPPED Ok/Some payload `TypeExpr` (what
     /// the `?` evaluates to). Written exactly once per `?`, by `resolve_question`
     /// — unambiguously the payload, never the `Result`/`Option` wrapper. Codegen's
@@ -2161,6 +2168,11 @@ pub struct TypeChecker<'a> {
     /// (span of the wp CALL -> TypeExpr). See the public copy on
     /// `TypeCheckResult`.
     pub(super) wp_result_types: FxHashMap<SpanKey, TypeExpr>,
+    /// B-2026-08-27-1 — a DIRECT `T.from(x)` / `T.try_from(x)` whose `(T,
+    /// member)` group has more than one impl: the span of the CALL → the
+    /// resolved impl's dispatch segment. Lowering rewrites the path's head
+    /// segment to it so the backends reach the impl the argument selected.
+    pub(super) assoc_conversion_dispatch: FxHashMap<SpanKey, String>,
     /// `x.into()` conversions (span of the MethodCall → target type name).
     pub(super) into_conversions: FxHashMap<SpanKey, String>,
     /// `x.try_into()` conversions (span of the MethodCall → target type name,
@@ -2566,6 +2578,7 @@ impl<'a> TypeChecker<'a> {
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
+            assoc_conversion_dispatch: FxHashMap::default(),
             question_ok_payload_types: FxHashMap::default(),
             wp_result_types: FxHashMap::default(),
             into_conversions: FxHashMap::default(),
@@ -2855,6 +2868,7 @@ impl<'a> TypeChecker<'a> {
             union_info: self.env.unions,
             distinct_type_traits,
             question_conversions: self.question_conversions,
+            assoc_conversion_dispatch: self.assoc_conversion_dispatch,
             question_ok_payload_types: self.question_ok_payload_types,
             wp_result_types: self.wp_result_types,
             trait_impls,
@@ -3197,6 +3211,32 @@ impl<'a> TypeChecker<'a> {
     /// *"deny-by-default for stdlib crates and allow for user code"*
     /// surface without needing a build-wide CLI default (which lands
     /// in slice 4b polish).
+    /// The dispatch type segment the backends will find a RESOLVED impl's
+    /// methods under: its qualified name when its `(head, method)` group
+    /// collides, else `fallback` (the bare target name).
+    ///
+    /// The conversion side-tables (`question_conversions`, `into_conversions`,
+    /// `try_into_conversions`) record this rather than the target name, and the
+    /// difference is the whole of B-2026-08-27-1. Resolution here already picks
+    /// the right impl — `find_from_impl` matches the source type against the
+    /// `from` method's first parameter — but storing only the TARGET threw that
+    /// away, leaving each backend to re-derive a callee from a name two impls
+    /// share. Recording the resolved impl's own segment means the choice made
+    /// here is the choice both backends execute, so they cannot disagree.
+    pub(super) fn resolved_impl_dispatch_segment(
+        &self,
+        target_span: Option<crate::token::Span>,
+        fallback: &str,
+    ) -> String {
+        target_span
+            .and_then(|sp| {
+                self.impl_dispatch_names
+                    .get(&SpanKey::from_span(&sp))
+                    .cloned()
+            })
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
     /// Refuse a program whose impls collide on a `Head.method` symbol that the
     /// dispatch-name machinery cannot qualify apart (B-2026-08-18-13).
     ///
@@ -3207,6 +3247,14 @@ impl<'a> TypeChecker<'a> {
     /// collapses onto a single symbol and each backend answers every receiver
     /// with a different member of it.
     ///
+    /// B-2026-08-27-1 widened this to the TRAIT-argument axis on the same
+    /// terms. `impl From[Array[i64, 3]] for T` and `impl From[Array[i64, 5]]
+    /// for T` have identical targets and const-carrying trait args, so neither
+    /// axis can name them apart — measured before this widened: an
+    /// `Array[i64, 3]` value silently converted through the `Array[i64, 5]`
+    /// impl. The message below therefore speaks of the impls, not of their
+    /// targets specifically, since either half can be the unrenderable one.
+    ///
     /// One error per member, so both offending impls are pointed at rather
     /// than only whichever happens to be second.
     fn reject_unqualifiable_impl_collisions(&mut self) {
@@ -3216,12 +3264,12 @@ impl<'a> TypeChecker<'a> {
             self.type_error(
                 format!(
                     "error[E_IMPL_TARGET_NOT_DISTINGUISHABLE]: two or more \
-                     `impl` blocks define '{method}' for different \
-                     instantiations of '{head}', and their targets cannot be \
-                     told apart at dispatch because they carry a const \
-                     argument (a size or shape). Both would compile to one \
-                     `{head}.{method}`, and the interpreter and the compiled \
-                     backends would each answer every receiver with a \
+                     `impl` blocks define '{method}' for '{head}', and they \
+                     cannot be told apart at dispatch because a const \
+                     argument (a size or shape) appears in the impl target or \
+                     in the implemented trait's arguments. All of them would \
+                     compile to one `{head}.{method}`, and the interpreter and \
+                     the compiled backends would each answer every call with a \
                      different one. Give the methods distinct names, or move \
                      them onto a wrapper type per instantiation"
                 ),

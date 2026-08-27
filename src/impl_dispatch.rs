@@ -1,5 +1,7 @@
-//! Disambiguating dispatch names for impls that differ only in their target's
-//! type arguments (B-2026-08-13-8).
+//! Disambiguating dispatch names for impls whose head name is not a unique
+//! dispatch identity — because they differ only in their target's type
+//! arguments (B-2026-08-13-8), or only in the arguments of the PARAMETERIZED
+//! TRAIT they implement (B-2026-08-27-1).
 //!
 //! An impl method is named `<target-head>.<method>` everywhere it is dispatched:
 //! codegen emits the LLVM function under that name, the interpreter binds it in
@@ -19,6 +21,25 @@
 //! keys its impl table on `(name, args)` and had resolved both correctly. Only
 //! the runtime NAME was lossy.
 //!
+//! The second axis is the same sentence with the arguments moved: two impls of
+//! one PARAMETERIZED trait for a single target.
+//!
+//! ```text
+//! impl From[ParseError] for AppError { fn from(e: ParseError) -> AppError { … } }
+//! impl From[DbError]    for AppError { fn from(e: DbError)    -> AppError { … } }
+//! ```
+//!
+//! Both wanted to be `AppError.from`, with the same measured split — and this
+//! one is the shape design.md § Conversion Traits TEACHES, one impl per error
+//! type flowing into one application error. When the two payloads had different
+//! layouts it stopped being a wrong answer and became a type confusion: an
+//! interpreter `unreachable!`, and on AOT a `String`'s three words read as three
+//! `i64` fields, printing a raw heap pointer and exiting 0.
+//!
+//! What makes both axes one problem is that the typechecker had ALREADY chosen
+//! correctly in each case — `impl_args_match` on the first, `find_from_impl`'s
+//! source-type match on the second. Only the name was ambiguous.
+//!
 //! This module is the single place that decides (a) which impls need more than a
 //! head name and (b) what that longer name is. All three phases call it on the
 //! same AST, so there is exactly one rendering and no way for the emitters and
@@ -29,9 +50,13 @@
 //! # Only on collision
 //!
 //! A qualified name is minted ONLY for a `(head, method)` that genuinely has two
-//! or more impls with different targets. Every other impl in the language keeps
-//! the exact name it has today, which is what makes this additive: a program
-//! that compiles now has no colliding group, so not one symbol moves.
+//! or more impls with different IDENTITIES. Every other impl in the language
+//! keeps the exact name it has today, which is what makes this additive: a
+//! program that compiles now has no colliding group, so not one symbol moves.
+//! In particular a lone `impl From[X] for T` — the common case by far — is not a
+//! group, and the baked stdlib defines no `From` impls at all (its numeric
+//! conversions are compiler builtins), so nothing outside a program that is
+//! already broken can move.
 //!
 //! # Qualifying the TYPE segment, not the method
 //!
@@ -112,15 +137,113 @@ fn impl_target_head(target: &TypeExpr) -> Option<String> {
     }
 }
 
+/// What an impl's implemented trait contributes to its dispatch identity.
+///
+/// The three cases must stay distinct, and conflating the last two is a silent
+/// miscompile: "carries no arguments" means the impl is not on this axis and
+/// keeps the name it has today, while "carries arguments that cannot be
+/// rendered" means two such impls are INDISTINGUISHABLE and the program has to
+/// be refused rather than guessed at.
+enum TraitAxis {
+    /// An inherent impl, or a plain `Ord` / `Display` — not on this axis.
+    Absent,
+    /// Parameterized, but an argument has no faithful spelling here (a const or
+    /// shape arg — the same shapes [`render_impl_target`] declines).
+    Declined,
+    /// `From[ParseError]`, `TryFrom[A]`, …
+    Rendered(String),
+}
+
+/// The implemented trait rendered WITH its generic arguments.
+fn render_trait_with_args(trait_name: Option<&crate::ast::PathExpr>) -> TraitAxis {
+    let Some(path) = trait_name else {
+        return TraitAxis::Absent;
+    };
+    let Some(args) = path.generic_args.as_ref() else {
+        return TraitAxis::Absent;
+    };
+    if args.is_empty() {
+        return TraitAxis::Absent;
+    }
+    let Some(head) = path.segments.last().cloned() else {
+        return TraitAxis::Declined;
+    };
+    let mut rendered = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg {
+            GenericArg::Type(t) => match render_impl_target(t) {
+                Some(r) => rendered.push(r),
+                None => return TraitAxis::Declined,
+            },
+            GenericArg::Const(_) | GenericArg::Shape(_) => return TraitAxis::Declined,
+        }
+    }
+    TraitAxis::Rendered(format!("{}[{}]", head, rendered.join(", ")))
+}
+
+/// An impl's full dispatch IDENTITY: its rendered target, plus the implemented
+/// trait's own arguments when it has any (`AppError@From[ParseError]`).
+///
+/// # Why the trait's arguments belong in the identity
+///
+/// The target alone is not an identity for a PARAMETERIZED trait. `impl
+/// From[ParseError] for AppError` and `impl From[DbError] for AppError` are two
+/// different impls that the language explicitly supports — design.md § Conversion
+/// Traits teaches exactly this pair, one per error type flowing into one
+/// application error — and both render the target `AppError`, so both wanted the
+/// symbol `AppError.from` (B-2026-08-27-1).
+///
+/// That is the same lossy-name failure as the target-args axis this module was
+/// written for, with the same measured shape: the interpreter's env kept the
+/// LAST registered and codegen's module handed out the FIRST, so `--interp` and
+/// `karac build` ran DIFFERENT conversion functions on the same program. With
+/// mismatched payloads it stopped being a wrong answer and became a type
+/// confusion — an interpreter `unreachable!`, and on AOT a `String`'s three
+/// words read as three `i64` fields, printing a raw heap pointer and exiting 0.
+///
+/// # Why this is not the coherence case the module declines
+///
+/// [`collect_impl_dispatch_names`] leaves `impl Ord for Foo` alongside `impl
+/// Display for Foo` alone, on the grounds that two same-named methods on one
+/// concrete type are a coherence question rather than a naming one. That
+/// reasoning holds only for UNPARAMETERIZED traits. `From[A]` and `From[B]` are
+/// distinct trait instances, legal together, and distinguishable by argument —
+/// the typechecker's `find_from_impl` already picks the right one. Nothing was
+/// ambiguous except the name, which is precisely what this module exists to fix.
+///
+/// The `@` separator is deliberate: dispatch keys are split on the LAST `.` to
+/// recover the method segment (see the module header), so the type segment must
+/// stay dot-free.
+fn render_impl_identity(imp: &crate::ast::ImplBlock) -> Option<String> {
+    let target = render_impl_target(&imp.target_type)?;
+    match render_trait_with_args(imp.trait_name.as_ref()) {
+        TraitAxis::Absent => Some(target),
+        TraitAxis::Rendered(tr) => Some(format!("{target}@{tr}")),
+        // Declining the whole identity is what routes a pair like
+        // `impl From[Array[i64, 3]] for T` / `impl From[Array[i64, 5]] for T`
+        // into `unqualifiable_collision_groups`, which REFUSES the program.
+        // Falling back to the bare target instead would render both impls
+        // identically and hand them back the silent collision this module
+        // exists to remove — measured on exactly that pair: an
+        // `Array[i64, 3]` value converted through the `Array[i64, 5]` impl.
+        TraitAxis::Declined => None,
+    }
+}
+
 /// Compute the qualified type segment for every impl whose head name collides
 /// with another impl's on some method.
 ///
 /// Two impls collide when they share a head name AND both define a method of the
-/// same name AND their rendered targets differ. The last conjunct is what keeps
-/// this narrow: `impl Ord for Foo` and `impl Display for Foo` both render `Foo`,
-/// so they are not a collision this module can fix (a genuine same-name method
-/// clash on one concrete type is a coherence question, not a naming one) and
-/// they are left exactly as they are.
+/// same name AND their rendered IDENTITIES differ. The last conjunct is what
+/// keeps this narrow: `impl Ord for Foo` and `impl Display for Foo` both render
+/// `Foo`, so they are not a collision this module can fix (a genuine same-name
+/// method clash on one concrete type is a coherence question, not a naming one)
+/// and they are left exactly as they are.
+///
+/// The identity is [`render_impl_identity`], not the target alone, so the axis
+/// covers a parameterized trait as well: `impl From[A] for T` and `impl From[B]
+/// for T` share a target but are two legal, distinguishable impls, and only
+/// their NAME was ambiguous (B-2026-08-27-1).
 ///
 /// If ANY impl in a colliding group fails to render, the entire group is left
 /// unqualified. Half-qualifying a group is the one outcome worse than the bug:
@@ -143,7 +266,7 @@ pub fn collect_impl_dispatch_names(program: &Program) -> ImplDispatchNames {
             continue;
         }
         let key = SpanKey::from_span(&imp.target_type.span);
-        let rendered = render_impl_target(&imp.target_type);
+        let rendered = render_impl_identity(imp);
         for it in &imp.items {
             let crate::ast::ImplItem::Method(m) = it else {
                 continue;
@@ -230,7 +353,7 @@ pub fn unqualifiable_collision_groups(program: &Program) -> Vec<(Span, String, S
         if imp.generic_params.is_some() {
             continue;
         }
-        let rendered = render_impl_target(&imp.target_type);
+        let rendered = render_impl_identity(imp);
         for it in &imp.items {
             let crate::ast::ImplItem::Method(m) = it else {
                 continue;
@@ -374,6 +497,74 @@ mod tests {
     }
 
     #[test]
+    fn two_impls_of_one_parameterized_trait_are_qualified() {
+        // B-2026-08-27-1. Both target `AppError`, so the TARGET axis renders
+        // them identically and the group was skipped as a coherence question —
+        // which it is not: `From[A]` and `From[B]` are distinct trait instances
+        // the language supports together, and `find_from_impl` already tells
+        // them apart. Only the name collapsed.
+        assert_eq!(
+            qualified(
+                "struct A { v: i64 }\n\
+                 struct B { v: i64 }\n\
+                 struct T { v: i64 }\n\
+                 impl From[A] for T { fn from(x: A) -> T { return T { v: x.v }; } }\n\
+                 impl From[B] for T { fn from(x: B) -> T { return T { v: x.v }; } }"
+            ),
+            vec!["T@From[A]".to_string(), "T@From[B]".to_string()],
+        );
+    }
+
+    #[test]
+    fn a_lone_parameterized_trait_impl_is_never_qualified() {
+        // The additive property, on the new axis. One `impl From[A] for T` is
+        // not a group, so it keeps the `T.from` symbol it owns today. If this
+        // fails, every single-impl program in existence has moved.
+        assert!(qualified(
+            "struct A { v: i64 }\n\
+             struct T { v: i64 }\n\
+             impl From[A] for T { fn from(x: A) -> T { return T { v: x.v }; } }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn an_unparameterized_trait_pair_stays_a_coherence_question() {
+        // Two same-named methods on one concrete type via two ARGUMENT-LESS
+        // traits render identically and must still be left alone — renaming
+        // them would be this module overreaching into coherence, which it
+        // deliberately does not do. The trait-args axis widened the identity
+        // only for traits that HAVE arguments.
+        assert!(qualified(
+            "trait P { fn d(ref self) -> String; }\n\
+             trait Q { fn d(ref self) -> String; }\n\
+             struct Foo { v: i64 }\n\
+             impl P for Foo { fn d(ref self) -> String { return f\"p\"; } }\n\
+             impl Q for Foo { fn d(ref self) -> String { return f\"q\"; } }"
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn the_two_axes_compose_on_one_impl() {
+        // A parameterized trait AND a generic target: the identity has to carry
+        // both, or `From[A] for Box[i64]` and `From[B] for Box[i64]` would
+        // collapse back together the moment the target args matched.
+        assert_eq!(
+            qualified(
+                "struct A { v: i64 }\n\
+                 struct B { v: i64 }\n\
+                 impl From[A] for Vec[i64] { fn from(x: A) -> Vec[i64] { return Vec.new(); } }\n\
+                 impl From[B] for Vec[i64] { fn from(x: B) -> Vec[i64] { return Vec.new(); } }"
+            ),
+            vec![
+                "Vec[i64]@From[A]".to_string(),
+                "Vec[i64]@From[B]".to_string()
+            ],
+        );
+    }
+
+    #[test]
     fn multi_arg_and_nested_targets_render_in_full() {
         // `Map[String, i64]` vs `Map[i64, String]` differ only by ARG ORDER, so
         // a renderer that dropped or sorted args would collapse them right back
@@ -447,5 +638,36 @@ mod tests {
              impl Z for Array[i64, 4] { fn d(ref self) -> String { return f\"b\"; } }"
         )
         .is_empty());
+    }
+
+    #[test]
+    fn a_const_arg_in_the_trait_position_also_declines_and_is_reported() {
+        // B-2026-08-27-1's conservative corner. Both impls share the target `T`
+        // AND carry a const argument inside the trait's own arguments, so
+        // neither axis can name them apart.
+        //
+        // The trap this pins is the difference between "the trait has no
+        // arguments" and "the trait's arguments cannot be rendered". Collapsing
+        // the second case back to the bare target would render both impls
+        // identically, and the group would then look like a coherence question
+        // and be skipped in silence — which is the original bug, restored in a
+        // corner. Measured on exactly this pair before the distinction existed:
+        // an `Array[i64, 3]` value converted through the `Array[i64, 5]` impl,
+        // with no diagnostic.
+        let src = "struct T { v: i64 }\n\
+                   impl From[Array[i64, 3]] for T { fn from(x: Array[i64, 3]) -> T { return T { v: 1 }; } }\n\
+                   impl From[Array[i64, 5]] for T { fn from(x: Array[i64, 5]) -> T { return T { v: 2 }; } }";
+        // Not qualified — there is no faithful name to qualify with …
+        assert!(qualified(src).is_empty());
+        // … so the group must instead be REPORTED, one entry per member, which
+        // is what turns the silent wrong conversion into a refusal.
+        let program = crate::parse(src).program;
+        let groups = unqualifiable_collision_groups(&program);
+        assert_eq!(
+            groups.len(),
+            2,
+            "both impls must be pointed at, got {groups:?}"
+        );
+        assert!(groups.iter().all(|(_, head, m)| head == "T" && m == "from"));
     }
 }
