@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 308 | 2 |
-| leak | 206 | 1 |
+| leak | 206 | 0 |
 | missing-feature | 187 | 0 |
-| run-vs-build | 180 | 1 |
+| run-vs-build | 181 | 2 |
 | codegen-gap | 143 | 0 |
 | double-free | 142 | 0 |
 | diagnostics | 111 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1107 | 3 |
+| codegen | 1107 | 2 |
 | typecheck | 278 | 0 |
-| interp | 196 | 1 |
+| interp | 197 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1667 surfaced · 4 open · 1637 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1668 surfaced · 4 open · 1638 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-40 | 2026-08-27 | codegen | high | A TUPLE TYPE ARGUMENT does not survive the monomorphization substitution channel, which is keyed by type NAME. A nested generic call silently loses the binding and erases `T` to the i64 default -- SILENT WRONG ANSWER on the compiled backend, correct under the interpreter -- and two distinct tuple instantiations of one generic collide on a single mono symbol | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
-| B-2026-08-27-44 | 2026-08-27 | codegen | medium | A heap-bearing TUPLE argument whose value ESCAPES the caller's frame LEAKS the caller's original buffer, because the callee entry-copies but the caller registers no orphan-free: `fn passthru(p: (Bag, i64)) -> (Bag, i64) { p }` and `use2(mk([...]))` each leak 48 bytes under LSan while printing the right answer. The enum sibling of this arm got the `arg_escapes_frame` orphan-free in B-2026-08-01-14; the tuple arm never did. Pre-existing on the NON-generic path, and unmasked on the generic one by B-2026-08-27-37 | — |
 | B-2026-08-27-46 | 2026-08-27 | interp | high | `.cmp()` WITH AN ENUM-VARIANT LITERAL AS THE RECEIVER answers a CONSTANT under the interpreter, independent of both operands -- `E.A.cmp(E.B)`, `E.B.cmp(E.A)` and `E.A.cmp(E.A)` all return the SAME `Ordering`, while both compiled backends return Less/Greater/Equal correctly. Silent wrong answer, no diagnostic on any surface. Binding the receiver first (`let a = E.A; a.cmp(E.B)`) is correct, and so is the `<` operator in either spelling, so only the literal-receiver method spelling is affected. | — |
 | B-2026-08-27-47 | 2026-08-27 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { .. }.cmp(q)`), a CALL-RESULT receiver (`mk(1).cmp(mk(2))`) and an `Option[T]` receiver (`x.cmp(y)`) all pass `karac check` and run correctly under `--interp`, and all three refuse to build. Loud, not silent -- `karac build` errors -- but a run-vs-build split in a shape the checker calls legal. | — |
+| B-2026-08-27-48 | 2026-08-27 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; r.id + n }` prints `drop 41` twice under `karac run --interp` and once under `karac build`. Isolated to the destructuring -- a bare struct param and a tuple param read by FIELD are both correct -- so the param's own drop and the binding's drop both fire. The interpreter-side twin of B-2026-08-27-37, which was codegen's DOUBLE FREE on the same source shape | — |
 
 ### Relocated (2)
 
@@ -165,9 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1667 surfaced
 
 </details>
 
-### Fixed (1637)
+### Fixed (1638)
 
-<details><summary>1637 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1638 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1807,6 +1807,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1667 surfaced
 | B-2026-08-27-41 | typecheck+interp+codegen | medium | `.cmp()` on a tuple has no dispatch on ANY surface -- the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both backends fall through their met… | 31cf904 |
 | B-2026-08-27-42 | interp+codegen | low | `Array[T, N]` ORDERING operators never lower, while `karac check` accepts them: `a < b` on two `Array[i64, 2]` passes the typechecker and then fails… | 2955b94 |
 | B-2026-08-27-43 | codegen | high | AN ARM-LOCAL BINDING HANDED OUT OF A BRANCH LEAF LOSES ITS OWNER, so the FIRST consumption of the selected `Option[shared]` reads through a freed box | 9f62ac6 |
+| B-2026-08-27-44 | codegen | medium | A heap-bearing TUPLE argument whose value ESCAPES the caller's frame LEAKS the caller's original buffer, because the callee entry-copies but the call… | 4efd5ab |
 | B-2026-08-27-45 | interp+codegen | low | `Slice[T]` ORDERING operators never lower, while `karac check` accepts them -- the last member of the tuple/array family: `a < b` on two `Slice[i64]`… | 5c715cb |
 
 </details>
