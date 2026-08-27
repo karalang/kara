@@ -891,6 +891,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 let struct_name = p.segments[0].clone();
                 self.emit_hash_fn_for_struct(&struct_name)
             }
+            // B-2026-08-27-4 — the eq twin's sibling; the two must move
+            // together or equal keys land in different buckets.
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && self.type_decls.shared_types.contains_key(&p.segments[0]) =>
+            {
+                let shared_name = p.segments[0].clone();
+                self.emit_hash_fn_for_shared(&shared_name)
+            }
             _ => {
                 let key_ty = self.llvm_type_for_type_expr(te);
                 self.emit_hash_fn_for_type(&type_name, key_ty)
@@ -942,6 +951,16 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 let struct_name = p.segments[0].clone();
                 self.emit_eq_fn_for_struct(&struct_name)
+            }
+            // B-2026-08-27-4 — a `shared struct` / `shared enum` KEY. Without
+            // this arm it fell to the byte-compare fallback below, which for a
+            // shared key compares the POINTER.
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && self.type_decls.shared_types.contains_key(&p.segments[0]) =>
+            {
+                let shared_name = p.segments[0].clone();
+                self.emit_eq_fn_for_shared(&shared_name)
             }
             _ => {
                 let key_ty = self.llvm_type_for_type_expr(te);
@@ -1267,6 +1286,348 @@ impl<'ctx> super::Codegen<'ctx> {
     /// equality / refcount hashing applies). Map-of-shared-struct keys
     /// route through `emit_hash_fn_for_type`'s integer/pointer path,
     /// not here.
+    /// A shared box's USER AREA as its own struct type: the heap type minus
+    /// the `base` header slots the refcount (and, for a weak-targeted type,
+    /// the weak count) occupy. The same twin [`Self::shared_gep_layout`]
+    /// builds for a headerless object — anonymous struct types are uniqued by
+    /// LLVM, so rebuilding it per call site is free.
+    fn shared_user_area_type(
+        &self,
+        heap_type: inkwell::types::StructType<'ctx>,
+        base: u32,
+    ) -> inkwell::types::StructType<'ctx> {
+        let fields: Vec<BasicTypeEnum<'ctx>> = heap_type
+            .get_field_types()
+            .into_iter()
+            .skip(base as usize)
+            .collect();
+        self.context.struct_type(&fields, false)
+    }
+
+    /// Structural EQ for a `shared struct` / `shared enum` KEY
+    /// (B-2026-08-27-4).
+    ///
+    /// The struct arm of [`Self::emit_eq_fn_for_type_expr`] excludes shared
+    /// types, so a shared key fell through to the byte-compare fallback — and
+    /// a shared key's blob IS a pointer, so that compared POINTER IDENTITY.
+    /// `m.contains_key(twin)` then answered `false` on the compiled backends
+    /// for a structurally-equal key the interpreter matched, and `Set` failed
+    /// to dedup. design.md § Equality is explicit that this is wrong: "`==`
+    /// always means structural equality … The `Eq` trait determines `==`
+    /// REGARDLESS of whether the compiler chose RC or owned representation.
+    /// There is no reference-identity short-circuit". Reference identity is
+    /// reachable, deliberately, under its own name (`ref_eq`).
+    ///
+    /// The rule this implements is exactly "a shared key behaves as its
+    /// NON-SHARED twin would". It therefore inherits, rather than fixes, the
+    /// separate defect that a plain ENUM key with a heap-bearing payload also
+    /// compares its payload words instead of recursing — measured on
+    /// `enum S { A { s: String } }` with no `shared` in sight.
+    ///
+    /// NO POINTER FAST PATH. `pa == pb → true` is tempting and would also
+    /// terminate a cyclic comparison, but it is observable: a `f64` NaN field
+    /// makes a value structurally unequal to ITSELF, and the fast path would
+    /// answer `true` where the interpreter answers `false`. The null test
+    /// below is a guard, not a fast path — it fires only where a field walk
+    /// would fault.
+    pub(super) fn emit_eq_fn_for_shared(&mut self, name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_eq_{name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        if let Some(f) = self.try_emit_user_impl_eq_fn(name, &fn_name) {
+            return f;
+        }
+        let Some(info) = self.type_decls.shared_types.get(name).cloned() else {
+            let key_ty = self.context.ptr_type(AddressSpace::default()).into();
+            return self.emit_eq_fn_for_type(name, key_ty);
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let saved_bb = self.builder.get_insert_block();
+        // DECLARED BEFORE THE BODY IS EMITTED, so a self-referential shared
+        // struct (`Node { next: Option[Node] }`) finds itself in the module
+        // and terminates instead of recursing forever in the emitter.
+        let eq_fn = self.module.add_function(
+            &fn_name,
+            bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+
+        // A shared ENUM's payload area is not a field list, so the struct walk
+        // below does not apply; deferring to what the non-shared enum key does
+        // (a byte compare of the value) keeps the two in step, which is the
+        // whole rule here. Emitted against the heap type so the compare covers
+        // the tag and payload words rather than the pointer.
+        let field_tes: Vec<crate::ast::TypeExpr> = if info.is_enum {
+            Vec::new()
+        } else {
+            self.type_decls
+                .struct_field_type_exprs
+                .get(name)
+                .cloned()
+                .unwrap_or_default()
+        };
+        // A niche-encoded `Option[shared Inner]` field stores a BARE pointer
+        // (null = None), not the conventional 4-i64 Option layout, so the
+        // `Option` child fn would read the wrong shape. The inner type's own
+        // shared eq fn reads exactly that slot — pointer in, null-guarded —
+        // so it is the right callee, and the recursion is what the
+        // declare-first above exists to terminate.
+        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
+            .iter()
+            .enumerate()
+            .map(
+                |(i, te)| match info.niche_option_fields.get(i).and_then(|n| n.as_ref()) {
+                    Some(inner) => {
+                        let inner = inner.clone();
+                        self.emit_eq_fn_for_shared(&inner)
+                    }
+                    None => self.emit_eq_fn_for_type_expr(te),
+                },
+            )
+            .collect();
+
+        let (gep_ty, base) = self.shared_gep_layout(name, info.heap_type);
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+        let null_bb = self.context.append_basic_block(eq_fn, "null");
+        let fields_bb = self.context.append_basic_block(eq_fn, "fields");
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        let a_slot = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_slot = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let pa = self
+            .builder
+            .build_load(ptr_ty, a_slot, "sh.eq.a")
+            .unwrap()
+            .into_pointer_value();
+        let pb = self
+            .builder
+            .build_load(ptr_ty, b_slot, "sh.eq.b")
+            .unwrap()
+            .into_pointer_value();
+        let a_null = self.builder.build_is_null(pa, "sh.eq.a.null").unwrap();
+        let b_null = self.builder.build_is_null(pb, "sh.eq.b.null").unwrap();
+        let either_null = self
+            .builder
+            .build_or(a_null, b_null, "sh.eq.either.null")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(either_null, null_bb, fields_bb)
+            .unwrap();
+
+        // Either side null: equal iff BOTH are (two `None` niche slots).
+        self.builder.position_at_end(null_bb);
+        let both = self
+            .builder
+            .build_and(a_null, b_null, "sh.eq.both.null")
+            .unwrap();
+        self.builder.build_return(Some(&both)).unwrap();
+
+        self.builder.position_at_end(fields_bb);
+        if info.is_enum {
+            // The USER AREA only — the rc header differs between two
+            // structurally-equal objects, so comparing the whole box would
+            // answer `false` for every distinct pair. The area type is the
+            // heap type minus its header slots, the same twin
+            // `shared_gep_layout` builds for a headerless object, and the byte
+            // loop reads its SIZE rather than its field offsets.
+            let area_ty = self.shared_user_area_type(info.heap_type, base);
+            let inner = self.emit_eq_fn_for_type(&format!("{name}__area"), area_ty.into());
+            let aa = self
+                .builder
+                .build_struct_gep(info.heap_type, pa, base, "sh.eq.area.a")
+                .unwrap();
+            let ab = self
+                .builder
+                .build_struct_gep(info.heap_type, pb, base, "sh.eq.area.b")
+                .unwrap();
+            let eq = self
+                .builder
+                .build_call(inner, &[aa.into(), ab.into()], "sh.eq.area")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            self.builder.build_return(Some(&eq)).unwrap();
+        } else {
+            for (i, child_fn) in child_fns.iter().enumerate() {
+                let idx = base + i as u32;
+                let fa = self
+                    .builder
+                    .build_struct_gep(gep_ty, pa, idx, &format!("sh.eq.fa{i}"))
+                    .unwrap();
+                let fb = self
+                    .builder
+                    .build_struct_gep(gep_ty, pb, idx, &format!("sh.eq.fb{i}"))
+                    .unwrap();
+                let ok = self
+                    .builder
+                    .build_call(*child_fn, &[fa.into(), fb.into()], &format!("sh.eq.f{i}"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let next = self.context.append_basic_block(eq_fn, &format!("f{i}.ok"));
+                self.builder
+                    .build_conditional_branch(ok, next, neq_bb)
+                    .unwrap();
+                self.builder.position_at_end(next);
+            }
+            self.builder
+                .build_return(Some(&bool_t.const_int(1, false)))
+                .unwrap();
+        }
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
+    }
+
+    /// Structural HASH for a `shared struct` / `shared enum` KEY — the twin of
+    /// [`Self::emit_eq_fn_for_shared`], and required to move WITH it. Equal
+    /// keys that hash differently never meet in the table, so fixing equality
+    /// alone would leave the lookup missing exactly as before.
+    pub(super) fn emit_hash_fn_for_shared(&mut self, name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_hash_{name}{}", self.hash_hasher.mangle_suffix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let Some(info) = self.type_decls.shared_types.get(name).cloned() else {
+            let key_ty = self.context.ptr_type(AddressSpace::default()).into();
+            return self.emit_hash_fn_for_type(name, key_ty);
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let saved_bb = self.builder.get_insert_block();
+        // Declared before the body, for the reason the eq twin documents.
+        let hash_fn = self.module.add_function(
+            &fn_name,
+            i64_t.fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+
+        let field_tes: Vec<crate::ast::TypeExpr> = if info.is_enum {
+            Vec::new()
+        } else {
+            self.type_decls
+                .struct_field_type_exprs
+                .get(name)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
+            .iter()
+            .enumerate()
+            .map(
+                |(i, te)| match info.niche_option_fields.get(i).and_then(|n| n.as_ref()) {
+                    Some(inner) => {
+                        let inner = inner.clone();
+                        self.emit_hash_fn_for_shared(&inner)
+                    }
+                    None => self.emit_hash_fn_for_type_expr(te),
+                },
+            )
+            .collect();
+
+        let (gep_ty, base) = self.shared_gep_layout(name, info.heap_type);
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        let null_bb = self.context.append_basic_block(hash_fn, "null");
+        let body_bb = self.context.append_basic_block(hash_fn, "body");
+        self.builder.position_at_end(null_bb);
+        self.builder
+            .build_return(Some(&i64_t.const_zero()))
+            .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        let slot = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let obj = self
+            .builder
+            .build_load(ptr_ty, slot, "sh.h.obj")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self.builder.build_is_null(obj, "sh.h.null").unwrap();
+        self.builder
+            .build_conditional_branch(is_null, null_bb, body_bb)
+            .unwrap();
+
+        // A `None` niche slot hashes 0 — and must, since the eq twin calls two
+        // of them equal.
+        self.builder.position_at_end(body_bb);
+        if info.is_enum {
+            // User area only, for the reason the eq twin gives: hashing the rc
+            // header would give two structurally-equal boxes different digests
+            // and they would never meet in the table.
+            let area_ty = self.shared_user_area_type(info.heap_type, base);
+            let inner = self.emit_hash_fn_for_type(&format!("{name}__area"), area_ty.into());
+            let ap = self
+                .builder
+                .build_struct_gep(info.heap_type, obj, base, "sh.h.area")
+                .unwrap();
+            let h = self
+                .builder
+                .build_call(inner, &[ap.into()], "sh.h.area.v")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            self.builder.build_return(Some(&h)).unwrap();
+        } else {
+            let seed = i64_t.const_int(Self::FXHASH_SEED, false);
+            let rotate_amt = i64_t.const_int(Self::FXHASH_ROTATE, false);
+            let rotate_inv = i64_t.const_int(64 - Self::FXHASH_ROTATE, false);
+            let mut state: IntValue<'ctx> = i64_t.const_zero();
+            for (i, child_fn) in child_fns.iter().enumerate() {
+                let idx = base + i as u32;
+                let fp = self
+                    .builder
+                    .build_struct_gep(gep_ty, obj, idx, &format!("sh.h.f{i}.p"))
+                    .unwrap();
+                let fh = self
+                    .builder
+                    .build_call(*child_fn, &[fp.into()], &format!("sh.h.f{i}"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let shl = self
+                    .builder
+                    .build_left_shift(state, rotate_amt, &format!("sh.h.f{i}.shl"))
+                    .unwrap();
+                let shr = self
+                    .builder
+                    .build_right_shift(state, rotate_inv, false, &format!("sh.h.f{i}.shr"))
+                    .unwrap();
+                let rot = self
+                    .builder
+                    .build_or(shl, shr, &format!("sh.h.f{i}.rot"))
+                    .unwrap();
+                let xored = self
+                    .builder
+                    .build_xor(rot, fh, &format!("sh.h.f{i}.xor"))
+                    .unwrap();
+                state = self
+                    .builder
+                    .build_int_mul(xored, seed, &format!("sh.h.f{i}.mul"))
+                    .unwrap();
+            }
+            self.builder.build_return(Some(&state)).unwrap();
+        }
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
+    }
+
     pub(super) fn emit_hash_fn_for_struct(&mut self, struct_name: &str) -> FunctionValue<'ctx> {
         let fn_name = format!(
             "karac_hash_{struct_name}{}",

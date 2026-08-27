@@ -725,6 +725,72 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
 }
 
 #[test]
+fn a_shared_key_is_matched_structurally_not_by_pointer_identity() {
+    // B-2026-08-27-4. The compiled backends matched a `shared` map/set key by
+    // POINTER IDENTITY: `contains_key` answered `false` for a structurally
+    // equal twin, `remove` silently removed nothing, and a `Set` failed to
+    // dedup. design.md § Equality settles which side is right -- "`==` always
+    // means structural equality ... The `Eq` trait determines `==` regardless
+    // of whether the compiler chose RC or owned representation. There is no
+    // reference-identity short-circuit" -- and reference identity has its own
+    // name, `ref_eq`. So the interpreter was already correct and this pins it
+    // as the oracle. Codegen twin:
+    // `test_e2e_shared_key_is_matched_structurally`.
+    //
+    // Four shapes because four distinct emitter paths reach a shared key: a
+    // scalar-field struct, a struct with a `String` field (the child eq fn has
+    // to recurse, not compare headers), a struct with a nested shared field,
+    // and a shared ENUM (whose payload area is not a field list at all).
+    let src = "#[derive(Hash, Eq, PartialEq)]
+        shared struct Scalar { id: i64, n: i64 }
+        #[derive(Hash, Eq, PartialEq)]
+        shared struct Named { id: i64, name: String }
+        #[derive(Hash, Eq, PartialEq)]
+        shared struct Inner { v: i64 }
+        #[derive(Hash, Eq, PartialEq)]
+        shared struct Outer { id: i64, inner: Inner }
+        #[derive(Hash, Eq, PartialEq)]
+        shared enum Tag { A { x: i64 }, B }
+        fn main() {
+            let mut a: Map[Scalar, i64] = Map.new();
+            a.insert(Scalar { id: 1, n: 2 }, 7);
+            println(f\"scalar={a.contains_key(Scalar { id: 1, n: 2 })}\");
+
+            let mut b: Map[Named, i64] = Map.new();
+            b.insert(Named { id: 1, name: f\"aa\" }, 7);
+            println(f\"named={b.contains_key(Named { id: 1, name: f\"aa\" })}\");
+            println(f\"named-ne={b.contains_key(Named { id: 1, name: f\"ab\" })}\");
+
+            let mut c: Map[Outer, i64] = Map.new();
+            c.insert(Outer { id: 1, inner: Inner { v: 5 } }, 7);
+            println(f\"nested={c.contains_key(Outer { id: 1, inner: Inner { v: 5 } })}\");
+            println(f\"nested-ne={c.contains_key(Outer { id: 1, inner: Inner { v: 6 } })}\");
+
+            let mut d: Map[Tag, i64] = Map.new();
+            d.insert(Tag.A { x: 1 }, 7);
+            println(f\"enum={d.contains_key(Tag.A { x: 1 })}\");
+            println(f\"enum-ne={d.contains_key(Tag.A { x: 2 })}\");
+
+            let mut s: Set[Scalar] = Set.new();
+            s.insert(Scalar { id: 1, n: 2 });
+            s.insert(Scalar { id: 1, n: 2 });
+            println(f\"dedup={s.len()}\");
+
+            let mut m: Map[Named, i64] = Map.new();
+            m.insert(Named { id: 1, name: f\"aa\" }, 7);
+            m.remove(Named { id: 1, name: f\"aa\" });
+            println(f\"removed={m.len()}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "scalar=true\nnamed=true\nnamed-ne=false\n\
+         nested=true\nnested-ne=false\n\
+         enum=true\nenum-ne=false\n\
+         dedup=1\nremoved=0\n"
+    );
+}
+
+#[test]
 fn removing_a_shared_key_releases_it_through_the_refcount() {
     // B-2026-08-27-3, the `shared` key half. `remove` gave back nothing: the
     // per-key drop fn declines for a shared half by design (teardown and

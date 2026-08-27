@@ -105239,6 +105239,82 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-4 — the compiled twin of
+    /// `a_shared_key_is_matched_structurally_not_by_pointer_identity`.
+    ///
+    /// A `shared` map/set key was matched by POINTER IDENTITY here and
+    /// structurally by the interpreter: `contains_key` answered `false` for an
+    /// equal twin, `remove` removed nothing, `Set` failed to dedup. The struct
+    /// arms of `emit_eq_fn_for_type_expr` / `emit_hash_fn_for_type_expr`
+    /// exclude shared types, so a shared key fell to the byte-compare
+    /// fallback — and a shared key's blob IS a pointer.
+    ///
+    /// EQ AND HASH HAD TO MOVE TOGETHER, which is what the `dedup` and
+    /// `removed` lines are really checking. Equal keys that hash differently
+    /// never land in the same bucket, so fixing equality alone leaves every
+    /// lookup missing exactly as before — and the fix would have looked
+    /// correct in a test that only compared two keys directly.
+    ///
+    /// The `-ne` lines are not padding. A comparator that answered `true`
+    /// unconditionally passes every positive assertion here, and that is a
+    /// plausible way to get the null-guard branch wrong.
+    #[test]
+    fn test_e2e_shared_key_is_matched_structurally() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct Scalar { id: i64, n: i64 }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Named { id: i64, name: String }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Inner { v: i64 }
+#[derive(Hash, Eq, PartialEq)]
+shared struct Outer { id: i64, inner: Inner }
+#[derive(Hash, Eq, PartialEq)]
+shared enum Tag { A { x: i64 }, B }
+fn main() {
+    let mut a: Map[Scalar, i64] = Map.new();
+    a.insert(Scalar { id: 1, n: 2 }, 7);
+    println(f"scalar={a.contains_key(Scalar { id: 1, n: 2 })}");
+
+    let mut b: Map[Named, i64] = Map.new();
+    b.insert(Named { id: 1, name: f"aa" }, 7);
+    println(f"named={b.contains_key(Named { id: 1, name: f"aa" })}");
+    println(f"named-ne={b.contains_key(Named { id: 1, name: f"ab" })}");
+
+    let mut c: Map[Outer, i64] = Map.new();
+    c.insert(Outer { id: 1, inner: Inner { v: 5 } }, 7);
+    println(f"nested={c.contains_key(Outer { id: 1, inner: Inner { v: 5 } })}");
+    println(f"nested-ne={c.contains_key(Outer { id: 1, inner: Inner { v: 6 } })}");
+
+    let mut d: Map[Tag, i64] = Map.new();
+    d.insert(Tag.A { x: 1 }, 7);
+    println(f"enum={d.contains_key(Tag.A { x: 1 })}");
+    println(f"enum-ne={d.contains_key(Tag.A { x: 2 })}");
+
+    let mut s: Set[Scalar] = Set.new();
+    s.insert(Scalar { id: 1, n: 2 });
+    s.insert(Scalar { id: 1, n: 2 });
+    println(f"dedup={s.len()}");
+
+    let mut m: Map[Named, i64] = Map.new();
+    m.insert(Named { id: 1, name: f"aa" }, 7);
+    m.remove(Named { id: 1, name: f"aa" });
+    println(f"removed={m.len()}");
+}
+"#
+            ),
+            Some(
+                "scalar=true\nnamed=true\nnamed-ne=false\n\
+                 nested=true\nnested-ne=false\n\
+                 enum=true\nenum-ne=false\n\
+                 dedup=1\nremoved=0\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// B-2026-08-27-3 — the compiled twin of
     /// `removing_a_shared_key_releases_it_through_the_refcount`, same bytes.
     ///
