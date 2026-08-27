@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 294 | 1 |
+| miscompile | 295 | 2 |
 | leak | 197 | 0 |
 | missing-feature | 184 | 3 |
 | run-vs-build | 171 | 0 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
-| diagnostics | 110 | 1 |
+| diagnostics | 110 | 0 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
 | other | 62 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1066 | 2 |
-| typecheck | 269 | 1 |
-| interp | 187 | 2 |
-| other | 70 | 1 |
+| codegen | 1067 | 3 |
+| typecheck | 270 | 2 |
+| interp | 188 | 3 |
+| other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,17 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced · 5 open · 1589 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1621 surfaced · 5 open · 1590 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-26-41 | 2026-08-26 | codegen+interp | medium | A USER `impl Drop` ON A MAP **KEY** TYPE NEVER FIRES, while the same impl on the VALUE type does. B-2026-07-30-11 shipped the Map-VALUES drop-body leg (`emit_map_val_user_drop_bodies_fn`); keys have only `emit_map_key_drop_fn_walk`, which reclaims memory and runs no user bodies. Identical under `--interp` and `build`, so it is a resource-cleanup gap for RAII key types rather than a run-vs-build divergence. | — |
+| B-2026-08-27-1 | 2026-08-27 | typecheck+interp+codegen | high | TWO `impl From[X] for T` FOR THE SAME TARGET SILENTLY RUN THE WRONG ONE: `?` and `.into()` resolve the conversion by target name only (`T.from`), so selection falls to impl ORDER -- interpreter takes the last, codegen the first, and the two backends disagree on the same program. Mismatched payloads give an interpreter `unreachable!` or a silent AOT type confusion that prints a raw heap pointer. This is the shape design.md's canonical `?` example teaches | — |
 
 ### Relocated (2)
 
@@ -166,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced
 
 </details>
 
-### Fixed (1589)
+### Fixed (1590)
 
-<details><summary>1589 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1590 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1729,6 +1729,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced
 | B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
 | B-2026-08-26-2 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third | 7da2bfe |
 | B-2026-08-26-3 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(\|\| 40 + 2);` passes `karac check` cleanly and then fails on EVERY exe… | 3988b47 |
+| B-2026-08-26-4 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Opti… | 5a7e985 |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
 | B-2026-08-26-6 | interp+codegen | high | `~` COMPLEMENTS AT THE CARRIER WIDTH, NOT THE DECLARED WIDTH, so every narrow UNSIGNED integer gets a wrong value and the two backends disagree on wh… | 297ef4f |
 | B-2026-08-26-7 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and ca… | 08410c2 |
