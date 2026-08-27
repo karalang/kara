@@ -49242,6 +49242,90 @@ fn main() {
         }
     }
 
+    /// B-2026-08-27-22 — a METHOD CALL on an element of an SoA-laid-out
+    /// container read the wrong data, and a mutating one wrote to the wrong
+    /// place. Both silent; both correct under AoS and the interpreter.
+    ///
+    /// `compile_indexed_receiver_method` lowers an index receiver to a single
+    /// element POINTER and binds a synth identifier to it. An SoA element has
+    /// no such pointer — its fields live one buffer per `layout` group — so the
+    /// lowering GEP'd into whichever group buffer it landed on:
+    /// `entities[5].clone()` returned `100 1000 200 2000`, the cold group at
+    /// indices 1 and 2. The element is now materialised through the same
+    /// `compile_soa_index_read` reassembly `entities[i].x` already uses.
+    ///
+    /// `mut4` IS THE HALF THE ROW DID NOT NAME, and it needs more than the
+    /// read fix. A materialised element is a COPY, so a `mut ref self` method
+    /// writes into the copy and the container never sees it — `entities[4]
+    /// .bump()` was a silent no-op even once the read was right. The scatter
+    /// back on a `MutRef` receiver is what closes that, and `mut4` is the only
+    /// line that can tell a correct write-back from no write-back at all.
+    ///
+    /// `neighbour3` / `neighbour5` are the write-back's blast radius: the
+    /// scatter must land on element 4 alone. Writing a whole materialised
+    /// element back through the group buffers is exactly the operation that
+    /// could smear across its neighbours, and index 5 sits past the cap
+    /// 0→4→8 realloc boundary so a mis-strided store shows up there first.
+    ///
+    /// RUN UNDER BOTH LAYOUTS AND COMPARED, like
+    /// `test_e2e_soa_whole_element_matches_aos`. That differential is what
+    /// caught this in the first place: every line here passes under AoS, so a
+    /// single-layout fixture asserts nothing about the bug.
+    #[test]
+    fn test_e2e_soa_element_method_matches_aos() {
+        let body = r#"
+#[derive(Clone)]
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+LAYOUT
+impl Entity {
+    fn sum(ref self) -> i64 { return self.x + self.y + self.vx + self.vy; }
+    fn bump(mut ref self) { self.x = self.x + 1000; self.vy = self.vy + 7; }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, vx: i * 100, vy: i * 1000 });
+        i = i + 1;
+    }
+    let c = entities[5].clone();
+    println(f"clone5 {c.x} {c.y} {c.vx} {c.vy}");
+    let d = entities[3].clone();
+    println(f"clone3 {d.x} {d.y} {d.vx} {d.vy}");
+    println(f"read5 {entities[5].sum()}");
+    println(f"read0 {entities[0].sum()}");
+    entities[4].bump();
+    println(f"mut4 {entities[4].x} {entities[4].y} {entities[4].vx} {entities[4].vy}");
+    println(f"neighbour3 {entities[3].x} {entities[3].vy}");
+    println(f"neighbour5 {entities[5].x} {entities[5].vy}");
+    println(f"field5 {entities[5].vx}");
+}
+"#;
+        let soa_src = body.replace(
+            "LAYOUT",
+            "layout entities: Vec[Entity] {\n    group pos { x, y }\n    group vel { vx, vy }\n}",
+        );
+        let aos_src = body.replace("LAYOUT", "");
+        let expected = vec![
+            "clone5 5 50 500 5000",
+            "clone3 3 30 300 3000",
+            "read5 5555",
+            "read0 0",
+            "mut4 1004 40 400 4007",
+            "neighbour3 3 3000",
+            "neighbour5 5 5000",
+            "field5 500",
+        ];
+        if let Some(aos) = run_program(&aos_src) {
+            let lines: Vec<&str> = aos.trim().lines().collect();
+            assert_eq!(lines, expected, "AoS baseline output mismatch");
+        }
+        if let Some(soa) = run_program(&soa_src) {
+            let lines: Vec<&str> = soa.trim().lines().collect();
+            assert_eq!(lines, expected, "SoA element-method output must match AoS");
+        }
+    }
+
     #[test]
     fn test_e2e_soa_whole_element_matches_aos() {
         // Whole-element binding `let e = entities[i]` on a SoA-laid-out
@@ -49260,11 +49344,12 @@ fn main() {
         // both backends), and the whole-element form is not available any more
         // regardless, since it moves a non-`Copy` element out of a container
         // (B-2026-08-26-21). NEITHER replacement for it works here: `ref` cannot
-        // borrow what has no contiguous storage, and `entities[i].clone()`
-        // MISCOMPILES under SoA — element 5 reads back `100 1000 200 2000`
-        // instead of `5 50 500 5000`, the cold group at the wrong indices,
-        // because a method call on an index receiver lowers to a single element
-        // pointer that an SoA layout does not have.
+        // borrow what has no contiguous storage, but `entities[i].clone()` now
+        // works under SoA: it used to read back `100 1000 200 2000` for element
+        // 5 — the cold group at the wrong indices — because a method call on an
+        // index receiver lowered to a single element pointer an SoA layout does
+        // not have. Fixed in B-2026-08-27-22 by materialising the element;
+        // `test_e2e_soa_element_method_matches_aos` covers it.
         let body = r#"
 struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
 LAYOUT

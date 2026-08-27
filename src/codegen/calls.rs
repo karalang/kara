@@ -397,7 +397,29 @@ impl<'ctx> super::Codegen<'ctx> {
         // container-shape-specific path. Bounds check goes through
         // `emit_panic` on OOB; the OK BB leaves the builder positioned for
         // the post-elem-ptr work.
-        let (elem_ptr, elem_ll_ty) = if self
+        // B-2026-08-27-22 — an SoA-laid-out container has NO single element
+        // pointer: its fields live one buffer per `layout` group, so every
+        // `lower_indexed_elem_ptr_*` below would GEP into whichever group
+        // buffer it landed on and read the wrong data. `entities[5].clone()`
+        // returned the COLD group at indices 1 and 2 rather than element 5,
+        // and a `mut ref self` method's write went to the same wrong place —
+        // both silent, and both correct under AoS and the interpreter.
+        //
+        // Materialise the element instead, through the same
+        // `compile_soa_index_read` reassembly that `entities[i].x` already
+        // uses, and hand the method a pointer to THAT. The synth binding below
+        // then sees an ordinary contiguous struct and the rest of the flow is
+        // unchanged.
+        let soa_receiver = self.active_soa_layout(outer_name.as_str()).is_some();
+        let (elem_ptr, elem_ll_ty) = if soa_receiver {
+            let val = self.compile_soa_index_read(&outer_name, index)?;
+            let cur_fn = self.current_fn.ok_or_else(|| {
+                format!("codegen: SoA indexed-receiver method '{method}' outside a fn")
+            })?;
+            let slot = self.create_entry_alloca(cur_fn, "__soa_elem", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            (slot, val.get_type())
+        } else if self
             .var_types
             .vec_elem_types
             .contains_key(outer_name.as_str())
@@ -484,6 +506,36 @@ impl<'ctx> super::Codegen<'ctx> {
             span: inner.span,
         };
         let result = self.compile_method_call(&synth_expr, method, args, call_span, call_span);
+
+        // SCATTER THE MATERIALISED ELEMENT BACK when the method took
+        // `mut ref self` (B-2026-08-27-22). The AoS path hands the method the
+        // element's real storage, so its writes land in the container; the SoA
+        // path hands it a COPY, so without this every mutation is silently
+        // dropped — `entities[3].bump()` left the container untouched. A
+        // read-only receiver (`self` / `ref self`) needs no write-back, and
+        // doing one anyway would store a stale copy over anything the call
+        // itself changed.
+        //
+        // The index expression is evaluated a second time here, so a
+        // side-effecting index (`entities[next()].bump()`) would advance twice
+        // — the same re-evaluability requirement the displaced-element drop
+        // path documents, and the reason both stay on simple index shapes.
+        if soa_receiver && result.is_ok() {
+            let mutates = self
+                .var_types
+                .var_type_names
+                .get(&synth)
+                .cloned()
+                .and_then(|tn| self.impl_method_self_and_borrow_return(&tn, method))
+                .is_some_and(|(sp, _)| matches!(sp, crate::ast::SelfParam::MutRef));
+            if mutates {
+                let back = self
+                    .builder
+                    .build_load(elem_ll_ty, elem_ptr, "__soa_elem.back")
+                    .unwrap();
+                self.compile_soa_index_store(&outer_name, index, back)?;
+            }
+        }
 
         // Clean up synth registrations.  The LLVM IR is already emitted; this
         // is bookkeeping cleanup so subsequent compilations in the same
