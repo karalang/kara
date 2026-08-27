@@ -521,6 +521,19 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0275",
         ty("TypeNotIndexable", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // B-2026-08-26-21 — `let t = v[i]` where the element is not `Copy`.
+    // An index expression is a BORROW (`fn index(ref self, ..) -> ref T`),
+    // so reading it in value position obeys the `*r` rule: `T: Copy`.
+    //
+    // E0285, not E0282: this rule was written against a tree where E0282 was
+    // free, and a sibling took it for `PreludeShadow` while the patch sat
+    // parked. `code_table_has_no_duplicate_rows` caught the collision — the
+    // second time a parked diagnostic collided on a number, so pick the code as
+    // late as possible, the same discipline the ledger uses for bug ids.
+    (
+        "E0285",
+        ty("IndexMoveNonCopy", Some(DiagnosticClass::TypeMismatch)),
+    ),
     (
         "E0283",
         ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),

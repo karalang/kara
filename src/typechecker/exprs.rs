@@ -1828,6 +1828,17 @@ impl<'a> super::TypeChecker<'a> {
                 let arg_ty = self.check_expr(&arg.value, param_ty);
                 self.borrow_context = saved_borrow_ctx;
                 self.mut_through_param_arg = saved_mut_through;
+                // B-2026-08-26-37 — a call ARGUMENT is a value position exactly
+                // as a `let` initializer is, so the index-move rule applies here
+                // too. Gated on a BY-VALUE parameter: handing `v[i]` to a
+                // `ref T` / `mut ref T` / `Slice[T]` parameter is a borrow, and
+                // a borrow is the remedy the rule points at, not the offence.
+                if !matches!(
+                    param_ty,
+                    Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }
+                ) {
+                    self.reject_index_move_non_copy(&arg.value, param_ty);
+                }
                 if apply_call_site_marker {
                     self.check_call_site_marker(arg, param_ty, &arg_ty);
                 }
@@ -4564,6 +4575,8 @@ impl<'a> super::TypeChecker<'a> {
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
+                        self.index_read_is_fresh_value
+                            .insert(SpanKey::from_span(&expr.span));
                         return Type::Named {
                             name: "Option".to_string(),
                             args: vec![elem_ty],
@@ -4655,6 +4668,8 @@ impl<'a> super::TypeChecker<'a> {
                         || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
                             if matches!(inner.as_ref(), Type::Str));
                     if is_string {
+                        self.index_read_is_fresh_value
+                            .insert(SpanKey::from_span(&expr.span));
                         return Type::Str;
                     }
                     // Range indexing: `collection[a..b]` → `Slice[T]` where T
@@ -4677,6 +4692,8 @@ impl<'a> super::TypeChecker<'a> {
                         Type::Error => return Type::Error,
                         _ => None,
                     };
+                    self.index_read_is_fresh_value
+                        .insert(SpanKey::from_span(&expr.span));
                     return match element_ty {
                         Some(el) => Type::Slice {
                             element: Box::new(el.clone()),
@@ -4940,6 +4957,8 @@ impl<'a> super::TypeChecker<'a> {
                         // B-2026-08-08-14 — record the read for the interpreter
                         // (see the store twin in `infer_method_call`).
                         self.weak_elem_read_sites
+                            .insert(SpanKey::from_span(&expr.span));
+                        self.index_read_is_fresh_value
                             .insert(SpanKey::from_span(&expr.span));
                         return Type::Named {
                             name: "Option".to_string(),

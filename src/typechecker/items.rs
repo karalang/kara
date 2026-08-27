@@ -4228,6 +4228,161 @@ impl<'a> super::TypeChecker<'a> {
         self.check_stmt_inner(stmt)
     }
 
+    /// design.md § "The index operator (`expr[i]`)" — reject reading a
+    /// non-`Copy` element out of a container in VALUE position.
+    ///
+    /// `Index.index` is `fn index(ref self, idx) -> ref T`, so `v[i]` produces
+    /// a BORROW. Binding it by value reads through that reference, which the
+    /// dereference rule already restricts to `T: Copy`; and `Index.index_set`
+    /// takes `val: T` by value, which a `ref T` cannot supply, so
+    /// `v[i] = v[j]` falls to the same rule. Underneath both is that a
+    /// container is not partially movable — there is no `Vec` with a hole in
+    /// it, and Kāra has no per-slot drop flags.
+    ///
+    /// Scope is deliberately the two forms design.md pins (a `let`
+    /// initializer and an assignment RHS). Other value positions — notably a
+    /// call argument, `f(v[i])` — read an element by value too and are the
+    /// same rule, but they are a much larger blast radius and are tracked
+    /// separately rather than swept in silently here.
+    ///
+    /// The `.clone()` fix-it is offered ONLY when the element type actually
+    /// has one. B-2026-07-29-31 is the standing lesson: the Mend loop is an
+    /// LLM acting on this sentence, so a confident wrong steer (suggesting
+    /// `.clone()` on a move-only struct, which then fails with `no method
+    /// 'clone'`) is worse than offering no fix-it at all.
+    /// Whether `name` is declared `shared struct` / `shared enum`.
+    ///
+    /// `lower_type_expr` normally yields `Type::Shared(name)` for these, but a
+    /// container's ELEMENT can reach here still spelled `Type::Named` — a
+    /// `shared enum` element of a `Vec` did, which is how the exemption came to
+    /// miss the self-hosted compiler's `Vec[TypeExpr]` entirely. Checking the
+    /// declaration covers both spellings, and the declaration is the thing the
+    /// rule actually cares about.
+    fn name_is_shared_decl(&self, name: &str) -> bool {
+        // Through the ENV, not `program.items`: the items list is this module's
+        // only, and a shared type is routinely declared elsewhere — the
+        // self-hosted compiler's `TypeExpr` lives in `ast.kara` while the reads
+        // are in `codegen.kara`, so an items-only lookup exempted none of them.
+        self.env
+            .structs
+            .get(name)
+            .map(|i| i.is_shared)
+            .or_else(|| self.env.enums.get(name).map(|i| i.is_shared))
+            .unwrap_or(false)
+    }
+
+    pub(super) fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
+        if !matches!(value.kind, ExprKind::Index { .. }) {
+            return;
+        }
+        // Not every `expr[i]` is an element alias. A range slice
+        // (`s[a..b]`, `v[a..b]`), a `Column` positional read and a `weak`
+        // element upgrade all CONSTRUCT a value rather than name one that
+        // is already in the container — nothing is moved out, so there is
+        // nothing to reject. Index inference marks each of those; anything
+        // unmarked is treated as not-an-alias too, which keeps a path
+        // nobody classified from being rejected by accident.
+        if self
+            .index_read_is_fresh_value
+            .contains(&SpanKey::from_span(&value.span))
+        {
+            return;
+        }
+        // An SoA-laid-out container is the same story told by the layout
+        // rather than by the type. Under `layout entities: Vec[Entity]`
+        // the element has no contiguous existence at all — its fields live
+        // in one buffer per group — so `entities[i]` cannot name a stored
+        // element; codegen REASSEMBLES a fresh struct from every group
+        // buffer (`compile_soa_index_read`). Nothing is moved out of the
+        // container because there is no single thing in the container to
+        // move. Checked here rather than marked in inference: the layout is
+        // attached to the BINDING, so the object expression is what knows.
+        if let ExprKind::Index { object, .. } = &value.kind {
+            if self.index_object_has_soa_layout(object) {
+                return;
+            }
+        }
+        // The same layout reached by TYPE rather than by name. A parameter
+        // or a returned collection carries its own binding name, so the
+        // match above misses it (`fn f(es: Vec[Entity])` indexed as
+        // `es[i]`). Any struct some layout block groups is materialized on
+        // read wherever that grouping is in force.
+        //
+        // Deliberately over-broad: a struct that HAS a layout somewhere but
+        // is also held in a plain `Vec` would be a genuine element read, and
+        // this skips it too. That is the safe direction — the rule's job is
+        // to stop a divergence, and declining to reject one shape costs less
+        // than rejecting valid code.
+        if let Type::Named { name, args } = ty {
+            if args.is_empty() && self.struct_has_soa_layout(name) {
+                return;
+            }
+        }
+        if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
+            return;
+        }
+        // A `shared` handle is exempt for the same reason the marked
+        // paths are: reading one out of a container RETAINS it, leaving
+        // the container's slot intact. The rule exists because a container
+        // is not partially movable — there is no `Vec` with a hole in it —
+        // and an RC handle copy makes no hole. Nor is the `Drop`-body
+        // divergence this row was filed for reachable here: RC decides when
+        // a shared value is destroyed, so neither backend runs a user `Drop`
+        // body on the read.
+        if matches!(ty, Type::Shared(_))
+            || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
+        {
+            return;
+        }
+        // A function value is a fat pointer, and reading one out of a
+        // container copies the pointer pair — the container keeps its own.
+        // `Vec[Fn(i64) -> i64]` holding a bare `fn` is the plain case, and
+        // rejecting it also steered toward a `.clone()` that does not exist:
+        // codegen has no `clone` arm for an indexed fn element, so the
+        // rule's own fix-it produced `no handler for method 'clone'`.
+        // Exempted rather than declared `Copy`, because a CAPTURING closure
+        // shares the same type and may carry an RC'd environment — widening
+        // `is_copy_type_during_check` would reach far past this rule.
+        if matches!(ty, Type::Function { .. }) {
+            return;
+        }
+        let has_clone = self.type_supports_clone(ty);
+        let message = if has_clone {
+            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: ".to_owned()
+                + "`v[i]` evaluates to `ref T`, and this element type is not `Copy`. "
+                + "Borrow it (`ref v[i]`), take an independent copy "
+                + "(`v[i].clone()`), or exchange two elements with `v.swap(i, j)`"
+        } else {
+            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: ".to_owned()
+                + "`v[i]` evaluates to `ref T`, and this element type is not `Copy`. "
+                + "Borrow it (`ref v[i]`), or exchange two elements with "
+                + "`v.swap(i, j)`. (No `.clone()` is offered: this element type "
+                + "does not have one.)"
+        };
+        if has_clone {
+            // Behaviour-PRESERVING migration: reading an element already
+            // cloned, so appending `.clone()` leaves the program's meaning
+            // exactly as it is today and only makes the cost visible. That is
+            // what lets `karac fix` mechanically migrate existing code.
+            self.type_error_with_fix_it(
+                message,
+                value.span,
+                TypeErrorKind::IndexMoveNonCopy,
+                crate::typechecker::FixIt {
+                    span: Span {
+                        offset: value.span.offset + value.span.length,
+                        length: 0,
+                        line: value.span.line,
+                        column: value.span.column,
+                    },
+                    replacement: ".clone()".to_string(),
+                },
+            );
+        } else {
+            self.type_error(message, value.span, TypeErrorKind::IndexMoveNonCopy);
+        }
+    }
+
     fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
         if let StmtKind::Expr(expr) = &stmt.kind {
             return self.infer_expr(expr);
@@ -4256,6 +4411,10 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred
                 };
+                // design.md § "The index operator (`expr[i]`)" — a `let`
+                // initializer is the canonical value position, so a non-`Copy`
+                // element read here is rejected (B-2026-08-26-21).
+                self.reject_index_move_non_copy(value, &expected_ty);
                 // B-2026-07-31-20 — record the result type of a
                 // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                 // (read as an implicit binding annotation). The intercept in
@@ -4414,6 +4573,15 @@ impl<'a> super::TypeChecker<'a> {
                 self.in_defer = prev;
             }
             StmtKind::Assign { target, value } => {
+                // design.md § "The index operator (`expr[i]`)" — the RHS of an
+                // assignment is a value position exactly as a `let` initializer
+                // is, so `v[i] = v[j]` falls to the same rule
+                // (B-2026-08-26-21). `Index.index_set` takes `val: T` by value,
+                // which a `ref T` cannot supply.
+                {
+                    let rhs_ty = self.infer_expr(value);
+                    self.reject_index_move_non_copy(value, &rhs_ty);
+                }
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
                 if let ExprKind::Unary {
                     op: UnaryOp::Deref,

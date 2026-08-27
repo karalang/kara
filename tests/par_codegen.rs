@@ -1979,16 +1979,17 @@ fn main() {
     fn test_e2e_autopar_joined_vec_element_struct_binding() {
         assert_eq!(
             run_program(
-                "struct Entry { service: String, weight: i64 }\n\
+                "#[derive(Clone)]\n\
+                 struct Entry { service: String, weight: i64 }\n\
                  shared struct Node { label: String }\n\
                  fn agg(entries: Vec[Entry]) -> String {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
-                     let e = entries[0];\n\
+                     let e = entries[0].clone();\n\
                      return e.service;\n\
                  }\n\
                  fn agg_method(entries: Vec[Entry]) -> i64 {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
-                     let e = entries[1];\n\
+                     let e = entries[1].clone();\n\
                      return e.service.len() + e.weight;\n\
                  }\n\
                  fn agg_shared(ns: Vec[Node]) -> String {\n\
@@ -2008,14 +2009,14 @@ fn main() {
                  }\n\
                  fn agg_nested(rows: Vec[Vec[Entry]]) -> String {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
-                     let inner = rows[0];\n\
-                     let e = inner[1];\n\
+                     let inner = rows[0].clone();\n\
+                     let e = inner[1].clone();\n\
                      return e.service;\n\
                  }\n\
                  fn agg_two(entries: Vec[Entry]) -> String {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
-                     let a = entries[0];\n\
-                     let b = entries[1];\n\
+                     let a = entries[0].clone();\n\
+                     let b = entries[1].clone();\n\
                      return a.service + \"-\" + b.service;\n\
                  }\n\
                  fn main() {\n\
@@ -2066,7 +2067,8 @@ fn main() {
     /// B-2026-08-15-15's separate double free, which this row does not fix.
     #[test]
     fn test_e2e_autopar_joined_range_slice_binding() {
-        let src = "struct Entry { service: String, weight: i64 }\n\
+        let src = "#[derive(Clone)]\n\
+                 struct Entry { service: String, weight: i64 }\n\
                  fn f_range(nums: Vec[i64]) -> i64 {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
                      let s = nums[0..2];\n\
@@ -2085,12 +2087,12 @@ fn main() {
                  fn f_both(nums: Vec[i64], entries: Vec[Entry]) -> i64 {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
                      let s = nums[0..3];\n\
-                     let e = entries[1];\n\
+                     let e = entries[1].clone();\n\
                      return s.len() + e.weight;\n\
                  }\n\
                  fn f_elem_only(entries: Vec[Entry]) -> String {\n\
                      let mut index: Map[String, usize] = Map.new();\n\
-                     let e = entries[0];\n\
+                     let e = entries[0].clone();\n\
                      return e.service;\n\
                  }\n\
                  fn f_two_ranges(nums: Vec[i64]) -> i64 {\n\
@@ -3518,9 +3520,9 @@ fn main() {
     fn test_e2e_auto_par_struct_enum_sort_declaration_order() {
         let out = run_program(
             r#"
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, Clone)]
 struct Rect { width: i64, height: i64 }
-#[derive(Eq, Ord)]
+#[derive(Eq, Ord, Clone)]
 enum Shape { Circle(i64), Rect(i64, i64), Unit }
 fn stag(s: Shape) -> i64 {
     match s { Shape.Circle(r) => 100 + r, Shape.Rect(w, h) => 200 + w * 10 + h, Shape.Unit => 300 }
@@ -3531,7 +3533,7 @@ fn main() {
     v.push(Rect { width: 1, height: 9 });
     v.sort();
     let mut i = 0;
-    while i < v.len() { let r = v[i]; println(f"{r.width},{r.height}"); i = i + 1; }
+    while i < v.len() { let r = v[i].clone(); println(f"{r.width},{r.height}"); i = i + 1; }
     let mut s: Vec[Shape] = Vec.new();
     s.push(Shape.Rect(2, 1));
     s.push(Shape.Circle(9));
@@ -3539,7 +3541,7 @@ fn main() {
     s.push(Shape.Circle(3));
     s.sort();
     let mut j = 0;
-    while j < s.len() { let sh = s[j]; println(f"{stag(sh)}"); j = j + 1; }
+    while j < s.len() { let sh = s[j].clone(); println(f"{stag(sh)}"); j = j + 1; }
 }
 "#,
         );

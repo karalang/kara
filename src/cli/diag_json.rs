@@ -1815,6 +1815,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
                 crate::typechecker::TypeErrorKind::RefOperandUnsupported => "E0283",
                 crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
+                crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E0285",
                 crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
                 crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
                 // B-2026-06-30-3 — reassignment of a non-`mut` field on a

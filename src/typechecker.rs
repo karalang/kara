@@ -644,6 +644,22 @@ pub enum TypeErrorKind {
     RefOperandUnsupported,
     /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
     LazyLockRuntimeCapture,
+    /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
+    ///
+    /// design.md § "The index operator (`expr[i]`)": `Index.index` is
+    /// `fn index(ref self, idx) -> ref T`, so an index expression produces a
+    /// BORROW. Binding it in value position reads THROUGH that reference and
+    /// obeys the same rule as `*r` — it requires `T: Copy`. A container is not
+    /// partially movable (there is no `Vec` with a hole in it), so moving an
+    /// element out of a live container is not expressible.
+    ///
+    /// Run-fatal for the `ImplTraitMultipleWitnesses` reason: both backends
+    /// previously ACCEPTED this and improvised DIFFERENT semantics for it — a
+    /// swap written through index reads printed a different `Drop` sequence
+    /// under `karac run` than under `karac build` (B-2026-08-26-21). Letting
+    /// the interpreter keep running it would preserve exactly the divergence
+    /// the rejection exists to remove.
+    IndexMoveNonCopy,
     StringNotIndexable,
     /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
     /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
@@ -1176,6 +1192,7 @@ impl TypeErrorKind {
             self,
             TypeErrorKind::InvalidCast
                 | TypeErrorKind::RefOperandUnsupported
+                | TypeErrorKind::IndexMoveNonCopy
                 | TypeErrorKind::StringNotIndexable
                 | TypeErrorKind::IteratorNotIndexable
                 | TypeErrorKind::TypeNotIndexable
@@ -1215,6 +1232,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::AtomicInvalidInnerType
         | TypeErrorKind::InvalidTupleIndex
         | TypeErrorKind::RefOperandUnsupported
+        | TypeErrorKind::IndexMoveNonCopy
         | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::IteratorNotIndexable
         | TypeErrorKind::TypeNotIndexable
@@ -2351,6 +2369,19 @@ pub struct TypeChecker<'a> {
     pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
     pub(super) weak_elem_store_sites: FxHashSet<SpanKey>,
     pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
+    /// B-2026-08-26-21 — index expressions whose read produces a FRESH
+    /// value rather than an alias of a stored element: a range slice
+    /// (`s[a..b]`, `v[a..b]`), a `Column` positional read
+    /// (`c[i] -> Option[T]`), and a `weak` element upgrade
+    /// (`w[i] -> Option[T]`). The index-move rejection must NOT fire on
+    /// these: nothing is moved out of the container, because nothing in
+    /// the container is what the expression evaluates to.
+    ///
+    /// Marked POSITIVELY at each such return, so the rejection is
+    /// fail-safe by construction — an index path nobody thought to
+    /// classify goes unmarked and is simply not rejected. A missed
+    /// rejection is recoverable; a false one blocks valid code.
+    pub(super) index_read_is_fresh_value: FxHashSet<SpanKey>,
     /// Element-aware mono-mangle tokens per call site. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
     pub(super) call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
@@ -2635,6 +2666,7 @@ impl<'a> TypeChecker<'a> {
             cast_source_unsigned: FxHashSet::default(),
             weak_elem_store_sites: FxHashSet::default(),
             weak_elem_read_sites: FxHashSet::default(),
+            index_read_is_fresh_value: FxHashSet::default(),
             call_type_subs_mangle: FxHashMap::default(),
             pattern_binding_types: FxHashMap::default(),
             pattern_binding_inner_types: FxHashMap::default(),
