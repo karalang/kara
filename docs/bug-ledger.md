@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 302 | 3 |
 | leak | 198 | 0 |
 | missing-feature | 185 | 2 |
-| run-vs-build | 173 | 2 |
+| run-vs-build | 173 | 1 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
 | diagnostics | 111 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1079 | 6 |
+| codegen | 1079 | 5 |
 | typecheck | 273 | 4 |
-| interp | 190 | 2 |
+| interp | 190 | 1 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1635 surfaced · 10 open · 1599 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1635 surfaced · 9 open · 1600 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
-| B-2026-08-27-7 | 2026-08-27 | codegen+interp | medium | CONTAINER ELEMENT `Drop` BODIES FIRE IN A DIFFERENT ORDER ON THE TWO BACKENDS: the interpreter walks INSERTION order (deterministic across seeds and runs), the compiled backends walk BUCKET order (a different permutation per `KARAC_HASH_SEED`). Affects all three walks -- Map values, Map keys, Set elements. Ordinary `for (k, v) in m` iteration is NOT affected: it is hash-ordered and run-to-run random on BOTH backends, exactly as design.md specifies. So this is the drop walk alone, and it breaks the A/B rule for any RAII element type. | — |
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-10 | 2026-08-27 | typecheck+codegen | high | `Vec[T] == Vec[T]` IS ACCEPTED BY `karac check` AND `karac build`, EXECUTED BY BOTH COMPILED BACKENDS, AND REJECTED AT RUNTIME BY THE INTERPRETER -- which reports it as a type error the typechecker was supposed to have caught. Worse, the compiled answer is WRONG for heap elements: two `Vec[String]` with identical contents compare `false`. So the same program either dies on `--interp` or silently answers incorrectly under `karac build`. | — |
 | B-2026-08-27-12 | 2026-08-27 | codegen | medium | THE MAP/SET ENUM KEY COMPARATOR DECLINES TWO PAYLOAD SHAPES THAT `compile_enum_eq` ALREADY HANDLES ON THE `==` SIDE, so `Map[Option[String], V]` and an enum whose payload struct has two consecutive sub-word fields ahead of a heap field still miss a structurally-equal key on the compiled backends while `x == y` on the same two values answers `true`. B-2026-08-27-6 closed the general case; `enum_structural_key_plan` returns `None` for both of these, leaving them on the byte compare. | — |
@@ -171,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1635 surfaced
 
 </details>
 
-### Fixed (1599)
+### Fixed (1600)
 
-<details><summary>1599 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1600 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1774,6 +1773,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1635 surfaced
 | B-2026-08-27-4 | codegen | high | A `shared` STRUCT USED AS A MAP/SET KEY IS MATCHED BY POINTER IDENTITY ON THE COMPILED BACKENDS AND STRUCTURALLY BY THE INTERPRETER | 393424d |
 | B-2026-08-27-5 | codegen | medium | `==` ON A `shared struct` WITH A NICHE-ENCODED `Option[shared T]` FIELD COMPARES RAW POINTERS, so two structurally-equal values answer `false` on the… | 41b233c |
 | B-2026-08-27-6 | codegen | medium | A PLAIN (non-shared) ENUM USED AS A MAP/SET KEY WITH A HEAP-BEARING PAYLOAD COMPARES ITS PAYLOAD WORDS INSTEAD OF RECURSING, so `Map[S, V]` where `en… | a35c3f5 |
+| B-2026-08-27-7 | codegen+interp | medium | CONTAINER ELEMENT `Drop` BODIES FIRE IN A DIFFERENT ORDER ON THE TWO BACKENDS: the interpreter walks INSERTION order (deterministic across seeds and… | 478fef6 |
 | B-2026-08-27-9 | codegen | medium | A FLOAT FIELD OF A `shared struct` IS COMPARED BY BITS, NOT BY IEEE SEMANTICS, so `==` is wrong in BOTH directions on the compiled backends: `0.0` vs… | cac21aa |
 | B-2026-08-27-11 | codegen | high | A USER STRUCT NAMED `F64` / `F32` / `F16` / `Bf16` SILENTLY INHERITS THE PRELUDE TOTAL-ORDER WRAPPER'S COMPARISON, which compares ONE float field and… | 374a8a3 |
 
