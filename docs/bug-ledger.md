@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 298 | 3 |
 | leak | 198 | 0 |
 | missing-feature | 185 | 2 |
-| run-vs-build | 171 | 0 |
+| run-vs-build | 172 | 1 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
 | diagnostics | 110 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1072 | 3 |
+| codegen | 1073 | 4 |
 | typecheck | 270 | 1 |
-| interp | 189 | 1 |
+| interp | 190 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1626 surfaced · 5 open · 1595 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1627 surfaced · 6 open · 1595 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1626 surfaced
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-27-5 | 2026-08-27 | codegen | medium | `==` ON A `shared struct` WITH A NICHE-ENCODED `Option[shared T]` FIELD COMPARES RAW POINTERS, so two structurally-equal values answer `false` on the compiled backends and `true` on the interpreter. `try_compile_struct_eq_typed` routes a struct to the TYPE-directed comparator only when it has a Vec field AND is not shared; everything else falls to the SHAPE-directed field walk, which does not know a niche slot holds a bare pointer instead of the 4-i64 Option layout. | — |
 | B-2026-08-27-6 | 2026-08-27 | codegen | medium | A PLAIN (non-shared) ENUM USED AS A MAP/SET KEY WITH A HEAP-BEARING PAYLOAD COMPARES ITS PAYLOAD WORDS INSTEAD OF RECURSING, so `Map[S, V]` where `enum S { A { s: String } }` misses a structurally-equal key on the compiled backends and finds it on the interpreter. `emit_eq_fn_for_type_expr` has arms for tuples, `Vec`, and STRUCTS, but none for enums -- an enum key falls to the byte-compare fallback, which for a `String` payload compares two distinct heap POINTERS. | — |
+| B-2026-08-27-7 | 2026-08-27 | codegen+interp | medium | CONTAINER ELEMENT `Drop` BODIES FIRE IN A DIFFERENT ORDER ON THE TWO BACKENDS: the interpreter walks INSERTION order (deterministic across seeds and runs), the compiled backends walk BUCKET order (a different permutation per `KARAC_HASH_SEED`). Affects all three walks -- Map values, Map keys, Set elements. Ordinary `for (k, v) in m` iteration is NOT affected: it is hash-ordered and run-to-run random on BOTH backends, exactly as design.md specifies. So this is the drop walk alone, and it breaks the A/B rule for any RAII element type. | — |
 
 ### Relocated (2)
 
