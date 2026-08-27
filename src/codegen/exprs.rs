@@ -505,6 +505,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `self.len() == other.len() and zip.all(a == b)`, which
                     // is what `emit_eq_fn_for_vec` implements, so this routes
                     // to the spec's comparator rather than inventing one.
+                    //
+                    // The two SIBLING shapes join it here (B-2026-08-27-24,
+                    // -25). `Slice[T]` and `Array[T, N]` were accepted by
+                    // `karac check` for the same reason `Vec` was —
+                    // `type_supports_partial_eq` recurses into the element for
+                    // all three — and then refused by codegen, each on a
+                    // different arm and each blaming a phase that was not at
+                    // fault: a `Slice` arrives as a bare `ptr` and tripped the
+                    // "reference type" arm written for `shared` handles, an
+                    // `Array` tripped the non-comparable-operand arm, which
+                    // guesses "likely a typechecker gap" at an operand pair
+                    // whose types match exactly. All three now route to the
+                    // shape's own content comparator.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                        if let Some((elem_te, n)) = self
+                            .array_te_of_operand(left)
+                            .or_else(|| self.array_te_of_operand(right))
+                        {
+                            return self.compile_array_eq(op, &elem_te, n, lhs, rhs);
+                        }
+                        if let Some(elem_te) = self
+                            .slice_elem_te_of_operand(left)
+                            .or_else(|| self.slice_elem_te_of_operand(right))
+                        {
+                            return self.compile_slice_eq(op, &elem_te, lhs, rhs);
+                        }
+                    }
                     if matches!(op, BinOp::Eq | BinOp::NotEq)
                         && lhs.is_struct_value()
                         && rhs.is_struct_value()

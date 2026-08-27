@@ -105538,6 +105538,177 @@ fn main() {
         );
     }
 
+    /// `Slice[T] == Slice[T]` compares CONTENTS over the viewed range
+    /// (B-2026-08-27-24).
+    ///
+    /// The `Vec` sibling's bug one type over, and NOT fixed by that work.
+    /// `type_supports_partial_eq` has a `Type::Slice` arm next to the `Vec`
+    /// one, so `karac check` admitted this deliberately — and then all three
+    /// components disagreed on one binary: `check` passed, `--interp` raised
+    /// "operator 'Eq' is not defined for operands of type 'Slice'" while
+    /// claiming the typechecker rejects it (it does not), and `build` refused
+    /// it as "a reference type", a message written for `shared` handles that a
+    /// slice is not. A slice reaches `compile_binop` as a bare `ptr`, which is
+    /// why it took a different wrong arm than the `Vec` did.
+    ///
+    /// The legs are chosen so no single one can carry the test. Element-wise
+    /// content equality needs the `Slice[String]` rows — a scalar slice would
+    /// also pass under a memcmp of the data — and the SAME-BUFFER rows
+    /// (`c[0..2]` vs `c[1..3]`) are the ones that fail if the comparator reads
+    /// from one operand's pointer twice. `s1 == s4` pins the length check;
+    /// `arr[0..2]` pins a slice over a stack `Array`, whose buffer is not a
+    /// heap `Vec` at all; and the two empty slices pin the zero-trip loop.
+    #[test]
+    fn test_e2e_slice_equality_compares_contents() {
+        assert_eq!(
+            run_program(
+                r#"
+fn cmp_slices(a: Slice[i64], b: Slice[i64]) -> bool { return a == b; }
+fn cmp_mut(a: mut Slice[i64], b: mut Slice[i64]) -> bool { return a == b; }
+
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    a.push(3);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1);
+    c.push(2);
+    c.push(9);
+    let s1: Slice[i64] = a[0..2];
+    let s2: Slice[i64] = c[0..2];
+    let s3: Slice[i64] = c[1..3];
+    let s4: Slice[i64] = a[0..3];
+    println(f"{s1 == s2}");
+    println(f"{s1 == s3}");
+    println(f"{s1 != s3}");
+    println(f"{s1 == s4}");
+    println(f"{s1 == s1}");
+    println(f"{cmp_slices(a[0..2], c[0..2])}");
+    println(f"{cmp_mut(mut a[0..2], mut c[0..2])}");
+    let mut p: Vec[String] = Vec.new();
+    p.push("hello");
+    p.push("world");
+    let mut q: Vec[String] = Vec.new();
+    q.push("hello");
+    q.push("WORLD");
+    let ps: Slice[String] = p[0..2];
+    let qs: Slice[String] = q[0..2];
+    let ps1: Slice[String] = p[0..1];
+    let qs1: Slice[String] = q[0..1];
+    println(f"{ps == qs}");
+    println(f"{ps1 == qs1}");
+    let arr: Array[i64, 3] = Array[1, 2, 3];
+    let as1: Slice[i64] = arr[0..2];
+    println(f"{as1 == s1}");
+    let e1: Vec[i64] = Vec.new();
+    let es1: Slice[i64] = e1[0..0];
+    let es2: Slice[i64] = a[0..0];
+    println(f"{es1 == es2}");
+}
+"#,
+            ),
+            // s1==s2, s1==s3, s1!=s3, s1==s4 (len), s1==s1, param, mut param,
+            // Slice[String] differing, Slice[String] equal prefix,
+            // slice-over-Array vs slice-over-Vec, two empty slices.
+            Some(
+                "true\nfalse\ntrue\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\ntrue\n".to_string()
+            )
+        );
+    }
+
+    /// `Array[T, N] == Array[T, N]` compares CONTENTS element-wise, and so do
+    /// an array FIELD and an array MAP KEY (B-2026-08-27-25).
+    ///
+    /// The row is about the bare operator, which failed LOUDLY — codegen
+    /// reported "left operand has non-comparable type ArrayType" and blamed
+    /// "likely a typechecker gap", at an operand pair whose types match
+    /// exactly. Fixing it turned up two SILENT siblings behind the same
+    /// missing arm, and they are pinned here because a routing-only repair
+    /// leaves both standing: `emit_eq_fn_for_type_expr` had no `Array` arm at
+    /// all, so a struct FIELD and a Map KEY of array type fell to the byte-loop
+    /// fallback. That is accidentally right for a scalar element and wrong for
+    /// a heap one — `WrapS { a: Array[String, 2] }` compared two equal values
+    /// UNEQUAL under `karac build` while the interpreter said equal, and
+    /// `Map[Array[String, 2], _]` grew a second entry for one key.
+    ///
+    /// The two `Map` rows are the eq/hash pair: a structural eq without a
+    /// structural hash puts equal keys in different buckets, where they never
+    /// meet to be compared, so a fix that adds only the comparator leaves
+    /// `km.len()` at 3.
+    ///
+    /// Both NESTED rows are here for the mangler. `display_mangle_te` dropped
+    /// CONST generic args, so `Array[i64, 2]` and `Array[i64, 3]` produced the
+    /// same name fragment and the first-emitted comparator served both;
+    /// `n3 == m3` differs only in the LAST element of a 3-wide inner array, so
+    /// a body compiled for extent 2 answers it wrong.
+    #[test]
+    fn test_e2e_array_equality_compares_contents() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+struct WrapS { a: Array[String, 2] }
+
+fn main() {
+    let x: Array[i64, 2] = Array[1, 2];
+    let y: Array[i64, 2] = Array[1, 9];
+    let z: Array[i64, 2] = Array[1, 2];
+    println(f"{x == y}");
+    println(f"{x == z}");
+    println(f"{x != y}");
+
+    let p: Array[String, 2] = Array["ab", "cd"];
+    let q: Array[String, 2] = Array["ab", "cd"];
+    let r: Array[String, 2] = Array["ab", "zz"];
+    println(f"{p == q}");
+    println(f"{p == r}");
+
+    println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "cd"] }}");
+    println(f"{WrapS { a: Array["ab", "cd"] } == WrapS { a: Array["ab", "zz"] }}");
+
+    let n2: Array[Array[i64, 2], 2] = Array[Array[1, 2], Array[3, 4]];
+    let m2: Array[Array[i64, 2], 2] = Array[Array[1, 2], Array[3, 5]];
+    let k2: Array[Array[i64, 2], 2] = Array[Array[1, 2], Array[3, 4]];
+    println(f"{n2 == m2}");
+    println(f"{n2 == k2}");
+
+    let n3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 6]];
+    let m3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 7]];
+    println(f"{n3 == m3}");
+
+    let three: Array[i64, 3] = Array[1, 2, 3];
+    let three2: Array[i64, 3] = Array[1, 2, 9];
+    println(f"{three == three2}");
+
+    let e1: Array[i64, 0] = Array[];
+    let e2: Array[i64, 0] = Array[];
+    println(f"{e1 == e2}");
+
+    let mut km: Map[Array[String, 2], i64] = Map.new();
+    km.insert(Array["ab", "cd"], 1);
+    km.insert(Array["ab", "cd"], 2);
+    km.insert(Array["ab", "zz"], 3);
+    println(f"{km.len()}");
+    let mut ki: Map[Array[i64, 2], i64] = Map.new();
+    ki.insert(Array[1, 2], 1);
+    ki.insert(Array[1, 2], 2);
+    println(f"{ki.len()}");
+}
+"#,
+            ),
+            // x==y, x==z, x!=y, p==q, p==r, field equal, field differing,
+            // nested differing, nested equal, nested-3 differing (mangler),
+            // three-wide differing, two empty arrays, Map[Array[String,2]] len,
+            // Map[Array[i64,2]] len.
+            Some(
+                "false\ntrue\ntrue\ntrue\nfalse\ntrue\nfalse\nfalse\ntrue\n\
+                 false\nfalse\ntrue\n2\n1\n"
+                    .to_string()
+            )
+        );
+    }
+
     #[test]
     fn test_e2e_sorted_container_destroys_in_key_order() {
         assert_eq!(

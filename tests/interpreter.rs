@@ -777,6 +777,89 @@ fn vec_equality_is_content_equality_in_the_interpreter() {
 }
 
 #[test]
+fn slice_equality_is_content_equality_in_the_interpreter() {
+    // B-2026-08-27-24 -- the `Vec` sibling's bug one type over, and unfixed by
+    // that work. The interpreter had no `Value::Slice` arm in its binop
+    // dispatcher, so `Slice[T] == Slice[T]` fell to the same catch-all, whose
+    // message says "this is a type error the typechecker reports as a hard
+    // error". False again: `type_supports_partial_eq` has a `Type::Slice` arm
+    // right beside the `Vec` one, so `karac check` printed "All checks passed."
+    // on the same file.
+    //
+    // `Value`'s `PartialEq` already compared slices by content, which is why a
+    // slice-typed struct field worked and only the bare operator did not.
+    //
+    // The SAME-BUFFER rows (`c[0..2]` vs `c[1..3]`) carry a second point: two
+    // slices of one `Vec` share an `Arc<RwLock<..>>`, and comparing them used
+    // to take two read locks on it. `RwLock::read` is not documented to be
+    // reentrant, so that pair now takes one lock -- an ordinary comparison
+    // must not depend on a recursive read succeeding.
+    let src = "fn cmp_slices(a: Slice[i64], b: Slice[i64]) -> bool { return a == b; }
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            a.push(1);
+            a.push(2);
+            a.push(3);
+            let mut c: Vec[i64] = Vec.new();
+            c.push(1);
+            c.push(2);
+            c.push(9);
+            let s1: Slice[i64] = a[0..2];
+            let s2: Slice[i64] = c[0..2];
+            let s3: Slice[i64] = c[1..3];
+            let s4: Slice[i64] = a[0..3];
+            println(f\"{s1 == s2}\");
+            println(f\"{s1 == s3}\");
+            println(f\"{s1 != s3}\");
+            println(f\"{s1 == s4}\");
+            println(f\"{cmp_slices(a[0..2], c[0..2])}\");
+            let mut p: Vec[String] = Vec.new();
+            p.push(\"hello\");
+            let mut q: Vec[String] = Vec.new();
+            q.push(\"hello\");
+            println(f\"{p[0..1] == q[0..1]}\");
+        }";
+    assert_eq!(run_no_errors(src), "true\nfalse\ntrue\nfalse\ntrue\ntrue\n");
+}
+
+#[test]
+fn array_equality_is_content_equality_in_the_interpreter() {
+    // B-2026-08-27-25's oracle. The interpreter was ALREADY right here --
+    // `Array[T, N]` is a `Value::Array` and took the `Vec` arm -- and that is
+    // exactly why this test exists: the row is a run-vs-build split where
+    // `karac run` works and `karac build` refuses, so the interpreter's answers
+    // are the reference its E2E twin
+    // (`test_e2e_array_equality_compares_contents`) is checked against. Pinning
+    // them keeps the two halves from drifting apart in the other direction.
+    let src = "#[derive(PartialEq)]
+        struct WrapS { a: Array[String, 2] }
+        fn main() {
+            let x: Array[i64, 2] = Array[1, 2];
+            let y: Array[i64, 2] = Array[1, 9];
+            println(f\"{x == y}\");
+            println(f\"{x != y}\");
+            let p: Array[String, 2] = Array[\"ab\", \"cd\"];
+            let q: Array[String, 2] = Array[\"ab\", \"cd\"];
+            let r: Array[String, 2] = Array[\"ab\", \"zz\"];
+            println(f\"{p == q}\");
+            println(f\"{p == r}\");
+            println(f\"{WrapS { a: Array[\"ab\", \"cd\"] } == WrapS { a: Array[\"ab\", \"cd\"] }}\");
+            let n3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 6]];
+            let m3: Array[Array[i64, 3], 2] = Array[Array[1, 2, 3], Array[4, 5, 7]];
+            println(f\"{n3 == m3}\");
+            let mut km: Map[Array[String, 2], i64] = Map.new();
+            km.insert(Array[\"ab\", \"cd\"], 1);
+            km.insert(Array[\"ab\", \"cd\"], 2);
+            km.insert(Array[\"ab\", \"zz\"], 3);
+            println(f\"{km.len()}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "false\ntrue\ntrue\nfalse\ntrue\nfalse\n2\n"
+    );
+}
+
+#[test]
 fn a_sorted_container_destroys_its_elements_in_key_order() {
     // B-2026-08-27-7's other half — the escape hatch, pinned. design.md § Map
     // sends code that needs a defined order to `SortedMap`/`SortedSet`, and

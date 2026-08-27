@@ -7856,23 +7856,149 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Element `TypeExpr` when `e` is statically a `Vec[T]`, else `None`
-    /// (B-2026-08-27-10) — the operand oracle for the bare-`Vec` `==` / `!=`
-    /// intercept in `compile_expr`'s Binary arm.
+    /// Surface `TypeExpr` when `e` is statically one of the three SEQUENCE
+    /// shapes — `Vec[T]` (B-2026-08-27-10), `Slice[T]` (B-2026-08-27-24) or
+    /// `Array[T, N]` (B-2026-08-27-25) — else `None`. The operand oracle for
+    /// the bare `==` / `!=` intercept in `compile_expr`'s Binary arm.
     ///
     /// The table is type-exact and covers a BORROWED operand: the lowering
     /// pass peels `ref` / `mut ref` when it builds it, matching the
     /// typechecker's `Eq` arm, which calls `strip_refs_for_compare` on both
     /// sides before admitting the comparison. Type-exactness is what makes the
     /// intercept safe to place ahead of `compile_binop` — an LLVM-shape test
-    /// cannot tell a `Vec` from a `String` (both `{ ptr, i64, i64 }`), which is
-    /// how this bug arose, and `var_elem_type_exprs` cannot tell a `Vec` from a
-    /// `Slice` or a `VecDeque`, so neither is usable here.
-    pub(super) fn vec_elem_te_of_operand(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
+    /// cannot tell a `Vec` from a `String` (both `{ ptr, i64, i64 }`) nor a
+    /// `Slice` from a `shared` handle (both a bare `ptr`), which is how these
+    /// bugs arose, and `var_elem_type_exprs` cannot tell a `Vec` from a `Slice`
+    /// or a `VecDeque`, so neither is usable here.
+    pub(super) fn seq_eq_operand_te(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
         self.span_tables
-            .vec_eq_elem_types
+            .seq_eq_operand_types
             .get(&(e.span.offset, e.span.length))
             .cloned()
+    }
+
+    /// Element `TypeExpr` when `e` is statically a `Vec[T]`, else `None`.
+    /// Thin projection of [`Self::seq_eq_operand_te`] for the `Vec` arm.
+    pub(super) fn vec_elem_te_of_operand(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
+        let te = self.seq_eq_operand_te(e)?;
+        match &te.kind {
+            crate::ast::TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec" => {
+                match p.generic_args.as_ref()?.first()? {
+                    crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Element `TypeExpr` when `e` is statically a `Slice[T]` / `mut Slice[T]`,
+    /// else `None` (B-2026-08-27-24).
+    pub(super) fn slice_elem_te_of_operand(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
+        let te = self.seq_eq_operand_te(e)?;
+        match &te.kind {
+            crate::ast::TypeKind::MutSlice(inner) => Some((**inner).clone()),
+            crate::ast::TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Slice" => {
+                match p.generic_args.as_ref()?.first()? {
+                    crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// `(element `TypeExpr`, N)` when `e` is statically an `Array[T, N]` with a
+    /// literal extent, else `None` (B-2026-08-27-25).
+    pub(super) fn array_te_of_operand(&self, e: &crate::ast::Expr) -> Option<(TypeExpr, u32)> {
+        let te = self.seq_eq_operand_te(e)?;
+        self.array_elem_and_len(&te)
+    }
+
+    /// Spill `v` to an entry alloca and hand back its address, or pass a
+    /// pointer operand through unchanged.
+    ///
+    /// The three sequence comparators all take POINTERS to the operand, and
+    /// each shape reaches the operator in both forms: a `Slice` local compiles
+    /// to the address of its `{ptr,len}` slot while a `Slice` *parameter*
+    /// arrives as the fat struct by value, and an `Array` is a by-value
+    /// `[N x T]` unless it is already being read through a place. Normalizing
+    /// here keeps that split out of the comparators.
+    fn operand_as_ptr(
+        &mut self,
+        v: BasicValueEnum<'ctx>,
+        name: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        if v.is_pointer_value() {
+            return v.into_pointer_value();
+        }
+        let slot = self.builder.build_alloca(v.get_type(), name).unwrap();
+        self.builder.build_store(slot, v).unwrap();
+        slot
+    }
+
+    /// `a == b` / `a != b` on two `Slice[T]` values, routed to the shared
+    /// content comparator `karac_eq_Slice_<T>` (B-2026-08-27-24).
+    ///
+    /// design.md § Slices gives a slice value semantics over a borrowed range,
+    /// and `type_supports_partial_eq` has admitted the operand since the same
+    /// commit that admitted `Vec` — so `karac check` passed while BOTH
+    /// executors refused it, each blaming a different phase. The comparator is
+    /// the `Vec` one parameterized by the `{ptr, len}` header, which is what
+    /// makes `v.as_slice() == w.as_slice()` and `v == w` agree by construction.
+    pub(super) fn compile_slice_eq(
+        &mut self,
+        op: &BinOp,
+        elem_te: &TypeExpr,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let eq_fn = self.emit_eq_fn_for_slice(elem_te);
+        let l_slot = self.operand_as_ptr(lhs, "sliceq.l");
+        let r_slot = self.operand_as_ptr(rhs, "sliceq.r");
+        let r = self
+            .builder
+            .build_call(eq_fn, &[l_slot.into(), r_slot.into()], "sliceq.call")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let out = if matches!(op, BinOp::NotEq) {
+            self.builder.build_not(r, "sliceq.ne").unwrap()
+        } else {
+            r
+        };
+        Ok(out.into())
+    }
+
+    /// `a == b` / `a != b` on two `Array[T, N]` values, routed to the shared
+    /// content comparator `karac_eq_Array_<T>_<N>` (B-2026-08-27-25) — the
+    /// same function a `#[derive(PartialEq)]` struct with an array field
+    /// reaches through `emit_eq_fn_for_struct`.
+    pub(super) fn compile_array_eq(
+        &mut self,
+        op: &BinOp,
+        elem_te: &TypeExpr,
+        n: u32,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let eq_fn = self.emit_eq_fn_for_array(elem_te, n);
+        let l_slot = self.operand_as_ptr(lhs, "arreq.l");
+        let r_slot = self.operand_as_ptr(rhs, "arreq.r");
+        let r = self
+            .builder
+            .build_call(eq_fn, &[l_slot.into(), r_slot.into()], "arreq.call")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let out = if matches!(op, BinOp::NotEq) {
+            self.builder.build_not(r, "arreq.ne").unwrap()
+        } else {
+            r
+        };
+        Ok(out.into())
     }
 
     /// `a == b` / `a != b` on two `Vec[T]` values, routed to the shared

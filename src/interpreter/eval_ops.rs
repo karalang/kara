@@ -841,6 +841,22 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::Eq, l @ Value::Array(_), r @ Value::Array(_)) => Value::Bool(l == r),
             (BinOp::NotEq, l @ Value::Array(_), r @ Value::Array(_)) => Value::Bool(l != r),
 
+            // `Slice[T]` equality is CONTENT equality over the viewed range —
+            // the `Vec` arm's sibling, on the same reasoning
+            // (B-2026-08-27-24). design.md § Slices gives a slice VALUE
+            // semantics over a borrowed range, and `type_supports_partial_eq`
+            // has a `Type::Slice` arm right beside the `Type::Vec` one, so
+            // `karac check` admitted the operand deliberately -- and the
+            // interpreter then died on the `_` arm below, whose message claims
+            // the typechecker rejects this. It does not, and did not.
+            //
+            // `Value`'s own `PartialEq` is the comparator (length, then
+            // element-wise over `start..start + len`), the same one a
+            // `#[derive(PartialEq)]` struct with a slice-typed field already
+            // compares through.
+            (BinOp::Eq, l @ Value::Slice { .. }, r @ Value::Slice { .. }) => Value::Bool(l == r),
+            (BinOp::NotEq, l @ Value::Slice { .. }, r @ Value::Slice { .. }) => Value::Bool(l != r),
+
             // No valid program reaches here — the typechecker rejects every
             // ill-typed operand combination as a hard error. The one way in is
             // `karac run`, which deliberately demotes typecheck errors to

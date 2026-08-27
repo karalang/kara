@@ -14,7 +14,7 @@
 use crate::ast::*;
 
 use inkwell::module::Linkage;
-use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -923,6 +923,12 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn emit_hash_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        // `Array[T, N]` FIRST, for the reason the eq twin documents: the
+        // cached name below is built from the shape-shallow
+        // `mangled_type_name` and is not unique to this array type.
+        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
+            return self.emit_hash_fn_for_array(&elem_te, n);
+        }
         let type_name = Self::mangled_type_name(te);
         let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
@@ -1009,6 +1015,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// TypeExpr-aware eq-fn wrapper. Mirror of `emit_hash_fn_for_type_expr`.
     pub(super) fn emit_eq_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        // `Array[T, N]` FIRST — ahead of the cached-name lookup below, not just
+        // ahead of the `match` (B-2026-08-27-25). `mangled_type_name` is
+        // shape-shallow: it yields a bare `"Array"` for every instantiation and
+        // `"unknown"` for the inference-recovered node, so the cache key it
+        // builds is shared with unrelated types and the lookup could hand back
+        // someone else's comparator. `emit_eq_fn_for_array` keys on its own
+        // precise name (element + extent), which is the identity that matters.
+        if let Some((elem_te, n)) = self.array_elem_and_len(te) {
+            return self.emit_eq_fn_for_array(&elem_te, n);
+        }
         let type_name = Self::mangled_type_name(te);
         let fn_name = format!("karac_eq_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
@@ -1238,16 +1254,97 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_eq_fn_for_vec(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let fn_name = format!("karac_eq_Vec_{elem_name}");
+        let header_ty = self.vec_struct_type();
+        self.emit_eq_fn_for_ptr_len_header(&fn_name, header_ty, elem_te)
+    }
+
+    /// Emit (or reuse) `karac_eq_Slice_<elem>(*const Slice, *const Slice)
+    /// -> i1` — the `Slice[T]` twin of `emit_eq_fn_for_vec` (B-2026-08-27-24).
+    ///
+    /// A slice is a `{ptr, i64 len}` fat struct: the same `ptr`-then-`len`
+    /// prefix a `Vec` has, minus the capacity word. That is why the two share
+    /// one emitter parameterized by the header type rather than each owning a
+    /// copy of the loop — the comparison itself ("equal lengths, then equal
+    /// elements") is identical, and design.md § Slices gives a slice VALUE
+    /// semantics over a borrowed range, so a slice compares by content exactly
+    /// as the `Vec` it views does. Sharing the emitter is also what makes
+    /// `v.as_slice() == w.as_slice()` agree with `v == w` by construction.
+    pub(super) fn emit_eq_fn_for_slice(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let fn_name = format!("karac_eq_Slice_{elem_name}");
+        let header_ty = self.slice_struct_type();
+        self.emit_eq_fn_for_ptr_len_header(&fn_name, header_ty, elem_te)
+    }
+
+    /// `(element `TypeExpr`, N)` for an `Array[T, N]` type expression, or
+    /// `None` when the extent is not a compile-time literal.
+    ///
+    /// Both surface forms reach codegen and mean the same type, so both are
+    /// accepted here: source-written annotations parse as
+    /// `Path("Array", [Type(T), Const(N)])`, while a type recovered from
+    /// inference (`TypeChecker::type_to_type_expr`) rebuilds as the dedicated
+    /// `TypeKind::Array { element, size }` node. N comes back through
+    /// `llvm_array_type` for the path form so a const-generic parameter bound
+    /// by the active monomorphization resolves the same way it does
+    /// everywhere else.
+    pub(super) fn array_elem_and_len(&self, te: &TypeExpr) -> Option<(TypeExpr, u32)> {
+        match &te.kind {
+            TypeKind::Array { element, size } => match &size.kind {
+                crate::ast::ExprKind::Integer(n, _) if *n >= 0 => {
+                    Some(((**element).clone(), *n as u32))
+                }
+                _ => None,
+            },
+            TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Array" => {
+                let elem_te = match p.generic_args.as_ref()?.first()? {
+                    GenericArg::Type(t) => t.clone(),
+                    _ => return None,
+                };
+                match self.llvm_array_type(&p.generic_args)? {
+                    BasicTypeEnum::ArrayType(at) => Some((elem_te, at.len())),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Emit (or reuse) `karac_eq_Array_<elem>_<N>(*const [N x T], *const
+    /// [N x T]) -> i1` — CONTENT equality for an `Array[T, N]`
+    /// (B-2026-08-27-25), element-wise through the per-element eq fn so a
+    /// heap-bearing element (`Array[String, N]`, `Array[Vec[_], N]`) compares
+    /// by content and not by its pointer word.
+    ///
+    /// Simpler than the `Vec` / `Slice` twin in one way and stricter in
+    /// another: N is a compile-time constant, so there is no length word to
+    /// load and no length check to emit — two arrays that reach here have the
+    /// SAME type and therefore the same extent. What remains is the element
+    /// loop.
+    ///
+    /// Without this arm an array key/field fell to `emit_eq_fn_for_type`'s
+    /// byte-loop fallback. That is accidentally right for a scalar element and
+    /// wrong for every heap one — measured on `#[derive(PartialEq)] struct Ws
+    /// { a: Array[String, 2] }`, where two equal-contents values compared
+    /// UNEQUAL under `karac build` and equal under the interpreter. It also
+    /// collided: the fallback names itself from `mangled_type_name`, which is
+    /// bare `"Array"` for every instantiation, so the first `Array[_, _]` in a
+    /// program supplied the comparator for all the others.
+    pub(super) fn emit_eq_fn_for_array(
+        &mut self,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let fn_name = format!("karac_eq_Array_{elem_name}_{n}");
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i8_t = self.context.i8_type();
         let i64_t = self.context.i64_type();
         let bool_t = self.context.bool_type();
-        let vec_ty = self.vec_struct_type();
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        let array_ty = elem_ty.array_type(n);
         // Recurse first — emit may switch the builder's insert block.
         let elem_eq = self.emit_eq_fn_for_type_expr(elem_te);
 
@@ -1256,6 +1353,219 @@ impl<'ctx> super::Codegen<'ctx> {
         let eq_fn = self
             .module
             .add_function(&fn_name, eq_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+        let loop_hdr = self.context.append_basic_block(eq_fn, "eq.hdr");
+        let loop_bdy = self.context.append_basic_block(eq_fn, "eq.bdy");
+        let loop_exit = self.context.append_basic_block(eq_fn, "eq.exit");
+
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let extent = i64_t.const_int(u64::from(n), false);
+        self.builder.build_unconditional_branch(loop_hdr).unwrap();
+
+        self.builder.position_at_end(loop_hdr);
+        let i_phi = self.builder.build_phi(i64_t, "eq.i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, extent, "eq.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, loop_bdy, loop_exit)
+            .unwrap();
+
+        self.builder.position_at_end(loop_bdy);
+        // Two-index GEP against the ARRAY type, not a byte offset: LLVM then
+        // computes the element stride itself, so a padded element type cannot
+        // desynchronize the walk from the real layout.
+        let zero = i64_t.const_zero();
+        let ea = unsafe {
+            self.builder
+                .build_in_bounds_gep(array_ty, a_ptr, &[zero, i_val], "eq.ea")
+                .unwrap()
+        };
+        let eb = unsafe {
+            self.builder
+                .build_in_bounds_gep(array_ty, b_ptr, &[zero, i_val], "eq.eb")
+                .unwrap()
+        };
+        let r = self
+            .builder
+            .build_call(elem_eq, &[ea.into(), eb.into()], "eq.r")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "eq.i1")
+            .unwrap();
+        i_phi.add_incoming(&[(&i_next, loop_bdy)]);
+        self.builder
+            .build_conditional_branch(r, loop_hdr, neq_bb)
+            .unwrap();
+
+        self.builder.position_at_end(loop_exit);
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
+    }
+
+    /// Emit (or reuse) `karac_hash_Array_<elem>_<N>(*const [N x T]) -> i64` —
+    /// the hash twin of `emit_eq_fn_for_array`, on the rule B-2026-08-27-4 and
+    /// -6 both turn on: a structural eq without a structural hash puts equal
+    /// keys in different buckets, where they never meet to be compared. The
+    /// two must land together or `Map[Array[String, N], V]` stays broken in a
+    /// harder-to-see way than before.
+    ///
+    /// Same FxHash tail-mix as `emit_hash_fn_for_vec`, seeded with the extent
+    /// (a constant here rather than a loaded length).
+    pub(super) fn emit_hash_fn_for_array(
+        &mut self,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let fn_name = format!(
+            "karac_hash_Array_{elem_name}_{n}{}",
+            self.hash_hasher.mangle_suffix()
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        let array_ty = elem_ty.array_type(n);
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_hash = self.emit_hash_fn_for_type_expr(elem_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn = self
+            .module
+            .add_function(&fn_name, hash_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        let seed = i64_t.const_int(Self::FXHASH_SEED, false);
+        let rotate_amt = i64_t.const_int(Self::FXHASH_ROTATE, false);
+        let rotate_inv = i64_t.const_int(64 - Self::FXHASH_ROTATE, false);
+        let extent = i64_t.const_int(u64::from(n), false);
+        let init_state = self
+            .builder
+            .build_int_mul(extent, seed, "a.h.init")
+            .unwrap();
+
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        let hdr_bb = self.context.append_basic_block(hash_fn, "a.h.hdr");
+        let bdy_bb = self.context.append_basic_block(hash_fn, "a.h.bdy");
+        let exit_bb = self.context.append_basic_block(hash_fn, "a.h.exit");
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let i_phi = self.builder.build_phi(i64_t, "a.h.i").unwrap();
+        let state_phi = self.builder.build_phi(i64_t, "a.h.state").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
+        state_phi.add_incoming(&[(&init_state, pre_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let state = state_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, extent, "a.h.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        let zero = i64_t.const_zero();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(array_ty, key_ptr, &[zero, i_val], "a.h.ep")
+                .unwrap()
+        };
+        let elem_h = self
+            .builder
+            .build_call(elem_hash, &[elem_ptr.into()], "a.h.eh")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let shl = self
+            .builder
+            .build_left_shift(state, rotate_amt, "a.h.shl")
+            .unwrap();
+        let shr = self
+            .builder
+            .build_right_shift(state, rotate_inv, false, "a.h.shr")
+            .unwrap();
+        let rotated = self.builder.build_or(shl, shr, "a.h.rot").unwrap();
+        let xored = self.builder.build_xor(rotated, elem_h, "a.h.xor").unwrap();
+        let new_state = self.builder.build_int_mul(xored, seed, "a.h.mul").unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "a.h.i1")
+            .unwrap();
+        i_phi.add_incoming(&[(&i_next, bdy_bb)]);
+        state_phi.add_incoming(&[(&new_state, bdy_bb)]);
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(Some(&state)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
+    }
+
+    /// Shared body of `emit_eq_fn_for_vec` / `emit_eq_fn_for_slice`: content
+    /// equality for any `{ ptr, i64 len, .. }`-prefixed fat struct. `header_ty`
+    /// selects which struct type the `ptr` / `len` GEPs are computed against —
+    /// the only difference between the two layouts, since both put the data
+    /// pointer at field 0 and the length at field 1.
+    fn emit_eq_fn_for_ptr_len_header(
+        &mut self,
+        fn_name: &str,
+        header_ty: StructType<'ctx>,
+        elem_te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let vec_ty = header_ty;
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_eq = self.emit_eq_fn_for_type_expr(elem_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let eq_fn = self
+            .module
+            .add_function(fn_name, eq_fn_ty, Some(Linkage::Internal));
 
         let entry_bb = self.context.append_basic_block(eq_fn, "entry");
         let neq_bb = self.context.append_basic_block(eq_fn, "neq");

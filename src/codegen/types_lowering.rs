@@ -615,6 +615,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // (wasm32 pointers are i32-width scalars, not i64).
             TypeKind::Pointer { .. } => self.context.ptr_type(AddressSpace::default()).into(),
             TypeKind::MutSlice(_) => self.slice_struct_type().into(),
+            // `Array[T, N]` recovered from INFERENCE
+            // (`TypeChecker::type_to_type_expr` builds this node; a
+            // source-written annotation parses as `Path("Array", …)` and takes
+            // the arm above via `llvm_array_type`). Without it the node fell to
+            // the `_ => i64` default, so a nested `Array[Array[i64, 2], 2]`
+            // element lowered to a scalar word and the array walk that used its
+            // size strode wrong (B-2026-08-27-25). A non-literal extent keeps
+            // the old default — there is no `[N x T]` to build.
+            TypeKind::Array { element, size } => match &size.kind {
+                ExprKind::Integer(n, _) if *n >= 0 => self
+                    .llvm_type_for_type_expr(element)
+                    .array_type(*n as u32)
+                    .into(),
+                _ => self.context.i64_type().into(),
+            },
             // A first-class `Fn(...)` / `OnceFn(...)` value is represented by
             // the same `{fn_ptr, env_ptr}` closure fat-pointer struct as a
             // closure literal (`closure_value_type`). Without this arm the

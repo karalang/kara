@@ -926,6 +926,68 @@ fn main() {
         );
     }
 
+    /// `Slice[T] == Slice[T]` and `Array[T, N] == Array[T, N]` borrow both
+    /// operands and free neither (B-2026-08-27-24, -25).
+    ///
+    /// Both new comparators take POINTERS, so the intercept spills a by-value
+    /// operand into an alloca before the call — the same shape as the `Vec`
+    /// sibling, and the same risk: spilling a heap-owning value is how a second
+    /// owner appears, and a heap ELEMENT is where a stray free shows up as a
+    /// double-free rather than as a wrong answer.
+    ///
+    /// A slice is the sharper of the two, because it OWNS NOTHING: the buffer
+    /// belongs to the `Vec` or `Array` it views, so any free at all on this
+    /// path is a double-free of someone else's memory, not a leak. The
+    /// `Array[String, 2]` legs cover the owning direction, including the `Map`
+    /// key, which moves an array of heap Strings into the table on a DUPLICATE
+    /// insert — the displaced key must be destroyed exactly once.
+    ///
+    /// Deliberately absent: a FRESH-TEMPORARY array operand (`mk(2) == mk(2)`).
+    /// Measured leaking 26 bytes in 4 allocations — the four element Strings,
+    /// the same signature B-2026-08-27-26 records for the `Vec[String]` shape
+    /// of the identical defect, which is that a temporary operand has no owner
+    /// to run its element drops. It is filed as B-2026-08-27-29 rather than
+    /// pinned green here; a bound operand of the same type is clean, which is
+    /// what these legs assert.
+    #[test]
+    fn asan_slice_and_array_equality_are_ownership_neutral() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Array[String, 2] {
+    return Array[f"item{n}", f"item{n + 1}"];
+}
+
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"hello");
+    a.push(f"world");
+    let mut b: Vec[String] = Vec.new();
+    b.push(f"hello");
+    b.push(f"world");
+    let sa: Slice[String] = a[0..2];
+    let sb: Slice[String] = b[0..2];
+    println(f"{sa == sb}");
+    println(f"{a[0..1] == b[0..1]}");
+    println(a[1]);
+
+    let p = mk(1);
+    let q = mk(1);
+    println(f"{p == q}");
+    println(p[0]);
+
+    let mut m: Map[Array[String, 2], i64] = Map.new();
+    let k1 = mk(3);
+    let k2 = mk(3);
+    m.insert(k1, 1);
+    m.insert(k2, 2);
+    println(f"{m.len()}");
+}
+"#,
+            &["true", "true", "world", "true", "item1", "1"],
+            "asan_slice_and_array_equality_are_ownership_neutral",
+        );
+    }
+
     #[test]
     fn asan_vec_equality_borrows_both_operands() {
         assert_clean_asan_run(

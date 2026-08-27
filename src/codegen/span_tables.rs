@@ -225,12 +225,14 @@ pub(crate) struct SpanTables {
     /// consults this map before the field-aware cascade so the user's
     /// `cmp` runs instead of a synthesized derive-equivalent lex compare.
     pub(crate) user_ord_typed_exprs: HashMap<(usize, usize), String>,
-    /// Element `TypeExpr` per `Vec[T]`-typed expression (borrows peeled),
-    /// from `Program.vec_eq_elem_types`. Read by `vec_elem_te_of_operand` so
-    /// the `==` / `!=` intercept can route a bare `Vec` operand to
-    /// `karac_eq_Vec_<T>` — the same comparator the `#[derive(PartialEq)]`
-    /// struct-field path already reaches (B-2026-08-27-10).
-    pub(crate) vec_eq_elem_types: HashMap<(usize, usize), TypeExpr>,
+    /// Surface `TypeExpr` per `Vec[T]` / `Slice[T]` / `Array[T, N]`-typed
+    /// expression (borrows peeled), from `Program.seq_eq_operand_types`. Read
+    /// by `seq_eq_operand_te` so the `==` / `!=` intercept can route a bare
+    /// sequence operand to `karac_eq_Vec_<T>` / `karac_eq_Slice_<T>` /
+    /// `karac_eq_Array_<T>_<N>` — the same comparators the
+    /// `#[derive(PartialEq)]` struct-field path reaches (B-2026-08-27-10,
+    /// -24, -25).
+    pub(crate) seq_eq_operand_types: HashMap<(usize, usize), TypeExpr>,
     /// Pointee surface `TypeExpr` per raw-pointer-typed (`*const T` / `*mut T`)
     /// expression, keyed by span — populated from
     /// `Program.raw_pointer_pointee_types`. The unary-deref arm keys this by the

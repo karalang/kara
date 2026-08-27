@@ -1524,6 +1524,16 @@ impl PartialEq for Value {
                 if la != lb {
                     return false;
                 }
+                // Two slices over the SAME storage take ONE read lock, not
+                // two: `RwLock::read` is not documented to be reentrant, and
+                // recursively acquiring a read lock the current thread already
+                // holds may deadlock. Two slices of one `Vec` (`v[0..2] ==
+                // v[2..4]`) are an ordinary comparison and reach here, so the
+                // shared-storage case must not depend on that.
+                if Arc::ptr_eq(sa, sb) {
+                    let va = sa.read().unwrap();
+                    return va[*ssa..*ssa + *la] == va[*ssb..*ssb + *lb];
+                }
                 let va = sa.read().unwrap();
                 let vb = sb.read().unwrap();
                 va[*ssa..*ssa + *la] == vb[*ssb..*ssb + *lb]

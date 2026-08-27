@@ -1359,12 +1359,31 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// Mangle a `TypeExpr` into the identifier fragment that keys every
+    /// synthesized per-type function (display, clone, drop, eq, hash).
+    ///
+    /// CONST generic args are part of the mangle, not decoration: a type whose
+    /// identity includes an extent — `Array[T, N]`, `Vector[T, N]` — has one
+    /// distinct layout per N, so dropping N collapses `Array[i64, 2]` and
+    /// `Array[i64, 3]` onto one name and the first-emitted body silently
+    /// serves both (B-2026-08-27-25). The same reason `TypeKind::Array` gets
+    /// its own arm rather than falling to `"unknown"`, which collapses it onto
+    /// every other unhandled shape.
     pub(super) fn display_mangle_te(te: &TypeExpr) -> String {
         match &te.kind {
             TypeKind::Tuple(elems) if elems.is_empty() => "unit".to_string(),
             TypeKind::Tuple(elems) => {
                 let parts: Vec<String> = elems.iter().map(Self::display_mangle_te).collect();
                 format!("tuple_{}", parts.join("_"))
+            }
+            // Inference-recovered form of `Array[T, N]` (`type_to_type_expr`);
+            // the source-written form is a `Path` and takes the arm below.
+            TypeKind::Array { element, size } => {
+                let elem = Self::display_mangle_te(element);
+                match &size.kind {
+                    ExprKind::Integer(n, _) => format!("Array_{elem}_{n}"),
+                    _ => format!("Array_{elem}"),
+                }
             }
             TypeKind::Path(p) => {
                 let head = p
@@ -1377,7 +1396,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         .iter()
                         .filter_map(|a| match a {
                             GenericArg::Type(t) => Some(Self::display_mangle_te(t)),
-                            _ => None,
+                            GenericArg::Const(e) => Some(match &e.kind {
+                                ExprKind::Integer(n, _) => n.to_string(),
+                                ExprKind::Identifier(name) => name.clone(),
+                                _ => "const".to_string(),
+                            }),
+                            GenericArg::Shape(_) => None,
                         })
                         .collect();
                     if !parts.is_empty() {

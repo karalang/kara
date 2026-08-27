@@ -940,18 +940,26 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // detectable on their own (slice 1) — the entry only *adds* the element
     // type, so a missing entry degrades to slice-1 behavior, never a leak
     // regression. See `docs/spikes/general-owned-temp-tracking.md` (slice 2).
-    // Element `TypeExpr` for every `Vec[T]`-typed expression, borrows peeled
-    // (B-2026-08-27-10). Codegen's `==` / `!=` intercept reads this to route a
-    // bare `Vec` operand to `karac_eq_Vec_<T>`; without it the operand fell
-    // through to `compile_binop`'s struct path, which dispatches on LLVM FIELD
-    // COUNT and so compared the `Vec` as a `String` (both are
-    // `{ ptr, i64, i64 }`).
+    // Surface `TypeExpr` for every expression typed as one of the three
+    // SEQUENCE shapes — `Vec[T]` (B-2026-08-27-10), `Slice[T]` /
+    // `mut Slice[T]` (B-2026-08-27-24) and `Array[T, N]` (B-2026-08-27-25) —
+    // borrows peeled. Codegen's `==` / `!=` intercept reads this to route a
+    // bare sequence operand to its content comparator. Without it each shape
+    // fell through to a `compile_binop` arm that could not see its type: a
+    // `Vec` hit the struct path, which dispatches on LLVM FIELD COUNT and so
+    // compared it as a `String` (both are `{ ptr, i64, i64 }`); a `Slice`
+    // arrives as a bare `ptr` and hit the "reference type" arm meant for
+    // `shared` handles; an `Array` hit the non-comparable-operand arm.
+    //
+    // The FULL type is recorded rather than just the element because the three
+    // comparators differ and, for two of the three, the LLVM value cannot
+    // discriminate them (`Vec` vs `String`, `Slice` vs a `shared` handle).
     //
     // Peeling `Ref`/`MutRef` mirrors the typechecker's own `Eq` arm, which
     // calls `strip_refs_for_compare` on both operands before deciding the
     // comparison is legal — a `ref Vec[T]` is the same comparison as an owned
     // one, and was wrong in exactly the same way.
-    program.vec_eq_elem_types = tc
+    program.seq_eq_operand_types = tc
         .expr_types
         .iter()
         .filter_map(|(k, ty)| {
@@ -959,19 +967,22 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 other => other,
             };
-            let Type::Named { name, args } = peeled else {
-                return None;
+            let elem = match peeled {
+                Type::Named { name, args } if name == "Vec" && args.len() == 1 => &args[0],
+                Type::Slice { element, .. } => element.as_ref(),
+                // Only a LITERAL extent is comparable at codegen time: an
+                // unresolved const-var / const-param leaves the comparator no
+                // trip count, so those stay on the pre-existing path.
+                Type::Array { element, size } if size.as_literal().is_some() => element.as_ref(),
+                _ => return None,
             };
-            if name != "Vec" || args.len() != 1 {
-                return None;
-            }
             // An `Error` element means inference already failed; emitting a
             // comparator for it would bake that in, so leave the site on the
             // pre-existing path where the real diagnostic is reported.
-            if matches!(args[0], Type::Error) {
+            if matches!(elem, Type::Error) {
                 return None;
             }
-            Some(((k.0, k.1), TypeChecker::type_to_type_expr(&args[0])))
+            Some(((k.0, k.1), TypeChecker::type_to_type_expr(peeled)))
         })
         .collect();
     program.owned_temp_drops = tc
