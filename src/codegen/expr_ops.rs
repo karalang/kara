@@ -7982,7 +7982,11 @@ impl<'ctx> super::Codegen<'ctx> {
         n: u32,
         lhs: BasicValueEnum<'ctx>,
         rhs: BasicValueEnum<'ctx>,
+        // One parameter rather than two so the signature stays inside clippy's
+        // argument-count limit; they are always the two operand expressions.
+        operands: (&crate::ast::Expr, &crate::ast::Expr),
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (left, right) = operands;
         let eq_fn = self.emit_eq_fn_for_array(elem_te, n);
         let l_slot = self.operand_as_ptr(lhs, "arreq.l");
         let r_slot = self.operand_as_ptr(rhs, "arreq.r");
@@ -7998,6 +8002,33 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             r
         };
+        // B-2026-08-27-30 -- drop a FRESH-TEMPORARY operand's elements.
+        //
+        // The `Vec` and `Slice` siblings hang their cleanup off a buffer free;
+        // an `Array[T, N]` is a by-value `[N x T]` with no header, so nothing
+        // on this path could free it and its elements simply survived. The
+        // comparison BORROWS both operands, so a temporary dies here and its
+        // heap is ours. Measured before this: `mk(2) == mk(2)` over
+        // `Array[String, 2]` lost 26 bytes in 4 allocations.
+        //
+        // Emitted AFTER the comparison, so every read of both arrays dominates
+        // the drop, and IMMEDIATELY rather than at scope exit -- the reason
+        // `free_fresh_owned_struct_key_arg` gives: a scope-exit registration
+        // hoists one entry alloca and frees only the LAST value when the
+        // comparison sits in a loop.
+        //
+        // `expr_yields_fresh_owned_temp` is the gate, so a bound operand, a
+        // place expression and a literal are untouched -- each is owned
+        // elsewhere and dropping it here would double-free.
+        if let Some(drop_fn) = self.emit_drop_fn_for_array(elem_te, n) {
+            for (operand, slot) in [(left, l_slot), (right, r_slot)] {
+                if self.expr_yields_fresh_owned_temp(operand) {
+                    self.builder
+                        .build_call(drop_fn, &[slot.into()], "")
+                        .unwrap();
+                }
+            }
+        }
         Ok(out.into())
     }
 

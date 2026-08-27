@@ -1329,6 +1329,66 @@ impl<'ctx> super::Codegen<'ctx> {
     /// collided: the fallback names itself from `mangled_type_name`, which is
     /// bare `"Array"` for every instantiation, so the first `Array[_, _]` in a
     /// program supplied the comparator for all the others.
+    /// Element-walking drop for an `Array[T, N]`, or `None` when `T` owns no
+    /// heap (B-2026-08-27-30).
+    ///
+    /// The `Vec` and `Slice` comparators have a buffer to hang a free off; an
+    /// array is a by-value `[N x T]` with no header at all, so a fresh array
+    /// TEMPORARY has nothing that could free it and its elements simply
+    /// survived. This is the missing operation: `fn(ptr)` over the array,
+    /// dropping each of the `N` elements in turn.
+    ///
+    /// `vec_element_drain_fn` decides WHETHER an element needs dropping, which
+    /// is the same policy the `Vec` element drain uses -- so a
+    /// `Array[i64, N]` emits nothing here, exactly as it frees nothing there.
+    pub(super) fn emit_drop_fn_for_array(
+        &mut self,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> Option<FunctionValue<'ctx>> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let fn_name = format!("karac_drop_Array_{elem_name}_{n}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        // Recurse first -- emit may switch the builder's insert block.
+        let elem_drop = self.vec_element_drain_fn(elem_te)?;
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        let array_ty = elem_ty.array_type(n);
+
+        let saved_bb = self.builder.get_insert_block();
+        let fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, fn_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let base = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        for i in 0..n {
+            let elem_p = unsafe {
+                self.builder
+                    .build_gep(
+                        array_ty,
+                        base,
+                        &[i64_t.const_zero(), i64_t.const_int(i as u64, false)],
+                        "ad.elem.p",
+                    )
+                    .unwrap()
+            };
+            self.builder
+                .build_call(elem_drop, &[elem_p.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
+    }
+
     pub(super) fn emit_eq_fn_for_array(
         &mut self,
         elem_te: &TypeExpr,

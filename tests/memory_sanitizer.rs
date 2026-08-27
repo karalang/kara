@@ -135,6 +135,60 @@ mod memory_sanitizer_tests {
     /// Deliberately checks the ANALYSIS rather than the emitted object: it is
     /// the thing the harness threads into codegen, it needs no linker or
     /// symbol-table reading, and it fails for the one reason worth failing for.
+    /// A fresh `Array[T, N]` temporary compared with `==` drops its elements
+    /// (B-2026-08-27-30).
+    ///
+    /// The `Vec` and `Slice` siblings hang their cleanup off a buffer free; an
+    /// array is a by-value `[N x T]` with NO header, so nothing on the
+    /// comparison path could free it and the elements simply survived.
+    /// Measured before the fix: `mk(2) == mk(2)` over `Array[String, 2]` lost
+    /// 26 bytes in 4 allocations.
+    ///
+    /// The comparison BORROWS both operands, so only a temporary dies here.
+    /// The non-fresh legs are what keep that honest, and each is read back
+    /// afterwards so a wrong drop surfaces as a use-after-free rather than
+    /// staying latent: a BOUND operand is owned by its binding, and rodata
+    /// LITERAL elements are not heap at all -- dropping either would be a
+    /// double-free or a free of static memory. The literal-vs-fresh row mixes
+    /// the two in ONE comparison, which is where an implementation that
+    /// dropped "both operands" rather than "each fresh operand" fails.
+    ///
+    /// `Array[Vec[i64], 2]` is here because the element policy is shared with
+    /// the `Vec` drain (`vec_element_drain_fn`): a fix keyed on `String`
+    /// specifically would pass every other row and fail this one.
+    #[test]
+    fn asan_fresh_array_temp_eq_drops_its_elements() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+fn mkv(n: i64) -> Array[Vec[i64], 2] {
+    let mut x: Vec[i64] = Vec.new();
+    x.push(n);
+    let mut y: Vec[i64] = Vec.new();
+    y.push(n + 1);
+    return Array[x, y];
+}
+
+fn main() {
+    println(f"{mk(2) == mk(2)}");
+    println(f"{mk(2) != mk(4)}");
+    println(f"{mkv(1) == mkv(1)}");
+    println(f"{Array["aa", "bb"] == Array["aa", "bb"]}");
+    println(f"{Array["item5", "item6"] == mk(5)}");
+    let p = mk(7);
+    let q = mk(7);
+    println(f"{p == q}");
+    println(p[0]);
+    println(q[1]);
+}
+"#,
+            &[
+                "true", "true", "true", "true", "true", "true", "item7", "item8",
+            ],
+            "asan_fresh_array_temp_eq_drops_its_elements",
+        );
+    }
+
     #[test]
     fn asan_harness_actually_parallelizes() {
         let src = "fn work(n: i64) -> i64 { let mut t = 0; for i in 0..n { t = t + i; } t }\n\

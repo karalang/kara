@@ -523,7 +523,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .array_te_of_operand(left)
                             .or_else(|| self.array_te_of_operand(right))
                         {
-                            return self.compile_array_eq(op, &elem_te, n, lhs, rhs);
+                            return self.compile_array_eq(op, &elem_te, n, lhs, rhs, (left, right));
                         }
                         if let Some(elem_te) = self
                             .slice_elem_te_of_operand(left)
