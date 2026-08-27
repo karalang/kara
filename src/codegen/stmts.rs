@@ -3004,11 +3004,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // not qualify: that leaf's own scope-exit dec cancels its retain
             // inside the arm, leaving nothing for `t` to own.
             ExprKind::Identifier(n) => {
+                // Two ways to learn that this leaf took a retain, in order of
+                // increasing exactness:
+                //
+                //   1. the name is STILL a live `Option[shared]` binding, which
+                //      is the predicate the emission self-gates on and so the
+                //      answer for a leaf naming an ENCLOSING binding
+                //      (B-2026-08-27-34's `let t = if c { a } else { b };`);
+                //
+                //   2. the EMISSION RECORD, which says outright that this
+                //      expression node was retained. This is what covers an
+                //      ARM-LOCAL leaf (`if c { let u = make(1); u }`,
+                //      B-2026-08-27-43): `u`'s frame has already been drained
+                //      and its name reverted by the time the `let` classifies
+                //      its RHS, so (1) cannot see it — but the retain did fire,
+                //      and the arm's own scope-exit dec cancelled it, which
+                //      leaves the escaping value's `+1` unowned in exactly the
+                //      way (1)'s case leaves it unowned. Same shape, same
+                //      remedy: the new binding adopts it.
+                //
+                // Both are fail-closed: no live binding and no record means no
+                // retain was emitted, so the value is a bare alias and
+                // registering a scope-exit dec against it would double-free.
                 let heap_type = self
                     .borrow_vars
                     .var_option_shared_heap
                     .get(n.as_str())
-                    .copied()?;
+                    .copied()
+                    .or_else(|| {
+                        self.borrow_vars
+                            .option_shared_leaf_retains
+                            .borrow()
+                            .get(&(e.span.offset, e.span.length))
+                            .copied()
+                    })?;
                 let info = self
                     .type_decls
                     .shared_types

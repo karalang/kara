@@ -48550,6 +48550,111 @@ fn driver() -> i64 {
         );
     }
 
+    /// B-2026-08-27-43 — the ARM-LOCAL half of the branch-leaf family, split
+    /// out of B-2026-08-27-34 and unchanged in either direction by its fix.
+    ///
+    /// The delta from the sibling test above is one line per leg: the arm binds
+    /// a LOCAL and hands the local out (`if c { let u = make(1); u }`) instead
+    /// of handing out a binding from the enclosing scope. That moves the
+    /// failure boundary from the THIRD consumption to the FIRST: there the leaf
+    /// retain survived and the box reached the uses at rc 2, paying for two of
+    /// them; here the arm-local's own scope-exit dec drains with the arm's frame
+    /// and cancels the retain, so the box arrives at rc 1 with nobody owning it
+    /// and the first callee's param dec already frees it.
+    ///
+    /// Both halves were individually right, which is why the sibling fix moved
+    /// nothing: the leaf hook fires, and case (g)'s `Identifier` arm correctly
+    /// DECLINES to register a binding whose retain was cancelled — it reads
+    /// `var_option_shared_heap`, and `compile_block_with_frame` reverted the
+    /// arm's name env before the `let` classified its RHS, so the name is
+    /// simply gone. The fix gives case (g) a second source of truth that
+    /// survives the revert: the emission RECORD each leaf retain writes,
+    /// keyed by the leaf expression's span.
+    ///
+    /// Eleven arm-local legs plus the enclosing-binding control. Every leg
+    /// consumes its ONE binding three times (four on leg 4, five on leg 5), so
+    /// no count can be balanced by accident. Measured against the unfixed
+    /// compiler: legs 1-11 all RED and all exiting 0 — silent wrong answers,
+    /// `/ 0 0` and garbage words — and leg 12 GREEN, which is what attributes
+    /// the failure to the arm-LOCAL shape rather than to branch leaves at large.
+    ///
+    /// Leg 4 is load-bearing beyond the reported shape: the arm-local is itself
+    /// an ALIAS of an enclosing binding (`let u = d; u`), so `d` must still read
+    /// correctly AFTER the branch's value has been consumed three times. It
+    /// pins that the escaping `+1` the new binding adopts is the arm-local's
+    /// own, not the source's.
+    ///
+    /// Twinned against the interpreter, which was correct throughout.
+    #[test]
+    fn option_shared_from_an_arm_local_leaf_survives_repeated_consumption() {
+        let src = "shared struct Node { val: i64 }\n\
+                   fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+                   fn show(t: Option[Node]) -> i64 {\n\
+                       match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+                   }\n\
+                   fn main() {\n\
+                       let b = make(2);\n\
+                       let t1 = if true { let u = make(1); u } else { b };\n\
+                       println(f\"{show(t1)} {show(t1)} {show(t1)}\");\n\
+                       let c = make(3);\n\
+                       let t2 = if false { c } else { let u = make(4); u };\n\
+                       println(f\"{show(t2)} {show(t2)} {show(t2)}\");\n\
+                       let t3 = if true { let u = make(5); u } else { let v = make(6); v };\n\
+                       println(f\"{show(t3)} {show(t3)} {show(t3)}\");\n\
+                       let d = make(7);\n\
+                       let t4 = if true { let u = d; u } else { b };\n\
+                       println(f\"{show(t4)} {show(t4)} {show(t4)} {show(d)}\");\n\
+                       let t5 = if true { let u = make(8); u } else { b };\n\
+                       println(f\"{show(t5)} {show(t5)} {show(t5)} {show(t5)} {show(t5)}\");\n\
+                       let k = 1;\n\
+                       let t6 = match k { 1 => { let u = make(9); u } _ => { b } };\n\
+                       println(f\"{show(t6)} {show(t6)} {show(t6)}\");\n\
+                       let t7 = if true { { let u = make(10); u } } else { b };\n\
+                       println(f\"{show(t7)} {show(t7)} {show(t7)}\");\n\
+                       let t8 = if false { b } else if true { let u = make(11); u } else { b };\n\
+                       println(f\"{show(t8)} {show(t8)} {show(t8)}\");\n\
+                       let t9 = if true { let u = make(12); u } else { None };\n\
+                       println(f\"{show(t9)} {show(t9)} {show(t9)}\");\n\
+                       let src2 = make(13);\n\
+                       let t10 = if let Some(n) = src2 { let u = make(n.val); u } else { b };\n\
+                       println(f\"{show(t10)} {show(t10)} {show(t10)}\");\n\
+                       let mut i = 0;\n\
+                       while i < 3 {\n\
+                           let t11 = if true { let u = make(20 + i); u } else { b };\n\
+                           println(f\"{show(t11)} {show(t11)} {show(t11)}\");\n\
+                           i = i + 1;\n\
+                       }\n\
+                       let t12 = if true { b } else { b };\n\
+                       println(f\"{show(t12)} {show(t12)} {show(t12)}\");\n\
+                   }";
+        let expected = "1 1 1\n4 4 4\n5 5 5\n7 7 7 7\n8 8 8 8 8\n9 9 9\n\
+                        10 10 10\n11 11 11\n12 12 12\n13 13 13\n20 20 20\n\
+                        21 21 21\n22 22 22\n2 2 2\n";
+        if let Some(c) = run_program_capturing(src) {
+            assert_eq!(
+                c.stdout, expected,
+                "an ARM-LOCAL branch leaf must hand its `Option[shared]` to the \
+                 binding with an owner, on the first consumption as on the third"
+            );
+            assert!(
+                c.status.success(),
+                "process died ({:?}) — stderr: {}",
+                c.status,
+                c.stderr
+            );
+        }
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored on the twin: {interp_errs:?}"
+        );
+        assert_eq!(
+            interp_out.join(""),
+            expected,
+            "interpreter twin must agree with the compiled backend"
+        );
+    }
+
     /// The control for `option_shared_from_a_branch_leaf_survives_a_third_consumption`:
     /// the same three reads with no branch leaf between the binding and the
     /// uses. Green today, and it is what keeps that test's failure attributable

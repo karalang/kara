@@ -5950,6 +5950,7 @@ impl<'ctx> Codegen<'ctx> {
                 owned_array_params: HashMap::new(),
                 var_option_shared_heap: HashMap::new(),
                 ref_option_shared_heap: HashMap::new(),
+                option_shared_leaf_retains: std::cell::RefCell::new(HashMap::new()),
             },
             enumerate_index_pattern: None,
             target_abi: TargetAbi {

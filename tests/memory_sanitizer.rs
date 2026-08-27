@@ -27901,6 +27901,76 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-43 — the BALANCE half of the arm-local branch-leaf fix.
+    ///
+    /// Like its sibling above, the reported fault is invisible to this harness:
+    /// it is a read through a box the callee's param dec already freed, and the
+    /// sanitizer is linked in rather than compiled in, so
+    /// `option_shared_from_an_arm_local_leaf_survives_repeated_consumption` in
+    /// `tests/codegen.rs` is what gates the use-after-free. What LSan gates is
+    /// the pair of wrong fixes on either side of it.
+    ///
+    /// The fix teaches case (g) to register the consuming binding when the
+    /// arm-local leaf actually took a retain, which arms a scope-exit dec and a
+    /// per-use retain. Register too eagerly — on a leaf that took no retain —
+    /// and the scope-exit dec frees a box nobody handed over, which is a
+    /// double-free ASAN reports. Retain too eagerly — at the phi, or on an arm
+    /// whose producer already carries its own `+1` — and the count never
+    /// reaches zero, which is a leak LSan reports. Every leg alternates its arms
+    /// across five iterations so an over-count on either side accumulates rather
+    /// than cancelling.
+    ///
+    /// The third leg is the one that separates the two directions: its arm-local
+    /// ALIASES an enclosing binding (`let z = d; z`), so the escaping `+1` must
+    /// be the arm-local's own and `d`'s must survive to its own scope exit.
+    ///
+    /// Measured RED against the unfixed compiler — but by the OVERFLOW PANIC the
+    /// garbage read out of the freed box produces when it is folded into `s`,
+    /// not by an LSan report, so record it as a balance check rather than as
+    /// evidence the sanitizer sees this bug. It does not: the fault is a read,
+    /// and the process dies on the arithmetic before any leak check runs.
+    #[test]
+    fn asan_option_shared_arm_local_branch_leaf_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64 }
+
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+
+fn show(t: Option[Node]) -> i64 {
+    match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+
+fn main() {
+    let mut s = 0;
+    let mut i = 0;
+    while i < 5 {
+        // Both arms hand out an arm-LOCAL, alternating which is taken.
+        let t = if i % 2 == 0 { let u = make(i); u } else { let v = make(i + 100); v };
+        s = s + show(t) + show(t) + show(t);
+        // MIXED: an arm-local against an enclosing binding.
+        let c = make(i + 1000);
+        let u2 = if i % 2 == 0 { let w = make(i + 7); w } else { c };
+        s = s + show(u2) + show(u2) + show(u2);
+        // The arm-local ALIASES an enclosing binding, which must outlive it.
+        let d = make(i + 10000);
+        let w2 = if i % 2 == 0 { let z = d; z } else { make(3) };
+        s = s + show(w2) + show(w2) + show(w2);
+        // `if let`, arm-local in the THEN arm.
+        let o = if i % 2 == 0 { Some(1) } else { None };
+        let e = make(i + 20000);
+        let x = if let Some(q) = o { let y = make(q + i); y } else { e };
+        s = s + show(x) + show(x) + show(x);
+        i = i + 1;
+    }
+    println(s);
+}
+"#,
+            &["216798"],
+            "option_shared_arm_local_branch_leaf",
+        );
+    }
+
     #[test]
     fn asan_option_shared_walk_unwrap_cursor_repeat() {
         // Regression for the walk-cursor refcount pair (2026-06-05):

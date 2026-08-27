@@ -19166,6 +19166,65 @@ fn option_shared_branch_leaf_survives_repeated_consumption() {
     );
 }
 
+/// Interpreter oracle for B-2026-08-27-43 — the ARM-LOCAL half of the same
+/// branch-leaf family, where the arm binds a local and hands the local out.
+///
+/// Same reason as the sibling oracle above: the interpreter has no refcount to
+/// get wrong and was correct throughout, and the codegen twin
+/// (`option_shared_from_an_arm_local_leaf_survives_repeated_consumption`) sits
+/// behind `#[cfg(feature = "llvm")]` where a plain `cargo test` never reaches
+/// it. Leg 4 additionally pins that the enclosing binding the arm-local aliases
+/// still reads correctly after the branch's value has been consumed.
+#[test]
+fn option_shared_arm_local_branch_leaf_survives_repeated_consumption() {
+    let src = "shared struct Node { val: i64 }\n\
+            fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+            fn show(t: Option[Node]) -> i64 {\n\
+                match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+            }\n\
+            fn main() {\n\
+                let b = make(2);\n\
+                let t1 = if true { let u = make(1); u } else { b };\n\
+                println(f\"{show(t1)} {show(t1)} {show(t1)}\");\n\
+                let c = make(3);\n\
+                let t2 = if false { c } else { let u = make(4); u };\n\
+                println(f\"{show(t2)} {show(t2)} {show(t2)}\");\n\
+                let t3 = if true { let u = make(5); u } else { let v = make(6); v };\n\
+                println(f\"{show(t3)} {show(t3)} {show(t3)}\");\n\
+                let d = make(7);\n\
+                let t4 = if true { let u = d; u } else { b };\n\
+                println(f\"{show(t4)} {show(t4)} {show(t4)} {show(d)}\");\n\
+                let t5 = if true { let u = make(8); u } else { b };\n\
+                println(f\"{show(t5)} {show(t5)} {show(t5)} {show(t5)} {show(t5)}\");\n\
+                let k = 1;\n\
+                let t6 = match k { 1 => { let u = make(9); u } _ => { b } };\n\
+                println(f\"{show(t6)} {show(t6)} {show(t6)}\");\n\
+                let t7 = if true { { let u = make(10); u } } else { b };\n\
+                println(f\"{show(t7)} {show(t7)} {show(t7)}\");\n\
+                let t8 = if false { b } else if true { let u = make(11); u } else { b };\n\
+                println(f\"{show(t8)} {show(t8)} {show(t8)}\");\n\
+                let t9 = if true { let u = make(12); u } else { None };\n\
+                println(f\"{show(t9)} {show(t9)} {show(t9)}\");\n\
+                let src2 = make(13);\n\
+                let t10 = if let Some(n) = src2 { let u = make(n.val); u } else { b };\n\
+                println(f\"{show(t10)} {show(t10)} {show(t10)}\");\n\
+                let mut i = 0;\n\
+                while i < 3 {\n\
+                    let t11 = if true { let u = make(20 + i); u } else { b };\n\
+                    println(f\"{show(t11)} {show(t11)} {show(t11)}\");\n\
+                    i = i + 1;\n\
+                }\n\
+                let t12 = if true { b } else { b };\n\
+                println(f\"{show(t12)} {show(t12)} {show(t12)}\");\n\
+            }";
+    assert_eq!(
+        run_no_errors(src),
+        "1 1 1\n4 4 4\n5 5 5\n7 7 7 7\n8 8 8 8 8\n9 9 9\n10 10 10\n11 11 11\n\
+         12 12 12\n13 13 13\n20 20 20\n21 21 21\n22 22 22\n2 2 2\n",
+        "every read of an arm-local branch-leaf `Option[shared]` must see the same value"
+    );
+}
+
 #[test]
 fn test_mut_ref_option_shared_writeback() {
     // B-2026-07-12-3 — reassigning through a `mut ref Option[shared]` param

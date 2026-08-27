@@ -8500,6 +8500,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_refcount_inc(var_name, heap_type, inner);
         let _ = self.builder.build_unconditional_branch(skip_bb);
         self.builder.position_at_end(skip_bb);
+        // B-2026-08-27-43 — record that THIS expression node took a leaf
+        // retain, so `control_flow_owned_option_shared` can ask the emission
+        // what it did instead of re-deriving it from the name env. The env
+        // answer is unavailable for an ARM-LOCAL leaf: the arm's frame reverts
+        // its bindings before the consuming `let` classifies the RHS. Keyed by
+        // span, which identifies the node uniquely across the compilation.
+        self.borrow_vars
+            .option_shared_leaf_retains
+            .borrow_mut()
+            .insert((arg_expr.span.offset, arg_expr.span.length), heap_type);
     }
 
     /// B-2026-06-15 (#226 invert-binary-tree). An enum-variant constructor

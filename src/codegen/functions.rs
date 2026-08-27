@@ -1387,6 +1387,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.inline_option_agg_payload_vars.clear();
         self.borrow_vars.var_option_shared_heap.clear();
         self.borrow_vars.ref_option_shared_heap.clear();
+        // B-2026-08-27-43: the branch-leaf retain record is per-function state
+        // like the two maps above (spans make a stale entry harmless, but the
+        // map has no reason to outlive the body that filled it).
+        self.borrow_vars
+            .option_shared_leaf_retains
+            .borrow_mut()
+            .clear();
         self.borrow_vars.ref_params.clear();
         self.borrow_vars.signature_ref_params.clear();
         self.borrow_vars.entry_slot_ref_vars.clear();

@@ -153,4 +153,27 @@ pub(crate) struct BorrowVars<'ctx> {
     /// than into the local slot — otherwise the write lands in a callee-local
     /// copy and never propagates back to the caller (B-2026-07-12-3).
     pub(crate) ref_option_shared_heap: HashMap<String, StructType<'ctx>>,
+    /// B-2026-08-27-43 — the EMISSION RECORD of the branch-leaf
+    /// `Option[shared T]` retains B-2026-08-26-12 introduced, keyed by the leaf
+    /// expression's span `(offset, length)` → its inner shared heap layout.
+    ///
+    /// `share_option_shared_ref_for_arg` writes one entry each time it actually
+    /// emits a leaf retain, and `control_flow_owned_option_shared` (case (g) of
+    /// the `let`-RHS cascade) reads it to decide whether the value a branch
+    /// hands out carries an unowned `+1` the new binding must adopt.
+    ///
+    /// The record exists because the STATIC re-derivation case (g) does instead
+    /// cannot see an ARM-LOCAL leaf: `let t = if c { let u = make(1); u } else
+    /// { b };` compiles the arm through its own `compile_block_with_frame`,
+    /// which reverts the name env before the `let` classifies its RHS, so `u`
+    /// is gone from `var_option_shared_heap` by the time case (g) looks. Asking
+    /// the emission what it did is exact by construction, and cannot drift from
+    /// it the way a second derivation of the same predicate can.
+    ///
+    /// Interior mutability because the emission helper takes `&self`. Cleared
+    /// per function alongside `var_option_shared_heap`; spans are unique per
+    /// source position, so a stale entry could only ever re-answer the same
+    /// question with the same answer.
+    pub(crate) option_shared_leaf_retains:
+        std::cell::RefCell<HashMap<(usize, usize), StructType<'ctx>>>,
 }
