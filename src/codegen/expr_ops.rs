@@ -424,6 +424,95 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Load `field` (declaration index `idx`) out of a shared-struct
+    /// TEMPORARY that the caller owns exactly one ref to, then RELEASE that
+    /// ref — the field value is in a register by then and no longer depends
+    /// on the heap object.
+    ///
+    /// Extracted from the call-result receiver branch (bug #8) so the
+    /// value-block / `if` receiver added by B-2026-08-28-7 shares one
+    /// implementation rather than a copy: both are fresh temporaries holding
+    /// one ref that nothing else will ever free, so their `Option[shared]`
+    /// compensation and their final dec must stay identical.
+    fn load_owned_shared_temp_field(
+        &mut self,
+        ptr: inkwell::values::PointerValue<'ctx>,
+        type_name: &str,
+        info: &super::state::SharedTypeInfo<'ctx>,
+        idx: usize,
+        field: &str,
+    ) -> BasicValueEnum<'ctx> {
+        // Phase-D layout resolution (`shared_gep_layout`): headered gives
+        // `(heap_type, 1)` — index 0 is the rc word — headerless the rc-less
+        // twin at base 0.
+        //
+        // The call-result receiver this was extracted from hard-coded the
+        // headered form, and `shared_gep_layout`'s doc lists `sh_call_` as a
+        // deliberate exception on the grounds that a call-returned type can
+        // never be headerless (the purity gate excludes any type a declared fn
+        // signature mentions). That argument is sound for a CALL and says
+        // nothing about the value-block / `if` receiver now sharing this code,
+        // whose tail can be a cluster-member literal built in this very
+        // function. Routing through the helper is behaviour-identical wherever
+        // the old exception's premise held, and correct where it does not — so
+        // the "every member-field GEP goes through one place" invariant is kept
+        // rather than extended on trust.
+        let (gep_ty, base) = self.shared_gep_layout(type_name, info.heap_type);
+        let field_ptr = self
+            .builder
+            .build_struct_gep(
+                gep_ty,
+                ptr,
+                idx as u32 + base,
+                &format!("sh_call_{}", field),
+            )
+            .unwrap();
+        let loaded = if self.niche_field_inner_heap_type(type_name, idx).is_some() {
+            self.niche_load_option_field(field_ptr, field)
+        } else {
+            let field_ty = gep_ty.get_field_type_at_index(idx as u32 + base).unwrap();
+            self.builder.build_load(field_ty, field_ptr, field).unwrap()
+        };
+        // `Option[shared T]` field: the upcoming
+        // `emit_rc_dec(ptr)` runs the outer Node's
+        // recursive drop fn, which walks the
+        // `next: Option[shared T]` field and dec's
+        // its inner ptr. The loaded SSA register
+        // would then alias freed memory — a
+        // use-after-free for any subsequent access
+        // through the returned value
+        // (`match v { Some(n) => n.val }`, `v.next.val`,
+        // etc.). Bump the inner ptr's RC here so the
+        // recursive drop's dec brings it back to the
+        // original count; the caller (let-stmt
+        // path's `shared_option_info` detection, the
+        // match-scrutinee binding, or the next
+        // FieldAccess hop in a chain) takes ownership
+        // of the +1 with its own RcDecOption.
+        // Mirrors how the let-stmt's
+        // `shared_option_info` arm doesn't inc for
+        // an aliasing source — the +1 emitted here
+        // *is* the alias source's transfer of one
+        // owned ref into the field-access result.
+        if let Some(field_te) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(type_name)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        {
+            if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(&field_te) {
+                self.emit_option_inner_rc_inc_for_loaded(loaded, inner_info.heap_type);
+            }
+        }
+        // The call-result temp owns one ref (RC=1 from the
+        // callee's move-out inc + scope-exit dec under bug
+        // #7). Release it now — the field value has been
+        // read into a register and no longer depends on
+        // the heap object.
+        self.emit_refcount_dec_by_type(info.heap_type, ptr);
+        loaded
+    }
     pub(super) fn compile_field_access(
         &mut self,
         object: &Expr,
@@ -842,70 +931,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(names) = self.type_decls.struct_field_names.get(&type_name).cloned() {
                     if let Some(idx) = names.iter().position(|n| n == field) {
                         let ptr = self.compile_expr(object)?.into_pointer_value();
-                        // Fields start at heap index 1 (index 0 is refcount).
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                info.heap_type,
-                                ptr,
-                                (idx + 1) as u32,
-                                &format!("sh_call_{}", field),
-                            )
-                            .unwrap();
-                        let loaded = if self.niche_field_inner_heap_type(&type_name, idx).is_some()
-                        {
-                            self.niche_load_option_field(field_ptr, field)
-                        } else {
-                            let field_ty = info
-                                .heap_type
-                                .get_field_type_at_index((idx + 1) as u32)
-                                .unwrap();
-                            self.builder.build_load(field_ty, field_ptr, field).unwrap()
-                        };
-                        // `Option[shared T]` field: the upcoming
-                        // `emit_rc_dec(ptr)` runs the outer Node's
-                        // recursive drop fn, which walks the
-                        // `next: Option[shared T]` field and dec's
-                        // its inner ptr. The loaded SSA register
-                        // would then alias freed memory — a
-                        // use-after-free for any subsequent access
-                        // through the returned value
-                        // (`match v { Some(n) => n.val }`, `v.next.val`,
-                        // etc.). Bump the inner ptr's RC here so the
-                        // recursive drop's dec brings it back to the
-                        // original count; the caller (let-stmt
-                        // path's `shared_option_info` detection, the
-                        // match-scrutinee binding, or the next
-                        // FieldAccess hop in a chain) takes ownership
-                        // of the +1 with its own RcDecOption.
-                        // Mirrors how the let-stmt's
-                        // `shared_option_info` arm doesn't inc for
-                        // an aliasing source — the +1 emitted here
-                        // *is* the alias source's transfer of one
-                        // owned ref into the field-access result.
-                        if let Some(field_te) = self
-                            .type_decls
-                            .struct_field_type_exprs
-                            .get(&type_name)
-                            .and_then(|v| v.get(idx))
-                            .cloned()
-                        {
-                            if let Some((_, inner_info)) =
-                                self.option_inner_shared_type_for_type_expr(&field_te)
-                            {
-                                self.emit_option_inner_rc_inc_for_loaded(
-                                    loaded,
-                                    inner_info.heap_type,
-                                );
-                            }
-                        }
-                        // The call-result temp owns one ref (RC=1 from the
-                        // callee's move-out inc + scope-exit dec under bug
-                        // #7). Release it now — the field value has been
-                        // read into a register and no longer depends on
-                        // the heap object.
-                        self.emit_refcount_dec_by_type(info.heap_type, ptr);
-                        return Ok(loaded);
+                        return Ok(
+                            self.load_owned_shared_temp_field(ptr, &type_name, &info, idx, field)
+                        );
                     }
                 }
             }
@@ -988,6 +1016,86 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap());
                 }
                 return Ok(extracted);
+            }
+        }
+        // A SHARED receiver whose type could only be named AFTER it was
+        // compiled — a value-position block or `if` (B-2026-08-28-7 leg 1).
+        //
+        // Every shared field path above gates on knowing the receiver's type
+        // BEFORE `compile_expr` runs, because it has to decide it is emitting a
+        // GEP through an RC pointer rather than extracting from a struct value.
+        // A block receiver cannot answer at that point: its type is its tail's,
+        // and the tail is typed in the block's own scope, which
+        // `compile_block_with_frame` records only as it compiles (see
+        // B-2026-08-27-49 for why re-deriving it later is a miscompile rather
+        // than merely a miss). So `{ let n = make(); n }.v` on a `shared struct`
+        // declined every branch, reached the generic tail with a POINTER where
+        // the `StructValue` guard wanted an aggregate, and died on the loud gap
+        // while the interpreter answered — even though the non-shared spelling
+        // of the same program had worked since B-2026-08-27-49.
+        //
+        // Here the recording exists, because `compile_expr(object)` above put it
+        // there. Placed last, after every other path has declined and
+        // immediately before the "please report it" error, so this can only turn
+        // a failing build into a working one and never reroutes a receiver an
+        // earlier branch already claimed. Ownership is the call-result
+        // temporary's, exactly: the block handed its tail out by neutralizing
+        // the tail's own cleanup, so this expression owns the one ref and
+        // `load_owned_shared_temp_field` releases it after the read.
+        if let BasicValueEnum::PointerValue(ptr) = obj_val {
+            if let Some(type_name) = self.type_name_of_expr(object) {
+                if let Some(info) = self
+                    .type_decls
+                    .shared_types
+                    .get(type_name.as_str())
+                    .cloned()
+                {
+                    if !info.is_enum {
+                        if let Some(idx) = self
+                            .type_decls
+                            .struct_field_names
+                            .get(&type_name)
+                            .and_then(|names| names.iter().position(|n| n == field))
+                        {
+                            // DECLINE a field that the shared-field-read cloner
+                            // will want to deep-copy (`String` / `Vec`). That
+                            // clone runs in `exprs.rs`'s FieldAccess arm AFTER
+                            // this returns — which is after
+                            // `load_owned_shared_temp_field` has released the
+                            // temporary's last ref and its recursive drop has
+                            // freed the buffer. Taking this branch there is a
+                            // heap-use-after-free, measured under ASAN, and a
+                            // memory error is not an improvement on a loud
+                            // "cannot resolve field" gap.
+                            //
+                            // The clone/release protocol for a shared TEMPORARY
+                            // receiver is broken independently of this branch:
+                            // the CALL spelling of the same read,
+                            // `make().tag`, LEAKS the buffer on the unfixed
+                            // compiler (5 bytes, LSan). That is its own bug —
+                            // fixing it means ordering the clone before the
+                            // release without turning it into the double-clone
+                            // the cloner's borrowed-receiver gate warns about —
+                            // so the scalar case is fixed here and the heap
+                            // case is left failing honestly.
+                            let heap_field = self
+                                .type_decls
+                                .struct_field_type_exprs
+                                .get(type_name.as_str())
+                                .and_then(|tes| tes.get(idx))
+                                .cloned()
+                                .is_some_and(|fte| {
+                                    self.is_string_type_expr(&fte)
+                                        || self.extract_vec_elem_type(&fte).is_some()
+                                });
+                            if !heap_field {
+                                return Ok(self.load_owned_shared_temp_field(
+                                    ptr, &type_name, &info, idx, field,
+                                ));
+                            }
+                        }
+                    }
+                }
             }
         }
         // A chained indexed receiver (`a[i][j].field`) is a KNOWN deferral,
@@ -1209,11 +1317,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// unrelated sites which do not share this one's transfer premise, so the
     /// widening is scoped to the caller that needs it.
     fn value_block_hands_out_its_tail(&self, object: &Expr) -> bool {
-        matches!(
-            &object.kind,
-            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b)
-                if b.final_expr.is_some()
-        )
+        match &object.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b.final_expr.is_some(),
+            // An `if`/`if let` in value position is the same transfer, once per
+            // branch: whichever branch runs, `compile_block_with_frame`
+            // neutralized its tail's cleanup, so the consumer owns what comes
+            // out (B-2026-08-28-7 leg 2). Without this the aggregate the branch
+            // handed over has no owner and its heap fields leak, exactly as a
+            // bare block receiver's did.
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => then_block.final_expr.is_some() && else_branch.is_some(),
+            _ => false,
+        }
     }
 
     fn track_freshtemp_field_access_object(
@@ -4151,6 +4274,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_types
                 .block_tail_type_names
                 .get(&(b.span.offset, b.span.length))
+                .cloned(),
+            // An `if`/`if let` used as a VALUE receiver —
+            // `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2). Its
+            // type is its branches' common type, which the typechecker has
+            // already made agree, so the THEN branch alone answers it. That
+            // branch is a `Block` compiled through `compile_block_with_frame`
+            // like any other, so its tail type is recorded by the same
+            // mechanism and no new recording site is needed here.
+            ExprKind::If { then_block, .. } | ExprKind::IfLet { then_block, .. } => self
+                .var_types
+                .block_tail_type_names
+                .get(&(then_block.span.offset, then_block.span.length))
                 .cloned(),
             _ => None,
         }

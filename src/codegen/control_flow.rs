@@ -318,6 +318,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.fn_ctx.tail_ret_inner = tail;
         let mut then_val = self.compile_block(then_block)?;
+        // B-2026-08-28-7 — record the then-arm's tail type so an `if let` used
+        // as a VALUE receiver (`if let Some(v) = o { Tag { n: v } } else { … }.n`)
+        // can be typed, the same way `compile_block_with_frame` records for a
+        // plain block and for an `if`'s branches. This arm hand-rolls its frame
+        // against a plain `compile_block` (see the B-2026-08-27-34 note below),
+        // so it never reaches that recording site and the field read died on
+        // codegen's "cannot resolve field" gap while the interpreter answered.
+        //
+        // Recorded HERE, with the arm's pattern bindings still live, for the
+        // same reason the block sibling records before its revert: the tail may
+        // name one of them, and the enclosing scope is not the environment that
+        // types it.
+        if let Some(tail_e) = then_block.final_expr.as_deref() {
+            if let Some(tn) = self.type_name_of_expr(tail_e) {
+                self.var_types
+                    .block_tail_type_names
+                    .insert((then_block.span.offset, then_block.span.length), tn);
+            }
+        }
         let then_terminated = self
             .builder
             .get_insert_block()

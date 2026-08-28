@@ -6616,13 +6616,22 @@ impl<'ctx> Codegen<'ctx> {
     /// (anonymous struct types are uniqued by LLVM, so rebuilding per
     /// call site is free). Every site that GEPs / allocs member fields
     /// MUST route through this helper — the centralization is what
-    /// keeps the two layouts from ever mixing on one object. The only
-    /// deliberate exceptions are the `sh_call_` / `sh_idx_` field
-    /// paths (call-result and collection-element receivers): those
-    /// receiver shapes are structurally impossible for a headerless
-    /// type (the purity gate excludes calls returning the type and any
-    /// collection mention), and a headered GEP is correct for every
-    /// value that CAN reach them.
+    /// keeps the two layouts from ever mixing on one object. The one
+    /// deliberate exception left is the `sh_idx_` field path
+    /// (collection-element receivers): that receiver shape is
+    /// structurally impossible for a headerless type (the purity gate
+    /// excludes any collection mention), and a headered GEP is correct
+    /// for every value that CAN reach it.
+    ///
+    /// `sh_call_` used to be the second exception, on the matching
+    /// argument that the purity gate excludes any type a declared fn
+    /// signature mentions, so a CALL result can never be headerless.
+    /// B-2026-08-28-7 gave that code path a second caller — a
+    /// value-position block / `if` receiver, whose tail can be a
+    /// cluster-member literal built in the very function that owns the
+    /// cluster — and the old argument covers only the call. It now
+    /// routes through here, which is identical wherever the premise
+    /// held and correct where it does not.
     pub(crate) fn shared_gep_layout(
         &self,
         type_name: &str,

@@ -56668,4 +56668,67 @@ fn main() {
 "#;
         assert_clean_asan_run(src, &["ada", "36"], "block-receiver-heap-field-read");
     }
+
+    /// A field read on an `if`-EXPRESSION receiver whose struct owns heap
+    /// fields (B-2026-08-28-7 leg 2).
+    ///
+    /// Sibling of the block-receiver gate above and for the same reason: making
+    /// the shape compile made its ownership reachable for the first time.
+    /// Whichever branch runs, `compile_block_with_frame` neutralized that
+    /// branch's tail cleanup, so the consumer owns the aggregate — and with
+    /// nothing registered to drop it, its heap fields leak, including the
+    /// `note` this read never names.
+    #[test]
+    fn test_if_expression_receiver_heap_field_read_is_leak_free() {
+        let src = r#"
+struct Person { name: String, note: String, age: i64 }
+
+fn make(k: i64) -> Person {
+    return Person { name: "ada".to_string(), note: "unread".to_string(), age: k };
+}
+
+fn main() {
+    let c = true;
+    println(if c { make(1) } else { make(2) }.name);
+    println(if not c { make(3) } else { make(4) }.age);
+}
+"#;
+        assert_clean_asan_run(src, &["ada", "4"], "if-receiver-heap-field-read");
+    }
+
+    /// A scalar field read on a `shared struct` block / `if` receiver is
+    /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
+    ///
+    /// The path added for this reads through the temporary's RC pointer and
+    /// then releases the one ref the block handed out, reusing the call-result
+    /// receiver's helper so the two cannot drift. Balance is the whole question
+    /// here: one dec too few leaks the box, one too many frees it under a live
+    /// alias — and the bound receiver in the same program shares the type, so a
+    /// dec aimed at the wrong handle shows up as well.
+    ///
+    /// The struct carries a `String` field that this program never reads
+    /// through a temporary, on purpose: it makes the box's drop non-trivial, so
+    /// a missing release leaks visibly rather than costing nothing.
+    #[test]
+    fn test_shared_block_receiver_scalar_field_read_is_refcount_balanced() {
+        let src = r#"
+shared struct Node { v: i64, tag: String }
+
+fn make(k: i64) -> Node { return Node { v: k, tag: "held".to_string() }; }
+
+fn main() {
+    println({ let n = make(1); n }.v);
+    let c = true;
+    println(if c { make(2) } else { make(3) }.v);
+    let b = make(4);
+    println(b.v);
+    println(b.tag);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &["1", "2", "4", "held"],
+            "shared-block-receiver-scalar-field",
+        );
+    }
 }

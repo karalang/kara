@@ -108058,6 +108058,129 @@ fn main() {
         );
     }
 
+    /// A field read on an `if` / `if let` EXPRESSION receiver —
+    /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
+    ///
+    /// `ExprKind::If` is a different node kind from `ExprKind::Block` and
+    /// `type_name_of_expr` had no arm for it, so the read failed `karac build`
+    /// on the loud "cannot resolve field" gap while `karac check` accepted it
+    /// and the interpreter answered it — the block-receiver sibling of
+    /// B-2026-08-27-49, one node kind over.
+    ///
+    /// Both branches are `Block`s compiled through `compile_block_with_frame`,
+    /// so the tail-type recording that fix added already covers them and the
+    /// `if` only has to read the THEN branch's entry (the typechecker has
+    /// already made the branches agree). An `if let`'s then-arm is the
+    /// exception: it hand-rolls its frame against a plain `compile_block` and
+    /// so never reaches that recording site, which is why it needs one of its
+    /// own — line 07 is what holds that.
+    #[test]
+    fn test_e2e_field_read_on_an_if_expression_receiver() {
+        let src = r#"
+struct Tag { n: i64 }
+struct Inner { m: i64 }
+struct Outer { inner: Inner, k: i64 }
+
+fn make(k: i64) -> Tag { return Tag { n: k }; }
+fn make2() -> Outer { return Outer { inner: Inner { m: 3 }, k: 4 }; }
+
+impl Tag { fn doubled(self) -> i64 { return self.n * 2; } }
+
+fn main() {
+    let c = true;
+    println(if c { make(1) } else { make(2) }.n);
+    println(if not c { make(1) } else { make(2) }.n);
+    println(if c { make(1) } else { make(2) }.n + 10);
+    println(if c { make2() } else { make2() }.inner.m);
+    println(if c { make2() } else { make2() }.k);
+    println(if c { make(5) } else { make(6) }.doubled());
+    let k = if c { make(7) } else { make(8) }.n;
+    println(k);
+    println(if c { make(1) } else if not c { make(2) } else { make(3) }.n);
+    let o: Option[i64] = Option.Some(9);
+    println(if let Option.Some(v) = o { Tag { n: v } } else { Tag { n: 0 } }.n);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity. Rows 1 and 2 take OPPOSITE branches, so a receiver that
+        // always resolved through the then-branch's value would show up; rows 4
+        // and 5 read both fields of a two-field struct, so an off-by-one field
+        // index cannot pass by coincidence.
+        assert_eq!(
+            expected, "1\n2\n11\n3\n4\n10\n7\n1\n9\n",
+            "interpreter oracle is wrong for an if-expression receiver",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a compiled field read on an if-expression receiver must match the interpreter",
+        );
+    }
+
+    /// A SCALAR field read on a `shared struct` block / `if` receiver
+    /// (B-2026-08-28-7 leg 1).
+    ///
+    /// The non-shared spelling of this program has worked since
+    /// B-2026-08-27-49; the shared one did not, because every shared field path
+    /// gates on knowing the receiver's type BEFORE `compile_expr` runs (it has
+    /// to decide it is emitting a GEP through an RC pointer rather than
+    /// extracting from an aggregate), and a block cannot answer then — its type
+    /// is its tail's, recorded only as the block compiles. The read therefore
+    /// reached the generic tail with a POINTER where the `StructValue` guard
+    /// wanted an aggregate, and died on the loud gap.
+    ///
+    /// Deliberately SCALAR fields only. A `String`/`Vec` field on a shared
+    /// TEMPORARY receiver is a separate, pre-existing defect — the CALL
+    /// spelling `make().tag` leaks the buffer under LSan on a compiler without
+    /// any of this — so that shape keeps failing loudly rather than being made
+    /// to build on top of a broken clone/release protocol.
+    #[test]
+    fn test_e2e_scalar_field_read_on_a_shared_block_receiver() {
+        let src = r#"
+shared struct Node { v: i64, w: i64 }
+shared struct Wrap { inner: i64 }
+
+fn make(k: i64) -> Node { return Node { v: k, w: k * 100 }; }
+fn mkw() -> Wrap { return Wrap { inner: 9 }; }
+
+fn main() {
+    println({ let n = make(1); n }.v);
+    println({ let n = make(2); n }.w);
+    println({ let n = make(3); n }.v + 10);
+    let k = { let n = make(4); n }.v;
+    println(k);
+    let c = true;
+    println(if c { make(5) } else { make(6) }.v);
+    println({ let w = mkw(); w }.inner);
+    let b = make(8);
+    println(b.v);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity: line 2 reads the SECOND field, so a GEP that ignored the
+        // field index would print 2 rather than 200, and the closing bound
+        // receiver pins that the pre-existing identifier path still works.
+        assert_eq!(
+            expected, "1\n200\n13\n4\n5\n9\n8\n",
+            "interpreter oracle is wrong for a shared block receiver",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a compiled scalar field read on a shared block receiver must match the interpreter",
+        );
+    }
+
     /// A tuple carrying a TYPE PARAMETER — `(T, i64)` at `T = i64` and
     /// `T = String` — orders through `.cmp` in a monomorph (B-2026-08-27-41).
     ///
