@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 212 | 3 |
 | run-vs-build | 198 | 8 |
 | missing-feature | 187 | 0 |
-| double-free | 149 | 1 |
+| double-free | 149 | 0 |
 | codegen-gap | 147 | 2 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1150 | 18 |
+| codegen | 1150 | 17 |
 | typecheck | 278 | 0 |
 | interp | 208 | 6 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1711 surfaced · 18 open · 1667 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1711 surfaced · 17 open · 1668 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (18)
+### Open (17)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -146,7 +146,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1711 surfaced
 | B-2026-08-28-31 | 2026-08-28 | interp+codegen | medium | AN ENUM WITH ITS OWN `impl Drop`, DISCARDED BY A WILDCARD DESTRUCTURE LEAF, RUNS NO BODY COMPILED while `karac run --interp` runs the enum's OWN body: `enum E { A(R), B } impl Drop for E { .. } let p = (E.A(R { id: 41 }), 1); let (_, n) = p;` prints `drop E` under `--interp` and nothing on either compiled backend. The payload walker the sibling row wires for payload-only enums is the WRONG body here -- admitting it prints the PAYLOAD's `drop R41` instead -- and the right one lives on the `karac_drop_<E>` wrapper, which also frees | — |
 | B-2026-08-28-32 | 2026-08-28 | codegen | low | A CONTAINER-ELEMENT HEAP READ CONSUMED BY AN UNBOUND TEMPORARY LEAKS: `println(Box2 { w: p[0].word }.w)`, `println((p[1].word, 9).0)`, and printing an `if`/`match`/block value without binding it all lose the deep clone the read emits -- 3 bytes in 1 allocation each under LSan. Pre-existing on the already-working FIELD spelling, which leaks the same shapes for the same byte counts; the BOUND form of every one is clean. The consuming temporary takes the clone over and then dies without freeing it. | — |
 | B-2026-08-28-34 | 2026-08-28 | codegen | medium | A FIELD READ THROUGH A TUPLE ELEMENT OF A CONTAINER ELEMENT never lowers: `v[0].0.id` where `v: Vec[(R, i64)]` fails `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while `karac check` accepts it and the interpreter answers it; binding the element first builds and runs. `place_chain_tuple_tes` has arms for Identifier, FieldAccess and TupleIndex and no `Index` arm, so a tuple held in a container element has no type source. The same resolution surface as B-2026-08-28-3, one source over. | — |
-| B-2026-08-28-37 | 2026-08-28 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String, i64), k: i64 }` aborts with `free(): double free detected in tcache 2` (rc 134) on both compiled backends, while `karac check` passes and `--interp` prints the field twice. The FieldAccess leaf through the same borrowed place (`w.r.name`) is fixed by B-2026-08-28-25; this is the sibling one node kind over, and it never enters that arm because the arm is gated on the OUTERMOST node being a field access. | — |
 | B-2026-08-28-38 | 2026-08-28 | codegen | medium | A CLOSURE'S BY-VALUE STRUCT PARAM RUNS NO USER `Drop` BODY ON EITHER COMPILED BACKEND while the interpreter runs one: `let f = |r: R| { r.id };` and the destructuring `|w: W| { let W { r, n } = w; … }` both print nothing under `karac run` and `karac build` where one `drop 41` is due. The TUPLE-param spelling of the same shape is correct compiled (1/1/1), which localizes this to a closure's struct param rather than to closures generally -- codegen appears not to treat it as an owned param for drop purposes | — |
 
 ### Relocated (2)
@@ -179,9 +178,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1711 surfaced
 
 </details>
 
-### Fixed (1667)
+### Fixed (1668)
 
-<details><summary>1667 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1668 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1852,6 +1851,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1711 surfaced
 | B-2026-08-28-33 | codegen | low | A CLONED CONTAINER-ELEMENT STRUCT PASSED DIRECTLY AS AN OWNED ARGUMENT LEAKS 3 BYTES: `takes_r(w[1].0)` where `w: Vec[(R, i64)]`, because an owned ag… | 54ca269 |
 | B-2026-08-28-35 | codegen | high | A STRUCT-VALUED FIELD READ OFF A CONTAINER ELEMENT IS NEVER CLONED AND DOUBLE-FREES: `let e = q[1].r` where `q: Vec[Q]`, `struct Q { r: R, n: i64 }`… | a0005b8 |
 | B-2026-08-28-36 | codegen | medium | A CONTAINER-ELEMENT TUPLE-INDEX READ WHOSE LEAF IS A WHOLE HEAP-CARRYING STRUCT LEAKS ITS CLONE when no destination adopts it: after B-2026-08-28-24… | 54ca269 |
+| B-2026-08-28-37 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String,… | 221cf4c |
 
 </details>
 
