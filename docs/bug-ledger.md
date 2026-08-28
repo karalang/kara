@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 309 | 0 |
+| miscompile | 310 | 1 |
 | leak | 206 | 0 |
 | missing-feature | 187 | 0 |
-| run-vs-build | 185 | 4 |
+| run-vs-build | 186 | 4 |
 | codegen-gap | 145 | 2 |
 | double-free | 143 | 0 |
 | diagnostics | 111 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1116 | 7 |
+| codegen | 1118 | 8 |
 | typecheck | 278 | 0 |
 | interp | 199 | 2 |
 | other | 70 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1677 surfaced · 7 open · 1644 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1679 surfaced · 8 open · 1645 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-49 | 2026-08-27 | codegen | medium | A FIELD READ ON A BLOCK-EXPRESSION RECEIVER never lowers: `{ let x = make(); x }.n` fails `karac build` with "codegen: cannot resolve field 'n' on this receiver (its type was not recorded for codegen)", while `karac check` accepts it and the interpreter answers it. Binding the block to a local first (`let t = { ... }; t.n`) builds and runs. It reaches ordinary source through a LOWERING: `rewrite_enum_literal_method_call` rewrites `Color.Red.to_tag().n` into exactly this shape, so a program containing no block at all fails to build with a diagnostic naming a receiver the author never wrote. | — |
-| B-2026-08-27-51 | 2026-08-27 | codegen | medium | `Vec[Option[T]].sort()` IS CHECK-GREEN, SORTS CORRECTLY UNDER `--interp`, AND REFUSES TO BUILD -- `Vec.sort()`'s codegen element-type dispatch has its own gate, independent of `type_supports_ord`, so B-2026-08-27-47's narrowing does not reach it. Loud, not silent. | — |
 | B-2026-08-27-53 | 2026-08-27 | codegen | medium | A `Slice[T]` PARAM GIVEN A STRUCT-FIELD `Vec` ARGUMENT from a generic-impl method fails MODULE VERIFICATION: the Vec-to-Slice coercion declines on a field access, so a 3-word `{ptr,len,cap}` is passed to a 2-word `{ptr,i64}` formal. Loud, not silent -- the third name-keyed blind spot in the family of B-2026-08-27-50 | — |
 | B-2026-08-28-1 | 2026-08-28 | codegen | high | BOTH COMPILED BACKENDS RUN NO USER `Drop` BODY AT ALL for a struct DESTRUCTURED out of a tuple that is NOT a param -- a tuple LOCAL or a CALL RESULT: `let p = (R { id: 41 }, 1); let (r, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` or `karac build`. Measured 0 of 40 bodies over a loop. The BUFFERS are still freed (peak RSS flat at ~2.3 MB across 300k iterations, matching the non-destructuring control), so this is the OBSERVABLE-EFFECTS half of drop only -- and it is the SHIPPED path that is wrong, which is the exact reason B-2026-08-27-48 stayed medium and this does not | — |
 | B-2026-08-28-2 | 2026-08-28 | interp+codegen | medium | A user `Drop` body runs TWICE FOR ONE OBJECT on ALL THREE BACKENDS when a struct destructured out of a tuple param is RETURNED: `fn take(p: (R, i64)) -> R { let (r, n) = p; r }` prints `drop 41` twice under `--interp`, LLJIT and AOT alike. Only one `R` is ever constructed. Backend-CONSISTENT, which is why no run-vs-build parity test can see it -- the whole destructure matrix agrees here, at the wrong number | — |
 | B-2026-08-28-3 | 2026-08-28 | codegen | medium | A STRUCT FIELD READ THROUGH A TUPLE ELEMENT never lowers when the tuple came from a CALL: `let q = make(); q.0.id` (and `make().0.id`) fail `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)", while the SAME read on a tuple LITERAL local (`let q = (R { id: 41 }, 1); q.0.id`) builds and runs. `karac check` accepts both and the interpreter answers both. One more unhandled receiver shape on the surface B-2026-08-27-49 is open against | — |
 | B-2026-08-28-4 | 2026-08-28 | interp+codegen | medium | A tuple-param destructure inside a CLOSURE is wrong on BOTH backends and in OPPOSITE directions: `let f = |p: (R, i64)| { let (r, n) = p; r.id + n };` runs the user `Drop` body TWICE under `karac run --interp` and ZERO times under `karac build`, for one object. The free-fn spelling of the same body is correct (1/1/1) after B-2026-08-27-48, which is what makes the closure the variable | — |
+| B-2026-08-28-5 | 2026-08-28 | codegen | high | EVERY `bool` COMPARISON INVERTS IN COMPILED CODE: `false < true` answers FALSE and `Vec[bool].sort()` sorts DESCENDING on jit/build/auto-par, while the interpreter is correct -- bool lowers as a SIGNED `i1`, so `true` is -1. SILENT wrong answer; the comparator family in the same file already treats bool as unsigned. | — |
+| B-2026-08-28-6 | 2026-08-28 | codegen | medium | `Vec.binary_search` ACCEPTS EVERY ELEMENT TYPE `sort` DOES BUT LOWERS ONLY INTEGER AND String -- tuples, nested Vec, Array, derived-Ord structs/enums and `F64` are check-green, work under `--interp`, and refuse to build. It inherited B-2026-08-27-51's gate but its own support is narrower still. | — |
 
 ### Relocated (2)
 
@@ -168,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1677 surfaced
 
 </details>
 
-### Fixed (1644)
+### Fixed (1645)
 
-<details><summary>1644 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1645 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1817,6 +1818,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1677 surfaced
 | B-2026-08-27-47 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { . | fa6d35a |
 | B-2026-08-27-48 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p:… | b0dac13 |
 | B-2026-08-27-50 | codegen | high | A GENERIC FN'S CONTAINER PARAM BOUND TO A FIELD-ACCESS ARGUMENT loses its ELEMENT TYPE, because every resolver that recovers an element keys on the a… | 4e5bdc0 |
+| B-2026-08-27-51 | codegen | medium | `Vec[Option[T]].sort()` IS CHECK-GREEN, SORTS CORRECTLY UNDER `--interp`, AND REFUSES TO BUILD -- `Vec.sort()`'s codegen element-type dispatch has it… | cbc761b |
 | B-2026-08-27-52 | codegen | high | A READ-ONLY `ref` CONTAINER PARAM OF A GENERIC CALLEE, GIVEN A STRUCT-FIELD ARGUMENT, DOUBLE-FREES the field's buffer: the mono argument path compute… | 4e5bdc0 |
 
 </details>
