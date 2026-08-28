@@ -1202,6 +1202,13 @@ fn main() {
     /// so it must not. Reaching for the combined `karac_drop_<E>` wrapper —
     /// body AND memory in one — is what the row expected this to need, and
     /// would have double-freed the place row.
+    ///
+    /// B-2026-08-28-40 later added the live payload's body to both discard
+    /// rows, bringing them level with `bound-control`. Running `drop R41` here
+    /// makes the payload's `String` observably live at a point the optimizer
+    /// could otherwise have deleted its allocation, so the balance question is
+    /// re-asked rather than inherited — the same way B-2026-08-28-12's
+    /// bodies-only first cut turned a dead allocation into a real 3-byte leak.
     #[test]
     fn asan_own_drop_enum_discarded_by_wildcard_leaf_is_balanced() {
         const H: &str = "enum E { A(R), B }\n\
@@ -1215,7 +1222,7 @@ fn main() {
                 "{H}fn main() {{ let (_, n) = (E.A(R {{ id: 41, name: f\"n{{41}}\" }}), 1);\n\
              \x20            println(f\"{{n}}\"); }}\n"
             ),
-            &["drop E", "1"],
+            &["drop E", "drop R41", "1"],
             "fresh-tuple",
         );
         // PLACE source — the local `p`'s own drop frees it; freeing here too
@@ -1225,7 +1232,7 @@ fn main() {
                 "{H}fn main() {{ let p = (E.A(R {{ id: 41, name: f\"n{{41}}\" }}), 1);\n\
              \x20            let (_, n) = p; println(f\"{{n}}\"); }}\n"
             ),
-            &["drop E", "1"],
+            &["drop E", "drop R41", "1"],
             "place-source",
         );
         // CONTROL — the same enum BOUND rather than discarded, which runs both
@@ -1238,6 +1245,20 @@ fn main() {
             ),
             &["drop E", "drop R41", "mid"],
             "bound-control",
+        );
+        // The STRUCT-pattern spelling of the same discard. B-2026-08-28-40
+        // routes it through a different walker than the two tuple rows above
+        // (`emit_user_drop_field_bodies_fn_skipping`, not the bodies-only
+        // whole-value one), so its balance is a separate question, not a
+        // corollary of theirs.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W {{ e: E, n: i64 }}\n\
+             \x20            fn main() {{ let w = W {{ e: E.A(R {{ id: 41, name: f\"n{{41}}\" }}), n: 1 }};\n\
+             \x20            let W {{ e: _, n }} = w; println(f\"{{n}}\"); }}\n"
+            ),
+            &["drop E", "drop R41", "1"],
+            "struct-field-sibling",
         );
     }
 

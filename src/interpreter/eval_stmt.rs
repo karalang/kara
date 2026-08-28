@@ -1386,7 +1386,24 @@ impl<'a> super::Interpreter<'a> {
             _ => return,
         }
         for v in discarded {
-            self.run_discarded_value_user_drops(v);
+            self.run_discarded_value_user_drops(v.clone());
+            // B-2026-08-28-40 — and an own-`impl Drop` ENUM leaf's live-variant
+            // PAYLOAD bodies. The walk above runs such an enum's own body and
+            // stops, so a discarded `E.A(R { .. })` leaf ran ONE body for the
+            // TWO objects it holds, while a BOUND local of the same type runs
+            // both on every backend — which is what says two is the target.
+            //
+            // Added HERE rather than inside `run_discarded_value_user_drops`
+            // for the reason B-2026-08-28-39 established: that walker has ~31
+            // callers and widening it moves shapes this fix has no measurement
+            // for. Codegen's twin is the enum payload leg on
+            // `emit_struct_user_drop_bodies_only_fn`, which likewise fires only
+            // for an enum name.
+            if let Value::EnumVariant { enum_name, .. } = &v {
+                if self.program.drop_method_keys.contains_key(enum_name) {
+                    self.run_enum_payload_user_drops_value(&v);
+                }
+            }
         }
     }
 

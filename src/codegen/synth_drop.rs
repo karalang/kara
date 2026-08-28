@@ -3454,7 +3454,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|p| p.drop_method_keys.contains_key(struct_name));
         let field_bodies =
             self.emit_user_drop_field_bodies_fn(struct_name, &std::collections::HashMap::new());
-        if !owns_body && field_bodies.is_none() {
+        // B-2026-08-28-40 — the ENUM analogue of `field_bodies`. Non-shared user
+        // enums only; `Option`/`Result` keep their own payload machinery.
+        let enum_payload_bodies = if self
+            .type_decls
+            .enum_layouts
+            .get(struct_name)
+            .is_some_and(|l| !l.is_shared)
+            && struct_name != "Option"
+            && struct_name != "Result"
+        {
+            self.emit_enum_payload_user_drop_bodies_fn(struct_name)
+        } else {
+            None
+        };
+        if !owns_body && field_bodies.is_none() && enum_payload_bodies.is_none() {
             return None;
         }
         let fn_name = format!("__karac_dropbodies_only_{struct_name}");
@@ -3477,6 +3491,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         if let Some(f) = field_bodies {
+            self.builder.build_call(f, &[p.into()], "").unwrap();
+        }
+        // B-2026-08-28-40 — an own-`impl Drop` ENUM's live-variant PAYLOAD
+        // bodies, after its own body. `field_bodies` above is struct-shaped and
+        // is always `None` for an enum name, so this walker used to run the
+        // enum's own body and stop — one body for the TWO objects a payload
+        // variant holds. A BOUND local of the same type runs both on every
+        // backend, which is what says two is the target rather than one.
+        //
+        // BODIES ONLY, like everything else this walker calls: the payload
+        // walker runs `<F>.drop` per Drop-bearing payload and frees nothing, so
+        // this stays additive and cannot double-free whatever memory half the
+        // call site registers separately (the per-site `free_memory` split).
+        if let Some(f) = enum_payload_bodies {
             self.builder.build_call(f, &[p.into()], "").unwrap();
         }
         self.builder.build_return(None).unwrap();
@@ -3812,6 +3840,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(body_fn, &[field_ptr.into()], "")
                     .unwrap();
+            }
+            // B-2026-08-28-40 — an ENUM field's live-variant PAYLOAD bodies,
+            // after its own body. The recursion below is struct-shaped
+            // (`emit_user_drop_field_bodies_fn` answers `None` for an enum
+            // name), so an own-`impl Drop` enum field ran its own body and
+            // stopped — one body for the TWO objects a payload variant holds,
+            // where a BOUND local of the same type runs both on every backend.
+            // Bodies only, so it stays additive over whatever memory half the
+            // parent's drop already owns.
+            if field_type != "Option"
+                && field_type != "Result"
+                && self
+                    .type_decls
+                    .enum_layouts
+                    .get(field_type.as_str())
+                    .is_some_and(|l| !l.is_shared)
+            {
+                if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&field_type) {
+                    self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
+                }
             }
             // Then the field's OWN Drop-bearing fields, one level deeper. The
             // recursion terminates because `user_drop_field_indices` is empty at

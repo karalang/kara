@@ -12792,16 +12792,17 @@ fn main() {
     /// struct-field walk `None`, so it emits a call to `<E>.drop` and nothing
     /// else. `payload-only-control` pins that the two walkers stay separate.
     ///
-    /// ONE body is the target, not two, and `struct-field-sibling` is why: the
-    /// same enum discarded through a STRUCT pattern's wildcard field already ran
-    /// `drop E` and only that, on all three backends, before this fix. Making
-    /// the tuple leaf run two would have put it out of step with its own
-    /// sibling.
+    /// -31 stopped at ONE body — the enum's own — because the STRUCT-pattern
+    /// sibling did too, and matching the sibling was the smaller step.
+    /// B-2026-08-28-40 then closed the remaining gap in BOTH spellings at once:
+    /// the bodies-only walker gained an enum-payload leg, so an own-`Drop` enum
+    /// discarded through either pattern runs its own body and then its live
+    /// payload's. `struct-field-sibling` still holds the two spellings together;
+    /// it now expects two, like its tuple counterpart.
     ///
-    /// `bound-control` shows what a NON-discarded enum of the same type does —
-    /// both bodies, on every backend. That the discard path runs one where a
-    /// binding runs two is a real gap, but a backend-CONSISTENT one, so it is
-    /// filed rather than pinned here.
+    /// `bound-control` is what the target is measured against: a NON-discarded
+    /// enum of the same type, both bodies, on every backend. Each discard row
+    /// above now prints exactly that.
     #[test]
     fn e2e_own_drop_enum_discarded_by_wildcard_leaf_runs_its_body() {
         const H: &str = "enum E { A(R), B }\n\
@@ -12814,12 +12815,12 @@ fn main() {
                 "place-source",
                 "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p;\n\
                  \x20            println(f\"{n}\"); }\n",
-                "drop E\n1\n",
+                "drop E\ndrop R41\n1\n",
             ),
             (
                 "fresh-tuple-source",
                 "fn main() { let (_, n) = (E.A(R { id: 41 }), 1); println(f\"{n}\"); }\n",
-                "drop E\n1\n",
+                "drop E\ndrop R41\n1\n",
             ),
             // A payloadless variant — the compiled zero was about the OWN body,
             // not about reaching a payload.
@@ -12828,14 +12829,15 @@ fn main() {
                 "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\"); }\n",
                 "drop E\n1\n",
             ),
-            // CONTROL — the STRUCT-pattern sibling, already 1 on all three
-            // backends before this fix, and the reason one body is the target.
+            // CONTROL — the STRUCT-pattern sibling. It moved 1 -> 2 with the
+            // tuple leaf under B-2026-08-28-40; the two spellings must not
+            // drift apart again.
             (
                 "struct-field-sibling",
                 "struct W { e: E, n: i64 }\n\
                  fn main() { let w = W { e: E.A(R { id: 41 }), n: 1 };\n\
                  \x20            let W { e: _, n } = w; println(f\"{n}\"); }\n",
-                "drop E\n1\n",
+                "drop E\ndrop R41\n1\n",
             ),
             // CONTROL — a BOUND enum of the same type runs both bodies.
             (
@@ -12862,6 +12864,105 @@ fn main() {
              impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
              fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\"); }\n";
         assert_eq!(run_program(prog).as_deref(), Some("drop R41\n1\n"));
+    }
+
+    /// B-2026-08-28-40 — an own-`impl Drop` enum discarded by a wildcard
+    /// destructure leaf runs its LIVE PAYLOAD's body too, not just its own.
+    ///
+    /// B-2026-08-28-31 had brought the discard from zero bodies to one on the
+    /// compiled backends by pointing the bodies-only walker at the enum name,
+    /// which finds `owns_body` true and emits `<E>.drop`. That walker had no
+    /// payload leg at all, so it stopped there — one body against the two the
+    /// same value runs when BOUND. Every backend agreed on the one, which is
+    /// why no run-vs-build gate could report it.
+    ///
+    /// The fix gives the bodies-only walker an enum-payload leg, and gives the
+    /// STRUCT-field walker the same leg for an enum-typed field, because the
+    /// two spellings reach the payload through different code. Fixing only the
+    /// first is what the first cut did, and it turned the previously consistent
+    /// pair into an interp-2 / compiled-1 divergence — the reason `struct-field`
+    /// is a row here and not a footnote.
+    ///
+    /// `second-variant` is the row that proves the walk reads the LIVE tag
+    /// rather than the first payload-bearing variant: the value is `E.B(..)` in
+    /// an enum whose `A` also carries an `R`, and only `R7` prints.
+    ///
+    /// Each row is stated as the same value's BOUND spelling would print it —
+    /// that equivalence is the whole claim, and `no-payload-variant` is the
+    /// boundary where the two legitimately agree at one body.
+    #[test]
+    fn e2e_wildcard_discard_of_own_drop_enum_runs_its_payload_body() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        for (label, body, want) in [
+            (
+                "tuple-leaf",
+                "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p;\n\
+                 \x20            println(f\"{n}\"); }\n",
+                "drop E\ndrop R41\n1\n",
+            ),
+            (
+                "struct-field",
+                "struct W { e: E, n: i64 }\n\
+                 fn main() { let w = W { e: E.A(R { id: 41 }), n: 1 };\n\
+                 \x20            let W { e: _, n } = w; println(f\"{n}\"); }\n",
+                "drop E\ndrop R41\n1\n",
+            ),
+            // BOUNDARY — a payloadless variant. One body is correct here, and
+            // it is the same one body the pre-fix rows above printed, so this
+            // row is what keeps the fix from being read as "always two".
+            (
+                "no-payload-variant",
+                "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\"); }\n",
+                "drop E\n1\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // The walk follows the LIVE variant, not the first one carrying a
+        // payload: `A` and `B` both hold an `R` and only the constructed one
+        // prints. Carries its own enum, hence a standalone assert.
+        assert_eq!(
+            run_program(
+                "enum E { A(R), B(R) }\n\
+                 impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+                 struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+                 fn main() { let p = (E.B(R { id: 7 }), 1); let (_, n) = p; println(f\"{n}\"); }\n"
+            )
+            .as_deref(),
+            Some("drop E\ndrop R7\n1\n"),
+            "second-variant"
+        );
+        // DEPTH — the payload's own fields keep walking, and the discard still
+        // matches the bound spelling exactly.
+        const D: &str = "struct S { tag: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"drop S{self.tag}\") } }\n\
+             struct R { id: i64, s: S }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n";
+        assert_eq!(
+            run_program(&format!(
+                "{D}fn main() {{ let p = (E.A(R {{ id: 41, s: S {{ tag: 9 }} }}), 1);\n\
+                 \x20            let (_, n) = p; println(f\"{{n}}\"); }}\n"
+            ))
+            .as_deref(),
+            Some("drop E\ndrop R41\ndrop S9\n1\n"),
+            "nested-payload"
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{D}fn main() {{ let e = E.A(R {{ id: 41, s: S {{ tag: 9 }} }});\n\
+                 \x20            println(\"mid\"); }}\n"
+            ))
+            .as_deref(),
+            Some("drop E\ndrop R41\ndrop S9\nmid\n"),
+            "nested-bound-control"
+        );
     }
 
     /// B-2026-08-28-41 — `let _ = E.B`, a PAYLOADLESS variant of an

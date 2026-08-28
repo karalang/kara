@@ -32587,11 +32587,15 @@ fn test_closure_param_destructure_user_drop_body_runs_once() {
 ///
 /// THE PAYLOAD WALK IS SITE-LOCAL, and that is the care in this fix rather than
 /// an implementation detail. `run_discarded_value_user_drops` has 31 callers,
-/// one of them the wildcard-LEAF path (B-2026-08-28-12), where compiled runs the
-/// own body ALONE. Widening the shared walker fixes this site and simultaneously
-/// pushes the leaf from one body to two against compiled's one — trading a
-/// divergence for a divergence. Measured, not assumed: the first cut of this fix
-/// did exactly that.
+/// and widening it moves every one of them at once. Measured, not assumed: the
+/// first cut of this fix did exactly that, and `call-source-control` below is
+/// the row that caught it and still holds the gate.
+///
+/// The leaf that the first cut ALSO disturbed — the wildcard-destructure path
+/// (B-2026-08-28-12), then one body against this site's two — has since moved to
+/// two on all three backends under B-2026-08-28-40, by the same site-local
+/// method rather than by widening the shared walker. `wildcard-leaf-control`
+/// tracks it at its new value.
 ///
 /// `call-source-control` is the second thing measurement forced. Firing for any
 /// own-`Drop` enum value here took `let _ = mk()` from 1/1/1 to 2/1/1 — a
@@ -32623,13 +32627,13 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
              fn main() { let _ = mk(); println(\"end\") }\n",
             "drop E\nend\n",
         ),
-        // CONTROL — the wildcard LEAF one level in, which compiled runs at ONE
-        // body. This is the row that fails if the payload walk is put in the
-        // shared walker instead of at this site.
+        // CONTROL — the wildcard LEAF one level in. Its own site-local walk
+        // (B-2026-08-28-40) brought it to two bodies on every backend; it is
+        // pinned here so the two discard sites stay in step.
         (
             "wildcard-leaf-control",
             "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\") }\n",
-            "drop E\n1\n",
+            "drop E\ndrop R41\n1\n",
         ),
     ] {
         assert_eq!(run(&format!("{H}{body}")), want, "{label}");
@@ -32645,6 +32649,77 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
              fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n"),
         "drop R41\nend\n",
         "payload-only-control"
+    );
+}
+
+/// B-2026-08-28-40, interpreter leg — an own-`impl Drop` enum discarded by a
+/// wildcard destructure leaf runs its LIVE PAYLOAD's body too.
+///
+/// This is the SOUNDNESS half of the row rather than a parity half: pre-fix
+/// every backend printed the enum's own body alone, so the two agreed on a
+/// number that neither the A/B gate nor `karac check` could object to. The
+/// bound spelling of the same value printed two, and that mismatch is the only
+/// thing that showed it.
+///
+/// The walk is site-local, inside `run_wildcard_destructure_leaf_user_drops`
+/// and NOT inside the 31-caller `run_discarded_value_user_drops` — the same
+/// discipline B-2026-08-28-39 arrived at by measurement one site over, and for
+/// the same reason: that walker's other callers include the CALL-source discard,
+/// which compiled runs at one body. `call-source-control` here is that guard.
+#[test]
+fn test_wildcard_discard_of_own_drop_enum_runs_its_payload_body() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "tuple-leaf",
+            "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\"); }\n",
+            "drop E\ndrop R41\n1\n",
+        ),
+        (
+            "struct-field",
+            "struct W { e: E, n: i64 }\n\
+             fn main() { let w = W { e: E.A(R { id: 41 }), n: 1 };\n\
+             \x20            let W { e: _, n } = w; println(f\"{n}\"); }\n",
+            "drop E\ndrop R41\n1\n",
+        ),
+        // The BOUND spelling of the same value — what the two rows above are
+        // measured against, and what they failed to match pre-fix.
+        (
+            "bound-control",
+            "fn main() { let e = E.A(R { id: 41 }); println(\"mid\"); }\n",
+            "drop E\ndrop R41\nmid\n",
+        ),
+        // BOUNDARY — a payloadless variant stays at one body.
+        (
+            "no-payload-variant",
+            "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\"); }\n",
+            "drop E\n1\n",
+        ),
+        // GUARD — a CALL source, which compiled runs at one body. It goes
+        // through the shared walker; this row fails the moment the payload walk
+        // is moved there.
+        (
+            "call-source-control",
+            "fn mk() -> E { E.A(R { id: 41 }) }\n\
+             fn main() { let _ = mk(); println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+    // The walk follows the LIVE variant: both variants carry an `R` and only
+    // the constructed one prints.
+    assert_eq!(
+        run("enum E { A(R), B(R) }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn main() { let p = (E.B(R { id: 7 }), 1); let (_, n) = p; println(f\"{n}\"); }\n"),
+        "drop E\ndrop R7\n1\n",
+        "second-variant"
     );
 }
 
