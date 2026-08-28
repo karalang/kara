@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 218 | 1 |
+| leak | 219 | 1 |
 | run-vs-build | 210 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1177 | 7 |
+| codegen | 1178 | 7 |
 | typecheck | 278 | 0 |
 | interp | 226 | 4 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced · 7 open · 1707 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1741 surfaced · 7 open · 1708 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -133,10 +133,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
 | B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
 | B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
-| B-2026-08-28-64 | 2026-08-28 | codegen | medium | `Option[K]` NEVER FREES A HEAP-CARRYING NESTED-STRUCT PAYLOAD while `Result[K, i64]` DOES: the plain `let` site calls `track_inline_result_payload_var` with no `Option` sibling for a struct/enum payload -- masked entirely by dead-malloc removal until some body reads the buffer | — |
 | B-2026-08-28-65 | 2026-08-28 | codegen | medium | A `return <local>` NESTED IN A BRANCH LOSES THE LOCAL'S `Drop` BODY ON THE PATH THAT NEVER TAKES THE RETURN, on all three COMPILED backends while the interpreter is correct: `fn take(k) -> R { let r = R { id: 41 }; if k { return r; } R { id: 99 } }` with `k = false` prints `99` / `drop 99` compiled and `drop 41` / `99` / `drop 99` under --interp. This is the UNDER-FIRE horn of B-2026-08-28-51's mechanism -- `suppress_cleanup_for_tail_return` statically REMOVES the action, disarming on every path including the ones that never reach the `return` -- and it is the half that row's fix deliberately did not touch, because un-removing an action is what changes the three frame-membership predicates | — |
 | B-2026-08-28-66 | 2026-08-28 | codegen | medium | A CONSUMING ARM THAT HANDS ITS BOUND STRUCT PAYLOAD ON RUNS THAT PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `let k = match o { Some(r) => { r } .. }` is interp `dR1 kept` vs compiled `dR1 dR1 kept`; the enum sibling is gated, the struct one cannot be with today's classifier | — |
 | B-2026-08-28-67 | 2026-08-28 | interp+codegen | low | A `match` OVER A BARE USER ENUM RUNS THE PAYLOAD'S `Drop` BODY AND THE ENUM'S OWN IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `match e { E.A(r) => .. }` is interp `dR5 dE` vs compiled `dE dR5`; same count, different sequence | — |
+| B-2026-08-28-68 | 2026-08-28 | codegen | medium | A `Result` WITH ONE SIDE BOXED LOSES THE OTHER SIDE'S INLINE PAYLOAD WALK: `track_inline_result_payload_var`'s name-keyed `boxed_enum_payload_vars` early return is per-BINDING while boxing is per-SIDE, so `Result[R2, Wide]` leaks the inline `Ok` payload's heap while `Result[R2, i64]` is clean -- not enum-specific, and masked entirely until a `Drop` body reads the buffer | — |
 
 ### Relocated (2)
 
@@ -168,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced
 
 </details>
 
-### Fixed (1707)
+### Fixed (1708)
 
-<details><summary>1707 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1708 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1881,6 +1881,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced
 | B-2026-08-28-61 | codegen | medium | A GENERIC CALLEE'S tuple element still loses its Drop-bearing field's body when destructured at the call site: `fn src[T](x: T) -> (Box2[T], i64)` wi… | dc01eb1 |
 | B-2026-08-28-62 | interp+codegen | medium | A BY-VALUE PARAM THAT ESCAPES THROUGH A CALL in return position runs its `Drop` body TWICE on all three backends: `fn outer(y: R) -> (BoxR, i64) { re… | 5ce2a57 |
 | B-2026-08-28-63 | interp+codegen | medium | A CONSUMING `match` / `if let` ARM THAT BINDS AN ENUM PAYLOAD OUT RUNS NO `Drop` BODY FOR IT ON ANY BACKEND, while the same arm binding a STRUCT payl… | f862656 |
+| B-2026-08-28-64 | codegen | medium | `Option[K]` NEVER FREES A HEAP-CARRYING NESTED-STRUCT PAYLOAD while `Result[K, i64]` DOES: the plain `let` site calls `track_inline_result_payload_va… | d4f565d |
 
 </details>
 
