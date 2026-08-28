@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 215 | 2 |
-| run-vs-build | 203 | 7 |
+| run-vs-build | 204 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
 | codegen-gap | 147 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 74 | 6 |
+| soundness | 74 | 5 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1162 | 14 |
+| codegen | 1163 | 14 |
 | typecheck | 278 | 0 |
-| interp | 218 | 10 |
+| interp | 219 | 10 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1725 surfaced · 15 open · 1684 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1726 surfaced · 15 open · 1685 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (15)
 
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1725 surfaced
 | B-2026-08-28-16 | 2026-08-28 | interp+codegen | medium | The B-2026-08-28-2 double `Drop` body SURVIVES when the tuple argument comes from a LOCAL instead of a literal: `let q = (R { id: 41 }, 1); let x = take(q);` still prints `drop 41` twice on all three backends after d5d7421. Same escaping-part asymmetry, different caller-side site -- the fresh-temp walk never sees a place argument, so this is the moved-out LOCAL's own cleanup firing alongside the result's. The control `-> i64` (returning the other element) is correctly 1 | — |
 | B-2026-08-28-18 | 2026-08-28 | codegen | medium | A tuple param returned WHOLE and then destructured AT THE CALL SITE loses its element's user `Drop` body on both compiled backends: `fn take(p: (R, i64)) -> (R, i64) { p }  let x = take((R { id: 41 }, 1)); let (r, n) = x;` prints `drop 41` under `--interp` and NOTHING under `karac run` / `karac build`. The whole-param passthrough guard correctly hands ownership to the caller, and the caller's destructure of a CALL-RESULT LOCAL then registers no body for the leaf | — |
 | B-2026-08-28-19 | 2026-08-28 | interp+codegen | low | The caller-side fresh-temp argument `Drop` walk fires AT THE CALL in the interpreter and at SCOPE EXIT in both compiled backends, so a tuple-literal argument whose element dies inside the callee prints its body in a different ORDER on the two surfaces: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }` gives `drop 41 / 1` under `--interp` and `1 / drop 41` compiled. Counts agree (1/1/1) -- only sequence differs, which is why every count-based check in this family missed it | — |
-| B-2026-08-28-21 | 2026-08-28 | interp+codegen | medium | A PARENT STRUCT THAT DECLARES ITS OWN `Drop` still double-runs a returned field's user `Drop` body: with `impl Drop for W` added, `fn take(w: W) -> R { let W { r, n } = w; r }` prints `drop 41` twice for one `R` on all three backends. B-2026-08-28-17's per-field mask is structurally unreachable here -- both backends dispatch a parent that owns a `Drop` to the full `karac_drop_<T>` wrapper and never reach the maskable bodies walker, and only the wrapper's BODY half may be masked since its field frees must still run | — |
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
 | B-2026-08-28-23 | 2026-08-28 | interp+codegen | low | A NESTED PROJECTION out of an owned struct param still double-runs the field's user `Drop` body: `fn take(w: W) -> R { w.inner.r }` prints `drop 41` twice for one `R` on all three backends. This is `fn_returns_param_parts`' DOCUMENTED under-approximation working as designed -- it classifies a projection only off the WHOLE param and declines a projection-of-a-projection by construction, which leaves the pre-existing double body (the safe direction) -- so closing it widens the ANALYSIS, not the two caller-side sites B-2026-08-28-17 finished | — |
 | B-2026-08-28-26 | 2026-08-28 | codegen | medium | A TUPLE-TYPED BINDING LEAF loses its inner element's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` / `karac build`. The leaf is a `PatternKind::Binding` whose element `TypeExpr` is a `TypeKind::Tuple`, so it clears the place-source walker's PATTERN test and then exits at its `TypeKind::Path` test -- one step past where B-2026-08-28-8's nested-PATTERN spelling failed | — |
@@ -145,6 +144,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1725 surfaced
 | B-2026-08-28-50 | 2026-08-28 | codegen | medium | AN UNBOUND DESTRUCTURE FIELD WHOSE TYPE HAS NO `Drop` LEAKS ON A STRUCT-LITERAL SOURCE: `let W { r: _, n } = W { r: R { .. }, n: 1 }` where `R` carries a `Vec[String]` and declares no `Drop` loses 98 bytes on both compiled backends, while the same field over a CALL source or a PLACE source is clean -- the source axis B-2026-08-28-29 fixed for BODIES, still open for the memory of a Drop-free type | — |
 | B-2026-08-28-51 | 2026-08-28 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }` with `k = true` prints `drop 41` / `41` / `drop 41`. This is the OVER-SCHEDULE horn of B-2026-08-28-22's mechanism -- `merge_outer_states` deliberately re-marks a conditionally-moved place `Owned` and relies on a runtime cap/null guard that exists for MEMORY and does not exist for a user `Drop` BODY -- and it refutes that row's premise that the tree uniformly picked the missed-body direction | — |
 | B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
+| B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
 
 ### Relocated (2)
 
@@ -176,9 +176,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1725 surfaced
 
 </details>
 
-### Fixed (1684)
+### Fixed (1685)
 
-<details><summary>1684 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1685 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1845,6 +1845,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1725 surfaced
 | B-2026-08-28-15 | codegen | high | PROJECTING A HEAP-CARRYING STRUCT ELEMENT OUT OF A TUPLE PARAM AND RETURNING IT DOUBLE-FREES: `fn take(p: (R, i64)) -> R { p.0 }` where `struct R { i… | 0944166 |
 | B-2026-08-28-17 | interp+codegen | medium | THE STRUCT TWIN of B-2026-08-28-2: returning a field extracted from an owned STRUCT param runs its user `Drop` body TWICE on all three backends -- `s… | f697522 |
 | B-2026-08-28-20 | codegen | low | A BARE-`shared` FIELD READ OFF A SHARED TEMPORARY RECEIVER LEAKS THE INNER OBJECT'S PAYLOAD: `make_outer(12).inner.tag` prints `t12` on all three bac… | 9cc5fb1 |
+| B-2026-08-28-21 | interp+codegen | medium | A PARENT STRUCT THAT DECLARES ITS OWN `Drop` still double-runs a returned field's user `Drop` body: with `impl Drop for W` added, `fn take(w: W) -> R… | 56e6493 |
 | B-2026-08-28-24 | codegen | high | A TUPLE ELEMENT PROJECTED OUT OF A CONTAINER ELEMENT (`v[0].0`) IS NEVER CLONED AND DOUBLE-FREES ON BOTH COMPILED BACKENDS, AT EVERY POSITION INCLUDI… | 0723acf |
 | B-2026-08-28-25 | codegen | high | A HEAP FIELD READ THROUGH A DEEPER PLACE ROOTED AT A `ref` BINDING AND RETURNED DIRECTLY IS NEVER CLONED AND DOUBLE-FREES: `fn peek(w: ref W) -> Stri… | d4da426 |
 | B-2026-08-28-27 | codegen | medium | A FRESH TUPLE TEMP IS NEVER DROPPED, so every heap element it owns leaks: `println(twoheap(1).1)` where `twoheap -> (Person, String)` loses the whole… | 1aeaddc |
