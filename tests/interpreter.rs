@@ -32567,6 +32567,87 @@ fn test_closure_param_destructure_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-39 — `let _ = <own-Drop enum ctor>` runs the enum's own body
+/// AND its payload's, matching both compiled backends.
+///
+/// Two spellings of one construction were wrong in two different ways, which is
+/// what made the shape read as a single payload-only gap:
+///
+///   * QUALIFIED (`let _ = E.A(R { .. })`) ran the OWN body and stopped, 1
+///     against compiled's 2. `run_discarded_value_user_drops` runs an
+///     own-`impl Drop` enum's own body and deliberately does not walk the
+///     payload, on the stated ground that firing payloads "would print bodies
+///     `karac build` does not" (the B-2026-08-01-2 p3 probe). That premise had
+///     since stopped holding at this site: compiled now prints both.
+///   * BARE (`let _ = A(R { .. })`) ran NOTHING — 0 against compiled's 2 —
+///     because the discard gate's `Identifier` arm looks for a program
+///     FUNCTION and a variant name is not one, so the whole discard was
+///     declined. The qualified spelling was admitted by the `Path` arm all
+///     along, which is exactly why only the payload looked missing.
+///
+/// THE PAYLOAD WALK IS SITE-LOCAL, and that is the care in this fix rather than
+/// an implementation detail. `run_discarded_value_user_drops` has 31 callers,
+/// one of them the wildcard-LEAF path (B-2026-08-28-12), where compiled runs the
+/// own body ALONE. Widening the shared walker fixes this site and simultaneously
+/// pushes the leaf from one body to two against compiled's one — trading a
+/// divergence for a divergence. Measured, not assumed: the first cut of this fix
+/// did exactly that.
+///
+/// `call-source-control` is the second thing measurement forced. Firing for any
+/// own-`Drop` enum value here took `let _ = mk()` from 1/1/1 to 2/1/1 — a
+/// divergence introduced by the fix — because compiled walks the payload for a
+/// variant built AT the discard and not for one arriving from a call. The gate
+/// is therefore on an INLINE construction, and this row is what holds it there.
+#[test]
+fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "qualified-ctor",
+            "fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n",
+            "drop E\ndrop R41\nend\n",
+        ),
+        (
+            "bare-ctor",
+            "fn main() { let _ = A(R { id: 41 }); println(\"end\") }\n",
+            "drop E\ndrop R41\nend\n",
+        ),
+        // CONTROL — a CALL source. Compiled runs the own body alone here, so
+        // this must stay at one; the inline-construction gate is what keeps it.
+        (
+            "call-source-control",
+            "fn mk() -> E { E.A(R { id: 41 }) }\n\
+             fn main() { let _ = mk(); println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        // CONTROL — the wildcard LEAF one level in, which compiled runs at ONE
+        // body. This is the row that fails if the payload walk is put in the
+        // shared walker instead of at this site.
+        (
+            "wildcard-leaf-control",
+            "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\") }\n",
+            "drop E\n1\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+
+    // CONTROL — a payload-only enum (no own `impl Drop`) keeps its existing
+    // single payload body; the new walk must not double it. Carries its own
+    // header, which is why it sits outside the table above.
+    assert_eq!(
+        run("enum E { A(R), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n"),
+        "drop R41\nend\n",
+        "payload-only-control"
+    );
+}
+
 /// B-2026-08-27-48, method leg — the same destructure inside an IMPL METHOD
 /// fires ONCE. This is the guard on the gate's other edge: a method frame's
 /// arguments get no caller-side fire (`run_fresh_temp_arg_drops` is wired

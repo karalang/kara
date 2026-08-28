@@ -2175,11 +2175,23 @@ impl<'a> super::Interpreter<'a> {
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
-                ExprKind::Identifier(n) => self
-                    .program
-                    .items
-                    .iter()
-                    .any(|it| matches!(it, Item::Function(f) if &f.name == n)),
+                ExprKind::Identifier(n) => {
+                    self.program
+                        .items
+                        .iter()
+                        .any(|it| matches!(it, Item::Function(f) if &f.name == n))
+                        // B-2026-08-28-39 — a BARE variant constructor
+                        // (`let _ = A(R { .. })`, the unqualified spelling of
+                        // `E.A(..)`). The fn lookup above cannot see it: `A` is
+                        // a VARIANT, not a program function, so the whole
+                        // discard was declined and the interpreter ran NO body
+                        // at all — measured 0 against both compiled backends'
+                        // 2. The QUALIFIED spelling was admitted by the `Path`
+                        // arm above all along, which is what made this family
+                        // look like a payload-only gap rather than, on this
+                        // spelling, a total miss.
+                        || self.find_enum_for_variant(n).is_some()
+                }
                 _ => false,
             },
             ExprKind::MethodCall { method, .. } => {
@@ -3204,6 +3216,55 @@ impl<'a> super::Interpreter<'a> {
                     && self.discard_rhs_produces_owned_value(value, &val)
                 {
                     self.run_discarded_value_user_drops(val.clone());
+                    // B-2026-08-28-39 — and its PAYLOAD, for an enum that
+                    // declares its own `impl Drop`. The walk above runs such an
+                    // enum's OWN body and deliberately stops there, on the
+                    // stated ground that firing payloads "would print bodies
+                    // `karac build` does not" (the B-2026-08-01-2 p3 probe).
+                    // That premise no longer holds AT THIS SITE: both compiled
+                    // backends now print `drop E` AND the payload's `drop R41`
+                    // for `let _ = E.A(R { .. })`, so the rule was preserving a
+                    // parity that had already moved. Measured 1 / 2 / 2 before
+                    // this line, and the compiled pair agrees with what a BOUND
+                    // local of the same type does on every backend, which is
+                    // what says the interpreter is the wrong side.
+                    //
+                    // Added HERE rather than inside `run_discarded_value_user_-
+                    // drops`, and that placement is the whole care in this fix:
+                    // that walker has 31 callers, one of which is the wildcard
+                    // LEAF path (B-2026-08-28-12), where compiled runs the own
+                    // body ALONE. Widening the shared walker would have fixed
+                    // this site and simultaneously pushed the leaf from one body
+                    // to two against compiled's one — trading a divergence for a
+                    // divergence. The leaf's own missing payload body is a
+                    // separate, backend-CONSISTENT gap tracked as
+                    // B-2026-08-28-40.
+                    // GATED ON AN INLINE CONSTRUCTION, and that gate is
+                    // measured. Compiled runs the payload body for a variant
+                    // built AT the discard (`let _ = E.A(R { .. })`) but not for
+                    // one that arrives from a call (`let _ = mk()`, where both
+                    // backends run the own body alone). Firing unconditionally
+                    // here fixed the first and broke the second — 1/1/1 became
+                    // 2/1/1 — so this matches the spelling compiled actually
+                    // walks, and the call spelling stays where both backends
+                    // already agree.
+                    let inline_ctor = match &value.kind {
+                        ExprKind::Call { callee, .. } => match &callee.kind {
+                            ExprKind::Path { .. } => true,
+                            // The bare spelling of the same construction.
+                            ExprKind::Identifier(n) => self.find_enum_for_variant(n).is_some(),
+                            _ => false,
+                        },
+                        _ => false,
+                    };
+                    if inline_ctor {
+                        if let Value::EnumVariant { enum_name, .. } = &val {
+                            if self.program.drop_method_keys.contains_key(enum_name) {
+                                let v = val.clone();
+                                self.run_enum_payload_user_drops_value(&v);
+                            }
+                        }
+                    }
                 }
                 // B-2026-08-28-12 — the same discard, one level IN. A wildcard
                 // LEAF of a tuple or struct pattern (`let (_, n) = p;`,
