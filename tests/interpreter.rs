@@ -42657,3 +42657,67 @@ fn tuple_elem_moved_out_at_an_escaping_position_yields_a_live_value() {
         assert_eq!(run(&format!("{DECL}{body}\n")), *want, "[{label}]");
     }
 }
+
+/// B-2026-08-28-42's ORACLE. A heap read off an element of a container held in
+/// a struct FIELD is a COPY: the container still has the value afterwards. The
+/// interpreter has always behaved this way, and it is what the compiled
+/// backends were measured against — they aborted with `free(): double free
+/// detected in tcache 2` on each of these while `--interp` printed both lines.
+///
+/// This test therefore PASSES against the unfixed compiler BY DESIGN. Its job
+/// is to pin the semantics the codegen twin
+/// (`e2e_field_rooted_container_element_heap_read_is_cloned`) is asserted
+/// against, so a later change cannot quietly move the oracle to meet a broken
+/// backend — which matters more than usual here, because the rejected
+/// alternative (cap-zeroing the source instead of cloning the read) would make
+/// the second line of every case print empty and could be mistaken for correct
+/// if this file agreed with it.
+#[test]
+fn field_rooted_container_element_heap_read_is_a_copy() {
+    const DECL: &str = "struct R { id: i64, name: String }\n";
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "vec-field",
+            "struct H { xs: Vec[R] }\n\
+             fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+             let s = h.xs[0].name; println(f\"{s}\"); println(f\"{h.xs[0].name}\") }",
+            "n41\nn41\n",
+        ),
+        (
+            "array-field",
+            "struct H { xs: Array[R, 1] }\n\
+             fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+             let s = h.xs[0].name; println(f\"{s}\"); println(f\"{h.xs[0].name}\") }",
+            "n41\nn41\n",
+        ),
+        (
+            "self-rooted-return",
+            "struct H { xs: Vec[R] }\n\
+             impl H { fn peek(ref self) -> String { self.xs[0].name } }\n\
+             fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+             println(f\"{h.peek()}\"); println(f\"{h.xs[0].name}\") }",
+            "n41\nn41\n",
+        ),
+        (
+            "field-rooted-tuple-hop",
+            "struct H { xs: Vec[(R, i64)] }\n\
+             fn main() { let h = H { xs: [(R { id: 41, name: f\"n{41}\" }, 1)] };\n\
+             let x = h.xs[0].0; println(f\"{x.id} {x.name}\"); println(f\"{h.xs[0].0.name}\") }",
+            "41 n41\nn41\n",
+        ),
+        // The copy is INDEPENDENT, not just readable: mutating the binding
+        // leaves the container's element untouched. This is the property a
+        // move-model "fix" would break while still passing the reads above.
+        (
+            "copy-is-independent",
+            "struct H { xs: Vec[R] }\n\
+             fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+             let mut s = h.xs[0].name; s = s + \"X\";\n\
+             println(f\"{s}\"); println(f\"{h.xs[0].name}\") }",
+            "n41X\nn41\n",
+        ),
+    ];
+    for (label, body, want) in cases {
+        assert_eq!(run(&format!("{DECL}{body}\n")), *want, "[{label}]");
+    }
+}

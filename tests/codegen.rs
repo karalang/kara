@@ -115295,6 +115295,135 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-08-28-42 — a heap read off an element of a container held in a
+    /// struct FIELD (`h.xs[0].name`, `self.xs[0].name`) was never cloned, so it
+    /// handed back a shallow alias of the element's buffer and every owning
+    /// destination freed it alongside the container: `free(): double free
+    /// detected in tcache 2`, rc 134, on both compiled backends, from a
+    /// `karac check`-clean program the interpreter answers correctly.
+    ///
+    /// ONE GATE, TWO CLONERS. `clone_vec_elem_heap_field_read` and its tuple-hop
+    /// sibling `clone_vec_elem_tuple_index_read` both asked "does this container
+    /// own or lend its elements" of three per-VARIABLE registries, which a
+    /// struct field is absent from by construction. Resolution was never the
+    /// gap — `vec_index_elem_type_expr` has had a FieldAccess arm (`self`,
+    /// generics, `Array`) for a while, and the bound container name was used
+    /// nowhere else in either function — so only the container-SHAPE test
+    /// assumed a bare name. Both now ask the same question of the FIELD's
+    /// declared type, which is why the tuple-hop rows are here beside the
+    /// field-hop ones.
+    ///
+    /// EVERY ASSERTION READS THE SOURCE BACK. The second line of each program
+    /// re-reads the container's element after the first read consumed one, so a
+    /// row fails loudly in BOTH directions: pre-fix the process aborted
+    /// (`run_program` → `None`), and a fix that made the read a MOVE instead of
+    /// a copy would print an empty field here rather than the value. That
+    /// distinction is the whole reason this is a clone and not a cap-zero —
+    /// B-2026-08-12-27 measured the move model turning these double frees into
+    /// silent use-after-frees.
+    ///
+    /// The `control-*` rows were already correct. `control-non-consuming` is
+    /// the leak direction: the fix ADDS a clone, and a clone no destination
+    /// takes over leaks rather than aborting, which no exit code would show —
+    /// the ASAN twin (`asan_field_rooted_container_element_read_is_cloned`)
+    /// carries that half under LSan.
+    #[test]
+    fn e2e_field_rooted_container_element_heap_read_is_cloned() {
+        const DECL: &str = "struct R { id: i64, name: String }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            // The row's own repro: a `Vec` field, `let`-bound.
+            (
+                "vec-field",
+                "struct H { xs: Vec[R] }\n\
+                 fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+                 let s = h.xs[0].name; println(f\"{s}\"); println(f\"{h.xs[0].name}\") }",
+                "n41\nn41\n",
+            ),
+            // An `Array` field. Its elements are struct-owned and struct-dropped
+            // (B-2026-08-27-32), which is what makes an un-cloned read off one a
+            // double free rather than a leak — measured, aborts identically.
+            (
+                "array-field",
+                "struct H { xs: Array[R, 1] }\n\
+                 fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+                 let s = h.xs[0].name; println(f\"{s}\"); println(f\"{h.xs[0].name}\") }",
+                "n41\nn41\n",
+            ),
+            // `self`-rooted, and escaping the frame as a return value.
+            (
+                "self-rooted-return",
+                "struct H { xs: Vec[R] }\n\
+                 impl H { fn peek(ref self) -> String { self.xs[0].name } }\n\
+                 fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+                 println(f\"{h.peek()}\"); println(f\"{h.xs[0].name}\") }",
+                "n41\nn41\n",
+            ),
+            // A `Vec.push` destination — one of the three consuming positions
+            // that do NOT route through `clone_owned_vec_index_element`, which
+            // is why the clone belongs at the READ rather than at the consumer.
+            (
+                "push-destination",
+                "struct H { xs: Vec[R] }\n\
+                 fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+                 let mut out: Vec[String] = Vec.new(); out.push(h.xs[0].name);\n\
+                 println(f\"{out[0]}\"); println(f\"{h.xs[0].name}\") }",
+                "n41\nn41\n",
+            ),
+            // The TUPLE-HOP sibling gate: `h.xs[0].0` over `Vec[(R, i64)]`.
+            (
+                "field-rooted-tuple-hop",
+                "struct H { xs: Vec[(R, i64)] }\n\
+                 fn main() { let h = H { xs: [(R { id: 41, name: f\"n{41}\" }, 1)] };\n\
+                 let x = h.xs[0].0; println(f\"{x.id} {x.name}\"); println(f\"{h.xs[0].0.name}\") }",
+                "41 n41\nn41\n",
+            ),
+            // ---- controls: already correct, and must STAY correct ----
+            // The IDENTIFIER-rooted spelling — the one position the gate always
+            // admitted, kept as a fixed point.
+            (
+                "control-identifier-root",
+                "fn main() { let v: Vec[R] = [R { id: 41, name: f\"n{41}\" }];\n\
+                 let s = v[0].name; println(f\"{s}\"); println(f\"{v[0].name}\") }",
+                "n41\nn41\n",
+            ),
+            (
+                "control-identifier-tuple-hop",
+                "fn main() { let v: Vec[(R, i64)] = [(R { id: 41, name: f\"n{41}\" }, 1)];\n\
+                 let x = v[0].0; println(f\"{x.id} {x.name}\"); println(f\"{v[0].0.name}\") }",
+                "41 n41\nn41\n",
+            ),
+            // NON-CONSUMING: the read is used and discarded. Nothing takes the
+            // clone over, so this is where an over-firing clone leaks instead of
+            // aborting. Behaviourally it can only be checked for correctness
+            // here; the ASAN twin proves it does not leak.
+            (
+                "control-non-consuming",
+                "struct H { xs: Vec[R] }\n\
+                 fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+                 println(f\"{h.xs[0].name.len()}\"); println(f\"{h.xs[0].name}\") }",
+                "3\nn41\n",
+            ),
+            // A SCALAR field off the same element: no heap, so the gate must
+            // not start cloning where there is nothing to clone.
+            (
+                "control-scalar-field",
+                "struct H { xs: Vec[R] }\n\
+                 fn main() { let h = H { xs: [R { id: 41, name: f\"n{41}\" }] };\n\
+                 let n = h.xs[0].id; println(f\"{n}\"); println(f\"{h.xs[0].name}\") }",
+                "41\nn41\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{DECL}{body}\n");
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(*want),
+                "[{label}] wrong output — or `None`, which for this fixture means \
+                 the binary ABORTED, the pre-fix double free"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
