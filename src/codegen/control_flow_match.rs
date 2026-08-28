@@ -3092,25 +3092,36 @@ impl<'ctx> super::Codegen<'ctx> {
             leaf.as_str(),
             "String" | "str" | "Vec" | "VecDeque" | "Option"
         ) {
-            let ExprKind::FieldAccess { object, field } = &value.kind else {
-                return val;
-            };
-            let Some(obj_ty) = self.place_chain_type_name(object) else {
-                return val;
-            };
-            let Some(fte) = self
-                .type_decls
-                .struct_field_names
-                .get(obj_ty.as_str())
-                .and_then(|ns| ns.iter().position(|n| n == field))
-                .and_then(|idx| {
-                    self.type_decls
-                        .struct_field_type_exprs
-                        .get(obj_ty.as_str())
-                        .and_then(|tes| tes.get(idx))
-                })
-                .cloned()
-            else {
+            // B-2026-08-28-37 — the leaf may be a TUPLE MEMBER, not a struct
+            // field: `let s = t.pair.0;` where `t: ref Wt` and the field is a
+            // `(String, i64)`. This branch required a `FieldAccess` at the
+            // outermost position, so a tuple-member leaf bailed here and the
+            // binding aliased the borrowed struct's buffer — double-freeing
+            // exactly as the field spelling did before B-2026-07-21-11. Both
+            // leaf shapes want the same thing, the leaf's declared `TypeExpr`;
+            // only the table it comes from differs (the owning struct's field
+            // table vs the tuple's element `TypeExpr`s).
+            let Some(fte) = (match &value.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    self.place_chain_type_name(object).and_then(|obj_ty| {
+                        self.type_decls
+                            .struct_field_names
+                            .get(obj_ty.as_str())
+                            .and_then(|ns| ns.iter().position(|n| n == field))
+                            .and_then(|idx| {
+                                self.type_decls
+                                    .struct_field_type_exprs
+                                    .get(obj_ty.as_str())
+                                    .and_then(|tes| tes.get(idx))
+                            })
+                            .cloned()
+                    })
+                }
+                ExprKind::TupleIndex { object, index } => self
+                    .place_chain_tuple_tes(object)
+                    .and_then(|elems| elems.get(*index as usize).cloned()),
+                _ => None,
+            }) else {
                 return val;
             };
             // B-2026-08-28-13: the field te is read from the GENERIC

@@ -5505,7 +5505,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // left to the refcount machinery. This runs on the return value at the
         // tail (`compile_function` / mono tail), so it fires exactly in return
         // position.
-        if let ExprKind::FieldAccess { object, field } = &arg_expr.kind {
+        // B-2026-08-28-37 — the leaf may be a TUPLE MEMBER rather than a struct
+        // field: `fn peek(t: ref Wt) -> String { t.pair.0 }` where the field is
+        // a `(String, i64)`. This arm was entered only on a `FieldAccess` at the
+        // OUTERMOST position, so a tuple-index leaf never reached it and the
+        // read handed out an alias of the borrowed struct's buffer — the same
+        // `free(): double free detected in tcache 2` B-2026-08-28-25 fixed one
+        // node kind over. The two leaf shapes differ only in where the leaf's
+        // declared `TypeExpr` comes from (a struct's field table vs the tuple's
+        // element `TypeExpr`s); everything below — the borrowed-root gate, the
+        // monomorph substitution, the heap gate and the clone emission — is
+        // shared, which is why this is one destructure rather than a second arm.
+        let leaf_place: Option<(&Expr, Option<&String>, Option<usize>)> = match &arg_expr.kind {
+            ExprKind::FieldAccess { object, field } => Some((object.as_ref(), Some(field), None)),
+            ExprKind::TupleIndex { object, index } => {
+                Some((object.as_ref(), None, Some(*index as usize)))
+            }
+            _ => None,
+        };
+        if let Some((object, field, tuple_index)) = leaf_place {
             let direct_recv = match &object.kind {
                 ExprKind::SelfValue => Some("self".to_string()),
                 ExprKind::Identifier(n) => Some(n.clone()),
@@ -5588,25 +5606,43 @@ impl<'ctx> super::Codegen<'ctx> {
                         .borrowed_agg_payload_struct_vars
                         .contains(recv_name.as_str())
                 {
+                    // A struct-field leaf resolves through the owning
+                    // struct's field table; a TUPLE-MEMBER leaf through the
+                    // tuple's element `TypeExpr`s (B-2026-08-28-37). Kept as
+                    // one `Option` so the shared body below sees only "the
+                    // leaf's declared type".
+                    //
                     // `inferred_receiver_type` resolves the depth-one root;
                     // a deeper place needs the chain walk (B-2026-08-28-25).
                     // Ordered so the depth-one path is bit-identical to before.
-                    if let Some(struct_name) = self
-                        .inferred_receiver_type(object)
-                        .or_else(|| self.place_chain_type_name(object))
-                    {
-                        let field_te = self
+                    // `owner_struct` is the struct that DECLARES the leaf, and
+                    // is `None` for a tuple member — a tuple is not a
+                    // single-field heap wrapper, so the check further down that
+                    // consults it correctly declines.
+                    let owner_struct = field.and_then(|_| {
+                        self.inferred_receiver_type(object)
+                            .or_else(|| self.place_chain_type_name(object))
+                    });
+                    let field_te = match (field, owner_struct.as_ref()) {
+                        (Some(field), Some(struct_name)) => self
                             .type_decls
                             .struct_field_names
-                            .get(&struct_name)
+                            .get(struct_name.as_str())
                             .and_then(|names| names.iter().position(|n| n == field))
                             .and_then(|idx| {
                                 self.type_decls
                                     .struct_field_type_exprs
-                                    .get(&struct_name)
+                                    .get(struct_name.as_str())
                                     .and_then(|tes| tes.get(idx))
                             })
-                            .cloned();
+                            .cloned(),
+                        (None, _) => tuple_index.and_then(|i| {
+                            self.place_chain_tuple_tes(object)
+                                .and_then(|elems| elems.get(i).cloned())
+                        }),
+                        _ => None,
+                    };
+                    {
                         if let Some(field_te) = field_te {
                             // B-2026-07-12-16 gap 2: inside a monomorph the
                             // field's declared TypeExpr is the bare generic
@@ -5669,10 +5705,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // A concrete (non-generic) struct has
                                     // `field_te == field_te_concrete`, so `emit_te`
                                     // is unchanged for it.
-                                    let single_field_heap_wrapper = self
-                                        .type_decls
-                                        .struct_field_type_exprs
-                                        .get(&struct_name)
+                                    let single_field_heap_wrapper = owner_struct
+                                        .as_ref()
+                                        .and_then(|n| {
+                                            self.type_decls.struct_field_type_exprs.get(n.as_str())
+                                        })
                                         .map(|v| v.len() == 1)
                                         .unwrap_or(false)
                                         && (self.is_string_type_expr(&field_te_concrete)

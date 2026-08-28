@@ -57418,6 +57418,74 @@ fn main() {
         );
     }
 
+    /// A TUPLE-MEMBER leaf read through a BORROWED place — `fn peek(t: ref Wt)
+    /// -> String { t.pair.0 }` where the field is a `(String, i64)`
+    /// (B-2026-08-28-37).
+    ///
+    /// The sibling of B-2026-08-28-25 one node kind over, and broader than that
+    /// one: the FieldAccess spelling had the `let` position covered already
+    /// (`clone_ref_chain_field_move_rhs`) and only the consuming positions were
+    /// broken, whereas a tuple-member leaf double-freed at BOTH — neither
+    /// cloner could name the leaf's type, because both resolve it through the
+    /// owning struct's field table and a tuple member is not in one.
+    ///
+    /// So the `let` row here is not redundant with the return rows: against a
+    /// fix that widened only the consuming arm it is the row that still fails.
+    ///
+    /// The scalar member and the owned (non-`ref`) receiver are the
+    /// must-not-change controls — the first has no buffer to free twice, the
+    /// second owns its storage and is reconciled by move-out suppression
+    /// instead, so a clone there would leak. The argument row covers the
+    /// opposite direction for the same reason it does in the sibling: this
+    /// helper also runs at argument positions, where an unclaimed clone shows
+    /// up as a leak rather than an abort.
+    #[test]
+    fn test_borrowed_tuple_member_leaf_is_cloned_not_aliased() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct Wt { pair: (String, i64), k: i64 }
+struct Wr { pr: (R, i64), k: i64 }
+
+fn sink(s: String) -> i64 { return s.len(); }
+
+fn ret(t: ref Wt) -> String { return t.pair.0; }
+fn tail(t: ref Wt) -> String { t.pair.0 }
+fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
+fn arg(t: ref Wt) -> i64 { return sink(t.pair.0); }
+fn scalar(t: ref Wt) -> i64 { return t.pair.1; }
+fn structleaf(t: ref Wr) -> R { return t.pr.0; }
+fn owned(t: Wt) -> String { return t.pair.0; }
+
+impl Wt { fn peek(ref self) -> String { return self.pair.0; } }
+
+fn main() {
+    let v = Wt { pair: (f"n{41}", 7), k: 2 };
+    println(ret(v));
+    println(tail(v));
+    println(bound(v));
+    println(arg(v));
+    println(scalar(v));
+    println(v.peek());
+    // the borrowed struct's member survives every one of those
+    println(v.pair.0);
+
+    let w = Wr { pr: (R { id: 1, name: f"n{41}" }, 7), k: 2 };
+    println(structleaf(w).name);
+    println(w.pr.0.name);
+
+    let o = Wt { pair: (f"n{41}", 7), k: 2 };
+    println(owned(o));
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "n41", "n41", "n41", "3", "7", "n41", "n41", "n41", "n41", "n41",
+            ],
+            "borrowed-tuple-member-leaf",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

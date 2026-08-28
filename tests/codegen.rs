@@ -109022,6 +109022,58 @@ fn main() {
         );
     }
 
+    /// A TUPLE-MEMBER leaf read through a BORROWED place is a COPY —
+    /// `fn peek(t: ref Wt) -> String { t.pair.0 }` (B-2026-08-28-37).
+    ///
+    /// Semantic twin of the field-leaf oracle above, and here for the same
+    /// reason: the abort is gated under LSan, but only the interpreter settles
+    /// which of the two silencing fixes is correct. Cap-zeroing the source
+    /// would strand the caller's buffer AND leave the borrowed struct's member
+    /// empty; cloning leaves it readable, which is what the interpreter does.
+    ///
+    /// The `let` row is carried alongside the return rows because a tuple
+    /// member was broken at BOTH positions, unlike the field spelling — so a
+    /// fix that widened only the consuming arm still fails here.
+    #[test]
+    fn test_e2e_borrowed_tuple_member_leaf_is_a_copy() {
+        let src = r#"
+struct Wt { pair: (String, i64), k: i64 }
+
+fn ret(t: ref Wt) -> String { return t.pair.0; }
+fn bound(t: ref Wt) -> String { let s = t.pair.0; return s; }
+
+fn main() {
+    let v = Wt { pair: (f"n{41}", 7), k: 2 };
+    let mut a = ret(v);
+    a = a + "X";
+    println(a);
+    println(v.pair.0);
+    let mut b = bound(v);
+    b = b + "Y";
+    println(b);
+    println(v.pair.0);
+    println(v.pair.1);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // `n41X` then `n41` is the copy: a move model prints `n41X` then empty
+        // or garbage for the borrowed struct's member.
+        assert_eq!(
+            expected, "n41X\nn41\nn41Y\nn41\n7\n",
+            "interpreter oracle is wrong for a borrowed tuple-member leaf",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a tuple member read through a borrowed place must be a copy",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///
