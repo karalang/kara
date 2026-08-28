@@ -32574,6 +32574,59 @@ fn test_passthrough_tuple_destructured_at_the_call_site_runs_its_body() {
     }
 }
 
+/// A by-value param that escapes through a CALL in return position runs its
+/// `Drop` body once (B-2026-08-28-62). Interpreter twin of `tests/codegen.rs`'s
+/// `e2e_param_escaping_through_a_forwarded_call_drops_once`, whose doc carries
+/// the reasoning.
+///
+/// Unlike most of this family this backend was NOT the correct one — it doubled
+/// too, which is what made the defect invisible to every run-vs-build gate.
+/// `callee-consumes` is the row that keeps the fix honest in the expensive
+/// direction: the callee genuinely consumes its argument there, so a predicate
+/// keyed on syntax rather than on the callee's own answer would take that
+/// value's only `Drop` away.
+#[test]
+fn test_param_escaping_through_a_forwarded_call_drops_once() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct BoxR { v: R }\n\
+         fn src2(x: R) -> (BoxR, i64) { return (BoxR { v: x }, 1); }\n";
+    for (label, body, want) in [
+        (
+            "forwarding",
+            "fn outer2(y: R) -> (BoxR, i64) { return src2(y); }\n\
+             fn main() { let (a, n) = outer2(R { id: 49 }); println(f\"{n}\") }\n",
+            "drop 49\n1\n",
+        ),
+        (
+            "forwarding-generic",
+            "struct Box2[T] { v: T }\n\
+             fn src[T](x: T) -> (Box2[T], i64) { return (Box2[T] { v: x }, 1); }\n\
+             fn outerg[U](y: U) -> (Box2[U], i64) { return src(y); }\n\
+             fn main() { let (b, n) = outerg(R { id: 51 }); println(f\"{n}\") }\n",
+            "drop 51\n1\n",
+        ),
+        // CONTROL — the callee CONSUMES the argument. The ORDER differs from the
+        // compiled twin's under B-2026-08-28-19 (the caller-side walk fires at
+        // the call here and at scope exit compiled); the COUNT, which is what
+        // this fix moves, agrees.
+        (
+            "callee-consumes",
+            "fn uses(x: R) -> i64 { return x.id; }\n\
+             fn consumer(y: R) -> i64 { return uses(y); }\n\
+             fn main() { println(f\"{consumer(R { id: 50 })}\") }\n",
+            "drop 50\n50\n",
+        ),
+        (
+            "direct-call",
+            "fn main() { let (e, n) = src2(R { id: 54 }); println(f\"{n}\") }\n",
+            "drop 54\n1\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-12, interpreter leg — a WILDCARD leaf of a `let` destructure
 /// runs the discarded value's user `Drop` body exactly once.
 ///

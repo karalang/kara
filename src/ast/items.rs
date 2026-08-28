@@ -1442,6 +1442,132 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     walk_block(&f.body, param_name)
 }
 
+/// B-2026-08-28-62 — the THIRD escape route for a by-value parameter: `f` hands
+/// it to ANOTHER CALL whose result is returned.
+///
+/// Kara passes a by-value argument under a caller-drops convention, and the
+/// caller declines to drop only where it can see the value leaving. Two routes
+/// were modelled: [`fn_returns_param`] (the param returned bare, or moved into a
+/// returned aggregate literal) and `fn_moves_param_into_outliving_place`
+/// (B-2026-08-26-9, stored into `self` or a `ref` param). `fn outer(y: R) -> …
+/// { return src(y); }` is neither, so the caller fired `y`'s `Drop` body while
+/// the value was still travelling out through `src`'s return — measured at two
+/// bodies for one object on all three backends, generic and non-generic alike.
+///
+/// PROGRAM-AWARE because the question is genuinely interprocedural: passing the
+/// param to a call proves nothing on its own — `fn outer(y: R) -> i64 { return
+/// uses(y); }` consumes it — so the callee's OWN answer decides. That makes this
+/// a separate entry point rather than a widening of `fn_returns_param`, whose
+/// eight codegen ownership consumers are documented as turning a leak into
+/// corruption if its answer moves; only the caller-side Drop-BODY walks ask this
+/// one.
+///
+/// ONE LEVEL, and the argument must be the param BARE. Both are the
+/// conservative direction this family runs on: a MISSED escape keeps today's
+/// double body, a FALSE one suppresses the only body that runs. A two-hop chain
+/// (`a` forwards to `b` forwards to a return) is therefore not recognized, and
+/// neither is a param buried inside an aggregate ARGUMENT — the callee may
+/// consume that aggregate whole.
+pub fn fn_returns_param_via_call(program: &crate::Program, f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+
+    /// Does `e`, at a return site, hand `name` to a call that gives it back?
+    /// Recurses through a returned aggregate LITERAL for the same reason
+    /// `fn_returns_param`'s own `expr_is_ident` does — the value crosses the
+    /// frame boundary inside it exactly as it would bare.
+    fn yields_via_call(program: &crate::Program, e: &Expr, name: &str, self_name: &str) -> bool {
+        match &e.kind {
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|fi| yields_via_call(program, &fi.value, name, self_name)),
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .any(|el| yields_via_call(program, el, name, self_name)),
+            ExprKind::Call { callee, args, .. } => {
+                let ExprKind::Identifier(g) = &callee.kind else {
+                    return false;
+                };
+                // Self-recursion would ask the same question of the same body;
+                // one level means one level.
+                if g == self_name {
+                    return false;
+                }
+                let Some(gf) = program.items.iter().find_map(|item| match item {
+                    Item::Function(gf) if &gf.name == g => Some(gf),
+                    _ => None,
+                }) else {
+                    return false;
+                };
+                args.iter().enumerate().any(|(j, a)| {
+                    matches!(&a.value.kind, ExprKind::Identifier(n) if n == name)
+                        && fn_returns_param(gf, j)
+                })
+            }
+            _ => false,
+        }
+    }
+
+    fn walk_expr(program: &crate::Program, e: &Expr, name: &str, self_name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => {
+                yields_via_call(program, inner, name, self_name)
+                    || walk_expr(program, inner, name, self_name)
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block(program, b, name, self_name),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk_block(program, then_block, name, self_name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| walk_expr(program, x, name, self_name))
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk_block(program, then_block, name, self_name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| walk_expr(program, x, name, self_name))
+            }
+            ExprKind::Match { arms, .. } => arms.iter().any(|a| {
+                yields_via_call(program, &a.body, name, self_name)
+                    || walk_expr(program, &a.body, name, self_name)
+            }),
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(program, body, name, self_name),
+            _ => false,
+        }
+    }
+
+    fn walk_block(program: &crate::Program, b: &Block, name: &str, self_name: &str) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => walk_expr(program, e, name, self_name),
+            _ => false,
+        }) || b.final_expr.as_deref().is_some_and(|fe| {
+            yields_via_call(program, fe, name, self_name) || walk_expr(program, fe, name, self_name)
+        })
+    }
+
+    walk_block(program, &f.body, param_name, &f.name)
+}
+
 /// A PATH from an owned aggregate parameter to one of its parts — empty for
 /// the whole param, one element per level in. See
 /// [`fn_returns_param_part_paths`].

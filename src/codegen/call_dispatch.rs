@@ -3032,7 +3032,16 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         program.items.iter().any(|item| {
             matches!(item, crate::ast::Item::Function(f)
-                if f.name == callee_name && crate::ast::fn_returns_param(f, arg_index))
+                if f.name == callee_name
+                    && (crate::ast::fn_returns_param(f, arg_index)
+                        // B-2026-08-28-62 — the FORWARDING route: the callee
+                        // hands the argument to another call whose result it
+                        // returns. Asked here rather than inside
+                        // `fn_returns_param` because that predicate's eight
+                        // ownership consumers are documented as turning a leak
+                        // into corruption if its answer moves; this is the
+                        // caller-side Drop-BODY question alone.
+                        || crate::ast::fn_returns_param_via_call(program, f, arg_index)))
         })
     }
 

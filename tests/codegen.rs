@@ -12103,6 +12103,78 @@ fn main() {
         }
     }
 
+    /// A by-value param that escapes through a CALL in return position runs its
+    /// `Drop` body once (B-2026-08-28-62).
+    ///
+    /// Kara passes a by-value argument under a caller-drops convention, and the
+    /// caller declines to drop only where it can see the value leaving. Two
+    /// routes were modelled — the param returned bare or moved into a returned
+    /// aggregate literal (`fn_returns_param`), and the param stored into `self`
+    /// or a `ref` param (B-2026-08-26-9). `fn outer(y: R) -> … { return src(y); }`
+    /// is neither, so the caller fired `y`'s body while the value was still
+    /// travelling out through `src`'s return: two bodies for one object, on all
+    /// three backends.
+    ///
+    /// `callee-consumes` is the row that makes the predicate interprocedural
+    /// rather than syntactic. Passing the param to a call proves nothing on its
+    /// own — `fn consumer(y: R) -> i64 { return uses(y); }` genuinely consumes
+    /// it — so the CALLEE's own answer decides, and a fix that keyed on "the
+    /// param appears as an argument at a return site" would take this row's only
+    /// body away. That is the expensive direction here: a missed escape keeps a
+    /// double body, a false one loses the value's only `Drop`.
+    ///
+    /// TWO SHAPES STAY DOUBLED, by the same conservative rule and measured
+    /// rather than assumed: a two-hop chain (`mid` forwards to `outer` forwards
+    /// to a return) and a param forwarded into a PROJECTION of the call's result
+    /// (`return (src(y).0, 9)`). Both are one level past what this recognizes,
+    /// and admitting them means proving the value survives two frames, not one.
+    /// They are noted here rather than pinned so this fixture asserts only counts
+    /// that are correct.
+    #[test]
+    fn e2e_param_escaping_through_a_forwarded_call_drops_once() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+             struct BoxR { v: R }\n\
+             fn src2(x: R) -> (BoxR, i64) { return (BoxR { v: x }, 1); }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "forwarding",
+                "fn outer2(y: R) -> (BoxR, i64) { return src2(y); }\n\
+                 fn main() { let (a, n) = outer2(R { id: 49 }); println(f\"{n}\"); }\n",
+                "drop 49\n1\n",
+            ),
+            // The GENERIC spelling, which was silent before B-2026-08-28-61 —
+            // right by accident, two bugs cancelling — and doubled after it.
+            (
+                "forwarding-generic",
+                "struct Box2[T] { v: T }\n\
+                 fn src[T](x: T) -> (Box2[T], i64) { return (Box2[T] { v: x }, 1); }\n\
+                 fn outerg[U](y: U) -> (Box2[U], i64) { return src(y); }\n\
+                 fn main() { let (b, n) = outerg(R { id: 51 }); println(f\"{n}\"); }\n",
+                "drop 51\n1\n",
+            ),
+            // CONTROL — the callee CONSUMES the argument, so the body belongs to
+            // this frame and a false escape would take it away entirely.
+            (
+                "callee-consumes",
+                "fn uses(x: R) -> i64 { return x.id; }\n\
+                 fn consumer(y: R) -> i64 { return uses(y); }\n\
+                 fn main() { println(f\"{consumer(R { id: 50 })}\"); }\n",
+                "50\ndrop 50\n",
+            ),
+            // CONTROL — no forwarding at all, the shape that always worked.
+            (
+                "direct-call",
+                "fn main() { let (e, n) = src2(R { id: 54 }); println(f\"{n}\"); }\n",
+                "drop 54\n1\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-27-44 — a heap-bearing TUPLE argument whose value ESCAPES the
     /// caller's frame. The callee entry-copies the tuple param and the COPY is
     /// what flows onward, so the caller's ORIGINAL is orphaned; unfixed, each

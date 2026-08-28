@@ -2625,7 +2625,14 @@ impl<'a> super::Interpreter<'a> {
             // (`let x = pass(Guard { id: 7 })` printed twice, probe f6).
             if self.program.items.iter().any(|item| {
                 matches!(item, crate::ast::Item::Function(f)
-                    if f.name == callee_name && crate::ast::fn_returns_param(f, i))
+                if f.name == callee_name
+                    && (crate::ast::fn_returns_param(f, i)
+                        // B-2026-08-28-62 — the FORWARDING route, the twin of
+                        // codegen's `call_arg_flows_into_return`: the callee
+                        // hands the argument to another call whose result it
+                        // returns, so the value is still travelling out when
+                        // this walk would fire its body.
+                        || crate::ast::fn_returns_param_via_call(self.program, f, i)))
             }) {
                 continue;
             }
