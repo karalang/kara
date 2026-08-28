@@ -4101,16 +4101,74 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return Ok(val);
         };
-        if !(self.is_string_type_expr(&fte) || self.extract_vec_elem_type(&fte).is_some()) {
+        // B-2026-08-28-35 — a STRUCT-VALUED field is the other heap shape this
+        // read can alias, and this gate declined it. `let e = q[1].r` over
+        // `Vec[Q]` / `Q { r: R, … }` where `R` owns a `String` DOUBLE-FREES on
+        // both compiled backends, as do the struct-literal, `Vec.push`, return
+        // and branch-tail positions — five of them — while `karac check` is
+        // silent and the interpreter is correct. Same mechanism as the
+        // `{ptr,len,cap}` case: the load copies a struct whose heap the
+        // container still owns, and every owning destination then frees it
+        // alongside the container.
+        //
+        // It takes the STRUCT ownership contract B-2026-08-28-36 worked out for
+        // the tuple-index sibling, unchanged and by reuse: the clone carries
+        // its own `track_struct_var` cleanup so a non-consuming read does not
+        // leak, and is recorded in `container_elem_struct_clone_slots` so a
+        // consuming destination neutralizes that cleanup instead. Both halves
+        // are load-bearing here for the same measured reasons they are there —
+        // without the cleanup a caller-retains ARGUMENT leaks (that position is
+        // already clean today, because an owned aggregate param is callee-owned
+        // by entry copy), and without the takeover `let` double-frees.
+        //
+        // `type_expr_has_drop_heap` keeps a heap-free struct field on the
+        // untouched path: nothing aliases, so cloning it would be pure cost.
+        let struct_field = (!self.is_string_type_expr(&fte)
+            && self.extract_vec_elem_type(&fte).is_none()
+            && self.type_expr_has_drop_heap(&fte))
+        .then(|| match &fte.kind {
+            TypeKind::Path(fp) => fp.segments.last().cloned().filter(|n| {
+                self.type_decls.struct_types.contains_key(n.as_str())
+                    && !self.type_decls.shared_types.contains_key(n.as_str())
+            }),
+            _ => None,
+        })
+        .flatten();
+        if struct_field.is_none()
+            && !(self.is_string_type_expr(&fte) || self.extract_vec_elem_type(&fte).is_some())
+        {
             return Ok(val);
         }
         let vec_ty = self.vec_struct_type();
-        if val.get_type() != vec_ty.into() {
+        if struct_field.is_none() && val.get_type() != vec_ty.into() {
             return Ok(val);
         }
         let Some(cur_fn) = self.current_fn else {
             return Ok(val);
         };
+        if let Some(sname) = struct_field {
+            let elem_ll = val.get_type();
+            let ssrc = self.create_entry_alloca(cur_fn, "sfld.read.src", elem_ll);
+            if self.builder.build_store(ssrc, val).is_err() {
+                return Ok(val);
+            }
+            let sdst = self.create_entry_alloca(cur_fn, "sfld.read.clone", elem_ll);
+            let clone_fn = self.emit_clone_fn_for_type_expr(&fte);
+            if self
+                .builder
+                .build_call(clone_fn, &[ssrc.into(), sdst.into()], "")
+                .is_err()
+            {
+                return Ok(val);
+            }
+            self.track_struct_var(&sname, sdst);
+            self.container_elem_struct_clone_slots
+                .insert((expr.span.offset, expr.span.length), (sdst, sname));
+            return Ok(self
+                .builder
+                .build_load(elem_ll, sdst, "sfld.read.cloned")
+                .unwrap());
+        }
         let src = self.create_entry_alloca(cur_fn, "vfld.read.src", vec_ty.into());
         if self.builder.build_store(src, val).is_err() {
             return Ok(val);

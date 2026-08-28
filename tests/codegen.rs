@@ -108896,6 +108896,70 @@ fn main() {
         );
     }
 
+    /// A STRUCT-VALUED field read off a CONTAINER ELEMENT stays a COPY —
+    /// `q[1].r` over `Vec[Q]` where `Q { r: R, … }` (B-2026-08-28-35).
+    ///
+    /// The abort is gated under LSan by
+    /// `test_struct_valued_field_of_a_container_element_is_cloned_not_aliased`.
+    /// What this pins is the semantics the fix had to pick, which no sanitizer
+    /// can see: the read is a COPY, so mutating the binding leaves the
+    /// container's element alone and the element is still readable afterwards.
+    ///
+    /// That is the difference between cloning the read and cap-zeroing the
+    /// source — the move model that also silences the abort, and that
+    /// B-2026-08-12-27 measured printing garbage on the next read of the
+    /// source. The interpreter is the oracle because it is the definition of
+    /// the copy semantics being pinned.
+    #[test]
+    fn test_e2e_struct_valued_field_of_a_container_element_is_a_copy() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct Q { r: R, n: i64 }
+
+fn mkq() -> Vec[Q] {
+    return [Q { r: R { id: 1, name: f"a{1}" }, n: 1 },
+            Q { r: R { id: 2, name: f"b{2}" }, n: 2 }];
+}
+fn ret_r(q: Vec[Q]) -> R { return q[0].r; }
+
+fn main() {
+    let q = mkq();
+    let mut e = q[1].r;
+    e.name = e.name + "X";
+    e.id = 99;
+    // the binding owns a copy; the container's element is untouched
+    println(e.name);
+    println(e.id);
+    println(q[1].r.name);
+    println(q[1].r.id);
+
+    let mut o: Vec[R] = Vec.new();
+    o.push(q[0].r);
+    println(o[0].name);
+    println(q[0].r.name);
+
+    println(ret_r(mkq()).name);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // `b2X`/99 on the binding and `b2`/2 back on the element is the copy; a
+        // move model prints the mutated value (or garbage) for the element too.
+        assert_eq!(
+            expected, "b2X\n99\nb2\n2\na1\na1\na1\n",
+            "interpreter oracle is wrong for a struct-valued container read",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a struct-valued field read off a container element must be a copy",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///

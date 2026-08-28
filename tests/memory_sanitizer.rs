@@ -57235,6 +57235,98 @@ fn main() {
         );
     }
 
+    /// A STRUCT-VALUED heap read off a CONTAINER ELEMENT — `q[1].r` over
+    /// `Vec[Q]` where `Q { r: R, … }` and `R` owns a `String`
+    /// (B-2026-08-28-35).
+    ///
+    /// `clone_vec_elem_heap_field_read` gated on `is_string_type_expr ||
+    /// extract_vec_elem_type` and declined a struct-valued field, so the read
+    /// handed back a shallow alias of the element's storage with no clone
+    /// anywhere: `let`, the struct-literal field, `Vec.push`, `return` and a
+    /// branch tail all double-freed on both compiled backends.
+    ///
+    /// THE ARGUMENT ROW IS THE ONE THAT CONSTRAINS THE FIX, and it was already
+    /// CLEAN before it. An owned aggregate param is callee-owned by ENTRY COPY,
+    /// so the callee never frees the caller's alias — which means the naive
+    /// fix, cloning with no cleanup, trades five double frees for a leak here.
+    /// That is measured, not hypothetical: it is exactly what B-2026-08-28-24
+    /// shipped for the tuple spelling, and what B-2026-08-28-36 then repaired
+    /// there. This read takes that same contract by reuse rather than by a
+    /// second copy of it.
+    ///
+    /// THE `let` ROW IS THE OTHER CONSTRAINT, from the opposite side. Adding
+    /// that cleanup without a takeover double-frees at every consuming
+    /// position, and a struct `let` does not route through the ~87-site funnel
+    /// the `{ptr,len,cap}` sibling relies on — its arm suppresses move SOURCES,
+    /// all of which correctly decline an index-rooted chain. So the two rows
+    /// pin the two halves: without the cleanup the argument row leaks, without
+    /// the takeover the `let` row double-frees, and only both together pass.
+    ///
+    /// The non-consuming reads are the third corner — a clone nothing takes
+    /// over must free itself — and the container is re-read after every
+    /// consumer so a "fix" that empties the source instead cannot pass.
+    #[test]
+    fn test_struct_valued_field_of_a_container_element_is_cloned_not_aliased() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct Q { r: R, n: i64 }
+struct Holder { r: R }
+
+fn takes_r(r: R) -> i64 { return r.id; }
+fn ret_r(q: Vec[Q]) -> R { return q[0].r; }
+fn ret_t(v: Vec[(R, i64)]) -> R { return v[0].0; }
+
+fn mkq() -> Vec[Q] {
+    return [Q { r: R { id: 1, name: f"a{1}" }, n: 1 },
+            Q { r: R { id: 2, name: f"b{2}" }, n: 2 }];
+}
+fn mkv() -> Vec[(R, i64)] {
+    return [(R { id: 1, name: f"a{1}" }, 1), (R { id: 2, name: f"b{2}" }, 2)];
+}
+
+fn main() {
+    let q = mkq();
+    let e = q[1].r;
+    println(e.name);
+    let h = Holder { r: q[1].r };
+    println(h.r.name);
+    let mut o: Vec[R] = Vec.new();
+    o.push(q[1].r);
+    println(o[0].name);
+    // already clean before the fix — the callee entry-copies, so this row is
+    // the one that fails as a LEAK if the clone carries no cleanup
+    println(takes_r(q[1].r));
+    println(ret_r(mkq()).name);
+    let c = true;
+    let d = if c { q[0].r } else { q[1].r };
+    println(d.name);
+    // non-consuming reads: the clone must free itself
+    println(q[1].r.name);
+    println(q[1].r.id);
+    // the container is intact
+    println(q[0].r.name);
+    println(q[1].r.name);
+
+    // the TUPLE spelling of the same member, whose ownership contract this
+    // read reuses (B-2026-08-28-36)
+    let v = mkv();
+    let te = v[1].0;
+    println(te.name);
+    println(takes_r(v[1].0));
+    let th = Holder { r: v[0].0 };
+    println(th.r.name);
+    println(ret_t(mkv()).name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "b2", "b2", "b2", "2", "a1", "a1", "b2", "2", "a1", "b2", "b2", "2", "a1", "a1",
+            ],
+            "struct-valued-field-of-container-element",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///
