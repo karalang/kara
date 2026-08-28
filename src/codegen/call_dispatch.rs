@@ -8319,20 +8319,67 @@ impl<'ctx> super::Codegen<'ctx> {
         // the element has no recorded type NAME. That empty path reads as a
         // no-drop leaf, so `suppress_tuple_index_move_source` silently skipped
         // the move-out neutralization for `let x = t.0`.
+        //
+        // B-2026-08-28-8 — that record is consulted PER ELEMENT, and only where
+        // the names-derived spelling is DEGENERATE (an absent name, which
+        // renders as an empty path). It is not preferred wholesale: doing that
+        // regresses `asan_tuple_index_assignment_heap_elems_freed`, because an
+        // f-string element has no recorded name AND no useful inferred one
+        // (measured: the record spells it as a single EMPTY segment), and the
+        // Vec/String arms downstream were tuned against the names spelling.
+        // `suppress_tuple_index_move_source` already applies exactly this
+        // narrow rule at its own call site, with that regression named in its
+        // comment; the same rule lives here so every reader of
+        // `place_chain_tuple_tes` gets it rather than one site.
+        //
+        // What the per-element merge buys is the two shapes a NAME cannot
+        // express at all: a nested tuple (an `Option<String>` cannot spell
+        // `(R, i64)`) and an enum constructor (which records no name). Both
+        // arrived as empty paths, so the destructure walker skipped the leaf
+        // before classifying it and the element's user `Drop` body was silent
+        // on every compiled backend. An element whose names spelling says
+        // ANYTHING keeps it, so no arm tuned against that spelling moves.
         let names = self.var_types.tuple_var_elem_type_names.get(var_name)?;
+        let recorded = self.var_types.tuple_var_elem_tes.get(var_name);
         Some(
             names
                 .iter()
-                .map(|n| TypeExpr {
-                    kind: TypeKind::Path(crate::ast::PathExpr {
-                        segments: n.clone().into_iter().collect(),
-                        generic_args: None,
+                .enumerate()
+                .map(|(idx, n)| {
+                    let synth = TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: n.clone().into_iter().collect(),
+                            generic_args: None,
+                            span: crate::token::Span::default(),
+                        }),
                         span: crate::token::Span::default(),
-                    }),
-                    span: crate::token::Span::default(),
+                    };
+                    if Self::tuple_elem_te_is_informative(&synth) {
+                        return synth;
+                    }
+                    recorded
+                        .and_then(|tes| tes.get(idx))
+                        .filter(|te| Self::tuple_elem_te_is_informative(te))
+                        .cloned()
+                        .unwrap_or(synth)
                 })
                 .collect(),
         )
+    }
+
+    /// Does this tuple-element `TypeExpr` actually name something?
+    ///
+    /// A `Path` with no segments (an absent recorded NAME) or whose last
+    /// segment is the empty string (what `infer_arg_elem_te` produces when
+    /// every inference it tries declines — an f-string element, measured) names
+    /// nothing, and every classification arm downstream reads it as a no-drop
+    /// leaf. Any other shape — including a `Tuple`, which is why this exists —
+    /// carries information.
+    fn tuple_elem_te_is_informative(te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Path(p) => p.segments.last().is_some_and(|s| !s.is_empty()),
+            _ => true,
+        }
     }
 
     /// Ref-share at the call site for `Option[shared T]` Identifier

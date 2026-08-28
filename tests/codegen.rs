@@ -12224,6 +12224,47 @@ fn main() {
                  fn main() { let (e, n) = make(); println(f\"{n}\"); }\n",
                 "drop 41\n1\n",
             ),
+            // B-2026-08-28-8 — the same nested pattern with a LOCAL source.
+            // The place-source walker `continue`d past a nested `Tuple`
+            // pattern outright, so the inner leaf was never reached and the
+            // body was silent on all three compiled surfaces. The `from-call`
+            // row above passed throughout, which is what pins the defect to
+            // the SOURCE rather than to the nesting.
+            (
+                "nested-from-local",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); let ((r, m), n) = p; println(f\"{r.id + m + n}\"); }\n",
+                "44\ndrop 41\n",
+            ),
+            // The literal source of the same nested shape — correct before the
+            // fix (it takes the fresh path), so it holds that half in place.
+            (
+                "nested-from-literal",
+                "fn main() { let ((r, m), n) = ((R { id: 41 }, 2), 1); println(f\"{r.id + m + n}\"); }\n",
+                "44\ndrop 41\n",
+            ),
+            // CONTROL for the nested shape — the leaf takes the body only
+            // because it also takes the MEMORY (the recursion cap-zeroes the
+            // source at the nested index). Undestructured, the source's own
+            // walk reaches the nested leaf and runs the body; this row is what
+            // fails if the recursion ever registers a body without the
+            // matching cap-zero, since both would then fire.
+            (
+                "nested-no-destructure-control",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); println(f\"{p.1}\"); }\n",
+                "1\ndrop 41\n",
+            ),
+            // B-2026-08-28-9 — the LOCAL twin of `enum-leaf-from-call`. The
+            // per-leaf `TypeExpr` arrived as an EMPTY path, so the `is_enum`
+            // test could never fire and the leaf was skipped before any
+            // registration. Fixed upstream of the walker, by having the
+            // element-type lookup prefer the let-site's exact record over the
+            // name-derived synthesis that cannot spell an enum constructor.
+            (
+                "enum-leaf-from-local",
+                "enum E { A(R), B }\n\
+                 fn main() { let p = (E.A(R { id: 41 }), 1); let (e, n) = p; println(f\"{n}\"); }\n",
+                "drop 41\n1\n",
+            ),
             // Leaf inside a nested block: the body fires at the leaf's live-range
             // end, BEFORE the statement following the block.
             (

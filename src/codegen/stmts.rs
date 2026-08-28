@@ -11701,11 +11701,67 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(value) else {
             return;
         };
+        self.place_source_tuple_leaf_cleanups(pats, &elems, base_ptr, tuple_ty, owner_runs_bodies);
+    }
+
+    /// Per-leaf half of [`Self::finish_place_source_tuple_destructure`], split
+    /// out so a NESTED tuple pattern can recurse into the source's nested
+    /// element (B-2026-08-28-8).
+    ///
+    /// The recursion carries three things down together, and needs all three:
+    /// the inner PATTERNS, the inner element `TypeExpr`s (so a leaf is still
+    /// classified as enum / nested-struct), and — the part that makes it safe —
+    /// a `base_ptr`/`tuple_ty` pair GEP'd to the nested element, so the
+    /// `zero_tuple_elem_cap_at` below cap-zeroes the SOURCE at the nested
+    /// index. Without that last part, registering an inner leaf's body would
+    /// leave the source's own tuple walk free to run it too: the source DOES
+    /// reach a nested leaf when the tuple is not destructured at all (measured
+    /// — `let p = ((R { .. }, 2), 1);` with no destructure runs the body on all
+    /// four surfaces), so the leaf can only take the body by taking the memory
+    /// with it. `zero_tuple_elem_cap_at` itself is unchanged and un-widened;
+    /// it is simply called one level down, against the nested pointer.
+    #[allow(clippy::too_many_arguments)]
+    fn place_source_tuple_leaf_cleanups(
+        &mut self,
+        pats: &[Pattern],
+        elems: &[TypeExpr],
+        base_ptr: PointerValue<'ctx>,
+        tuple_ty: StructType<'ctx>,
+        owner_runs_bodies: bool,
+    ) {
         for (idx, pat) in pats.iter().enumerate() {
-            let PatternKind::Binding(name) = &pat.kind else {
+            let Some(te) = elems.get(idx).cloned() else {
                 continue;
             };
-            let Some(te) = elems.get(idx).cloned() else {
+            // A nested tuple pattern (`let ((r, m), n) = p`). Before this arm
+            // the loop `continue`d past it outright, so the inner leaf was
+            // never reached and its user `Drop` body was silent on every
+            // compiled backend while the interpreter ran it.
+            if let PatternKind::Tuple(inner_pats) = &pat.kind {
+                let TypeKind::Tuple(inner_tes) = &te.kind else {
+                    continue;
+                };
+                let Some(BasicTypeEnum::StructType(inner_ty)) =
+                    tuple_ty.get_field_type_at_index(idx as u32)
+                else {
+                    continue;
+                };
+                let Ok(inner_ptr) =
+                    self.builder
+                        .build_struct_gep(tuple_ty, base_ptr, idx as u32, "ptup.nested.p")
+                else {
+                    continue;
+                };
+                self.place_source_tuple_leaf_cleanups(
+                    inner_pats,
+                    inner_tes,
+                    inner_ptr,
+                    inner_ty,
+                    owner_runs_bodies,
+                );
+                continue;
+            }
+            let PatternKind::Binding(name) = &pat.kind else {
                 continue;
             };
             // Only ENUM / nested-STRUCT leaves are newly freed by `NestedTuple`;

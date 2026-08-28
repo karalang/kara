@@ -11201,6 +11201,55 @@ fn main() {
         );
     }
 
+    // ── nested / enum tuple-destructure leaves from a LOCAL (B-2026-08-28-8,
+    //    B-2026-08-28-9) ─────────────────────────────────────────────────
+    //
+    // The place-source destructure walker now reaches two leaf shapes it used
+    // to skip, and registering a leaf's cleanup there is only sound because it
+    // ALSO cap-zeroes the source at that (possibly nested) index. Both halves
+    // are double-free risks in exactly the way this suite exists to catch: the
+    // source's own tuple walk does reach a nested leaf when the tuple is not
+    // destructured, so an over-registered leaf frees twice, and an
+    // over-zeroed source frees nothing.
+    //
+    // Every leaf here carries a heap `String` so the pairing is observable to
+    // ASAN at all (an all-scalar leaf would pass vacuously), and the loop makes
+    // a double-free or UAF trip rather than merely being possible.
+    #[test]
+    fn asan_nested_and_enum_tuple_destructure_leaves_from_a_local() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+enum E { A(R), B }
+fn make_nested(n: i64) -> ((R, i64), i64) { ((R { id: n, name: f"n{n}" }, 2), 1) }
+fn main() {
+    let mut i = 0;
+    while i < 200 {
+        // nested pattern, LOCAL source — the leaf takes the body and the memory
+        let p = ((R { id: i, name: f"a{i}" }, 2), 1);
+        let ((r, m), n) = p;
+        if i == 0 { println(f"{r.name} {r.id + m + n}"); }
+        // the same nested shape from a CALL — the fresh path, already correct
+        let ((r2, m2), n2) = make_nested(i);
+        if i == 0 { println(f"{r2.name} {r2.id + m2 + n2}"); }
+        // enum leaf, LOCAL source — reached only once the element type resolves
+        let q = (E.A(R { id: i, name: f"e{i}" }), 1);
+        let (e, k) = q;
+        if i == 0 { println(f"{k}"); }
+        // CONTROL — the same nested local NEVER destructured: the source's own
+        // walk owns the leaf, so nothing here may have been zeroed away.
+        let u = ((R { id: i, name: f"u{i}" }, 2), 1);
+        if i == 0 { println(f"{u.1}"); }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            &["a0 3", "n0 3", "1", "1", "end"],
+            "nested_and_enum_tuple_destructure_leaves_from_a_local",
+        );
+    }
+
     // ── push_str of a fresh-owned String temp (lexer token-text shape) ──
     //
     // `buffer.push_str(s.substring(a, b))` passes a freshly-malloc'd String
