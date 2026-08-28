@@ -32648,6 +32648,58 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
     );
 }
 
+/// B-2026-08-28-41, interpreter leg — `let _ = E.B`, a payloadless variant of
+/// an own-`impl Drop` enum, runs that enum's body.
+///
+/// Pre-fix zero, on this backend and both compiled ones. Here the cause is
+/// `discard_rhs_produces_owned_value`, whose arms are `StructLiteral`,
+/// `Identifier`, `Tuple`, `Call` and `MethodCall`: a QUALIFIED unit variant is
+/// a bare `Path` and matched none of them, so the discard never fired.
+///
+/// The BARE spelling was admitted by the `Identifier` arm all along and is
+/// already correct on this backend — which is exactly what made the family look
+/// spelling-dependent rather than site-dependent. It is still zero on the
+/// COMPILED backends, for an unrelated reason on that side, and is filed
+/// separately.
+#[test]
+fn test_discarded_unit_variant_of_own_drop_enum_runs_its_body() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "qualified-unit-variant",
+            "fn main() { let _ = E.B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        // Already correct on this backend via the `Identifier` arm; pinned so
+        // the two spellings stay in step here.
+        (
+            "bare-unit-variant",
+            "fn main() { let _ = B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        (
+            "bound-control",
+            "fn main() { let e = E.B; println(\"mid\") }\n",
+            "drop E\nmid\n",
+        ),
+        (
+            "wildcard-leaf-control",
+            "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\") }\n",
+            "drop E\n1\n",
+        ),
+        (
+            "payload-ctor-control",
+            "fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n",
+            "drop E\ndrop R41\nend\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-27-48, method leg — the same destructure inside an IMPL METHOD
 /// fires ONCE. This is the guard on the gate's other edge: a method frame's
 /// arguments get no caller-side fire (`run_fresh_temp_arg_drops` is wired

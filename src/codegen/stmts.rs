@@ -3245,10 +3245,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // value rc_dec path is untouched.
             StmtKind::Let { pattern, value, .. }
                 if matches!(&pattern.kind, PatternKind::Wildcard)
-                    && Self::discarded_owned_temp_tail(value).is_some() =>
+                    && (Self::discarded_owned_temp_tail(value).is_some()
+                        || self.discarded_unit_variant_tail(value).is_some()) =>
             {
                 let tail = Self::discarded_owned_temp_tail(value)
-                    .expect("guard guarantees a discarded owned-temp tail");
+                    .or_else(|| self.discarded_unit_variant_tail(value))
+                    .expect("guard guarantees a discarded tail");
                 // `let _ = m.insert(k, v)` over an owned-heap/shared-V map:
                 // the insert LOWERING reclaims the displaced value inline
                 // (`pending_map_insert_old_dec`, consumed inside
@@ -3283,7 +3285,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // was removed). Option/Result ctors are excluded — their
                 // payload cleanup belongs to the trackers above and the
                 // bodies walk below.
-                if let ExprKind::Call { .. } = &tail.kind {
+                // B-2026-08-28-41 — a UNIT variant is not a `Call`, so neither
+                // spelling of `let _ = E.B` / `let _ = B` reached the registrar
+                // and an own-`impl Drop` enum ran NO body. The same value drops
+                // correctly when BOUND, as a fresh ARGUMENT, and through a tuple
+                // wildcard LEAF (all 1/1/1), which is what identifies the
+                // discard site rather than unit variants generally.
+                //
+                // A bare `Identifier` is admitted only when it names a VARIANT
+                // and is NOT a local. That distinction is load-bearing rather
+                // than tidy: `enum_name_of_expr` resolves an `Identifier`
+                // through `var_type_names`, so admitting one unconditionally
+                // would treat `let _ = someEnumLocal;` as a fresh ctor temp and
+                // register a caller-side drop ON TOP of the binding's own — a
+                // double free, not a missing body.
+                if matches!(&tail.kind, ExprKind::Call { .. } | ExprKind::Path { .. }) {
                     if let Some(en) = self.enum_name_of_expr(tail) {
                         if en != "Option" && en != "Result" {
                             self.track_inline_owned_aggregate_arg(val, tail, false);
@@ -14448,6 +14464,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 .final_expr
                 .as_deref()
                 .and_then(Self::discarded_owned_temp_tail),
+            _ => None,
+        }
+    }
+
+    /// B-2026-08-28-41 — the UNIT-VARIANT sibling of
+    /// [`Self::discarded_owned_temp_tail`]: `let _ = E.B` / `let _ = B` where
+    /// the variant carries no payload.
+    ///
+    /// That predicate is `Self::`-static and purely syntactic (`Call` /
+    /// `MethodCall` / a block tail of one), which is why a unit variant never
+    /// entered the discard arm at all and an own-`impl Drop` enum ran NO body:
+    /// a unit variant is a bare `Path`, or a bare `Identifier` for the
+    /// unqualified spelling. Deciding those needs the enum tables, so this is a
+    /// `&self` sibling rather than a widening of the static one.
+    ///
+    /// The QUALIFIED spelling only. The bare one (`let _ = B`) is not admitted,
+    /// and its absence is deliberate: the aggregate registrar this arm feeds
+    /// never matches an `Identifier` argument, because a let-bound enum's drop
+    /// belongs to its binding and registering a second caller-side drop over it
+    /// would be a double free rather than a missing body. Admitting the bare
+    /// spelling therefore buys nothing here and would imply a support that is
+    /// not present; it is filed as its own row instead.
+    fn discarded_unit_variant_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        match &expr.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                .type_decls
+                .enum_layouts
+                .contains_key(segments[0].as_str())
+                .then_some(expr),
+            ExprKind::Block(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::LabeledBlock { body: block, .. } => block
+                .final_expr
+                .as_deref()
+                .and_then(|e| self.discarded_unit_variant_tail(e)),
             _ => None,
         }
     }

@@ -2162,6 +2162,21 @@ impl<'a> super::Interpreter<'a> {
     fn discard_rhs_produces_owned_value(&self, rhs: &Expr, val: &Value) -> bool {
         match &rhs.kind {
             ExprKind::StructLiteral { .. } | ExprKind::Identifier(_) => true,
+            // B-2026-08-28-41 — a QUALIFIED unit variant (`let _ = E.B`). It is
+            // a bare `Path`, which matched no arm here, so the discard was
+            // declined and an own-`impl Drop` enum ran NO body at all. The BARE
+            // spelling (`let _ = B`) was admitted by the `Identifier` arm above
+            // all along, which is why only one of the two spellings looked
+            // broken on this backend.
+            //
+            // The value drops correctly in every OTHER position — bound
+            // (`let e = E.B`), as a fresh argument (`take(E.B)`), and through a
+            // tuple wildcard leaf — all at one body on all three backends, which
+            // is what identifies the discard site rather than unit variants
+            // generally.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                .qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                .unwrap_or(false),
             // A tuple LITERAL only when every element is itself a fresh
             // temporary or a scalar copy: a heap/Drop-carrying PLACE element
             // (`let _ = (r, 1)`) moves a binding whose own Drop slot stays

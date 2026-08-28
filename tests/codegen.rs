@@ -12864,6 +12864,90 @@ fn main() {
         assert_eq!(run_program(prog).as_deref(), Some("drop R41\n1\n"));
     }
 
+    /// B-2026-08-28-41 — `let _ = E.B`, a PAYLOADLESS variant of an
+    /// own-`impl Drop` enum, runs that enum's body.
+    ///
+    /// Pre-fix it ran ZERO bodies on all three backends, which is why this is a
+    /// soundness row rather than a parity one — every backend agreed on the
+    /// wrong number, the failure mode no A/B gate can report.
+    ///
+    /// The discard arm is gated on `discarded_owned_temp_tail`, a static,
+    /// purely syntactic predicate matching `Call` / `MethodCall` / a block tail
+    /// of one. A unit variant is a bare `Path`, so it entered the arm at all —
+    /// and thus the whole cleanup battery — never. Deciding that needs the enum
+    /// tables, hence a `&self` sibling rather than a widening of the static
+    /// predicate.
+    ///
+    /// THE THREE CONTROLS ARE WHAT LOCALIZE IT, and they were the reason to
+    /// look at the discard site rather than at unit variants: the same value
+    /// drops exactly once when BOUND, as a fresh ARGUMENT, and through a tuple
+    /// wildcard LEAF, on every backend, before and after.
+    ///
+    /// The BARE spelling (`let _ = B`) is deliberately absent and still runs
+    /// zero compiled. The aggregate registrar this arm feeds never matches an
+    /// `Identifier` argument — a let-bound enum's drop belongs to its binding,
+    /// and registering a second caller-side drop over it is a double free, not
+    /// a missing body — so admitting it here would buy nothing and imply
+    /// support that is not present. Filed as its own row.
+    #[test]
+    fn e2e_discarded_unit_variant_of_own_drop_enum_runs_its_body() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "qualified-unit-variant",
+                "fn main() { let _ = E.B; println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
+            // CONTROL — the same value BOUND. Correct before and after, and the
+            // reason one body is the right answer.
+            (
+                "bound-control",
+                "fn main() { let e = E.B; println(\"mid\") }\n",
+                "drop E\nmid\n",
+            ),
+            // CONTROL — a fresh ARGUMENT.
+            (
+                "argument-control",
+                "fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { println(f\"{take(E.B)}\") }\n",
+                "7\ndrop E\n",
+            ),
+            // CONTROL — a tuple wildcard LEAF (B-2026-08-28-31's shape).
+            (
+                "wildcard-leaf-control",
+                "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\") }\n",
+                "drop E\n1\n",
+            ),
+            // CONTROL — the payload-BEARING ctor at the same site, which
+            // B-2026-08-28-39 settled at two bodies. The new arm must not
+            // disturb it.
+            (
+                "payload-ctor-control",
+                "fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n",
+                "drop E\ndrop R41\nend\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // An enum whose variants are ALL payloadless — the same fix, with no
+        // payload machinery anywhere in the type.
+        assert_eq!(
+            run_program(
+                "enum S { X, Y }\n\
+                 impl Drop for S { fn drop(mut ref self) { println(\"drop S\") } }\n\
+                 fn main() { let _ = S.X; println(\"end\") }\n"
+            )
+            .as_deref(),
+            Some("drop S\nend\n"),
+            "unit-only-enum"
+        );
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and
