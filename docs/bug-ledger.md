@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 219 | 1 |
-| run-vs-build | 210 | 3 |
+| run-vs-build | 211 | 4 |
 | missing-feature | 187 | 0 |
 | double-free | 151 | 1 |
-| codegen-gap | 147 | 0 |
+| codegen-gap | 148 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 79 | 1 |
+| soundness | 79 | 0 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1178 | 5 |
+| codegen | 1180 | 6 |
 | typecheck | 278 | 0 |
-| interp | 227 | 4 |
+| interp | 228 | 4 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,18 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1742 surfaced · 6 open · 1710 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1744 surfaced · 7 open · 1711 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
 | B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
 | B-2026-08-28-66 | 2026-08-28 | codegen | high | A CONSUMING ARM THAT HANDS ITS BOUND STRUCT PAYLOAD ON RUNS THAT PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `let k = match o { Some(r) => { r } .. }` is interp `dR1 kept` vs compiled `dR1 dR1 kept`; the enum sibling is gated, the struct one cannot be with today's classifier | — |
 | B-2026-08-28-67 | 2026-08-28 | interp+codegen | low | A `match` OVER A BARE USER ENUM RUNS THE PAYLOAD'S `Drop` BODY AND THE ENUM'S OWN IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `match e { E.A(r) => .. }` is interp `dR5 dE` vs compiled `dE dR5`; same count, different sequence | — |
 | B-2026-08-28-68 | 2026-08-28 | codegen | medium | A `Result` WITH ONE SIDE BOXED LOSES THE OTHER SIDE'S INLINE PAYLOAD WALK: `track_inline_result_payload_var`'s name-keyed `boxed_enum_payload_vars` early return is per-BINDING while boxing is per-SIDE, so `Result[R2, Wide]` leaks the inline `Ok` payload's heap while `Result[R2, i64]` is clean -- not enum-specific, and masked entirely until a `Drop` body reads the buffer | — |
 | B-2026-08-28-69 | 2026-08-28 | interp | medium | A DISCARDED `match` WHOSE ARM YIELDS ITS BOUND PAYLOAD RUNS NO `Drop` BODY IN THE INTERPRETER while both compiled backends run exactly one -- `match o { Some(r) => { r } .. };` in statement position is interp `dropped` vs compiled `dR1 dropped`; a discarded CALL result and a read-only arm both run it, so the loss is specific to the arm handing the binding on | — |
+| B-2026-08-28-70 | 2026-08-28 | interp+codegen | medium | A CONDITIONALLY-RETURNED owned param of a METHOD loses its `Drop` body IN THE INTERPRETER while all three compiled backends run it -- and the callee-side flip that fixed the free-function twin (B-2026-08-28-22) DOUBLE-FIRES here, because `method_call.rs`'s argument handling does not stand down the way `call_dispatch.rs`'s does | — |
+| B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
 
 ### Relocated (2)
 
@@ -167,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1742 surfaced
 
 </details>
 
-### Fixed (1710)
+### Fixed (1711)
 
-<details><summary>1710 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1711 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1841,6 +1842,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1742 surfaced
 | B-2026-08-28-19 | interp+codegen | low | The caller-side fresh-temp argument `Drop` walk fires AT THE CALL in the interpreter and at SCOPE EXIT in both compiled backends, so a tuple-literal… | 8888f9f |
 | B-2026-08-28-20 | codegen | low | A BARE-`shared` FIELD READ OFF A SHARED TEMPORARY RECEIVER LEAKS THE INNER OBJECT'S PAYLOAD: `make_outer(12).inner.tag` prints `t12` on all three bac… | 9cc5fb1 |
 | B-2026-08-28-21 | interp+codegen | medium | A PARENT STRUCT THAT DECLARES ITS OWN `Drop` still double-runs a returned field's user `Drop` body: with `impl Drop for W` added, `fn take(w: W) -> R… | 56e6493 |
+| B-2026-08-28-22 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value act… | 7c0569a |
 | B-2026-08-28-23 | interp+codegen | low | A NESTED PROJECTION out of an owned struct param still double-runs the field's user `Drop` body: `fn take(w: W) -> R { w.inner.r }` prints `drop 41`… | 4d37d4e |
 | B-2026-08-28-24 | codegen | high | A TUPLE ELEMENT PROJECTED OUT OF A CONTAINER ELEMENT (`v[0].0`) IS NEVER CLONED AND DOUBLE-FREES ON BOTH COMPILED BACKENDS, AT EVERY POSITION INCLUDI… | 0723acf |
 | B-2026-08-28-25 | codegen | high | A HEAP FIELD READ THROUGH A DEEPER PLACE ROOTED AT A `ref` BINDING AND RETURNED DIRECTLY IS NEVER CLONED AND DOUBLE-FREES: `fn peek(w: ref W) -> Stri… | d4da426 |
