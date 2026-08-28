@@ -13519,6 +13519,24 @@ fn main() {
                 "fn main() { let p = ((R { id: 41 }, 2), 1); println(f\"{p.1}\") }\n",
                 "1\ndrop 41\n",
             ),
+            // A SIBLING top-level dropper beside the tuple leaf — one body each,
+            // and the row that constrains HOW the leaf takes its body rather
+            // than just showing that it does.
+            //
+            // Every other row here has a single dropper, so any registration
+            // that fires once passes them. Built one way round, this shape went
+            // to TWO bodies for the sibling: transferring the leaf's element by
+            // re-registering the SOURCE's element-bodies walker with that index
+            // masked also re-arms the walker over the destructure's OTHER
+            // elements, whose bodies the arm beside this one has already taken.
+            // Measured while landing this row from a second session, against the
+            // fix as committed — which passes it.
+            (
+                "sibling-top-level-dropper",
+                "fn main() { let p = ((R { id: 46 }, 2), R { id: 56 }); let (inner, n) = p;\n\
+                 \x20            println(\"mid\") }\n",
+                "drop 56\ndrop 46\nmid\n",
+            ),
         ] {
             let prog = format!("{H}{body}");
             assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
