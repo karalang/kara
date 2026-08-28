@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 212 | 2 |
 | run-vs-build | 199 | 7 |
 | missing-feature | 187 | 0 |
-| double-free | 150 | 1 |
+| double-free | 150 | 0 |
 | codegen-gap | 147 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1154 | 17 |
+| codegen | 1154 | 16 |
 | typecheck | 278 | 0 |
 | interp | 212 | 7 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1716 surfaced · 17 open · 1673 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1716 surfaced · 16 open · 1674 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (17)
+### Open (16)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -145,7 +145,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1716 surfaced
 | B-2026-08-28-32 | 2026-08-28 | codegen | low | A CONTAINER-ELEMENT HEAP READ CONSUMED BY AN UNBOUND TEMPORARY LEAKS: `println(Box2 { w: p[0].word }.w)`, `println((p[1].word, 9).0)`, and printing an `if`/`match`/block value without binding it all lose the deep clone the read emits -- 3 bytes in 1 allocation each under LSan. Pre-existing on the already-working FIELD spelling, which leaks the same shapes for the same byte counts; the BOUND form of every one is clean. The consuming temporary takes the clone over and then dies without freeing it. | — |
 | B-2026-08-28-38 | 2026-08-28 | codegen | medium | A CLOSURE'S BY-VALUE STRUCT PARAM RUNS NO USER `Drop` BODY ON EITHER COMPILED BACKEND while the interpreter runs one: `let f = |r: R| { r.id };` and the destructuring `|w: W| { let W { r, n } = w; … }` both print nothing under `karac run` and `karac build` where one `drop 41` is due. The TUPLE-param spelling of the same shape is correct compiled (1/1/1), which localizes this to a closure's struct param rather than to closures generally -- codegen appears not to treat it as an owned param for drop purposes | — |
 | B-2026-08-28-40 | 2026-08-28 | interp+codegen | medium | A WILDCARD DESTRUCTURE LEAF RUNS ONE `Drop` BODY WHERE THE SAME VALUE BOUND RUNS TWO, so a discarded aggregate's INNER object never gets its body: `let (_, n) = (E.A(R { id: 41 }), 1)` runs `drop E` on all three backends where `let e = E.A(R { id: 41 })` runs `drop E` + `drop R41` on all three. Backend-CONSISTENT, so no parity gate can report it -- the same failure shape the original B-2026-08-28-12 family had, one ownership level down | — |
-| B-2026-08-28-42 | 2026-08-28 | codegen | high | A HEAP FIELD READ OFF A FIELD-ROOTED CONTAINER IS NEVER CLONED AND DOUBLE-FREES: `h.xs[0].name` where `struct H { xs: Vec[R] }` and `struct R { id: i64, name: String }` aborts with `free(): double free detected in tcache 2` (rc 134) on both compiled backends, and so does the `ref self` twin `self.xs[0].name`, while `karac check` passes and `--interp` prints the field twice. The IDENTIFIER-rooted spelling of the same read is CLEAN, which is what isolates the container ROOT: `clone_vec_elem_heap_field_read` requires `ExprKind::Identifier` for the container. | — |
 | B-2026-08-28-43 | 2026-08-28 | interp+codegen | medium | TWO MORE SPELLINGS OF A DISCARDED PAYLOADLESS OWN-`Drop` ENUM VARIANT STILL RUN NO BODY: `let _ = B;` (the BARE spelling) is interp 1 / compiled 0, and the bare STATEMENT `E.B;` is 0/0/0. B-2026-08-28-41 fixed the qualified `let _ = E.B` on both backends; the bare `let` spelling is blocked by a deliberate invariant -- the aggregate registrar never matches an `Identifier` argument, since a let-bound enum's drop belongs to its binding and a second caller-side drop would be a double free -- and the bare statement is a different dispatch entirely | — |
 
 ### Relocated (2)
@@ -178,9 +177,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1716 surfaced
 
 </details>
 
-### Fixed (1673)
+### Fixed (1674)
 
-<details><summary>1673 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1674 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1857,6 +1856,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1716 surfaced
 | B-2026-08-28-37 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String,… | 221cf4c |
 | B-2026-08-28-39 | interp | medium | A WHOLE-PATTERN WILDCARD DISCARD OF AN OWN-`Drop` ENUM OMITS THE PAYLOAD BODY IN THE INTERPRETER ONLY: `let _ = E.A(R { id: 41 });` prints `drop E` u… | 4997b9f |
 | B-2026-08-28-41 | interp+codegen | medium | A PAYLOADLESS VARIANT OF AN OWN-`Drop` ENUM, DISCARDED BY `let _ =`, RUNS ZERO BODIES ON ALL THREE BACKENDS: `let _ = E.B;` where `impl Drop for E` p… | b75a1f0 |
+| B-2026-08-28-42 | codegen | high | A HEAP FIELD READ OFF A FIELD-ROOTED CONTAINER IS NEVER CLONED AND DOUBLE-FREES: `h.xs[0].name` where `struct H { xs: Vec[R] }` and `struct R { id: i… | ed405c3 |
 
 </details>
 
