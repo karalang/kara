@@ -3883,9 +3883,59 @@ impl<'a> super::Interpreter<'a> {
                         // statement shapes agree (B-2026-07-30-11, optres
                         // bare leg).
                         if matches!(&callee.kind, ExprKind::Path { .. }) {
+                            // B-2026-08-28-48 — and its PAYLOAD, for an enum
+                            // that declares its own `impl Drop`. The shared
+                            // walker runs such an enum's OWN body and stops, so
+                            // `E.A(R { id: 41 });` was 1 body here against
+                            // compiled's 2 — while the `let _ =` spelling of the
+                            // same construction is 2 on every backend, and a
+                            // BOUND local is too.
+                            //
+                            // SITE-LOCAL, and that placement is the whole care
+                            // in this fix, for the reason B-2026-08-28-39
+                            // recorded one statement kind over and
+                            // B-2026-08-28-40 re-applied at the wildcard leaf:
+                            // `run_discarded_value_user_drops` has ~31 callers,
+                            // among them the CALL-source discard that compiled
+                            // deliberately runs at ONE body (the `Identifier`
+                            // callee arm just below). Widening the shared walker
+                            // would fix this site and break that one — trading a
+                            // divergence for a divergence.
+                            //
+                            // No inline-ctor gate is needed here, unlike the
+                            // `let _ =` twin: a `Path` callee in statement
+                            // position IS the inline construction, and a value
+                            // arriving from a call takes the `Identifier` arm.
+                            let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
+                            if let Value::EnumVariant { enum_name, .. } = &payload_src {
+                                if self.program.drop_method_keys.contains_key(enum_name) {
+                                    self.run_enum_payload_user_drops_value(&payload_src);
+                                }
+                            }
                         } else if let ExprKind::Identifier(fn_name) = &callee.kind {
-                            if let Some(tn) = self.user_fn_return_type_name(fn_name) {
+                            // B-2026-08-28-48 (bare-unqualified leg) — `A(R { .. });`
+                            // is the SAME construction as the `Path` arm above,
+                            // spelled without its enum. It ran NOTHING here — 0
+                            // against compiled's 2 — because the gate below looks
+                            // for a program FUNCTION and a variant name is not
+                            // one, so the discard was declined outright rather
+                            // than merely losing the payload.
+                            //
+                            // Exactly the mechanism B-2026-08-28-39 recorded for
+                            // the `let _ =` spelling of this shape and fixed
+                            // there; the statement position was never given the
+                            // same treatment, so the two statement kinds
+                            // disagreed for one spelling and not the other.
+                            if self.find_enum_for_variant(fn_name).is_some() {
+                                let payload_src = discarded.clone();
+                                self.run_discarded_value_user_drops(discarded);
+                                if let Value::EnumVariant { enum_name, .. } = &payload_src {
+                                    if self.program.drop_method_keys.contains_key(enum_name) {
+                                        self.run_enum_payload_user_drops_value(&payload_src);
+                                    }
+                                }
+                            } else if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 if self.program.drop_method_keys.contains_key(&tn) {
                                     self.run_user_drop_body_on_value(&tn, discarded);
                                 } else if self.value_runs_user_drop(&discarded) {

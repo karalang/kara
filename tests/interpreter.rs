@@ -32829,6 +32829,48 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
             "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\") }\n",
             "drop E\ndrop R41\n1\n",
         ),
+        // B-2026-08-28-48 — the BARE STATEMENT position of both spellings, the
+        // third site in this sequence. The same two-spellings-two-failures
+        // split this test documents for `let _ =` was present here and had
+        // never been fixed:
+        //
+        //   qualified `E.A(..);`  ran the own body and stopped   (1 vs 2)
+        //   bare      `A(..);`    ran NOTHING at all             (0 vs 2)
+        //
+        // Both now match the `let _ =` rows above and the bound yardstick.
+        (
+            "qualified-ctor-stmt",
+            "fn main() { E.A(R { id: 41 }); println(\"end\") }\n",
+            "drop E\ndrop R41\nend\n",
+        ),
+        (
+            "bare-ctor-stmt",
+            "fn main() { A(R { id: 41 }); println(\"end\") }\n",
+            "drop E\ndrop R41\nend\n",
+        ),
+        // CONTROL — a CALL source in STATEMENT position. This is the arm the
+        // bare-spelling fix sits beside, and compiled runs the own body alone
+        // here exactly as it does for `let _ = mk()`. It fails the moment the
+        // variant check is loosened into a general "any Identifier callee".
+        (
+            "call-source-stmt-control",
+            "fn mk() -> E { E.A(R { id: 41 }) }\n\
+             fn main() { mk(); println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        // CONTROL — a payloadless variant in statement position, both
+        // spellings. One body is correct; these pin that the new walk adds
+        // nothing where there is no payload.
+        (
+            "unit-variant-stmt",
+            "fn main() { E.B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        (
+            "bare-unit-variant-stmt",
+            "fn main() { B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
     ] {
         assert_eq!(run(&format!("{H}{body}")), want, "{label}");
     }
@@ -32843,6 +32885,18 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
              fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n"),
         "drop R41\nend\n",
         "payload-only-control"
+    );
+    // CONTROL — the same payload-only enum in STATEMENT position. Its single
+    // payload body comes from the shared discard walk, not from the own-`Drop`
+    // gated line B-2026-08-28-48 added, so this row is what shows that line is
+    // additive rather than a replacement.
+    assert_eq!(
+        run("enum E { A(R), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn main() { E.A(R { id: 41 }); println(\"end\") }\n"),
+        "drop R41\nend\n",
+        "payload-only-stmt-control"
     );
 }
 

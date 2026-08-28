@@ -14080,6 +14080,33 @@ fn main() {
                 "fn main() { let _ = E.A(R { id: 41 }); println(\"end\") }\n",
                 "drop E\ndrop R41\nend\n",
             ),
+            // B-2026-08-28-48 — the compiled side of the BARE STATEMENT
+            // position, both spellings. Compiled was already right for all
+            // four of these rows; they are the parity anchor the interpreter
+            // twin is measured against, and pinning them here is what makes a
+            // future change to the compiled side visible as a failure rather
+            // than as a silent re-divergence.
+            (
+                "qualified-ctor-stmt",
+                "fn main() { E.A(R { id: 41 }); println(\"end\") }\n",
+                "drop E\ndrop R41\nend\n",
+            ),
+            (
+                "bare-ctor-stmt",
+                "fn main() { A(R { id: 41 }); println(\"end\") }\n",
+                "drop E\ndrop R41\nend\n",
+            ),
+            (
+                "call-source-stmt-control",
+                "fn mk() -> E { E.A(R { id: 41 }) }\n\
+                 fn main() { mk(); println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
+            (
+                "bare-unit-variant-stmt",
+                "fn main() { B; println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
         ] {
             let prog = format!("{H}{body}");
             assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
