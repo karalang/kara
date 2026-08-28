@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 209 | 2 |
-| run-vs-build | 194 | 6 |
+| run-vs-build | 195 | 7 |
 | missing-feature | 187 | 0 |
 | double-free | 147 | 2 |
 | codegen-gap | 146 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 69 | 5 |
+| soundness | 69 | 4 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1140 | 16 |
+| codegen | 1141 | 16 |
 | typecheck | 278 | 0 |
-| interp | 206 | 7 |
+| interp | 206 | 6 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1701 surfaced · 16 open · 1659 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1702 surfaced · 16 open · 1660 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (16)
 
@@ -133,7 +133,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1701 surfaced
 | B-2026-08-28-4 | 2026-08-28 | interp+codegen | medium | A tuple-param destructure inside a CLOSURE is wrong on BOTH backends and in OPPOSITE directions: `let f = |p: (R, i64)| { let (r, n) = p; r.id + n };` runs the user `Drop` body TWICE under `karac run --interp` and ZERO times under `karac build`, for one object. The free-fn spelling of the same body is correct (1/1/1) after B-2026-08-27-48, which is what makes the closure the variable | — |
 | B-2026-08-28-10 | 2026-08-28 | codegen | medium | A STRUCT-PATTERN destructure leaf's user `Drop` body is wrong in TWO OPPOSITE DIRECTIONS depending on the source: from a LOCAL it runs TOO EARLY (`drop 41` then `42`, against the interpreter's `42` then `drop 41`), and from a CALL it does not run AT ALL. `struct W { r: R, n: i64 }  let W { r, n } = w;` -- the struct twin of B-2026-08-28-1, whose helper `track_owned_destructure_field_cleanup` ends in the same bare `track_struct_var` tail with no `drop_method_keys` check | — |
 | B-2026-08-28-11 | 2026-08-28 | codegen | medium | A GENERIC struct leaf destructured out of a tuple never runs its Drop-bearing field's body on ANY source path -- local, call result and tuple literal all print it under `karac run --interp` and nothing compiled: `struct Box2[T] { v: T }  let (b, n) = (Box2[R] { v: R { id: 41 } }, 1);`. The leaf has no recorded instantiation, so the field-bodies substitution is empty and `Box2 { v: T }` is judged Drop-free through a bare `T` | — |
-| B-2026-08-28-12 | 2026-08-28 | interp+codegen | medium | A tuple-element WILDCARD drops the element ZERO TIMES ON ALL THREE BACKENDS: `let (_, n) = p;` where element 0 declares `impl Drop` runs the body under NEITHER `karac run --interp` NOR `karac run` NOR `karac build`, against design.md's guarantee that a value is dropped exactly once at its final owner's live-range end. NOT a run-vs-build divergence -- all three agree, so no A/B gate can see it. The non-tuple control `let _ = R { .. }` is correct on all three | — |
 | B-2026-08-28-16 | 2026-08-28 | interp+codegen | medium | The B-2026-08-28-2 double `Drop` body SURVIVES when the tuple argument comes from a LOCAL instead of a literal: `let q = (R { id: 41 }, 1); let x = take(q);` still prints `drop 41` twice on all three backends after d5d7421. Same escaping-part asymmetry, different caller-side site -- the fresh-temp walk never sees a place argument, so this is the moved-out LOCAL's own cleanup firing alongside the result's. The control `-> i64` (returning the other element) is correctly 1 | — |
 | B-2026-08-28-18 | 2026-08-28 | codegen | medium | A tuple param returned WHOLE and then destructured AT THE CALL SITE loses its element's user `Drop` body on both compiled backends: `fn take(p: (R, i64)) -> (R, i64) { p }  let x = take((R { id: 41 }, 1)); let (r, n) = x;` prints `drop 41` under `--interp` and NOTHING under `karac run` / `karac build`. The whole-param passthrough guard correctly hands ownership to the caller, and the caller's destructure of a CALL-RESULT LOCAL then registers no body for the leaf | — |
 | B-2026-08-28-19 | 2026-08-28 | interp+codegen | low | The caller-side fresh-temp argument `Drop` walk fires AT THE CALL in the interpreter and at SCOPE EXIT in both compiled backends, so a tuple-literal argument whose element dies inside the callee prints its body in a different ORDER on the two surfaces: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }` gives `drop 41 / 1` under `--interp` and `1 / drop 41` compiled. Counts agree (1/1/1) -- only sequence differs, which is why every count-based check in this family missed it | — |
@@ -146,6 +145,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1701 surfaced
 | B-2026-08-28-26 | 2026-08-28 | codegen | medium | A TUPLE-TYPED BINDING LEAF loses its inner element's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` / `karac build`. The leaf is a `PatternKind::Binding` whose element `TypeExpr` is a `TypeKind::Tuple`, so it clears the place-source walker's PATTERN test and then exits at its `TypeKind::Path` test -- one step past where B-2026-08-28-8's nested-PATTERN spelling failed | — |
 | B-2026-08-28-27 | 2026-08-28 | codegen | medium | A FRESH TUPLE TEMP IS NEVER DROPPED, so every heap element it owns leaks: `println(twoheap(1).1)` where `twoheap -> (Person, String)` loses the whole tuple -- the read element's own `String` included -- 24 bytes in 6 allocations across two calls at -O0. Pre-existing and independent of B-2026-08-28-3, which fixed only the PROJECTED element; measured RED on unmodified main, on a shape that needs no struct field read at all. Binding the tuple is clean. | — |
 | B-2026-08-28-28 | 2026-08-28 | codegen | medium | A GENERIC callee's tuple element cannot be named, so a struct field read through it still fails `karac build`: `fn firstof[T](x: T) -> (T, i64)` then `let q = firstof(Tag { n: 9 }); q.0.n` hits "codegen: cannot resolve field 'n' on this receiver" while `karac check` accepts it and the interpreter prints 9. The non-generic control B-2026-08-28-3 fixed builds. Deliberate: the declared return type is `(T, i64)`, and recording the bare param name would resolve the read against an unrelated struct -- the silent-wrong-answer trade B-2026-08-27-49 measured and rejected. | — |
+| B-2026-08-28-29 | 2026-08-28 | codegen | medium | A destructure of a FRESH STRUCT source loses user `Drop` bodies on BOTH compiled backends while the interpreter runs one: `let W { r, n } = mk()` and the struct-literal spelling both print nothing where one `drop 41` is due. Two separable roots -- `expr_yields_fresh_owned_temp` admits only `Call`/`MethodCall`, so a struct LITERAL never reaches the leaf path at all (the tuple literal got exactly this widening in B-2026-08-28-1 and the struct spelling never did), and even on the admitted call spelling the BOUND leaf registers memory cleanup but no user body. PLACE, PARAM and TUPLE sources are all correct, which is what localizes it | — |
 
 ### Relocated (2)
 
@@ -177,9 +177,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1701 surfaced
 
 </details>
 
-### Fixed (1659)
+### Fixed (1660)
 
-<details><summary>1659 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1660 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1838,6 +1838,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1701 surfaced
 | B-2026-08-28-7 | codegen | medium | TWO MORE RECEIVER SHAPES the block-receiver fix does not reach, both still `karac check`-clean and interpreter-correct but failing `karac build` with… | dac56eb |
 | B-2026-08-28-8 | codegen | medium | A NESTED TUPLE PATTERN never runs its inner leaf's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let ((r, m), n… | 919f31e |
 | B-2026-08-28-9 | codegen | medium | An ENUM leaf destructured out of a tuple LOCAL never runs its live variant's payload `Drop` body: `enum E { A(R), B } let p = (E.A(R { id: 41 }), 1);… | 919f31e |
+| B-2026-08-28-12 | interp+codegen | medium | A tuple-element WILDCARD drops the element ZERO TIMES ON ALL THREE BACKENDS: `let (_, n) = p;` where element 0 declares `impl Drop` runs the body und… | 429977d |
 | B-2026-08-28-13 | codegen | high | MOVING A `Vec` OUT OF A FIELD OF A BORROWED BINDING inside a GENERIC fn or impl DOUBLE-FREES the buffer under both compiled backends: `impl[T] Bag[T]… | e58aaef |
 | B-2026-08-28-14 | codegen | medium | A `String` / `Vec` FIELD READ ON A SHARED-STRUCT TEMPORARY RECEIVER LEAKS THE BUFFER: `make().tag` where `make() -> shared Node` prints correctly and… | e17e361 |
 | B-2026-08-28-15 | codegen | high | PROJECTING A HEAP-CARRYING STRUCT ELEMENT OUT OF A TUPLE PARAM AND RETURNING IT DOUBLE-FREES: `fn take(p: (R, i64)) -> R { p.0 }` where `struct R { i… | 0944166 |

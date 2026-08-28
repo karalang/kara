@@ -12627,10 +12627,11 @@ fn main() {
     ///
     /// One member of the family is deliberately absent: a wildcard field over
     /// a struct LITERAL source (`let W { r: _, n } = W { .. }`) still runs
-    /// zero bodies compiled. It is blocked behind a larger, separate defect —
-    /// a struct-literal destructure registers no leaf cleanup at all, losing
-    /// even a BOUND field's body — filed as its own row rather than pinned
-    /// wrong here.
+    /// zero bodies compiled. It is blocked behind a larger, separate defect
+    /// (B-2026-08-28-29): a destructure of a FRESH STRUCT source loses even a
+    /// BOUND field's body, because `expr_yields_fresh_owned_temp` admits only
+    /// `Call`/`MethodCall` and a struct literal therefore reaches no leaf path
+    /// at all. Filed rather than pinned wrong here.
     #[test]
     fn e2e_wildcard_destructure_leaf_user_drop_body_runs_once() {
         const DROPPER: &str = "struct R { id: i64 }\n\
