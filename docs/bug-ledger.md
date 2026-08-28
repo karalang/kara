@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 216 | 2 |
-| run-vs-build | 206 | 7 |
+| run-vs-build | 206 | 6 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
 | codegen-gap | 147 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 1169 | 12 |
 | typecheck | 278 | 0 |
-| interp | 223 | 9 |
+| interp | 223 | 8 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1732 surfaced · 13 open · 1693 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1732 surfaced · 12 open · 1694 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1732 surfaced
 | B-2026-08-28-16 | 2026-08-28 | interp+codegen | medium | The B-2026-08-28-2 double `Drop` body SURVIVES when the tuple argument comes from a LOCAL instead of a literal: `let q = (R { id: 41 }, 1); let x = take(q);` still prints `drop 41` twice on all three backends after d5d7421. Same escaping-part asymmetry, different caller-side site -- the fresh-temp walk never sees a place argument, so this is the moved-out LOCAL's own cleanup firing alongside the result's. The control `-> i64` (returning the other element) is correctly 1 | — |
 | B-2026-08-28-19 | 2026-08-28 | interp+codegen | low | The caller-side fresh-temp argument `Drop` walk fires AT THE CALL in the interpreter and at SCOPE EXIT in both compiled backends, so a tuple-literal argument whose element dies inside the callee prints its body in a different ORDER on the two surfaces: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }` gives `drop 41 / 1` under `--interp` and `1 / drop 41` compiled. Counts agree (1/1/1) -- only sequence differs, which is why every count-based check in this family missed it | — |
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
-| B-2026-08-28-48 | 2026-08-28 | interp | low | A DISCARDED PAYLOAD-BEARING ENUM CTOR IN BARE STATEMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY IN THE INTERPRETER: `E.A(R { id: 41 });` is interp 1 / compiled 2, the statement-position twin of the `let _ =` shape B-2026-08-28-39 settled at two | — |
 | B-2026-08-28-49 | 2026-08-28 | codegen | low | TWO RESIDUALS OF B-2026-08-28-20, both pre-existing and measured identical before and after that row's fix. (1) The BOUND spelling `let h = make_outer(14).inner; println(h.tag);` leaks 3 bytes at -O2 and is CLEAN at -O0 -- a cleanup that runs but does not walk the field, not a missing dec. (2) A program with MORE THAN ONE shared-temp field read leaks exactly ONE box regardless of how many: one read is clean, two leak 42/2, three still leak 42/2, and a three-iteration loop leaks 84/4. A count flat in the straight-line case and growing in the loop points at a single slot or once-only emission being reused -- `deferred_shared_temp_release` is a single `Option` with a `debug_assert!` guarding exactly that reuse, and is the first thing to rule in or out. | — |
 | B-2026-08-28-51 | 2026-08-28 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }` with `k = true` prints `drop 41` / `41` / `drop 41`. This is the OVER-SCHEDULE horn of B-2026-08-28-22's mechanism -- `merge_outer_states` deliberately re-marks a conditionally-moved place `Owned` and relies on a runtime cap/null guard that exists for MEMORY and does not exist for a user `Drop` BODY -- and it refutes that row's premise that the tree uniformly picked the missed-body direction | — |
 | B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
@@ -174,9 +173,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1732 surfaced
 
 </details>
 
-### Fixed (1693)
+### Fixed (1694)
 
-<details><summary>1693 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1694 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1870,6 +1869,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1732 surfaced
 | B-2026-08-28-45 | interp+codegen | medium | A FRESH STRUCT LITERAL DESTRUCTURED IN THE SAME STATEMENT LOSES ITS WILDCARD FIELD'S `Drop` BODY on both compiled backends: `let W { e: _, n } = W {… | 05fefaa |
 | B-2026-08-28-46 | interp+codegen | medium | A STRUCT HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM DIVERGES IN THE INTERPRETER-SILENT DIRECTION when it is never destructured: `let w = W { e: E.B… | 9727cdb |
 | B-2026-08-28-47 | interp+codegen | medium | A TUPLE HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND when it is never destructured: `let p = (E.B, 1); println(p.1)` is 0… | 9727cdb |
+| B-2026-08-28-48 | interp | low | A DISCARDED PAYLOAD-BEARING ENUM CTOR IN BARE STATEMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY IN THE INTERPRETER: `E.A(R { id: 41 });` is interp 1… | 4190c0a |
 | B-2026-08-28-50 | codegen | medium | AN UNBOUND DESTRUCTURE FIELD WHOSE TYPE HAS NO `Drop` LEAKS ON A STRUCT-LITERAL SOURCE: `let W { r: _, n } = W { r: R { . | bf7c226 |
 | B-2026-08-28-54 | interp+codegen | medium | AN ENUM WITH NO OWN `Drop` BUT A DROP-BEARING PAYLOAD RUNS NO BODY ON ANY BACKEND when held as a struct field or tuple element: `enum E2 { A(R), B }`… | 0e872dd |
 | B-2026-08-28-55 | interp+codegen | medium | A `Vec` ELEMENT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND: `let mut v = Vec.new(); v.push(E.B)` is 0/0/0 while the TUPLE element of the same… | 0ad7a39 |
