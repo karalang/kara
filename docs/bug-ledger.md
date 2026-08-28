@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 212 | 3 |
 | run-vs-build | 197 | 8 |
 | missing-feature | 187 | 0 |
-| double-free | 148 | 1 |
+| double-free | 149 | 1 |
 | codegen-gap | 147 | 2 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1148 | 18 |
+| codegen | 1149 | 18 |
 | typecheck | 278 | 0 |
 | interp | 208 | 7 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced · 18 open · 1665 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1710 surfaced · 18 open · 1666 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (18)
 
@@ -140,7 +140,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 | B-2026-08-28-21 | 2026-08-28 | interp+codegen | medium | A PARENT STRUCT THAT DECLARES ITS OWN `Drop` still double-runs a returned field's user `Drop` body: with `impl Drop for W` added, `fn take(w: W) -> R { let W { r, n } = w; r }` prints `drop 41` twice for one `R` on all three backends. B-2026-08-28-17's per-field mask is structurally unreachable here -- both backends dispatch a parent that owns a `Drop` to the full `karac_drop_<T>` wrapper and never reach the maskable bodies walker, and only the wrapper's BODY half may be masked since its field frees must still run | — |
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
 | B-2026-08-28-23 | 2026-08-28 | interp+codegen | low | A NESTED PROJECTION out of an owned struct param still double-runs the field's user `Drop` body: `fn take(w: W) -> R { w.inner.r }` prints `drop 41` twice for one `R` on all three backends. This is `fn_returns_param_parts`' DOCUMENTED under-approximation working as designed -- it classifies a projection only off the WHOLE param and declines a projection-of-a-projection by construction, which leaves the pre-existing double body (the safe direction) -- so closing it widens the ANALYSIS, not the two caller-side sites B-2026-08-28-17 finished | — |
-| B-2026-08-28-25 | 2026-08-28 | codegen | high | A HEAP FIELD READ THROUGH A DEEPER PLACE ROOTED AT A `ref` BINDING AND RETURNED DIRECTLY IS NEVER CLONED AND DOUBLE-FREES: `fn peek(w: ref W) -> String { w.r.name }` (and its `ref self` twin, and the tuple-hop `p.0.name`) aborts with `free(): double free detected in tcache 2` (rc 134) under `karac run` and `karac build`, while `karac check` passes and `--interp` prints the field TWICE -- once from the callee, once from the caller reading it back -- which is the oracle: the read must be a COPY. DEPTH ONE is clean and so is the depth-two `let` spelling, which is what isolates it. | — |
 | B-2026-08-28-26 | 2026-08-28 | codegen | medium | A TUPLE-TYPED BINDING LEAF loses its inner element's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` / `karac build`. The leaf is a `PatternKind::Binding` whose element `TypeExpr` is a `TypeKind::Tuple`, so it clears the place-source walker's PATTERN test and then exits at its `TypeKind::Path` test -- one step past where B-2026-08-28-8's nested-PATTERN spelling failed | — |
 | B-2026-08-28-27 | 2026-08-28 | codegen | medium | A FRESH TUPLE TEMP IS NEVER DROPPED, so every heap element it owns leaks: `println(twoheap(1).1)` where `twoheap -> (Person, String)` loses the whole tuple -- the read element's own `String` included -- 24 bytes in 6 allocations across two calls at -O0. Pre-existing and independent of B-2026-08-28-3, which fixed only the PROJECTED element; measured RED on unmodified main, on a shape that needs no struct field read at all. Binding the tuple is clean. | — |
 | B-2026-08-28-28 | 2026-08-28 | codegen | medium | A GENERIC callee's tuple element cannot be named, so a struct field read through it still fails `karac build`: `fn firstof[T](x: T) -> (T, i64)` then `let q = firstof(Tag { n: 9 }); q.0.n` hits "codegen: cannot resolve field 'n' on this receiver" while `karac check` accepts it and the interpreter prints 9. The non-generic control B-2026-08-28-3 fixed builds. Deliberate: the declared return type is `(T, i64)`, and recording the bare param name would resolve the read against an unrelated struct -- the silent-wrong-answer trade B-2026-08-27-49 measured and rejected. | — |
@@ -148,6 +147,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 | B-2026-08-28-31 | 2026-08-28 | interp+codegen | medium | AN ENUM WITH ITS OWN `impl Drop`, DISCARDED BY A WILDCARD DESTRUCTURE LEAF, RUNS NO BODY COMPILED while `karac run --interp` runs the enum's OWN body: `enum E { A(R), B } impl Drop for E { .. } let p = (E.A(R { id: 41 }), 1); let (_, n) = p;` prints `drop E` under `--interp` and nothing on either compiled backend. The payload walker the sibling row wires for payload-only enums is the WRONG body here -- admitting it prints the PAYLOAD's `drop R41` instead -- and the right one lives on the `karac_drop_<E>` wrapper, which also frees | — |
 | B-2026-08-28-32 | 2026-08-28 | codegen | low | A CONTAINER-ELEMENT HEAP READ CONSUMED BY AN UNBOUND TEMPORARY LEAKS: `println(Box2 { w: p[0].word }.w)`, `println((p[1].word, 9).0)`, and printing an `if`/`match`/block value without binding it all lose the deep clone the read emits -- 3 bytes in 1 allocation each under LSan. Pre-existing on the already-working FIELD spelling, which leaks the same shapes for the same byte counts; the BOUND form of every one is clean. The consuming temporary takes the clone over and then dies without freeing it. | — |
 | B-2026-08-28-34 | 2026-08-28 | codegen | medium | A FIELD READ THROUGH A TUPLE ELEMENT OF A CONTAINER ELEMENT never lowers: `v[0].0.id` where `v: Vec[(R, i64)]` fails `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while `karac check` accepts it and the interpreter answers it; binding the element first builds and runs. `place_chain_tuple_tes` has arms for Identifier, FieldAccess and TupleIndex and no `Index` arm, so a tuple held in a container element has no type source. The same resolution surface as B-2026-08-28-3, one source over. | — |
+| B-2026-08-28-37 | 2026-08-28 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String, i64), k: i64 }` aborts with `free(): double free detected in tcache 2` (rc 134) on both compiled backends, while `karac check` passes and `--interp` prints the field twice. The FieldAccess leaf through the same borrowed place (`w.r.name`) is fixed by B-2026-08-28-25; this is the sibling one node kind over, and it never enters that arm because the arm is gated on the OUTERMOST node being a field access. | — |
 
 ### Relocated (2)
 
@@ -179,9 +179,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 
 </details>
 
-### Fixed (1665)
+### Fixed (1666)
 
-<details><summary>1665 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1666 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1846,6 +1846,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 | B-2026-08-28-15 | codegen | high | PROJECTING A HEAP-CARRYING STRUCT ELEMENT OUT OF A TUPLE PARAM AND RETURNING IT DOUBLE-FREES: `fn take(p: (R, i64)) -> R { p.0 }` where `struct R { i… | 0944166 |
 | B-2026-08-28-17 | interp+codegen | medium | THE STRUCT TWIN of B-2026-08-28-2: returning a field extracted from an owned STRUCT param runs its user `Drop` body TWICE on all three backends -- `s… | f697522 |
 | B-2026-08-28-24 | codegen | high | A TUPLE ELEMENT PROJECTED OUT OF A CONTAINER ELEMENT (`v[0].0`) IS NEVER CLONED AND DOUBLE-FREES ON BOTH COMPILED BACKENDS, AT EVERY POSITION INCLUDI… | 0723acf |
+| B-2026-08-28-25 | codegen | high | A HEAP FIELD READ THROUGH A DEEPER PLACE ROOTED AT A `ref` BINDING AND RETURNED DIRECTLY IS NEVER CLONED AND DOUBLE-FREES: `fn peek(w: ref W) -> Stri… | d4da426 |
 | B-2026-08-28-30 | interp+codegen | medium | THE B-2026-08-28-12 WILDCARD DISCARD DISAGREES BETWEEN BACKENDS IN TWO OPPOSITE-DIRECTION SHAPES that its fix (429977d) did not cover: an ENUM elemen… | 34b1691 |
 | B-2026-08-28-33 | codegen | low | A CLONED CONTAINER-ELEMENT STRUCT PASSED DIRECTLY AS AN OWNED ARGUMENT LEAKS 3 BYTES: `takes_r(w[1].0)` where `w: Vec[(R, i64)]`, because an owned ag… | 54ca269 |
 | B-2026-08-28-35 | codegen | high | A STRUCT-VALUED FIELD READ OFF A CONTAINER ELEMENT IS NEVER CLONED AND DOUBLE-FREES: `let e = q[1].r` where `q: Vec[Q]`, `struct Q { r: R, n: i64 }`… | a0005b8 |
