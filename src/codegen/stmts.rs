@@ -11469,6 +11469,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // interpreter was the wrong side of it. Firing here for a place source
             // too would take the compiled backends to two and re-open the split
             // from the other direction.
+            // B-2026-08-28-50 — did the discard walker below take this field's
+            // MEMORY? Only it knows, because the answer depends on whether the
+            // field's type has a `Drop` body to hang a walker off at all.
+            let mut discard_took_memory = false;
             if fresh
                 && matches!(
                     fields
@@ -11507,7 +11511,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // walker here and so no owner either — a pre-existing leak
                     // on this source, unchanged by this fix and filed on its own
                     // row rather than folded in.
-                    self.run_discarded_leaf_user_drop_bodies(&field_te, elem, fresh_struct_literal);
+                    discard_took_memory = self.run_discarded_leaf_user_drop_bodies(
+                        &field_te,
+                        elem,
+                        fresh_struct_literal,
+                    );
                 }
             }
 
@@ -11820,13 +11828,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some((tn, slot_ptr)) = pending_place_bodies {
                     self.track_destructure_struct_leaf_user_drop(&tn, &name, slot_ptr, false);
                 }
-            // B-2026-08-28-29 — `fresh_call`, NOT the literal-widened `fresh`.
-            // A discarded field of a struct-LITERAL source is claimed by the
-            // discard walker higher in this loop; letting this arm claim it too
-            // aborts at 12 frees for 11 allocs (measured). The bound-leaf arms
-            // above take the widened flag, because a bound leaf moves the field
-            // out and nothing else follows it.
-            } else if (fresh_call || boxed_view_src)
+            // B-2026-08-28-29 / -50 — `fresh_call`, plus a struct LITERAL whose
+            // field the discard walker DECLINED.
+            //
+            // Both halves are measured. A discarded field of a literal source
+            // whose type has a `Drop` body is claimed by that walker higher in
+            // this loop, and letting this arm claim it too aborts at 12 frees
+            // for 11 allocs. A field whose type has NO `Drop` gets no walker
+            // there — nothing is emitted and nothing owns it — so on a literal
+            // source, whose temp owns nothing either, it simply leaked: 98
+            // bytes on a runtime-built `Vec[String]`, with the same field clean
+            // over a CALL or PLACE source.
+            //
+            // `discard_took_memory` is the walker's own answer rather than a
+            // re-derivation of it, because the condition is exactly "was a
+            // walker found", which only that call knows. A field absent from
+            // the pattern entirely (dropped by `..`) never reaches the walker,
+            // so it answers false and this arm owns it — which is right.
+            } else if (fresh_call
+                || boxed_view_src
+                || (fresh_struct_literal && !discard_took_memory))
                 && self.destructure_field_needs_cleanup(&field_te)
             {
                 // Unbound heap field (`items: _` or dropped by `..`): no
@@ -12331,27 +12352,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// arm's `track_vec_var` covers only a DIRECT `{ptr,len,cap}` element,
     /// never a struct element with a heap field — so this is the commit that
     /// makes it observable and therefore the one that owes the free.
+    ///
+    /// Returns whether this call took OWNERSHIP OF THE FIELD'S MEMORY, so a
+    /// caller that has a second candidate owner can tell whether to use it
+    /// (B-2026-08-28-50). `false` covers both "did not free" and "found no
+    /// walker at all" — the latter is the case that leaked: a discarded field
+    /// whose type has no user `Drop` gets no walker here, so nothing is
+    /// emitted and nothing owns it.
     fn run_discarded_leaf_user_drop_bodies(
         &mut self,
         te: &TypeExpr,
         elem: BasicValueEnum<'ctx>,
         free_memory: bool,
-    ) {
+    ) -> bool {
         let TypeKind::Path(p) = &te.kind else {
-            return;
+            return false;
         };
         let Some(name) = p.segments.last().cloned() else {
-            return;
+            return false;
         };
         // A `shared` leaf drops through the RC machinery against a box with a
         // refcount header, so the plain-struct GEPs in the walker would be off
         // by it; the emitter declines such a type anyway, but bailing here keeps
         // the intent local.
         if self.type_decls.shared_types.contains_key(&name) {
-            return;
+            return false;
         }
         let Some(cur_fn) = self.current_fn else {
-            return;
+            return false;
         };
         // A non-shared user ENUM leaf runs its LIVE VARIANT's payload bodies,
         // through the same emitter the binding-leaf arm of
@@ -12411,7 +12439,7 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
         let Some(walker) = walker else {
-            return;
+            return false;
         };
         let synth = format!("__wildcard_discard_{}", self.indexed_elem_counter);
         self.indexed_elem_counter += 1;
@@ -12433,8 +12461,10 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if let Some(mem) = mem {
                 self.builder.build_call(mem, &[slot.into()], "").unwrap();
+                return true;
             }
         }
+        false
     }
 
     /// Queue scope-exit cleanup for a heap-owning destructure leaf, keyed off

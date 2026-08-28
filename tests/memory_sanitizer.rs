@@ -1501,6 +1501,68 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-50 — an UNBOUND destructure field of a struct-LITERAL
+    /// source is owned exactly once whether or not its type has a `Drop`.
+    ///
+    /// B-2026-08-28-29 established that a struct-literal temp owns nothing and
+    /// that its DISCARDED Drop-bearing fields are owned by the discard walker.
+    /// A field whose type has NO `Drop` gets no walker there — nothing is
+    /// emitted — so on that source it had no owner at all and leaked. The other
+    /// two sources were clean, which is what localizes it.
+    ///
+    /// THE `Vec` IS THE REPRO, NOT THE DEFECT. A bare `String` field is
+    /// leak-clean in the same shape only because LLVM deletes the whole dead
+    /// allocation chain — the DCE mask B-2026-08-28-12 and -29 both record. The
+    /// element here is pushed through a runtime call the optimizer cannot fold,
+    /// which is the only reason the 98 bytes are observable at all.
+    ///
+    /// `drop-bearing-field` is the boundary in the other direction: that field
+    /// IS claimed by the walker, and letting the unbound-field arm claim it too
+    /// aborts at 12 frees for 11 allocs.
+    #[test]
+    fn asan_unbound_drop_free_field_of_a_struct_literal_is_owned_once() {
+        const N: &str = "struct R { id: i64, tags: Vec[String] }\n\
+             struct W { r: R, n: i64 }\n\
+             fn mkv(n: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f\"t{n}\"); v }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn main() {{ let W {{ r: _, n }} = W {{ r: R {{ id: 41, tags: mkv(3) }}, n: 1 }};\n\
+             \x20            println(f\"{{n}}\") }}\n"
+            ),
+            &["1"],
+            "literal-source",
+        );
+        // The same field over the two sources that were already clean.
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn mk() -> W {{ W {{ r: R {{ id: 41, tags: mkv(3) }}, n: 1 }} }}\n\
+             \x20            fn main() {{ let W {{ r: _, n }} = mk(); println(f\"{{n}}\") }}\n"
+            ),
+            &["1"],
+            "call-source-control",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn main() {{ let w = W {{ r: R {{ id: 41, tags: mkv(3) }}, n: 1 }};\n\
+             \x20            let W {{ r: _, n }} = w; println(f\"{{n}}\") }}\n"
+            ),
+            &["1"],
+            "place-source-control",
+        );
+        // BOUNDARY — the same position with a Drop-BEARING field type. The
+        // discard walker owns this one, and the unbound-field arm must keep
+        // declining it or the two claims abort at 12 frees for 11 allocs.
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+             struct W { r: R, n: i64 }\n\
+             fn main() { let W { r: _, n } = W { r: R { id: 41, name: f\"n{41}\" }, n: 1 };\n\
+             \x20            println(f\"{n}\") }\n",
+            &["drop 41 n41", "1"],
+            "drop-bearing-field",
+        );
+    }
+
     /// B-2026-08-28-10 — moving a place-source leaf's `Drop` body to the leaf
     /// keeps its heap owned exactly once.
     ///
