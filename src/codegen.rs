@@ -5610,6 +5610,7 @@ impl<'ctx> Codegen<'ctx> {
             },
             var_types: VarTypes {
                 var_type_names: HashMap::new(),
+                block_tail_type_names: HashMap::new(),
                 tuple_var_elem_type_names: HashMap::new(),
                 tuple_var_elem_type_exprs: HashMap::new(),
                 int_const_locals: std::collections::HashMap::new(),

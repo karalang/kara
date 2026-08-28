@@ -246,6 +246,33 @@ pub(crate) struct VarTypes<'ctx> {
     /// use of the binding (`v[r]`, passing `r` to a function) still fails
     /// LOUDLY at the catch-all; a real `Range` value is a separate slice.
     pub(crate) range_let_bindings: HashMap<String, RangeLetBinding<'ctx>>,
+    /// B-2026-08-27-49 — a value-position BLOCK's tail type name, keyed by
+    /// `(block.span.offset, block.span.length)`. Recorded by
+    /// `compile_block_with_frame` at the LAST moment the block's own scope is
+    /// still live, and read back by `type_name_of_expr`'s block arm so a field
+    /// read on a block receiver (`{ let x = make(); x }.n`) can find the
+    /// struct's layout.
+    ///
+    /// It has to be recorded rather than derived on demand because of
+    /// B-2026-07-13-6's lexical scoping: `compile_block_with_frame` reverts the
+    /// whole per-variable env at scope exit, so by the time the consuming
+    /// `compile_field_access` asks, the tail's binding is gone. Resolving the
+    /// tail structurally against the env that remains is not a substitute — it
+    /// is actively WRONG when an outer binding of the same name is in scope,
+    /// because the block-local SHADOWS it: `let x = Other {..};
+    /// println({ let x = make(); x }.n)` would type the receiver as `Other` and
+    /// read field `n` at `Other`'s index. That is the silent-miscompile class
+    /// B-2026-07-20-9 removed, so the environment this is captured in — the
+    /// block's own — is load-bearing, not a convenience.
+    ///
+    /// Deliberately NOT part of `VarEnvSnapshot`: the whole point is to outlive
+    /// the scope revert that discards the binding it was derived from. Keyed by
+    /// the BLOCK's span, and only ever written and read under a block's span, so
+    /// the postfix-chain span aliasing that keeps `type_name_of_expr` otherwise
+    /// structural cannot confuse a block with the field access wrapping it.
+    /// An unrecorded block reads back `None` and keeps the pre-existing loud
+    /// "cannot resolve field" error — fail-closed, never a guess.
+    pub(crate) block_tail_type_names: HashMap<(usize, usize), String>,
 }
 
 /// A `let`-bound bounded range's captured loop bounds — see

@@ -107617,6 +107617,132 @@ fn main() {
         );
     }
 
+    /// A FIELD READ ON A BLOCK-EXPRESSION RECEIVER — `{ let x = make(); x }.n`
+    /// (B-2026-08-27-49).
+    ///
+    /// `karac check` accepted this and the interpreter answered it, but
+    /// `karac build` died on codegen's loud "cannot resolve field 'n' on this
+    /// receiver" guard, while the same read through a local
+    /// (`let t = { … }; t.n`) compiled. Codegen compiles the block fine and gets
+    /// a proper struct value back; what it could not do was NAME the value's
+    /// type, because `compile_block_with_frame` reverts the block's scope before
+    /// any consumer asks and `type_name_of_expr` had no block arm.
+    ///
+    /// The last two lines are why this outranks its hand-written spelling.
+    /// `lowering.rs`'s `rewrite_enum_literal_method_call` materializes a method
+    /// call on a unit-variant literal into exactly this block shape, so
+    /// `Color.Red.to_tag().n` — source containing no block at all — failed to
+    /// build with a diagnostic naming a receiver the author never wrote.
+    #[test]
+    fn test_e2e_field_read_on_a_block_expression_receiver() {
+        let src = r#"
+struct Inner { m: i64 }
+struct Outer { inner: Inner, k: i64 }
+struct Tag { n: i64 }
+
+enum Color { Red, Green }
+
+fn make() -> Tag { return Tag { n: 7 }; }
+fn make2() -> Outer { return Outer { inner: Inner { m: 3 }, k: 4 }; }
+
+impl Tag {
+    fn doubled(self) -> i64 { return self.n * 2; }
+}
+
+impl Color {
+    fn to_tag(self) -> Tag {
+        match self {
+            Red => { return Tag { n: 1 }; }
+            Green => { return Tag { n: 2 }; }
+        }
+    }
+}
+
+fn main() {
+    println({ let x = make(); x }.n);
+    println({ let x = make(); x }.n + 1);
+    println({ Tag { n: 5 } }.n);
+    println({ let x = make2(); x }.inner.m);
+    println({ let x = make2(); x }.k);
+    println({ let x = make(); x }.doubled());
+    println({ let a = make(); { let b = a; b } }.n);
+    println(Color.Red.to_tag().n);
+    println(Color.Green.to_tag().n);
+    let c = Color.Green;
+    println(c.to_tag().n);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity. Lines 4 and 5 read BOTH fields of a two-field struct, so
+        // a receiver typed as the wrong struct — which is what an off-by-one
+        // field index means — cannot pass by coincidence, and the tail pins the
+        // lowering-synthesized spelling (8, 9) against the bound one (10).
+        assert_eq!(
+            expected, "7\n8\n5\n3\n4\n14\n7\n1\n2\n2\n",
+            "interpreter oracle is wrong for a block-expression receiver",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a compiled field read on a block receiver must match the interpreter",
+        );
+    }
+
+    /// The block-receiver fix must read the tail's type in the BLOCK's OWN
+    /// scope, not in whatever scope survives it (B-2026-08-27-49).
+    ///
+    /// This is the case that separates the fix from the one-line version of it.
+    /// `type_name_of_expr` is consulted AFTER `compile_block_with_frame` has
+    /// reverted the block's bindings, so re-deriving the tail's type there
+    /// resolves the identifier `x` against the OUTER `x` — which the
+    /// block-local shadows. Both structs here declare an `n`, at DIFFERENT
+    /// indices, so that mistake is not a build error: it reads `Tag`'s storage
+    /// at `Other`'s index for `n` and silently prints 99, the value of `Tag.a`.
+    /// Measured — that is exactly what the naive arm did before the recording
+    /// one replaced it.
+    ///
+    /// A silent wrong answer in place of the loud gap would be strictly worse
+    /// than the bug being fixed, so this guards the capture POINT, which no
+    /// other fixture can distinguish.
+    #[test]
+    fn test_e2e_block_receiver_tail_is_typed_in_the_blocks_own_scope() {
+        let src = r#"
+struct Other { a: i64, n: i64 }
+struct Tag { n: i64, a: i64 }
+
+fn make() -> Tag { return Tag { n: 7, a: 99 }; }
+
+fn main() {
+    let x = Other { a: 5, n: 42 };
+    println({ let x = make(); x }.n);
+    println(x.n);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // 7 is the block-local `Tag`'s `n`. 99 would mean the receiver typed as
+        // the outer `Other` and the read landed on `Tag.a`; 42 would mean it
+        // read the outer binding outright.
+        assert_eq!(
+            expected, "7\n42\n",
+            "interpreter oracle is wrong for a shadowed block tail",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a block receiver's tail must be typed in the block's own scope",
+        );
+    }
+
     /// A tuple carrying a TYPE PARAMETER — `(T, i64)` at `T = i64` and
     /// `T = String` — orders through `.cmp` in a monomorph (B-2026-08-27-41).
     ///

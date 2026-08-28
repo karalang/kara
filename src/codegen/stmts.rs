@@ -818,6 +818,37 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.drop_rc.scope_cleanup_actions.pop();
         }
+        // B-2026-08-27-49 — record the tail's user-type name while this block's
+        // OWN scope is still live. One line below, `restore_var_env` discards
+        // every binding the block made, and with them the only environment in
+        // which the tail can be typed correctly: `{ let x = make(); x }.n` has
+        // tail `x`, and `x` ceases to exist at the revert. Without this the
+        // consuming `compile_field_access` compiled the block fine — it gets a
+        // proper struct value back — and then could not name its type, so
+        // `field_index_for` found no layout and the read died on the loud
+        // "cannot resolve field 'n' on this receiver" gap while `karac check`
+        // and the interpreter both accepted the program.
+        //
+        // Resolving the tail AFTER the revert instead would be worse than
+        // failing: an outer binding of the same name is still in scope there and
+        // the block-local shadows it, so the receiver would silently type as the
+        // OUTER `x` and read a field at that struct's index. Capturing here is
+        // what makes the answer the block's own.
+        //
+        // This matters well beyond the hand-written spelling: `lowering.rs`'s
+        // `rewrite_enum_literal_method_call` materializes a method call on a
+        // unit-variant literal INTO this shape, so `Color.Red.to_tag().n` — a
+        // program containing no block at all — failed to build with a diagnostic
+        // naming a receiver the author never wrote. Recording every value-block's
+        // tail keeps any future lowering that synthesizes a block receiver
+        // working by construction rather than by a special case.
+        if let Some(tail) = block.final_expr.as_deref() {
+            if let Some(tn) = self.type_name_of_expr(tail) {
+                self.var_types
+                    .block_tail_type_names
+                    .insert((block.span.offset, block.span.length), tn);
+            }
+        }
         // Revert the name env AFTER the cleanup frame drained (the drain reads
         // the inner bindings' allocas). Normal scope exit only — a mid-block
         // `return`/`?` takes the `?` early-return above and never reaches here,

@@ -56539,4 +56539,33 @@ fn main() {
             assert_clean_asan_run(prog, &[want], label);
         }
     }
+
+    /// A field read on a BLOCK-EXPRESSION receiver whose struct owns heap
+    /// fields (B-2026-08-27-49).
+    ///
+    /// The block-receiver fix made this shape COMPILE for the first time, so
+    /// its ownership had never been exercised. It needs its own gate because
+    /// `expr_yields_fresh_owned_temp` — which arms the fresh-temp struct drop
+    /// behind `track_freshtemp_field_access_object` — admits `Call` and
+    /// `MethodCall` and NOT `Block`, so a block temp is not a fresh owned temp
+    /// by that predicate. The read below hands out one field and never names
+    /// the other, which is precisely the B-2026-07-22-2 leak shape: an
+    /// unnamed heap field of a temporary aggregate that nothing owns.
+    #[test]
+    fn test_block_receiver_heap_field_read_is_leak_free() {
+        let src = r#"
+struct Person { name: String, note: String, age: i64 }
+
+fn make() -> Person {
+    return Person { name: "ada".to_string(), note: "first".to_string(), age: 36 };
+}
+
+fn main() {
+    // `name` escapes to the print; `note` is never read by anyone.
+    println({ let p = make(); p }.name);
+    println({ let p = make(); p }.age);
+}
+"#;
+        assert_clean_asan_run(src, &["ada", "36"], "block-receiver-heap-field-read");
+    }
 }

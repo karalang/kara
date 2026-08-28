@@ -1188,13 +1188,43 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(out.into())
     }
 
+    /// True for a VALUE-POSITION block receiver, whose tail this consumer must
+    /// own exactly as it owns a call result (B-2026-08-27-49).
+    ///
+    /// `compile_block_with_frame` hands a value-position block's tail to its
+    /// consumer by NEUTRALIZING the tail's own cleanup
+    /// (`suppress_block_tail_cleanup` — the cap-zero / null-store / tag-zero
+    /// its type defines, or a retain for `shared`). After that nothing else
+    /// will ever free the aggregate, so whoever received it is the owner. A
+    /// `let`-bound block already satisfies that — its binding takes the drop —
+    /// but a block read straight through a field (`{ let p = mk(); p }.name`)
+    /// has no binding, and before this its heap fields leaked wholesale,
+    /// including the ones the read never names. That is the B-2026-07-22-2 leak
+    /// shape reached through a different receiver kind, and it became reachable
+    /// the moment a block receiver could be typed at all: LSan flags the
+    /// two-`String` fixture in `tests/memory_sanitizer.rs` without this.
+    ///
+    /// SEPARATE from `expr_yields_fresh_owned_temp` on purpose, following the
+    /// array-literal sibling (B-2026-08-27-35): that predicate is asked by many
+    /// unrelated sites which do not share this one's transfer premise, so the
+    /// widening is scoped to the caller that needs it.
+    fn value_block_hands_out_its_tail(&self, object: &Expr) -> bool {
+        matches!(
+            &object.kind,
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b)
+                if b.final_expr.is_some()
+        )
+    }
+
     fn track_freshtemp_field_access_object(
         &mut self,
         object: &Expr,
         field: &str,
         sv: inkwell::values::StructValue<'ctx>,
     ) {
-        if !self.expr_yields_fresh_owned_temp(object) {
+        if !self.expr_yields_fresh_owned_temp(object)
+            && !self.value_block_hands_out_its_tail(object)
+        {
             return;
         }
         if self.scrutinee_is_borrow_call(object) {
@@ -4102,6 +4132,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     .cloned(),
                 _ => None,
             },
+            // A value-position BLOCK receiver — `{ let x = make(); x }.n`
+            // (B-2026-08-27-49). Its type is its tail's, but the tail is
+            // typed in the block's OWN scope, which
+            // `compile_block_with_frame` has already reverted by the time any
+            // consumer asks (B-2026-07-13-6's lexical scoping). So the answer
+            // is read from what that function recorded one line before the
+            // revert, rather than re-derived here: re-deriving would resolve a
+            // tail identifier against the surviving OUTER binding of the same
+            // name — which the block-local shadows — and read a field at the
+            // wrong struct's index.
+            //
+            // `Seq` and `Unsafe` share `compile_block_with_frame`, so they
+            // record and resolve identically. A block that was never compiled
+            // (or whose tail codegen cannot type) is simply absent, which
+            // returns None and keeps the caller's pre-existing behaviour.
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => self
+                .var_types
+                .block_tail_type_names
+                .get(&(b.span.offset, b.span.length))
+                .cloned(),
             _ => None,
         }
     }
