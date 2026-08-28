@@ -2656,9 +2656,14 @@ impl<'a> super::Interpreter<'a> {
                     .qualified_enum_variant_is_unit(&segments[0], &segments[1])
                     .map(|_| segments[0].clone()),
                 // Bare unit variant (`consume(B)` where B is a variant).
-                ExprKind::Identifier(v) if self.env.get(v).is_none() => {
-                    self.find_enum_for_variant(v)
-                }
+                //
+                // B-2026-08-28-43 — via `fresh_bare_unit_variant_enum`, not a
+                // bare `env.get(v).is_none()`. That test excluded this shape
+                // entirely: the item pass seeds every unit variant into the
+                // outermost scope as a constant, so `env.get("B")` answers
+                // `Some` for the VARIANT exactly as it does for a local, and
+                // `consume(B)` ran no body while `consume(E.B)` ran one.
+                ExprKind::Identifier(v) => self.fresh_bare_unit_variant_enum(v),
                 _ => None,
             };
             let Some(tn) = type_name else { continue };

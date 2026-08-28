@@ -32723,6 +32723,110 @@ fn test_wildcard_discard_of_own_drop_enum_runs_its_payload_body() {
     );
 }
 
+/// B-2026-08-28-43, interpreter leg — the BARE spelling of a unit variant runs
+/// its enum's `Drop` body as a fresh ARGUMENT, and both spellings run it in
+/// bare STATEMENT position.
+///
+/// The two halves fail for different reasons and only one is shared with
+/// codegen:
+///
+///   * ARGUMENT (`take(B)`) — zero here, and the cause is a lookup that cannot
+///     answer the question it is asked. `run_fresh_temp_arg_drops` excluded a
+///     named binding on `env.get(v).is_none()`, but the item pass seeds EVERY
+///     unit variant into the outermost scope as a constant, so `env.get("B")`
+///     answers `Some` for the variant exactly as it does for a local. The
+///     exclusion meant for bindings therefore swallowed the variant, and
+///     `take(B)` ran no body while `take(E.B)` ran one.
+///   * STATEMENT (`E.B;` / `B;`) — zero for both spellings, because the
+///     statement-expression arm dispatches on `Call` / `MethodCall` and a unit
+///     variant is neither. The `let _ =` sibling of this was B-2026-08-28-41.
+///
+/// The fix is `fresh_bare_unit_variant_enum`, which asks whether any INNER
+/// scope binds the name rather than whether the name is bound at all.
+/// `bound-then-passed-control` is the row that would catch the permissive
+/// version: a local really is owned by its binding, and firing here too doubles
+/// its body.
+#[test]
+fn test_bare_unit_variant_of_own_drop_enum_runs_its_body() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "argument-bare",
+            "fn take(e: E) -> i64 { 7 }\n\
+             fn main() { let x = take(B); println(f\"{x}\") }\n",
+            "drop E\n7\n",
+        ),
+        // Correct here all along — the asymmetry that made the family look
+        // spelling-dependent rather than lookup-dependent.
+        (
+            "argument-qualified",
+            "fn take(e: E) -> i64 { 7 }\n\
+             fn main() { let x = take(E.B); println(f\"{x}\") }\n",
+            "drop E\n7\n",
+        ),
+        (
+            "statement-bare",
+            "fn main() { B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        (
+            "statement-qualified",
+            "fn main() { E.B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        // Already correct on this backend, and pinned because the compiled
+        // sibling of each was not.
+        (
+            "let-discard-bare",
+            "fn main() { let _ = B; println(\"end\") }\n",
+            "drop E\nend\n",
+        ),
+        (
+            "tuple-leaf-bare",
+            "fn main() { let p = (B, 1); let (_, n) = p; println(f\"{n}\") }\n",
+            "drop E\n1\n",
+        ),
+        // CONTROL — BOUND, the yardstick.
+        (
+            "bound-control",
+            "fn main() { let e = B; println(\"mid\") }\n",
+            "drop E\nmid\n",
+        ),
+        // CONTROL, the DOUBLE-FREE direction. A local named for a variant is
+        // owned by its binding; the argument arm must not fire for it as well.
+        // This is the row that fails if the new lookup asks "is this a variant
+        // name" instead of "is this shadowed".
+        (
+            "bound-then-passed-control",
+            "fn take(e: E) -> i64 { 7 }\n\
+             fn main() { let e = B; println(f\"{take(e)}\") }\n",
+            "7\ndrop E\n",
+        ),
+        // CONTROL — a PASSTHROUGH callee owns the drop through its result.
+        (
+            "passthrough-control",
+            "fn pass(e: E) -> E { e }\n\
+             fn main() { let y = pass(B); println(\"mid\") }\n",
+            "drop E\nmid\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+    // BOUNDARY — a bare `None`. The scan reads `program.items`, which carries
+    // the user program and not the baked stdlib, so a seeded variant is out of
+    // reach by construction; codegen filters `seeded_enum_names` to land in the
+    // same place.
+    assert_eq!(
+        run("fn take(o: Option[String]) -> i64 { 7 }\n\
+             fn main() { let x = take(None); println(f\"{x}\") }\n"),
+        "7\n",
+        "bare-None-control"
+    );
+}
+
 /// B-2026-08-28-41, interpreter leg — `let _ = E.B`, a payloadless variant of
 /// an own-`impl Drop` enum, runs that enum's body.
 ///

@@ -2302,6 +2302,33 @@ impl<'a> Interpreter<'a> {
         None
     }
 
+    /// B-2026-08-28-43 — the enum owning a BARE unit-variant identifier that is
+    /// a FRESH temp here: `B` in `take(B)` / `let _ = B` / `(B, 1)`, as opposed
+    /// to a local that happens to be named `B`.
+    ///
+    /// Ownership sites need the distinction because the two are opposite
+    /// answers: a bare variant constructs a value nothing else owns, so the
+    /// site must run its `Drop` body; a LOCAL's body belongs to its binding and
+    /// firing here as well doubles it. The sites used to ask
+    /// `env.get(name).is_none()`, which answers `Some` for BOTH — the item pass
+    /// seeds every unit variant into the outermost scope as a constant — so the
+    /// bare spelling was excluded outright and ran no body at all, while the
+    /// qualified `E.B` was correct at every one of those positions.
+    ///
+    /// Unit variants only: a payload-bearing variant cannot appear bare without
+    /// a call, and that spelling is the `Call` arm's business.
+    ///
+    /// Codegen twin: `fresh_bare_unit_variant_enum`.
+    pub(crate) fn fresh_bare_unit_variant_enum(&self, name: &str) -> Option<String> {
+        if self.env.get(name).is_some() && !self.env.is_outermost_only(name) {
+            return None;
+        }
+        let en = self.find_enum_for_variant(name)?;
+        self.qualified_enum_variant_is_unit(&en, name)
+            .unwrap_or(false)
+            .then_some(en)
+    }
+
     fn find_enum_for_variant(&self, variant_name: &str) -> Option<String> {
         for item in &self.program.items {
             if let Item::EnumDef(e) = item {

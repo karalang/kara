@@ -12965,6 +12965,196 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-43 — the BARE spelling of a unit variant (`B`, not `E.B`)
+    /// runs its enum's `Drop` body at every FRESH-TEMP position, and the bare
+    /// STATEMENT spellings run it at all.
+    ///
+    /// B-2026-08-28-41 fixed `let _ = E.B` and left the bare `let _ = B` at
+    /// compiled ZERO, on the reading that the aggregate registrar declines
+    /// every `Identifier` by design. That reading was right about the
+    /// registrar and wrong about the scope: measured across the positions
+    /// below, `B` lost its body at EVERY fresh-temp position while `E.B` was
+    /// correct at all of them — argument 0/0/0, tuple wildcard leaf 1/0/0,
+    /// `let _ =` 1/0/0. One defect wearing three shapes, not two spellings.
+    ///
+    /// The registrar's invariant survives intact, and that is the care here.
+    /// It still declines a let-bound `Identifier`, whose drop belongs to its
+    /// binding and would be double-freed by a second caller-side owner. What it
+    /// gained is the ability to tell that apart from a bare VARIANT:
+    /// `fresh_bare_unit_variant_enum` answers only for a name no local, const
+    /// or module binding shadows, and never through `enum_name_of_expr`, whose
+    /// `Identifier` arm resolves through `var_type_names` and so means exactly
+    /// the local case.
+    ///
+    /// EVERY ROW CARRIES ITS QUALIFIED SIBLING, because spelling-dependence is
+    /// the finding: a regression that takes both spellings back to zero
+    /// together would otherwise read as a consistent gap rather than a
+    /// reintroduction of this one. `bound-*` and `passthrough` are the
+    /// double-free direction — each must stay at ONE.
+    #[test]
+    fn e2e_bare_unit_variant_of_own_drop_enum_runs_its_body() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's first named spelling.
+            (
+                "let-discard-bare",
+                "fn main() { let _ = B; println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
+            (
+                "let-discard-qualified",
+                "fn main() { let _ = E.B; println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
+            // The row's second named spelling — a bare STATEMENT, which reached
+            // no discard arm at all in EITHER spelling and so ran zero bodies
+            // on every backend.
+            (
+                "statement-bare",
+                "fn main() { B; println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
+            (
+                "statement-qualified",
+                "fn main() { E.B; println(\"end\") }\n",
+                "drop E\nend\n",
+            ),
+            // A fresh ARGUMENT — 0/0/0 before this, against the qualified
+            // spelling's 1/1/1. Not in the row as filed; found by widening its
+            // repro across positions.
+            (
+                "argument-bare",
+                "fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { let x = take(B); println(f\"{x}\") }\n",
+                "drop E\n7\n",
+            ),
+            (
+                "argument-qualified",
+                "fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { let x = take(E.B); println(f\"{x}\") }\n",
+                "drop E\n7\n",
+            ),
+            // A tuple wildcard LEAF, both sources. Also not in the row: the
+            // leaf's element type came back EMPTY for the bare spelling,
+            // because `enum_name_of_expr` answers `None` for an `Identifier`
+            // that is not a local.
+            (
+                "tuple-leaf-place-bare",
+                "fn main() { let p = (B, 1); let (_, n) = p; println(f\"{n}\") }\n",
+                "drop E\n1\n",
+            ),
+            (
+                "tuple-leaf-place-qualified",
+                "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\") }\n",
+                "drop E\n1\n",
+            ),
+            (
+                "tuple-leaf-fresh-bare",
+                "fn main() { let (_, n) = (B, 1); println(f\"{n}\") }\n",
+                "drop E\n1\n",
+            ),
+            (
+                "tuple-leaf-fresh-qualified",
+                "fn main() { let (_, n) = (E.B, 1); println(f\"{n}\") }\n",
+                "drop E\n1\n",
+            ),
+            // The STRUCT-field wildcard, which was already correct in both
+            // spellings — the one fresh-temp position the bare form reached.
+            // Pinned so the fix cannot regress it while moving its siblings.
+            (
+                "struct-field-bare",
+                "struct W { e: E, n: i64 }\n\
+                 fn main() { let w = W { e: B, n: 1 };\n\
+                 \x20            let W { e: _, n } = w; println(f\"{n}\") }\n",
+                "drop E\n1\n",
+            ),
+            // CONTROL — BOUND. Correct throughout, and the yardstick every row
+            // above is measured against.
+            (
+                "bound-control",
+                "fn main() { let e = B; println(\"mid\") }\n",
+                "drop E\nmid\n",
+            ),
+            // CONTROL, the DOUBLE-FREE direction — a bound local passed on. If
+            // the registrar ever admitted a plain `Identifier` this goes to
+            // two: the binding's drop plus a caller-side one over the same
+            // value.
+            (
+                "bound-then-passed-control",
+                "fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { let e = B; println(f\"{take(e)}\") }\n",
+                "7\ndrop E\n",
+            ),
+            // CONTROL — a PASSTHROUGH callee. The result's consumer owns the
+            // drop; firing caller-side as well would double it.
+            (
+                "passthrough-control",
+                "fn pass(e: E) -> E { e }\n\
+                 fn main() { let y = pass(B); println(\"mid\") }\n",
+                "drop E\nmid\n",
+            ),
+            // CONTROL — a LOOP. One body per iteration, not an accumulating
+            // registration.
+            (
+                "loop-control",
+                "fn take(e: E) -> i64 { 7 }\n\
+                 fn main() {\n\
+                 \x20  let mut i = 0;\n\
+                 \x20  while i < 3 { let _ = take(B); i = i + 1; }\n\
+                 \x20  println(\"end\");\n\
+                 \x20}\n",
+                "drop E\ndrop E\ndrop E\nend\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // BOUNDARY — an enum with NO user `Drop` stays silent. The admission is
+        // about reaching the body, not about inventing one.
+        assert_eq!(
+            run_program(
+                "enum E { A(i64), B }\n\
+                 fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { let x = take(B); println(f\"{x}\") }\n"
+            )
+            .as_deref(),
+            Some("7\n"),
+            "no-user-drop-control"
+        );
+        // BOUNDARY — a bare `None`. The seeded enums are excluded from the
+        // admission on both backends (codegen filters `seeded_enum_names`; the
+        // interpreter's scan reads `program.items`, which carries no baked
+        // stdlib), so `Option`'s payload cleanup stays with its own machinery.
+        assert_eq!(
+            run_program(
+                "fn take(o: Option[String]) -> i64 { 7 }\n\
+                 fn main() { let x = take(None); println(f\"{x}\") }\n"
+            )
+            .as_deref(),
+            Some("7\n"),
+            "bare-None-control"
+        );
+        // Two enums, two bare names: each resolves to ITS OWN enum. The bare
+        // spelling has no qualifier to disambiguate with, so this is where a
+        // wrong owner would show up as the wrong body.
+        assert_eq!(
+            run_program(
+                "enum E { A(i64), Z }\n\
+                 impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+                 enum F { Y(i64), W }\n\
+                 impl Drop for F { fn drop(mut ref self) { println(\"drop F\") } }\n\
+                 fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { let x = take(Z); println(f\"{x}\"); let _ = W; println(\"end\") }\n"
+            )
+            .as_deref(),
+            Some("drop E\n7\ndrop F\nend\n"),
+            "two-enums-distinct-owners"
+        );
+    }
+
     /// B-2026-08-28-41 — `let _ = E.B`, a PAYLOADLESS variant of an
     /// own-`impl Drop` enum, runs that enum's body.
     ///

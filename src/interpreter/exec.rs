@@ -633,6 +633,28 @@ impl Env {
         self.scopes.pop();
     }
 
+    /// B-2026-08-28-43 — `true` when `name` is bound in the OUTERMOST scope and
+    /// nowhere inner, i.e. no local shadows it.
+    ///
+    /// The outermost scope is the one the item pass seeds: free-fn values,
+    /// variant constructors, and — the case this exists for — a bare unit
+    /// variant's constant (`B`, alongside the qualified `E.B`). Ownership sites
+    /// need to tell that seeded constant apart from a LOCAL of enum type,
+    /// because they mean opposite things: the constant is a fresh temp whose
+    /// drop nobody else owns, while a local's drop belongs to its binding and a
+    /// second caller-side fire would double it. A plain `env.get(name).is_some()`
+    /// cannot separate them — both answer `Some` — which is why the bare
+    /// spelling of a unit variant ran no body in argument position at all.
+    ///
+    /// Codegen twin: `fresh_bare_unit_variant_enum`, which mirrors
+    /// `compile_expr`'s resolution order for the same purpose.
+    pub(crate) fn is_outermost_only(&self, name: &str) -> bool {
+        if self.scopes.iter().skip(1).any(|s| s.contains_key(name)) {
+            return false;
+        }
+        self.scopes.first().is_some_and(|s| s.contains_key(name))
+    }
+
     pub(crate) fn define(&mut self, name: String, val: Value) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, val);

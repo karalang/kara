@@ -3877,6 +3877,31 @@ impl<'a> super::Interpreter<'a> {
                             _ => {}
                         }
                     }
+                    // B-2026-08-28-43 — a bare UNIT VARIANT in statement
+                    // position, both spellings: `E.B;` (a `Path`) and `B;` (an
+                    // `Identifier`). Neither is a `Call` or a `MethodCall`, so
+                    // neither reached the arms above and an own-`impl Drop`
+                    // enum's body ran on NO backend — the same shape
+                    // B-2026-08-28-41 fixed one statement kind over, at
+                    // `let _ = E.B`.
+                    //
+                    // The `Identifier` spelling goes through
+                    // `fresh_bare_unit_variant_enum`, never a bare name lookup:
+                    // the item pass seeds every unit variant into the outermost
+                    // scope, so a plain `env.get` cannot tell the seeded
+                    // constant from a LOCAL of enum type — and firing for a
+                    // local would run a body its binding already owns.
+                    ExprKind::Path { segments, .. }
+                        if segments.len() == 2
+                            && self
+                                .qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                                .unwrap_or(false) =>
+                    {
+                        self.run_discarded_value_user_drops(discarded);
+                    }
+                    ExprKind::Identifier(n) if self.fresh_bare_unit_variant_enum(n).is_some() => {
+                        self.run_discarded_value_user_drops(discarded);
+                    }
                     _ => {}
                 }
             }

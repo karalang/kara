@@ -1262,6 +1262,74 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-43 — a BARE unit variant of an own-`impl Drop` enum is
+    /// owned exactly once at each fresh-temp position.
+    ///
+    /// The body half was a soundness gap: `B` ran no `Drop` body where `E.B`
+    /// ran one, at every position below. This fixture is the half that decides
+    /// whether closing it is safe, and the risk it measures is specific. The
+    /// registrar these positions feed declines every `Identifier` precisely
+    /// because a LET-BOUND enum's drop belongs to its binding; admitting the
+    /// bare variant means teaching it a distinction it did not have, and
+    /// getting that wrong in the permissive direction is a double free rather
+    /// than an extra print.
+    ///
+    /// The enum carries a `String` in its OTHER variant, which is the point of
+    /// the shape: the value under test is the payloadless `B`, so a spurious
+    /// second owner would run the drop switch twice over a live heap word, and
+    /// the constructed variant is the one that decides whether that word is
+    /// real. `bound-then-passed` is the double-free direction stated directly —
+    /// a local, owned by its binding, passed on.
+    #[test]
+    fn asan_bare_unit_variant_of_own_drop_enum_is_owned_once() {
+        const H: &str = "enum E { A(String), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n";
+        assert_clean_asan_run(
+            &format!("{H}fn main() {{ let _ = B; println(\"end\") }}\n"),
+            &["drop E", "end"],
+            "let-discard-bare",
+        );
+        assert_clean_asan_run(
+            &format!("{H}fn main() {{ B; println(\"end\") }}\n"),
+            &["drop E", "end"],
+            "statement-bare",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(e: E) -> i64 {{ 7 }}\n\
+             \x20            fn main() {{ let x = take(B); println(f\"{{x}}\") }}\n"
+            ),
+            &["drop E", "7"],
+            "argument-bare",
+        );
+        assert_clean_asan_run(
+            &format!("{H}fn main() {{ let p = (B, 1); let (_, n) = p; println(f\"{{n}}\") }}\n"),
+            &["drop E", "1"],
+            "tuple-leaf-bare",
+        );
+        // The DOUBLE-FREE direction: a local, whose binding already owns the
+        // drop, handed to a callee. One body, one free.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(e: E) -> i64 {{ 7 }}\n\
+             \x20            fn main() {{ let e = E.A(f\"n{{41}}\"); println(f\"{{take(e)}}\") }}\n"
+            ),
+            &["7", "drop E"],
+            "bound-then-passed",
+        );
+        // The LIVE-payload variant at the same positions, so the frees the
+        // admission newly reaches are exercised against a real heap word rather
+        // than an empty tag.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(e: E) -> i64 {{ 7 }}\n\
+             \x20            fn main() {{ let x = take(E.A(f\"n{{41}}\")); println(f\"{{x}}\") }}\n"
+            ),
+            &["drop E", "7"],
+            "payload-argument-control",
+        );
+    }
+
     /// B-2026-08-28-38 — a by-value aggregate argument to a CLOSURE is owned
     /// exactly once.
     ///

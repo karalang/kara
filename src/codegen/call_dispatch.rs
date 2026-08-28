@@ -3551,9 +3551,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (Call), unit variant `E.V` (Path), and struct variant `E.V { .. }`
         // (StructLiteral whose enum owner `enum_name_of_expr` recognizes; a
         // plain struct literal yields `None` and falls to the struct arm
-        // below). `Identifier` args are deliberately NOT matched — a
-        // let-bound enum's drop is owned by its binding (let-path), and the
-        // arg-pass move-suppression handles the transfer.
+        // below). A LET-BOUND `Identifier` is deliberately NOT matched — such
+        // an enum's drop is owned by its binding (let-path), and the arg-pass
+        // move-suppression handles the transfer; a bare UNIT-VARIANT
+        // identifier is a different thing wearing the same syntax and is
+        // admitted separately (B-2026-08-28-43, at the match below).
         // Fn-call-RETURNED Drop temp (B-2026-07-01-7): `consume(make())`
         // where `make() -> Guard`/`-> Sig` and the type has a user Drop —
         // `enum_name_of_expr`'s Call arm resolves only VARIANT ctors, so a
@@ -3689,6 +3691,22 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Call { .. } | ExprKind::Path { .. } | ExprKind::StructLiteral { .. } => {
                 self.enum_name_of_expr(arg)
             }
+            // B-2026-08-28-43 — a BARE unit-variant identifier (`take(B)`,
+            // `let _ = B`), the unqualified spelling of the `Path` arm's
+            // `E.B`. It is a fresh temp exactly like the qualified form, and
+            // it lost its `Drop` body at every fresh-temp position while
+            // `E.B` was correct at all of them.
+            //
+            // This is the one `Identifier` shape admitted, and the narrowness
+            // is the whole safety argument. `fresh_bare_unit_variant_enum`
+            // answers only for a name that no local, const-generic
+            // substitution or module binding shadows — so it can never be the
+            // let-bound enum the paragraph above rules out, whose drop belongs
+            // to its binding and would be double-freed by a second
+            // caller-side owner. `enum_name_of_expr` cannot be used here: its
+            // `Identifier` arm resolves through `var_type_names`, which is the
+            // LOCAL case and precisely the wrong answer.
+            ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
             _ => None,
         };
         if let Some(enum_name) = fresh_enum_temp {
@@ -4717,6 +4735,18 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let name = self
             .enum_name_of_expr(e)
+            // B-2026-08-28-43 — a BARE unit-variant element (`(B, 1)`).
+            // `enum_name_of_expr`'s `Identifier` arm resolves through
+            // `var_type_names`, i.e. LOCALS, so it answers `None` for the bare
+            // spelling and the element's type came back empty — which is what
+            // made a discarded `(B, 1)` leaf run no body on either compiled
+            // backend while `(E.B, 1)` ran one. Asked here rather than inside
+            // `enum_name_of_expr` because that helper has twenty other callers
+            // whose `Identifier` question really is about a local.
+            .or_else(|| match &e.kind {
+                ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
+                _ => None,
+            })
             .or_else(|| self.type_name_of(e))
             .or_else(|| self.scalar_type_name_of_expr(e))
             .unwrap_or_default();
@@ -9325,6 +9355,68 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The enum that a BARE unit-variant identifier names, by the same
+    /// user-first / seed-preferring scan [`Self::try_unit_enum_variant`]
+    /// constructs through. Split out so a caller can ask WHICH enum a bare
+    /// variant belongs to without emitting the value (B-2026-08-28-43); the
+    /// constructor below is now its only other user, so the two can never
+    /// disagree about which enum a name resolves to.
+    ///
+    /// Answers for the name alone. A caller that needs "and `compile_expr`
+    /// really will lower this identifier as that variant" wants
+    /// [`Self::fresh_bare_unit_variant_enum`], which first rules out the
+    /// bindings that shadow it.
+    pub(super) fn bare_unit_variant_owner(&self, name: &str) -> Option<String> {
+        let (mut user_pick, mut seed_pick) = (None, None);
+        for (enum_name, layout) in &self.type_decls.enum_layouts {
+            if layout.tags.contains_key(name)
+                && layout.field_counts.get(name).copied().unwrap_or(0) == 0
+            {
+                if self.type_decls.seeded_enum_names.contains(enum_name) {
+                    seed_pick.get_or_insert_with(|| enum_name.clone());
+                } else {
+                    user_pick.get_or_insert_with(|| enum_name.clone());
+                }
+            }
+        }
+        if Self::seeded_variant_owner(name).is_some() && seed_pick.is_some() {
+            seed_pick.or(user_pick)
+        } else {
+            user_pick.or(seed_pick)
+        }
+    }
+
+    /// B-2026-08-28-43 — the enum owning a bare unit-variant identifier that
+    /// `compile_expr` will ACTUALLY lower as that variant, i.e. one no closer
+    /// binding shadows.
+    ///
+    /// The shadowing checks mirror `compile_expr`'s `Identifier` resolution
+    /// order exactly — const-generic substitution, then local, then module
+    /// binding, and only then the unit-variant scan — using the
+    /// non-side-effecting form of each (`try_load_module_binding` emits a load,
+    /// so the table is consulted directly). Mirroring rather than approximating
+    /// is the point: this predicate exists to let ownership sites treat a bare
+    /// variant as a FRESH TEMP, and getting it wrong in the permissive
+    /// direction would register a caller-side drop over a LOCAL whose binding
+    /// already owns one — a double free, which is exactly why those sites
+    /// declined every `Identifier` before this existed.
+    pub(super) fn fresh_bare_unit_variant_enum(&self, name: &str) -> Option<String> {
+        if self.mono_state.const_subst.contains_key(name)
+            || self.variables.contains_key(name)
+            || self.mod_bindings.module_bindings.contains_key(name)
+        {
+            return None;
+        }
+        // USER-declared enums only, which is also what makes this agree with
+        // the interpreter's twin BY CONSTRUCTION rather than by convention: its
+        // `find_enum_for_variant` scans `program.items`, and those carry the
+        // user program without the baked stdlib. A bare `None` is the shape
+        // this excludes in practice — the seeded `Option`, whose payload
+        // cleanup belongs to its own machinery at every one of these sites.
+        self.bare_unit_variant_owner(name)
+            .filter(|en| !self.type_decls.seeded_enum_names.contains(en))
+    }
+
     /// Look up a unit enum variant by identifier name and construct its value.
     pub(super) fn try_unit_enum_variant(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
         // When a variant name (`None` / `Some` / `Ok` / `Err`) collides
@@ -9349,24 +9441,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // answered by the qualified form: `MyOption.None` resolves by enum name
         // through `try_compile_enum_variant` and never reaches this bare-name
         // scan, so a program that means its own variant still gets it.
-        let (mut user_pick, mut seed_pick) = (None, None);
-        for (enum_name, layout) in &self.type_decls.enum_layouts {
-            if let Some(&tag) = layout.tags.get(name) {
-                if layout.field_counts.get(name).copied().unwrap_or(0) == 0 {
-                    if self.type_decls.seeded_enum_names.contains(enum_name) {
-                        seed_pick.get_or_insert((enum_name.clone(), tag, layout));
-                    } else {
-                        user_pick.get_or_insert((enum_name.clone(), tag, layout));
-                    }
-                }
-            }
-        }
-        let prefer_seed = Self::seeded_variant_owner(name).is_some() && seed_pick.is_some();
-        let (enum_name, tag, layout) = if prefer_seed {
-            seed_pick.or(user_pick)?
-        } else {
-            user_pick.or(seed_pick)?
-        };
+        let enum_name = self.bare_unit_variant_owner(name)?;
+        let layout = self.type_decls.enum_layouts.get(&enum_name)?;
+        let tag = *layout.tags.get(name)?;
         let i64_t = self.context.i64_type();
 
         // Shared enum: heap-allocate.

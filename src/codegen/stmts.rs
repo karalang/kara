@@ -3292,19 +3292,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 // wildcard LEAF (all 1/1/1), which is what identifies the
                 // discard site rather than unit variants generally.
                 //
-                // A bare `Identifier` is admitted only when it names a VARIANT
-                // and is NOT a local. That distinction is load-bearing rather
-                // than tidy: `enum_name_of_expr` resolves an `Identifier`
-                // through `var_type_names`, so admitting one unconditionally
-                // would treat `let _ = someEnumLocal;` as a fresh ctor temp and
-                // register a caller-side drop ON TOP of the binding's own — a
-                // double free, not a missing body.
+                // B-2026-08-28-43 — and the BARE spelling (`let _ = B`),
+                // which -41 left at compiled ZERO. A bare `Identifier` is
+                // admitted only when it names a VARIANT that no local, const
+                // or module binding shadows. That distinction is load-bearing
+                // rather than tidy: `enum_name_of_expr` resolves an
+                // `Identifier` through `var_type_names`, so admitting one
+                // unconditionally would treat `let _ = someEnumLocal;` as a
+                // fresh ctor temp and register a caller-side drop ON TOP of
+                // the binding's own — a double free, not a missing body. Hence
+                // `fresh_bare_unit_variant_enum`, which answers only for the
+                // fresh case, and never `enum_name_of_expr` for this shape.
+                let bare_variant_enum = match &tail.kind {
+                    ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
+                    _ => None,
+                };
                 if matches!(&tail.kind, ExprKind::Call { .. } | ExprKind::Path { .. }) {
                     if let Some(en) = self.enum_name_of_expr(tail) {
                         if en != "Option" && en != "Result" {
                             self.track_inline_owned_aggregate_arg(val, tail, false);
                         }
                     }
+                } else if bare_variant_enum.is_some_and(|en| en != "Option" && en != "Result") {
+                    self.track_inline_owned_aggregate_arg(val, tail, false);
                 }
                 // Payload bodies for a discarded Option/Result temp — pushed
                 // AFTER the battery so the LIFO drain runs them before the
@@ -8734,7 +8744,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // hint table is keyed on the *tail* expr's span (not the
                 // block's), so element/Map/RC types resolve correctly. Direct
                 // `make();` is the degenerate tail == expr case — unchanged.
+                // B-2026-08-28-43 — and a bare UNIT VARIANT in statement
+                // position (`E.B;`, `B;`), the statement-expression sibling of
+                // the `let _ =` arm B-2026-08-28-41 fixed. The predicate above
+                // is purely syntactic (`Call` / `MethodCall`), so a unit
+                // variant — a `Path`, or an `Identifier` unqualified — never
+                // entered this arm and its own `impl Drop` body ran on NO
+                // backend. Same `&self` sibling both arms share, so the two
+                // discard spellings cannot drift apart.
                 let tail = Self::discarded_owned_temp_tail(expr)
+                    .or_else(|| self.discarded_unit_variant_tail(expr))
                     .or_else(|| self.discarded_match_value_tail(expr));
                 if tail.is_some() {
                     self.drop_rc.scope_cleanup_actions.push(Vec::new());
@@ -8758,12 +8777,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     // payload-bodies walker. Option/Result ctors are
                     // excluded — their cleanup is the trackers above and the
                     // bodies walk below.
-                    if let ExprKind::Call { .. } = &tail.kind {
+                    // B-2026-08-28-43 — the unit-variant spellings join the
+                    // ctor Call here for the same reason, and through the same
+                    // registrar: `E.B` is a `Path`, and a bare `B` an
+                    // `Identifier` that the registrar admits only when no local
+                    // shadows it (`fresh_bare_unit_variant_enum`), never via
+                    // `enum_name_of_expr`, whose `Identifier` arm means a LOCAL
+                    // and would register a second drop over its binding's.
+                    let bare_variant_enum = match &tail.kind {
+                        ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
+                        _ => None,
+                    };
+                    if matches!(&tail.kind, ExprKind::Call { .. } | ExprKind::Path { .. }) {
                         if let Some(en) = self.enum_name_of_expr(tail) {
                             if en != "Option" && en != "Result" {
                                 self.track_inline_owned_aggregate_arg(val, tail, false);
                             }
                         }
+                    } else if bare_variant_enum.is_some_and(|en| en != "Option" && en != "Result") {
+                        self.track_inline_owned_aggregate_arg(val, tail, false);
                     }
                     // B-2026-07-30-11 (Option/Result bare-statement leg):
                     // payload user-Drop bodies for `mkopt(2);` — the same
@@ -14467,19 +14499,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// unqualified spelling. Deciding those needs the enum tables, so this is a
     /// `&self` sibling rather than a widening of the static one.
     ///
-    /// The QUALIFIED spelling only. The bare one (`let _ = B`) is not admitted,
-    /// and its absence is deliberate: the aggregate registrar this arm feeds
-    /// never matches an `Identifier` argument, because a let-bound enum's drop
-    /// belongs to its binding and registering a second caller-side drop over it
-    /// would be a double free rather than a missing body. Admitting the bare
-    /// spelling therefore buys nothing here and would imply a support that is
-    /// not present; it is filed as its own row instead.
+    /// Both spellings. The BARE one (`let _ = B`) was held back when this
+    /// landed, because the aggregate registrar the arm feeds matched no
+    /// `Identifier` at all and admitting it here bought nothing. That registrar
+    /// now distinguishes a bare VARIANT from a let-bound LOCAL
+    /// (`fresh_bare_unit_variant_enum`, B-2026-08-28-43), so the two spellings
+    /// are admitted together — which is what they always should have been:
+    /// `B` and `E.B` construct the same fresh temp, and only the qualified one
+    /// ran a body.
     fn discarded_unit_variant_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
         match &expr.kind {
             ExprKind::Path { segments, .. } if segments.len() == 2 => self
                 .type_decls
                 .enum_layouts
                 .contains_key(segments[0].as_str())
+                .then_some(expr),
+            ExprKind::Identifier(n) => self
+                .fresh_bare_unit_variant_enum(n)
+                .is_some()
                 .then_some(expr),
             ExprKind::Block(block)
             | ExprKind::Seq(block)
