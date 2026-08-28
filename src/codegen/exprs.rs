@@ -1248,6 +1248,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // owner, so cap-zero it in the array's slot to keep the
                     // array's scope-exit element drop from freeing it again.
                     self.suppress_array_elem_move_source(e);
+                    // B-2026-08-28-15 — `return p.0;` moving a heap-carrying
+                    // element out of an owned tuple. Explicit-`return` twin of
+                    // the tail-position hook in `suppress_cleanup_for_tail_return`;
+                    // see there for why an escaping tuple element needs the same
+                    // cap-zero the `let` positions have always emitted.
+                    self.suppress_tuple_index_move_source(e);
+                    // B-2026-08-28-15 — `return p.0.name;`, the deeper-place
+                    // peer; see the tail-position sibling.
+                    self.suppress_place_field_struct_move_source(e);
                     // B-2026-08-24-5 — the explicit-`return` twin for the WHOLE
                     // array: `return a;` where `a` is an owned `Array[T, N]`
                     // transfers the elements to the caller, so this frame's
@@ -3520,6 +3529,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // StructDrop skips it (the new literal is the sole owner). The
                 // whole-Identifier suppress above doesn't reach a FieldAccess.
                 self.suppress_struct_field_move_into_literal(&field_init.value);
+                // B-2026-08-28-15 — the TUPLE-INDEX and ARRAY-ELEMENT peers of
+                // the field-access line above. `S { f: t.0 }` / `S { f: a[0] }`
+                // move a heap-carrying element into the literal, which now owns
+                // it, so the source's element must be cap-zeroed exactly as a
+                // moved-out FIELD is. Neither peer had a literal-position hook:
+                // the tuple one had no escaping hook at all, and the array one
+                // was wired only at the two return positions — so both
+                // double-freed here while the field-access spelling of the same
+                // move was clean.
+                self.suppress_tuple_index_move_source(&field_init.value);
+                self.suppress_array_elem_move_source(&field_init.value);
+                // B-2026-08-28-15 — and the deeper-place peer, `S { f: p.0.name }`.
+                self.suppress_place_field_struct_move_source(&field_init.value);
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
                 // this field: the field now owns the box / inline buffer, so
                 // neutralize the source binding's `FreeInlineOptionPayload` /

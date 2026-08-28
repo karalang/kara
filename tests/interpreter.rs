@@ -42244,3 +42244,62 @@ fn generic_borrowed_field_move_out_yields_a_copy() {
         "3\n2\n"
     );
 }
+
+/// B-2026-08-28-15's ORACLE. The interpreter has always treated `p.0` as a
+/// move that hands the caller a live element, and it is what the compiled
+/// backends were measured against: they aborted with `free(): double free
+/// detected in tcache 2` on each of these while `--interp` printed the values
+/// below. This test therefore PASSES against the unfixed compiler BY DESIGN —
+/// its job is to pin the semantics the codegen twin
+/// (`e2e_tuple_elem_moved_out_at_an_escaping_position_is_not_double_freed`) is
+/// asserted against, so a future change cannot quietly move the oracle to meet
+/// a broken backend.
+#[test]
+fn tuple_elem_moved_out_at_an_escaping_position_yields_a_live_value() {
+    const DECL: &str = "struct R { id: i64, name: String }\n";
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "tail",
+            "fn take(p: (R, i64)) -> R { p.0 }\n\
+             fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id} {x.name}\") }",
+            "41 n41\n",
+        ),
+        (
+            "explicit-return",
+            "fn take(p: (R, i64)) -> R { return p.0; }\n\
+             fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id} {x.name}\") }",
+            "41 n41\n",
+        ),
+        (
+            "struct-literal-field",
+            "struct H { r: R }\n\
+             fn take(p: (R, i64)) -> H { H { r: p.0 } }\n\
+             fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.r.id} {x.r.name}\") }",
+            "41 n41\n",
+        ),
+        (
+            "nested-field",
+            "fn take(p: (R, i64)) -> String { p.0.name }\n\
+             fn main() { let a = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{a}\") }",
+            "n41\n",
+        ),
+        (
+            "array-elem-literal",
+            "struct H { r: R }\n\
+             fn take(a: Array[R, 2]) -> H { H { r: a[0] } }\n\
+             fn main() { let x = take([R { id: 41, name: f\"n{41}\" }, R { id: 9, name: f\"m{9}\" }]); println(f\"{x.r.id} {x.r.name}\") }",
+            "41 n41\n",
+        ),
+        // The source stays readable after an element moves out — the property
+        // that makes the compiled cap-zeroing a suppression of the SOURCE's
+        // free rather than a retraction of the source itself.
+        (
+            "reuse-after-move",
+            "fn main() { let p = (R { id: 41, name: f\"n{41}\" }, 7); let a = p.0; println(f\"{a.name}\"); println(f\"{p.1}\") }",
+            "n41\n7\n",
+        ),
+    ];
+    for (label, body, want) in cases {
+        assert_eq!(run(&format!("{DECL}{body}\n")), *want, "[{label}]");
+    }
+}

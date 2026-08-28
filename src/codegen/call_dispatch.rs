@@ -5596,6 +5596,21 @@ impl<'ctx> super::Codegen<'ctx> {
             // sibling is in `exprs.rs`). Cap-zero the element in the array's slot
             // so its scope-exit drop skips the moved-out buffer.
             self.suppress_array_elem_move_source(expr);
+            // B-2026-08-28-15 — the TUPLE-INDEX peer of the array-element line
+            // above: a tail `p.0` moving a heap-carrying element out of an
+            // owned tuple. Both `let`-statement positions already call this
+            // (`stmts.rs`), but no ESCAPING position did, so the element left
+            // the frame while the tuple's own scope-exit drop still freed it —
+            // `free(): double free detected in tcache 2` on a program the
+            // interpreter runs correctly. The explicit-`return` twin is in
+            // `exprs.rs`, the aggregate-literal twin in the struct-literal
+            // field loop; all three mirror the array peer's hook set.
+            self.suppress_tuple_index_move_source(expr);
+            // B-2026-08-28-15 — the DEEPER-PLACE peer: a tail `p.0.name`
+            // moving a heap field out of a struct reached THROUGH a tuple
+            // element. Hooked at the same four `let` positions and nowhere
+            // else, so it had the identical escaping-position hole.
+            self.suppress_place_field_struct_move_source(expr);
             // B-2026-08-24-5 — the WHOLE owned `Array[T, N]` returned out
             // (`fn mk() -> Array[String, 2] { ...; return a; }`). The element
             // sibling above covers `return a[0]`; this covers `return a`. The

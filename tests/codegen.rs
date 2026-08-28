@@ -114294,6 +114294,194 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-08-28-15 — a heap-carrying element moved out of an owned tuple
+    /// by `.N` at an ESCAPING position (fn tail, explicit `return`, aggregate
+    /// literal field) left the frame while the tuple's own scope-exit drop
+    /// still freed it: `free(): double free detected in tcache 2`, rc 134, on
+    /// both compiled backends, from a `karac check`-clean program the
+    /// interpreter runs correctly.
+    ///
+    /// The move-suppression machinery all existed — `zero_tuple_elem_cap_at`
+    /// even documents itself as "used at a single-element move-out
+    /// `let x = t.0`" — but `suppress_tuple_index_move_source` was hooked at
+    /// the two `let`-statement positions in `stmts.rs` and NOWHERE else. So
+    /// `let r = p.0; r` was clean while `p.0` was a double free, which is why
+    /// the row's own repro used the tail spelling and its "the destructure
+    /// spelling is clean" control read as though the EXTRACTION FORM mattered.
+    /// It does not: the CONSUMING POSITION does.
+    ///
+    /// Three peers shared the hole, and all are asserted here because each is
+    /// reached by a different suppressor:
+    ///   * `suppress_tuple_index_move_source` — no escaping hook at all.
+    ///   * `suppress_place_field_struct_move_source` (`p.0.name`, a field
+    ///     INSIDE the element) — likewise `let`-only, all four of its hooks.
+    ///   * `suppress_array_elem_move_source` (`a[0]`) — wired at both return
+    ///     positions but NOT at the aggregate-literal field, so
+    ///     `H { r: a[0] }` double-freed while `return a[0]` was clean.
+    ///
+    /// Every non-control row aborted (rc 134, so `run_program` returns `None`)
+    /// before the fix. The `control-*` rows were already correct and guard the
+    /// REVERSE failure: a suppression that fires where the consumer does not
+    /// take ownership converts this double free into a leak, which no exit
+    /// code would reveal.
+    #[test]
+    fn e2e_tuple_elem_moved_out_at_an_escaping_position_is_not_double_freed() {
+        const DECL: &str = "struct R { id: i64, name: String }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            // The row's own repro: fn tail `p.0` off an owned tuple PARAM.
+            (
+                "tail-param",
+                "fn take(p: (R, i64)) -> R { p.0 }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            // Same tail, tuple LOCAL rather than a param — so the defect is
+            // not about parameter ownership at all.
+            (
+                "tail-local",
+                "fn mk() -> R { let p = (R { id: 41, name: f\"n{41}\" }, 1); p.0 }\n\
+                 fn main() { let x = mk(); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            (
+                "explicit-return",
+                "fn take(p: (R, i64)) -> R { return p.0; }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            // Early `return` inside a branch — a different lowering path from
+            // the last-statement return above.
+            (
+                "early-return",
+                "fn take(p: (R, i64), f: bool) -> R { if f { return p.0; } p.0 }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1), true); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            (
+                "struct-literal-field",
+                "struct H { r: R }\n\
+                 fn take(p: (R, i64)) -> H { H { r: p.0 } }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.r.id} {x.r.name}\") }",
+                "41 n41\n",
+            ),
+            // The tuple lives as a struct FIELD and the move is off `self`.
+            (
+                "method-self",
+                "struct B { p: (R, i64) }\n\
+                 impl B { fn take(self) -> R { self.p.0 } }\n\
+                 fn main() { let b = B { p: (R { id: 41, name: f\"n{41}\" }, 1) }; let x = b.take(); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            // Element ONE, so the fix is not index-0 special-casing.
+            (
+                "second-element",
+                "fn take(p: (i64, R)) -> R { p.1 }\n\
+                 fn main() { let x = take((1, R { id: 41, name: f\"n{41}\" })); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            // A `Vec` payload rather than a `String`. This row is also the
+            // run-vs-build witness: pre-fix it aborted under LLJIT while the
+            // -O2 AOT build happened to survive, so a `karac build`-only check
+            // would have called this shape clean.
+            (
+                "vec-payload",
+                "struct V { id: i64, xs: Vec[i64] }\n\
+                 fn take(p: (V, i64)) -> V { p.0 }\n\
+                 fn main() { let x = take((V { id: 41, xs: [1, 2] }, 1)); println(f\"{x.id} {x.xs.len()}\") }",
+                "41 2\n",
+            ),
+            // A field INSIDE the element — the deeper-place peer, reached by
+            // `suppress_place_field_struct_move_source`.
+            (
+                "nested-field-return",
+                "fn take(p: (R, i64)) -> String { p.0.name }\n\
+                 fn main() { let a = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{a}\") }",
+                "n41\n",
+            ),
+            (
+                "nested-field-literal",
+                "struct H { s: String }\n\
+                 fn take(p: (R, i64)) -> H { H { s: p.0.name } }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.s}\") }",
+                "n41\n",
+            ),
+            // The ARRAY peer at the literal position: `return a[0]` was
+            // already suppressed, `H { r: a[0] }` was not.
+            (
+                "array-elem-literal",
+                "struct H { r: R }\n\
+                 fn take(a: Array[R, 2]) -> H { H { r: a[0] } }\n\
+                 fn main() { let x = take([R { id: 41, name: f\"n{41}\" }, R { id: 9, name: f\"m{9}\" }]); println(f\"{x.r.id} {x.r.name}\") }",
+                "41 n41\n",
+            ),
+            // ---- controls: already correct, and must STAY correct ----
+            // The row's own "the destructure spelling is clean" control.
+            (
+                "control-destructure",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            // A `ref` tuple param: the callee does NOT own the storage, so
+            // zeroing here would strand the CALLER's buffer. The second line
+            // reads that field back through the caller's binding — which is
+            // what an over-firing suppression would print empty.
+            (
+                "control-ref-param",
+                "fn peek(p: ref (R, i64)) -> i64 { p.0.id }\n\
+                 fn main() { let p = (R { id: 41, name: f\"n{41}\" }, 1); println(f\"{peek(p)}\"); println(f\"{p.0.name}\") }",
+                "41\nn41\n",
+            ),
+            // The source tuple is READ AGAIN after the element moved out.
+            (
+                "control-reuse-after-move",
+                "fn main() { let p = (R { id: 41, name: f\"n{41}\" }, 1); let a = p.0; println(f\"{a.name}\"); println(f\"{p.1}\") }",
+                "n41\n1\n",
+            ),
+            // The `let` spelling the pre-fix compiler already handled — the
+            // one position that WAS covered, kept as a fixed point.
+            (
+                "control-let-binding",
+                "fn take(p: (R, i64)) -> i64 { let r = p.0; r.id }\n\
+                 fn main() { let a = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{a}\") }",
+                "41\n",
+            ),
+            // A struct param's field projection — the row's PARAM SHAPE
+            // control, isolating this to tuple/array element sources.
+            (
+                "control-struct-param",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { w.r }\n\
+                 fn main() { let x = take(W { r: R { id: 41, name: f\"n{41}\" }, n: 1 }); println(f\"{x.id} {x.name}\") }",
+                "41 n41\n",
+            ),
+            // A scalar-only element: no heap, so nothing to double free.
+            (
+                "control-scalar-element",
+                "struct S { id: i64 }\n\
+                 fn take(p: (S, i64)) -> S { p.0 }\n\
+                 fn main() { let x = take((S { id: 41 }, 1)); println(f\"{x.id}\") }",
+                "41\n",
+            ),
+            // A BARE heap element rather than a struct that carries heap.
+            (
+                "control-bare-string-element",
+                "fn take(p: (String, i64)) -> String { p.0 }\n\
+                 fn main() { let x = take((f\"n{41}\", 1)); println(f\"{x}\") }",
+                "n41\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{DECL}{body}\n");
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(*want),
+                "[{label}] wrong output — or `None`, which for this fixture means \
+                 the binary ABORTED, the pre-fix double free"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

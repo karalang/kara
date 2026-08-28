@@ -57017,4 +57017,96 @@ fn main() {
             "shared-temp-receiver-heap-field-read",
         );
     }
+
+    /// B-2026-08-28-15 — a heap-carrying element moved out of an owned tuple
+    /// by `.N` at an ESCAPING position leaves the frame; the tuple's own
+    /// scope-exit drop must not free it a second time.
+    ///
+    /// Pre-fix this aborted the process (`free(): double free detected in
+    /// tcache 2`), which under ASAN reports as a heap-use-after-free inside
+    /// the `memcpy` that copies the returned element — the projected copy
+    /// reads the element's control block after the source tuple freed the
+    /// buffer. Note that the failure is a SIGNAL, not an output mismatch, so a
+    /// revert of the fix kills the process rather than printing wrong bytes.
+    ///
+    /// Elements are seeded from `env.args().len()` and read back per element,
+    /// because the harness compiles at -O2 by default and a provably-dead
+    /// allocation is deleted along with the evidence (the B-2026-08-24-5
+    /// lesson). String payloads are built with f-strings for the same reason a
+    /// sibling fixture gives: a literal is rodata with `cap == 0`, so the
+    /// second free would be a silent no-op and the fixture would pass
+    /// vacuously against the very defect it exists for.
+    ///
+    /// Leak coverage is the other half and is why this belongs here rather
+    /// than only in `tests/codegen.rs`: the fix ADDS cap-zeroing, and a
+    /// suppression that fired one position too wide would orphan the buffer
+    /// instead of double-freeing it — invisible to any exit code, caught by
+    /// LSan on the Linux CI leg. (e)-(g) are the positions where the consumer
+    /// does not take ownership, so they must stay un-suppressed.
+    #[test]
+    fn asan_tuple_elem_escaping_the_frame_is_freed_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+struct V { id: i64, xs: Vec[i64] }
+struct H { r: R }
+struct B { p: (R, i64) }
+impl B { fn take(self) -> R { self.p.0 } }
+fn tail(p: (R, i64)) -> R { p.0 }
+fn ret(p: (R, i64)) -> R { return p.0; }
+fn lit(p: (R, i64)) -> H { H { r: p.0 } }
+fn nested(p: (R, i64)) -> String { p.0.name }
+fn vecpay(p: (V, i64)) -> V { p.0 }
+fn arr_lit(a: Array[R, 2]) -> H { H { r: a[0] } }
+fn peek(p: ref (R, i64)) -> i64 { p.0.id }
+fn main() {
+    let base: i64 = env.args().len();
+    // (a) the filed shape: fn tail off an owned tuple param.
+    let a = tail((R { id: base, name: f"n{base}" }, 1));
+    println(f"a={a.id} {a.name}");
+    // (b) explicit `return` — a different lowering path.
+    let b = ret((R { id: base + 1, name: f"n{base + 1}" }, 1));
+    println(f"b={b.id} {b.name}");
+    // (c) moved into an aggregate LITERAL field.
+    let c = lit((R { id: base + 2, name: f"n{base + 2}" }, 1));
+    println(f"c={c.r.id} {c.r.name}");
+    // (d) a field INSIDE the element — the deeper-place peer.
+    let d = nested((R { id: base + 3, name: f"n{base + 3}" }, 1));
+    println(f"d={d}");
+    // (e) a `Vec` payload, and the run-vs-build witness: pre-fix this aborted
+    // under LLJIT while the -O2 AOT build survived.
+    let mut xs: Vec[i64] = Vec.new();
+    xs.push(base + 4);
+    xs.push(base + 5);
+    let e = vecpay((V { id: base + 4, xs: xs }, 1));
+    println(f"e={e.id} {e.xs.len()} {e.xs[1]}");
+    // (f) the ARRAY peer at the literal position.
+    let f = arr_lit([R { id: base + 6, name: f"n{base + 6}" },
+                     R { id: base + 7, name: f"n{base + 7}" }]);
+    println(f"f={f.r.id} {f.r.name}");
+    // (g) the tuple as a struct FIELD, moved off `self`.
+    let g = B { p: (R { id: base + 8, name: f"n{base + 8}" }, 1) }.take();
+    println(f"g={g.id} {g.name}");
+    // (h) LEAK CONTROL — a `ref` param does not take ownership, so the caller
+    // still owns and must still free. An over-firing suppression strands this
+    // buffer; LSan is the only thing that would say so.
+    let h = (R { id: base + 9, name: f"n{base + 9}" }, 1);
+    println(f"h={peek(h)} {h.0.name}");
+    // (i) LEAK CONTROL — the source tuple is read again after the move.
+    let i = (R { id: base + 10, name: f"n{base + 10}" }, 7);
+    let iv = i.0;
+    println(f"i={iv.name} {i.1}");
+    // (j) LEAK CONTROL — the `let` position, already correct pre-fix.
+    let j = (R { id: base + 11, name: f"n{base + 11}" }, 1);
+    let jv = j.0;
+    println(f"j={jv.id} {jv.name}");
+}
+"#,
+            &[
+                "a=1 n1", "b=2 n2", "c=3 n3", "d=n4", "e=5 2 6", "f=7 n7", "g=9 n9", "h=10 n10",
+                "i=n11 7", "j=12 n12",
+            ],
+            "tuple-elem-escaping-position",
+        );
+    }
 }
