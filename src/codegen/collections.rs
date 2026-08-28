@@ -4146,6 +4146,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap())
     }
 
+    /// B-2026-08-28-36 — hand a container-element struct CLONE over to a
+    /// destination that now owns it, by zeroing the caps of its heap fields so
+    /// the clone's own `track_struct_var` registration finds nothing to free.
+    ///
+    /// The return / call-argument / block-tail positions reach the same
+    /// takeover through `suppress_source_vec_cleanup_for_arg_ex`; a `let` site
+    /// does not route through that, so it calls this directly. A no-op unless
+    /// `value`'s span actually produced such a clone, which is what makes it
+    /// safe to call unconditionally.
+    pub(super) fn take_over_container_elem_struct_clone(&mut self, value: &Expr) {
+        if let Some((slot, sname)) = self
+            .container_elem_struct_clone_slots
+            .get(&(value.span.offset, value.span.length))
+            .cloned()
+        {
+            self.zero_struct_heap_field_caps(slot, &sname);
+        }
+    }
+
     /// B-2026-08-13-6 — the SHARED-struct sibling of
     /// [`Self::clone_vec_elem_heap_field_read`]: `let w = i.word` where `i` is a
     /// `shared struct` handed back a `{ptr,len,cap}` ALIAS of the buffer inside
@@ -4391,6 +4410,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert((expr.span.offset, expr.span.length), dst);
             self.vec_elem_field_clone_log
                 .push((expr.span.offset, expr.span.length));
+        } else if let TypeKind::Path(mp) = &mte.kind {
+            // B-2026-08-28-36 — a whole-STRUCT leaf carrying heap. The arm above
+            // covers a `{ptr,len,cap}` member; a struct member is cloned here
+            // too but registered NOTHING, so the clone leaked whenever no
+            // consuming destination adopted it — measured 4 bytes under LSan on
+            // `fn take(v: Vec[(R, i64)]) -> i64 { peek(v[0].0) }`, a read handed
+            // to a `ref` param. Register the struct's own cleanup and record the
+            // clone so a CONSUMING destination takes it over instead.
+            if let Some(mname) = mp.segments.last().cloned() {
+                if self.type_decls.struct_types.contains_key(mname.as_str())
+                    && !self.type_decls.shared_types.contains_key(mname.as_str())
+                    && self.type_expr_has_drop_heap(&mte)
+                {
+                    self.track_struct_var(&mname, dst);
+                    self.container_elem_struct_clone_slots
+                        .insert((expr.span.offset, expr.span.length), (dst, mname));
+                }
+            }
         }
         Ok(self
             .builder

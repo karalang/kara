@@ -1466,6 +1466,15 @@ pub(super) struct Codegen<'ctx> {
     /// binding to look up.
     pub(crate) vec_elem_field_clone_slots:
         std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
+    /// B-2026-08-28-36 — the STRUCT-leaf peer of `vec_elem_field_clone_slots`:
+    /// clones made by `clone_vec_elem_tuple_index_read` when the projected leaf
+    /// is a whole heap-carrying user struct rather than a `{ptr,len,cap}`,
+    /// keyed by the read's span and carrying the clone slot plus the struct's
+    /// name. A consuming destination takes the clone over by zeroing the caps
+    /// of its heap FIELDS (`zero_struct_heap_field_caps`) — the struct-shaped
+    /// analogue of zeroing a `{ptr,len,cap}`'s cap.
+    pub(crate) container_elem_struct_clone_slots:
+        std::collections::HashMap<(usize, usize), (PointerValue<'ctx>, String)>,
     /// B-2026-08-12-33 — the same clones as `vec_elem_field_clone_slots`, in
     /// EMISSION ORDER, so a later consumer can ask "was this span cloned
     /// *during this evaluation*" rather than "has it ever been cloned".
@@ -5708,6 +5717,7 @@ impl<'ctx> Codegen<'ctx> {
                 drop_fn_cache: HashMap::new(),
             },
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
+            container_elem_struct_clone_slots: std::collections::HashMap::new(),
             deferred_shared_temp_release: None,
             vec_elem_field_clone_log: Vec::new(),
             in_return_defensive_copy: false,

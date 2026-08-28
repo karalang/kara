@@ -8230,6 +8230,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&value.kind, ExprKind::TupleIndex { .. }) {
                             self.suppress_tuple_index_move_source(value);
                         }
+                        // B-2026-08-28-36 — `let r = v[0].0` where the leaf is a
+                        // heap-carrying struct: the read was deep-cloned (the
+                        // container still owns its element) and this binding now
+                        // owns the clone, so hand the clone's own registration
+                        // over rather than letting both free it. The return /
+                        // call-arg / block-tail positions get the same takeover
+                        // through `suppress_source_vec_cleanup_for_arg_ex`.
+                        self.take_over_container_elem_struct_clone(value);
                         // B-2026-07-15-22 — a heap-bearing STRUCT moved OUT of an
                         // owned struct's FIELD (`let bound = o.inner` where
                         // `inner: Inner` and `Inner` owns heap, e.g. a `Vec`).

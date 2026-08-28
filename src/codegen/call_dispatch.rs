@@ -7768,6 +7768,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // of eight. The container's element is NOT touched: it still owns its
         // own buffer, which is the whole point of cloning rather than
         // spreading the `let` site's source cap-zeroing.
+        // B-2026-08-28-36 — the STRUCT-leaf peer of the arm below: a `v[0].0`
+        // clone whose leaf is a whole heap-carrying struct, which registers a
+        // `track_struct_var` rather than a vec cleanup. Same takeover, one shape
+        // wider: zero the caps of the clone's heap FIELDS so its registration
+        // finds nothing left to free, while the container's own element keeps
+        // its buffers untouched.
+        if let Some((slot, sname)) = self
+            .container_elem_struct_clone_slots
+            .get(&(arg_expr.span.offset, arg_expr.span.length))
+            .cloned()
+        {
+            self.zero_struct_heap_field_caps(slot, &sname);
+            return;
+        }
         if let Some(slot) = self
             .vec_elem_field_clone_slots
             .get(&(arg_expr.span.offset, arg_expr.span.length))

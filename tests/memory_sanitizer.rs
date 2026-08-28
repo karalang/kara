@@ -1124,6 +1124,67 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-36 — a container-element tuple-index read whose leaf is a
+    /// whole heap-carrying STRUCT frees its clone exactly once, at every
+    /// position.
+    ///
+    /// B-2026-08-28-24 made `v[0].0` deep-clone instead of aliasing, which
+    /// closed the double free. It registered cleanup for the clone only when
+    /// the projected member is a `{ptr,len,cap}`; a whole-STRUCT member was
+    /// cloned and then owned by nobody, so any read that no destination adopted
+    /// leaked it — 4 bytes under LSan for `peek(v[0].0)` through a `ref` param.
+    ///
+    /// THE TWO ROWS HERE ARE A PAIR AND MUST STAY THAT WAY, because the naive
+    /// repairs move the bug rather than fix it. Registering nothing (the
+    /// pre-fix state) leaks `ref-param`. Registering the clone's cleanup
+    /// without handing it over double-frees `let-bound`, since the binding
+    /// frees it too — measured, not hypothesized. So the clone keeps its
+    /// `track_struct_var` AND every consuming destination neutralizes that
+    /// registration: return / call-arg / block-tail through
+    /// `suppress_source_vec_cleanup_for_arg_ex`, and a `let` through
+    /// `take_over_container_elem_struct_clone`.
+    ///
+    /// Neither failure is visible in stdout — all three variants print the same
+    /// thing — which is why this is a sanitizer fixture and has no behavioural
+    /// twin.
+    #[test]
+    fn asan_container_elem_struct_leaf_clone_is_owned_once() {
+        const H: &str = "struct R { id: i64, name: String }\n";
+        // NON-consuming: handed to a `ref` param, so nothing adopts the clone
+        // and its own registration has to free it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn peek(r: ref R) -> i64 {{ r.id }}\n\
+             fn take(v: Vec[(R, i64)]) -> i64 {{ peek(v[0].0) }}\n\
+             fn main() {{ let q = [(R {{ id: 41, name: f\"n{{41}}\" }}, 1)];\n\
+             \x20            println(f\"{{take(q)}}\"); }}\n"
+            ),
+            &["41"],
+            "ref-param",
+        );
+        // Consuming `let`: the binding adopts the clone, so the clone's own
+        // registration must be neutralized or both free it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(v: Vec[(R, i64)]) -> i64 {{ let r = v[0].0; r.id }}\n\
+             fn main() {{ let q = [(R {{ id: 41, name: f\"n{{41}}\" }}, 1)];\n\
+             \x20            println(f\"{{take(q)}}\"); }}\n"
+            ),
+            &["41"],
+            "let-bound",
+        );
+        // Consuming return — B-2026-08-28-24's own shape, which must stay clean.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(v: Vec[(R, i64)]) -> R {{ v[0].0 }}\n\
+             fn main() {{ let q = [(R {{ id: 41, name: f\"n{{41}}\" }}, 1)];\n\
+             \x20            let x = take(q); println(f\"{{x.id}} {{x.name}}\"); }}\n"
+            ),
+            &["41 n41"],
+            "return-position",
+        );
+    }
+
     #[test]
     fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
         for (label, decl, arg) in [

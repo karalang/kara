@@ -4210,6 +4210,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::zero_tuple_elem_caps`]). Used at a single-element move-out —
     /// `let x = t.0` — where only element `idx` is consumed and the tuple's
     /// other elements stay owned by the source.
+    /// B-2026-08-28-36 — zero the caps of every heap FIELD of a struct value at
+    /// `base`: the struct-shaped analogue of zeroing a `{ptr,len,cap}`'s cap.
+    ///
+    /// Hands a container-element struct CLONE over to a consuming destination.
+    /// The clone keeps its own `track_struct_var` registration so a
+    /// NON-consuming read does not leak, and a consumer neutralizes that
+    /// registration field by field rather than retracting it — which is what
+    /// keeps the consumer side `&self`, exactly as the `{ptr,len,cap}` sibling
+    /// does and for the same reason.
+    ///
+    /// Reuses [`Self::zero_tuple_elem_cap_at`] per field: that helper is named
+    /// for tuples but is generic over "a struct-typed base pointer, a field
+    /// index, and that field's `TypeExpr`", which is exactly this walk.
+    pub(super) fn zero_struct_heap_field_caps(&self, base: PointerValue<'ctx>, sname: &str) {
+        let Some(st) = self.type_decls.struct_types.get(sname).copied() else {
+            return;
+        };
+        let Some(ftes) = self.type_decls.struct_field_type_exprs.get(sname).cloned() else {
+            return;
+        };
+        for (i, fte) in ftes.iter().enumerate() {
+            self.zero_tuple_elem_cap_at(base, st, i as u32, fte);
+        }
+    }
+
     pub(super) fn zero_tuple_elem_cap_at(
         &self,
         base_ptr: PointerValue<'ctx>,
