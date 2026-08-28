@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 72 | 6 |
+| soundness | 72 | 5 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1155 | 14 |
+| codegen | 1155 | 13 |
 | typecheck | 278 | 0 |
-| interp | 212 | 7 |
+| interp | 212 | 6 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1717 surfaced · 14 open · 1677 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1717 surfaced · 13 open · 1678 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1717 surfaced
 | B-2026-08-28-23 | 2026-08-28 | interp+codegen | low | A NESTED PROJECTION out of an owned struct param still double-runs the field's user `Drop` body: `fn take(w: W) -> R { w.inner.r }` prints `drop 41` twice for one `R` on all three backends. This is `fn_returns_param_parts`' DOCUMENTED under-approximation working as designed -- it classifies a projection only off the WHOLE param and declines a projection-of-a-projection by construction, which leaves the pre-existing double body (the safe direction) -- so closing it widens the ANALYSIS, not the two caller-side sites B-2026-08-28-17 finished | — |
 | B-2026-08-28-26 | 2026-08-28 | codegen | medium | A TUPLE-TYPED BINDING LEAF loses its inner element's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` / `karac build`. The leaf is a `PatternKind::Binding` whose element `TypeExpr` is a `TypeKind::Tuple`, so it clears the place-source walker's PATTERN test and then exits at its `TypeKind::Path` test -- one step past where B-2026-08-28-8's nested-PATTERN spelling failed | — |
 | B-2026-08-28-29 | 2026-08-28 | codegen | medium | A destructure of a FRESH STRUCT source loses user `Drop` bodies on BOTH compiled backends while the interpreter runs one: `let W { r, n } = mk()` and the struct-literal spelling both print nothing where one `drop 41` is due. Two separable roots -- `expr_yields_fresh_owned_temp` admits only `Call`/`MethodCall`, so a struct LITERAL never reaches the leaf path at all (the tuple literal got exactly this widening in B-2026-08-28-1 and the struct spelling never did), and even on the admitted call spelling the BOUND leaf registers memory cleanup but no user body. PLACE, PARAM and TUPLE sources are all correct, which is what localizes it | — |
-| B-2026-08-28-40 | 2026-08-28 | interp+codegen | medium | A WILDCARD DESTRUCTURE LEAF RUNS ONE `Drop` BODY WHERE THE SAME VALUE BOUND RUNS TWO, so a discarded aggregate's INNER object never gets its body: `let (_, n) = (E.A(R { id: 41 }), 1)` runs `drop E` on all three backends where `let e = E.A(R { id: 41 })` runs `drop E` + `drop R41` on all three. Backend-CONSISTENT, so no parity gate can report it -- the same failure shape the original B-2026-08-28-12 family had, one ownership level down | — |
 | B-2026-08-28-43 | 2026-08-28 | interp+codegen | medium | TWO MORE SPELLINGS OF A DISCARDED PAYLOADLESS OWN-`Drop` ENUM VARIANT STILL RUN NO BODY: `let _ = B;` (the BARE spelling) is interp 1 / compiled 0, and the bare STATEMENT `E.B;` is 0/0/0. B-2026-08-28-41 fixed the qualified `let _ = E.B` on both backends; the bare `let` spelling is blocked by a deliberate invariant -- the aggregate registrar never matches an `Identifier` argument, since a let-bound enum's drop belongs to its binding and a second caller-side drop would be a double free -- and the bare statement is a different dispatch entirely | — |
 | B-2026-08-28-44 | 2026-08-28 | codegen | low | TWO SHAPES OF THE B-2026-08-28-32 FAMILY STILL LEAK, on mechanisms that row's fix does not touch: a container-element heap read consumed by an unbound TUPLE LITERAL (`println((p[1].word, 9).0)`) or handed out of a MATCH ARM (`println(match c { true => p[1].word, ... })`) loses the clone -- 3 bytes in 1 allocation apiece at -O0. The `if` spelling of the identical match program is CLEAN, so the two branch forms already disagree, and the tuple literal declines for a different reason again: the projected element's TypeExpr is resolved from the CALLEE's return type and a literal has no callee. | — |
 
@@ -175,9 +174,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1717 surfaced
 
 </details>
 
-### Fixed (1677)
+### Fixed (1678)
 
-<details><summary>1677 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1678 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1856,6 +1855,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1717 surfaced
 | B-2026-08-28-37 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String,… | 221cf4c |
 | B-2026-08-28-38 | codegen | medium | A CLOSURE'S BY-VALUE STRUCT PARAM RUNS NO USER `Drop` BODY ON EITHER COMPILED BACKEND while the interpreter runs one: `let f = \|r: R\| { r.id };` and… | 7b30536 |
 | B-2026-08-28-39 | interp | medium | A WHOLE-PATTERN WILDCARD DISCARD OF AN OWN-`Drop` ENUM OMITS THE PAYLOAD BODY IN THE INTERPRETER ONLY: `let _ = E.A(R { id: 41 });` prints `drop E` u… | 4997b9f |
+| B-2026-08-28-40 | interp+codegen | medium | A WILDCARD DESTRUCTURE LEAF RUNS ONE `Drop` BODY WHERE THE SAME VALUE BOUND RUNS TWO, so a discarded aggregate's INNER object never gets its body: `l… | 6673474 |
 | B-2026-08-28-41 | interp+codegen | medium | A PAYLOADLESS VARIANT OF AN OWN-`Drop` ENUM, DISCARDED BY `let _ =`, RUNS ZERO BODIES ON ALL THREE BACKENDS: `let _ = E.B;` where `impl Drop for E` p… | b75a1f0 |
 | B-2026-08-28-42 | codegen | high | A HEAP FIELD READ OFF A FIELD-ROOTED CONTAINER IS NEVER CLONED AND DOUBLE-FREES: `h.xs[0].name` where `struct H { xs: Vec[R] }` and `struct R { id: i… | ed405c3 |
 
