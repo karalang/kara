@@ -12536,6 +12536,56 @@ fn main() {
                  fn main() { let x = take((R { id: 41 }, R { id: 42 })); println(f\"{x.id}\"); }\n",
                 "41\ndrop 41\ndrop 42\n",
             ),
+            // B-2026-08-28-16 — the same shapes with a LOCAL as the argument
+            // instead of a literal. Everything above passes a fresh tuple TEMP,
+            // which the caller-side parts filter reaches; a bare identifier is
+            // a PLACE and never enters that walk, so the second body came from
+            // the local's OWN element walk firing at its live-range end on a
+            // value the callee had already handed back. Fixed by recording the
+            // escape as a per-element move-out on the local, the same mask
+            // `let x = t.N` uses.
+            (
+                "local-arg-destructure-return",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { let q = (R { id: 41 }, 1); let x = take(q);\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            (
+                "local-arg-tuple-index-return",
+                "fn take(p: (R, i64)) -> R { p.0 }\n\
+                 fn main() { let q = (R { id: 41 }, 1); let x = take(q);\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // THE ROW THAT PINS THE MASK AS PER-ELEMENT. Only element 0
+            // escapes; element 1 dies inside the call and its body must still
+            // run caller-side. Suppressing the local's whole walk instead —
+            // the obvious coarser fix — loses `drop 42` here.
+            (
+                "local-arg-two-droppers",
+                "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
+                 fn main() { let q = (R { id: 41 }, R { id: 42 }); let x = take(q);\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "drop 42\n41\ndrop 41\n",
+            ),
+            // CONTROL — the callee returns the OTHER element, so nothing
+            // escapes and the local's walk must stay fully armed. Correct
+            // before this fix; it is what a too-eager mask would break.
+            (
+                "local-arg-nothing-escapes",
+                "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
+                 fn main() { let q = (R { id: 41 }, 1); let x = take(q);\n\
+                 \x20            println(f\"{x}\"); }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — no call at all. The local's own walk is the only
+            // owner and runs once.
+            (
+                "local-no-call",
+                "fn main() { let q = (R { id: 41 }, 1); println(f\"{q.1}\"); }\n",
+                "1\ndrop 41\n",
+            ),
             // Two calls — the per-callee answer is not cached across sites in a
             // way that leaks between them.
             (

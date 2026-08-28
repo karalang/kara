@@ -1073,6 +1073,35 @@ fn main() {
                  fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id}\"); }\n",
                 vec!["41", "drop 41 n41"],
             ),
+            // B-2026-08-28-16 — the LOCAL-argument spelling, which reaches the
+            // escape through a different caller-side owner (the local's own
+            // element walk rather than the fresh-temp walk) and is therefore a
+            // separate registration to get wrong. Same memory claim: the fix
+            // masks BODIES only, so element 0's buffer must still be freed
+            // exactly once, by the result's owner.
+            //
+            // The `p.0` projection spelling is absent here for the reason given
+            // above — at a heap-carrying `R` it is a pre-existing
+            // use-after-free filed on its own row, and the behavioural twins
+            // cover that spelling at a scalar `R`.
+            (
+                "local-arg-destructure-return",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { let q = (R { id: 41, name: f\"n{41}\" }, 1);\n\
+                 \x20            let x = take(q); println(f\"{x.id}\"); }\n",
+                vec!["41", "drop 41 n41"],
+            ),
+            // The per-element load-bearing row, at a heap `R`: masking one
+            // element too many leaks element 1's buffer, which no stdout
+            // assertion in the behavioural twins would notice.
+            (
+                "local-arg-two-droppers",
+                "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
+                 fn main() { let q = (R { id: 41, name: f\"n{41}\" },\n\
+                 \x20                 R { id: 42, name: f\"n{42}\" });\n\
+                 \x20            let x = take(q); println(f\"{x.id}\"); }\n",
+                vec!["drop 42 n42", "41", "drop 41 n41"],
+            ),
             (
                 "result-discarded",
                 "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\

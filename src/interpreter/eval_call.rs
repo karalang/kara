@@ -2647,6 +2647,32 @@ impl<'a> super::Interpreter<'a> {
             }) {
                 continue;
             }
+            // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose
+            // ELEMENT escapes through the callee's return. The fresh-temp walk
+            // below is gated on `ExprKind::Tuple`, so a bare identifier never
+            // reaches it and its B-2026-08-28-2 filter never applies; the second
+            // body here is the LOCAL's own element walk firing at `q`'s
+            // live-range end on a value the callee already handed back.
+            //
+            // Recorded as a per-element MOVE rather than skipped at a walk,
+            // because that is the mechanism the local's cleanup already
+            // consults: `run_array_element_user_drops` skips exactly the
+            // indices in `moved_out_tuple_elem_bodies` (B-2026-08-03-3, for
+            // `let x = t.N`). A callee that returns element N is the same
+            // move, reached through a call instead of a projection.
+            //
+            // TOP-LEVEL elements only, matching the fresh-temp filter: a deeper
+            // path names something INSIDE an element, which the per-element
+            // skip cannot express (B-2026-08-28-23).
+            if let ExprKind::Identifier(src) = &arg.value.kind {
+                if matches!(arg_vals.get(i), Some(Value::Tuple(_))) {
+                    for path in self.callee_returned_param_parts(callee_name, i) {
+                        if let [crate::ast::ParamPart::TupleIndex(idx)] = path.as_slice() {
+                            self.moved_out_tuple_elem_bodies.insert((src.clone(), *idx));
+                        }
+                    }
+                }
+            }
             // B-2026-07-30-11 (param-tuple leg, the A shape): a tuple
             // LITERAL arg (`take_tuple((Res { id: 41 }, 10))`) moved into
             // the callee's tuple param never ran its Drop-carrying

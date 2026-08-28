@@ -32181,6 +32181,40 @@ fn test_returned_tuple_param_element_user_drop_body_runs_once() {
              fn main() { let x = take((R { id: 41 }, R { id: 42 })); println(f\"{x.id}\") }\n",
             "drop 42\n41\ndrop 41\n",
         ),
+        // B-2026-08-28-16 — the same shapes with a LOCAL as the argument. Every
+        // row above passes a fresh tuple TEMP, which the caller-side parts
+        // filter reaches; a bare identifier is a PLACE and never enters that
+        // walk, so the second body came from the local's OWN element walk
+        // firing at its live-range end on a value the callee had handed back.
+        (
+            "local-arg-destructure-return",
+            "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+             fn main() { let q = (R { id: 41 }, 1); let x = take(q); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "local-arg-tuple-index-return",
+            "fn take(p: (R, i64)) -> R { p.0 }\n\
+             fn main() { let q = (R { id: 41 }, 1); let x = take(q); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // Carries the same load as `two-droppers` above, for the local: only
+        // element 0 escapes, so masking the local's whole walk loses `drop 42`.
+        (
+            "local-arg-two-droppers",
+            "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
+             fn main() { let q = (R { id: 41 }, R { id: 42 }); let x = take(q);\n\
+             \x20            println(f\"{x.id}\") }\n",
+            "drop 42\n41\ndrop 41\n",
+        ),
+        // CONTROL — nothing escapes, so the local's walk stays fully armed.
+        // Correct before this fix; it is what a too-eager mask would break.
+        (
+            "local-arg-nothing-escapes",
+            "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
+             fn main() { let q = (R { id: 41 }, 1); let x = take(q); println(f\"{x}\") }\n",
+            "drop 41\n1\n",
+        ),
         // CONTROL — the OTHER element is returned, so the dropper dies in the
         // call and the caller-side walk is its only body.
         (

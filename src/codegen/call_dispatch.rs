@@ -2122,6 +2122,43 @@ impl<'ctx> super::Codegen<'ctx> {
                     &escaping_parts,
                 );
             }
+            // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose
+            // ELEMENT escapes through the callee's return. Everything above is
+            // gated on an INLINE aggregate, so a bare identifier never reaches
+            // the parts filter and the caller's own element walk still fired on
+            // a value the callee had handed back — two bodies for one object,
+            // on every backend.
+            //
+            // Reuses the `let x = t.N` move-out mask rather than adding an
+            // argument-site skip list, because a callee that returns element N
+            // IS that move, reached through a call instead of a projection.
+            // `disarm_tuple_elem_bodies_at` re-registers the walk with the
+            // index masked, so the tuple's OTHER elements keep their bodies —
+            // the distinction that makes this different from suppressing the
+            // whole walk (measured on `fn take(p: (R, R)) -> R` in
+            // B-2026-08-28-2: the coarse form loses element 1's only body).
+            //
+            // TOP-LEVEL elements only, matching the inline filter: a deeper
+            // path names something inside an element, which a per-element mask
+            // cannot express (B-2026-08-28-23).
+            if let ExprKind::Identifier(src) = &a.value.kind {
+                let src = src.clone();
+                let idxs: Vec<u32> = self
+                    .callee_returned_param_parts(&name, i)
+                    .iter()
+                    .filter_map(|path| match path.as_slice() {
+                        [crate::ast::ParamPart::TupleIndex(idx)] => Some(*idx as u32),
+                        _ => None,
+                    })
+                    .collect();
+                if !idxs.is_empty() {
+                    if let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(&a.value) {
+                        for idx in idxs {
+                            self.disarm_tuple_elem_bodies_at(&src, idx, tuple_ty);
+                        }
+                    }
+                }
+            }
             // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
             // `Option[Vec]` binding MOVED by value into a user function that
             // OWNS + frees it (`consume(sv)` where `sv: Option[String]` is a
