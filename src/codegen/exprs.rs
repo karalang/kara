@@ -1294,7 +1294,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.share_direct_shared_field_ref_for_return(object, field, v);
                     }
                     if let ExprKind::Identifier(name) = &e.kind {
-                        self.suppress_user_drop_for_var(name);
+                        // B-2026-08-28-65 — a `return r;` NESTED in a branch
+                        // moves `r` only on the path that takes it, but the
+                        // removal below is a compile-time frame retraction and
+                        // disarms every path, so a fall-through that never
+                        // reaches this `return` runs no `Drop` body. Prefer the
+                        // runtime bit (B-2026-08-28-51's `cond_move` flag) when
+                        // the action lives in an ENCLOSING frame, which is the
+                        // test for "nested"; an unconditional top-level
+                        // `return r;` finds it in the innermost frame, declines
+                        // the guard, and keeps the static removal. Same trade as
+                        // the memory-side siblings below, which already use
+                        // runtime sentinels for exactly this reason.
+                        if !self.guard_user_drop_for_nested_return(name) {
+                            self.suppress_user_drop_for_var(name);
+                        }
                         self.suppress_map_cleanup_for_tail_identifier(name);
                         // B-2026-08-06-32 — an explicit `return b;` of a
                         // binding whose INLINE payload hides a box hands that

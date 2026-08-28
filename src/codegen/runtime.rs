@@ -8316,6 +8316,77 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
     }
 
+    /// B-2026-08-28-65 — the UNDER-FIRE horn of B-2026-08-28-51's mechanism.
+    /// An explicit `return <ident>` NESTED in a branch (`if k { return r; }`)
+    /// is a move on the path that takes it and a no-op on every other path,
+    /// but [`Self::suppress_user_drop_for_var`] is a compile-time frame
+    /// removal: it disarms the binding on ALL paths, so a fall-through that
+    /// never reaches the `return` runs no `Drop` body at all. The interpreter
+    /// retracts from the CURRENT block's cleanup vector, which for a nested
+    /// `return` does not hold the binding, so the retraction no-ops there and
+    /// only the compiled backends lose the body — a run-vs-build divergence.
+    ///
+    /// Replace the removal with the runtime bit B-2026-08-28-51 introduced:
+    /// keep the action armed and store `false` into the binding's
+    /// `cond_move_drop_flag` at the `return`, so the guarded fire
+    /// ([`Self::emit_user_drop_call_guarded`], which covers BOTH the
+    /// scope-exit drain and the NLL live-range-end channel) skips the body on
+    /// the returning path and runs it on the others. Returns `true` when the
+    /// guard was installed, i.e. when the caller must NOT also remove.
+    ///
+    /// This is the same trade the memory-side siblings in this same `return`
+    /// arm already make — `suppress_boxed_enum_payload_cleanup_for_owner`'s
+    /// "runtime word-0 zero, not a queue retract, so a binding returned on one
+    /// path and consumed on another still frees its box on the consuming
+    /// path", and `neutralize_moved_soa_groups_slot`'s "the early-return
+    /// cleanup frame is shared with the fall-through path ... frame removal
+    /// would leak it there". Bodies had no such sentinel until -51 built one.
+    ///
+    /// GATED on the action living in an ENCLOSING frame, which is exactly the
+    /// test for "this `return` is nested". An UNCONDITIONAL `return r;` at the
+    /// body's top level finds the action in the innermost frame, takes no
+    /// guard, and keeps today's static removal — so the only behaviour that
+    /// changes is the conditional case, and unconditional moves stay on the
+    /// path every other suppression sibling uses.
+    ///
+    /// WHY RETAINING THE ACTION IS SAFE HERE, given that the three
+    /// frame-membership predicates (`has_armed_user_drop`,
+    /// `has_armed_own_user_drop`, `has_armed_container_elem_bodies`) read
+    /// membership as a proxy for OWNERSHIP and now answer `true` where they
+    /// answered `false`: control flow makes the proxy exact for this shape. If
+    /// the `return` executed, the function has left; so on every path that
+    /// reaches a later reassignment or scope exit, the `return` did NOT run
+    /// and the binding still owns its value. That is precisely the condition
+    /// `has_armed_user_drop`'s displaced-value leg (B-2026-07-30-11) needs,
+    /// and answering `true` there FIXES the same missing body for the
+    /// reassignment spelling rather than risking B-2026-07-31-38's stale-slot
+    /// replay. The argument needs the frame stack to be per-function, which it
+    /// is: `compile_closure_body` `mem::take`s `scope_cleanup_actions` (and
+    /// `cond_move_drop_flags`), so an enclosing function's frames are never
+    /// visible from inside a closure whose `return` exits only the closure.
+    pub(super) fn guard_user_drop_for_nested_return(&mut self, name: &str) -> bool {
+        let depth = self.drop_rc.scope_cleanup_actions.len();
+        if depth == 0 {
+            return false;
+        }
+        let in_enclosing = self.drop_rc.scope_cleanup_actions[..depth - 1]
+            .iter()
+            .any(|frame| {
+                frame.iter().any(|a| {
+                    matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == name)
+                })
+            });
+        if !in_enclosing {
+            return false;
+        }
+        let Some(flag) = self.cond_move_drop_flag_for(name) else {
+            return false;
+        };
+        let bool_t = self.context.bool_type();
+        let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+        true
+    }
+
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {

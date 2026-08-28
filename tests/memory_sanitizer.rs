@@ -59656,4 +59656,66 @@ fn main() {
             "tuple-elem-escaping-position",
         );
     }
+    /// B-2026-08-28-65 — the retained-and-flagged `Drop` action of a local
+    /// returned from a NESTED `return` stays memory-balanced on both paths.
+    ///
+    /// The behavioural twin
+    /// (`e2e_nested_return_local_user_drop_body_runs_on_the_fallthrough`) proves
+    /// the BODY count; this proves the fix did not buy that body with a double
+    /// free or a leak, which is the specific risk of replacing a compile-time
+    /// frame removal with a runtime guard. Pre-fix the fall-through row ran no
+    /// body at all, so a naive repair — dropping the removal without the flag —
+    /// would free the returned buffer in the callee AND at the caller.
+    ///
+    /// The two directions are a pair and must stay that way. `fallthrough` is
+    /// the leak side: `h` dies in the callee, so its buffer must be freed there.
+    /// `return-taken` is the double-free side: `h` escapes, so the callee must
+    /// free nothing and the caller frees once. A guard that is never cleared
+    /// passes the first and double-frees the second; a removal that is never
+    /// replaced passes the second and leaks the first.
+    ///
+    /// `displaced` covers the predicate the fix changes the answer of: retaining
+    /// the action makes `has_armed_user_drop` true, which re-enables the
+    /// displaced-value leg's body AND its frees on the reassignment. Firing that
+    /// on a moved-from slot is B-2026-07-31-38's shape and would show here as a
+    /// free through moved-from bits rather than as wrong stdout.
+    #[test]
+    fn asan_nested_return_local_drop_body_is_memory_balanced() {
+        const DROPPER: &str = "struct H { id: i64, name: String }\n\
+             impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\") } }\n";
+        for (label, body, want) in [
+            (
+                "fallthrough",
+                "fn take(k: bool) -> H { let h = H { id: 41, name: f\"n{41}\" };\n\
+                 \x20  if k { return h; } H { id: 99, name: f\"n{99}\" } }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                vec!["drop n41", "99", "drop n99"],
+            ),
+            (
+                "return-taken",
+                "fn take(k: bool) -> H { let h = H { id: 41, name: f\"n{41}\" };\n\
+                 \x20  if k { return h; } H { id: 99, name: f\"n{99}\" } }\n\
+                 fn main() { let x = take(true); println(f\"{x.id}\"); }\n",
+                vec!["41", "drop n41"],
+            ),
+            (
+                "displaced",
+                "fn take(k: bool) -> H { let mut h = H { id: 41, name: f\"n{41}\" };\n\
+                 \x20  if k { return h; }\n\
+                 \x20  h = H { id: 99, name: f\"n{99}\" }; h }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                vec!["drop n41", "99", "drop n99"],
+            ),
+            // CONTROL — the UNCONDITIONAL `return`, which keeps the static
+            // removal. Its memory answer must be untouched by the fix.
+            (
+                "unconditional-return-control",
+                "fn take() -> H { let h = H { id: 41, name: f\"n{41}\" }; return h; }\n\
+                 fn main() { let x = take(); println(f\"{x.id}\"); }\n",
+                vec!["41", "drop n41"],
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);
+        }
+    }
 }

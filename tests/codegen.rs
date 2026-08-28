@@ -12678,6 +12678,190 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-65 — the UNDER-FIRE horn of B-2026-08-28-51's mechanism: a
+    /// `return <local>` NESTED IN A BRANCH lost the local's `Drop` body on the
+    /// path that never takes the `return`, on all three COMPILED backends while
+    /// the interpreter was right.
+    ///
+    /// `fn take(k) -> R { let r = R { id: 41 }; if k { return r; } R { id: 99 } }`
+    /// with `k = false` printed `99` / `drop 99` under LLJIT, AOT and AOT with
+    /// `KARAC_AUTO_PAR=0`, against `--interp`'s correct `drop 41` / `99` /
+    /// `drop 99`. `r` dies in the callee on that path and must run its body
+    /// there.
+    ///
+    /// The removal was `suppress_user_drop_for_var` in the `ExprKind::Return`
+    /// arm: a compile-time frame retraction, so it disarmed EVERY path, not the
+    /// one that returns. The interpreter's twin retracts from the CURRENT
+    /// block's cleanup vector, which for a nested `return` does not hold the
+    /// binding, so its retraction silently no-ops and it stayed correct by an
+    /// accident of scoping — which is why this was run-vs-build rather than a
+    /// shared wrong answer.
+    ///
+    /// The fix keeps the action armed and clears B-2026-08-28-51's `i1` flag at
+    /// the `return`, so the guarded fire skips the body on the returning path
+    /// and runs it on the others. It is the same trade the MEMORY-side siblings
+    /// in that same `return` arm already make — `neutralize_moved_soa_groups_slot`
+    /// uses a runtime sentinel "not the tail path's compile-time frame removal"
+    /// for exactly this reason, since "the early-return cleanup frame is shared
+    /// with the fall-through path". Bodies simply had no sentinel until -51
+    /// built one.
+    ///
+    /// `unconditional-return` is the row that CONSTRAINS the fix rather than
+    /// reproducing the bug. Its `return r;` is the body's own tail, where the
+    /// static removal is correct and today's behaviour must survive; the guard
+    /// is therefore gated on the action living in an ENCLOSING frame, which is
+    /// exactly the test for "this `return` is nested". Any version that guards
+    /// every `return` takes this row from one body to two.
+    ///
+    /// `displaced-fallthrough` is the row the analysis said was the risk, and it
+    /// is the one that turned out to VALIDATE the fix. Retaining the action
+    /// makes `has_armed_user_drop` answer `true` where it answered `false`, and
+    /// that predicate gates the displaced-value leg (B-2026-07-30-11) which runs
+    /// a reassigned binding's old body. Firing it on a moved-from slot would
+    /// replay B-2026-07-31-38's shape — but control flow makes the proxy exact
+    /// here: if the `return` had executed, the function would have left, so any
+    /// path reaching the reassignment still owns the value. The row therefore
+    /// goes from a MISSING body to a correct one rather than to a stale-slot
+    /// read, and it is the fixture that would catch a regression either way.
+    ///
+    /// `param-nested-return` is NOT fixed and is pinned at its current answer on
+    /// purpose: an owned by-value param is caller-drops, so its body is lost in
+    /// the CALLEE by a different channel — the interprocedural escape predicates
+    /// unioning over return sites, which is B-2026-08-28-22. All four surfaces
+    /// agree there, so it is aligned-wrong rather than run-vs-build, and this
+    /// row exists so that fixing -22 is noticed here rather than silently
+    /// changing an untested expectation.
+    ///
+    /// Twin: `tests/interpreter.rs`'s
+    /// `test_nested_return_local_user_drop_body_runs_on_the_fallthrough`, whose
+    /// expectations are these verbatim — the point of the row is that the three
+    /// backends now agree, so a divergence surfaces as one of the two failing
+    /// against a shared constant.
+    #[test]
+    fn e2e_nested_return_local_user_drop_body_runs_on_the_fallthrough() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct H { id: i64, name: String }\n\
+             impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\"); } }\n";
+        for (label, body, want) in [
+            // The row's own repro: the path that never takes the `return`.
+            // Pre-fix the three compiled backends printed only `99` / `drop 99`.
+            (
+                "nested-return-fallthrough",
+                "fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r; } R { id: 99 } }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // The same program on the path that DOES return: `r` escapes, so
+            // exactly one body must run, at the caller. A guard that failed to
+            // clear would double it here.
+            (
+                "nested-return-taken",
+                "fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r; } R { id: 99 } }\n\
+                 fn main() { let x = take(true); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // BOUNDARY — an UNCONDITIONAL `return r;` at the body's tail, where
+            // the static removal is correct. Guarding every `return` doubles it.
+            (
+                "unconditional-return",
+                "fn take() -> R { let r = R { id: 41 }; return r; }\n\
+                 fn main() { let x = take(); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // The `match`-arm spelling of the repro — a different statement
+            // form reaching the same nested `ExprKind::Return`.
+            (
+                "match-arm-return-fallthrough",
+                "fn take(k: bool) -> R { let r = R { id: 41 };\n\
+                 \x20  match k { true => { return r; } false => {} }\n\
+                 \x20  R { id: 99 } }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // TWO levels of nesting, so the enclosing-frame test cannot be
+            // reading only the immediately-enclosing scope.
+            (
+                "twice-nested-return-fallthrough",
+                "fn take(k: bool, j: bool) -> R { let r = R { id: 41 };\n\
+                 \x20  if k { if j { return r; } }\n\
+                 \x20  R { id: 99 } }\n\
+                 fn main() { let x = take(true, false); println(f\"{x.id}\"); }\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // A `return` inside a LOOP body, where the fall-through reaches the
+            // reassignment-free tail after the loop finishes.
+            (
+                "loop-return-fallthrough",
+                "fn take(k: bool) -> R { let r = R { id: 41 }; let mut i = 0;\n\
+                 \x20  while i < 1 { if k { return r; } i = i + 1; }\n\
+                 \x20  R { id: 99 } }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // The DISPLACED-VALUE leg (B-2026-07-30-11) — the predicate the fix
+            // changes the answer of. `r` is reassigned on the fall-through, so
+            // the OLD value's body must run at the assignment.
+            (
+                "displaced-fallthrough",
+                "fn take(k: bool) -> R { let mut r = R { id: 41 }; if k { return r; }\n\
+                 \x20  r = R { id: 99 }; r }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            (
+                "displaced-return-taken",
+                "fn take(k: bool) -> R { let mut r = R { id: 41 }; if k { return r; }\n\
+                 \x20  r = R { id: 99 }; r }\n\
+                 fn main() { let x = take(true); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // A SECOND local that is never returned must keep firing where it
+            // always did, on both paths — the fix must disarm one binding on one
+            // path, not a whole frame.
+            (
+                "two-locals-fallthrough",
+                "fn take(k: bool) -> R { let a = R { id: 41 }; let b = R { id: 42 };\n\
+                 \x20  if k { return a; } b }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                "drop 41\n42\ndrop 42\n",
+            ),
+            (
+                "two-locals-return-taken",
+                "fn take(k: bool) -> R { let a = R { id: 41 }; let b = R { id: 42 };\n\
+                 \x20  if k { return a; } b }\n\
+                 fn main() { let x = take(true); println(f\"{x.id}\"); }\n",
+                "drop 42\n41\ndrop 41\n",
+            ),
+            // A HEAP-carrying local, so the body reads a live buffer rather than
+            // a moved-from husk. The memory twin is
+            // `asan_nested_return_local_drop_body_is_memory_balanced`.
+            (
+                "heap-nested-return-fallthrough",
+                "fn take(k: bool) -> H { let h = H { id: 41, name: f\"n{41}\" };\n\
+                 \x20  if k { return h; } H { id: 99, name: f\"n{99}\" } }\n\
+                 fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
+                "drop n41\n99\ndrop n99\n",
+            ),
+            // NOT FIXED, pinned deliberately — an owned by-value PARAM is
+            // caller-drops, and its lost body is B-2026-08-28-22's channel.
+            // Aligned-wrong on all four surfaces, so this row is the tripwire
+            // for -22 rather than a claim about this fix.
+            (
+                "param-nested-return",
+                "fn take(r: R, k: bool) -> R { if k { return r; } R { id: 99 } }\n\
+                 fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\"); }\n",
+                "99\ndrop 99\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{DROPPER}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-28-51, codegen leg — a CONDITIONALLY-MOVED local runs its
     /// user `Drop` body exactly once, on every path.
     ///
@@ -12719,14 +12903,15 @@ fn main() {
     /// `drop ` (empty) because the spurious body read the moved-from slot, so this
     /// row fails if the body ever runs on a husk again.
     ///
-    /// NOT COVERED, deliberately: `fn take(k) -> R { let r = ...; if k { return r; } R { id: 99 } }`
-    /// with `k = false` still loses `r`'s body on the COMPILED backends. That is
-    /// the row's UNDER-fire horn — `suppress_cleanup_for_tail_return` statically
-    /// removes the action — and fixing it means RETAINING flagged actions, which
-    /// changes what `has_armed_user_drop` / `has_armed_own_user_drop` /
-    /// `has_armed_container_elem_bodies` answer. This slice stays off that
-    /// question; `return-in-branch` below covers only the `k = true` direction,
-    /// which is the over-fire horn and is now correct on all four surfaces.
+    /// THE OTHER HORN, since closed. `fn take(k) -> R { let r = ...; if k { return r; } R { id: 99 } }`
+    /// with `k = false` lost `r`'s body on the COMPILED backends when this slice
+    /// landed — the UNDER-fire horn, a static removal in the `ExprKind::Return`
+    /// arm. It was filed as B-2026-08-28-65 and fixed by RETAINING the action and
+    /// clearing this slice's flag at the `return`, gated on the action living in
+    /// an enclosing frame so an unconditional `return r;` keeps the static
+    /// removal. `return-in-branch` below still covers only the `k = true`
+    /// direction; the fall-through direction lives in
+    /// `e2e_nested_return_local_user_drop_body_runs_on_the_fallthrough`.
     ///
     /// Twin: `tests/interpreter.rs`'s
     /// `test_conditionally_moved_local_user_drop_body_runs_once`, whose
