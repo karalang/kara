@@ -32493,6 +32493,53 @@ fn test_nested_projection_runs_the_returned_fields_body_once() {
     }
 }
 
+/// A tuple param returned WHOLE, bound to a local, then destructured at the call
+/// site runs its element's user `Drop` body (B-2026-08-28-18).
+///
+/// This backend was the CORRECT one — it printed the body while both compiled
+/// backends printed nothing — so this fixture is the parity anchor rather than
+/// the regression proof. Keeping it is what makes the twin in `tests/codegen.rs`
+/// (`e2e_passthrough_tuple_destructured_at_the_call_site_runs_its_body`) an
+/// assertion about agreement rather than about one backend's opinion.
+#[test]
+fn test_passthrough_tuple_destructured_at_the_call_site_runs_its_body() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "passthrough",
+            "fn take(p: (R, i64)) -> (R, i64) { p }\n\
+             fn main() { let x = take((R { id: 41 }, 1)); let (r, n) = x;\n\
+             \x20           println(f\"{r.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "passthrough-no-local",
+            "fn take(p: (R, i64)) -> (R, i64) { p }\n\
+             fn main() { let (r, n) = take((R { id: 42 }, 1)); println(f\"{r.id}\") }\n",
+            "42\ndrop 42\n",
+        ),
+        // CONTROL — the callee BUILDS the tuple rather than passing one through.
+        (
+            "builds-its-own",
+            "fn make() -> (R, i64) { return (R { id: 43 }, 1); }\n\
+             fn main() { let y = make(); let (a, b) = y; println(f\"{a.id}\") }\n",
+            "43\ndrop 43\n",
+        ),
+        // CONTROL — the STRUCT spelling of the passthrough.
+        (
+            "struct-passthrough",
+            "struct W { r: R, n: i64 }\n\
+             fn take(w: W) -> W { w }\n\
+             fn main() { let x = take(W { r: R { id: 44 }, n: 1 }); let W { r, n } = x;\n\
+             \x20           println(f\"{r.id}\") }\n",
+            "44\ndrop 44\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-12, interpreter leg — a WILDCARD leaf of a `let` destructure
 /// runs the discarded value's user `Drop` body exactly once.
 ///

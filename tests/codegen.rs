@@ -12294,6 +12294,77 @@ fn main() {
         }
     }
 
+    /// A tuple param returned WHOLE, bound to a local, then destructured at the
+    /// call site runs its element's user `Drop` body (B-2026-08-28-18).
+    ///
+    /// Both compiled backends printed NOTHING for this shape while the
+    /// interpreter printed one body — a genuine run-vs-build divergence, unlike
+    /// most of the family. The passthrough half was never at fault:
+    /// `fn_returns_param` is TRUE here, so the caller-side fresh-temp walk
+    /// correctly declines and hands ownership to the caller's consumer. The loss
+    /// was downstream, at the destructure of the LOCAL holding the call result.
+    ///
+    /// FIXED INCIDENTALLY by B-2026-08-28-3 (`0f058f1`), which taught the
+    /// let-site to resolve a tuple element's struct type when the tuple came
+    /// from a CALL — exactly the missing piece, since a leaf whose type cannot
+    /// be named registers no body. Bisected to that boundary (`919f31e` before
+    /// it still prints nothing), and pinned here because nothing else does: -3's
+    /// own fixtures assert the RESOLUTION, not this body count, so the shape
+    /// would have been free to regress silently.
+    ///
+    /// `passthrough` is the row's repro. `builds-its-own` is the control the row
+    /// used to isolate it — the same destructure of a call result whose callee
+    /// CONSTRUCTS the tuple was always correct on all three backends, so the
+    /// defect needed the callee to have RECEIVED the tuple as a param and passed
+    /// it through, not merely to have returned one. Keeping both is what
+    /// distinguishes "the destructure lost the leaf" from "the passthrough guard
+    /// dropped the value".
+    #[test]
+    fn e2e_passthrough_tuple_destructured_at_the_call_site_runs_its_body() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "passthrough",
+                "fn take(p: (R, i64)) -> (R, i64) { p }\n\
+                 fn main() { let x = take((R { id: 41 }, 1)); let (r, n) = x;\n\
+                 \x20            println(f\"{r.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // The same shape destructured DIRECTLY off the call, with no local
+            // in between.
+            (
+                "passthrough-no-local",
+                "fn take(p: (R, i64)) -> (R, i64) { p }\n\
+                 fn main() { let (r, n) = take((R { id: 42 }, 1)); println(f\"{r.id}\"); }\n",
+                "42\ndrop 42\n",
+            ),
+            // CONTROL — the callee BUILDS the tuple rather than passing one
+            // through. Always correct, and what isolates the defect to the
+            // passthrough.
+            (
+                "builds-its-own",
+                "fn make() -> (R, i64) { return (R { id: 43 }, 1); }\n\
+                 fn main() { let y = make(); let (a, b) = y; println(f\"{a.id}\"); }\n",
+                "43\ndrop 43\n",
+            ),
+            // CONTROL — the STRUCT spelling of the passthrough, which shares the
+            // let-site resolution the fix touched.
+            (
+                "struct-passthrough",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> W { w }\n\
+                 fn main() { let x = take(W { r: R { id: 44 }, n: 1 }); let W { r, n } = x;\n\
+                 \x20            println(f\"{r.id}\"); }\n",
+                "44\ndrop 44\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-2 — a user `Drop` body ran TWICE FOR ONE OBJECT when the
     /// callee pulled an element out of an owned TUPLE PARAM and RETURNED it.
     ///
