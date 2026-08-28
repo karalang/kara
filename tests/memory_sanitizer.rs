@@ -1359,6 +1359,86 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-10 — moving a place-source leaf's `Drop` body to the leaf
+    /// keeps its heap owned exactly once.
+    ///
+    /// The body half was an ordering divergence AND a wrong-value one: the body
+    /// ran on the source copy `bind_pattern` had moved out of, printing
+    /// `drop 41 ` where the interpreter printed `drop 41 n41`. This fixture is
+    /// the half that decides whether moving it is safe, and the answer took
+    /// three measured corrections, each a different failure:
+    ///
+    ///   * body moved, memory left with the source -> USE-AFTER-FREE, the body
+    ///     reading a buffer the source had already freed at the destructure;
+    ///   * body and memory moved via `zero_struct_field_move_cap` -> still a
+    ///     DOUBLE FREE, because that helper reaches only DIRECT
+    ///     Vec/String/Map/Option fields and a nested STRUCT field's own heap
+    ///     survived it;
+    ///   * both moved correctly, but the `callee_owned_src` arm further down
+    ///     the same loop then registered its OWN memory drop on the leaf ->
+    ///     DOUBLE FREE again, visible only in the emitted IR as
+    ///     `__karac_drop_struct_R` beside `karac_drop_R`.
+    ///
+    /// `field-only-drop-leaf` is the fourth: a leaf with no wrapper to take
+    /// keeps the chain's memory owner, so its body must be registered AFTER
+    /// that owner or it prints from freed memory.
+    #[test]
+    fn asan_place_source_destructure_leaf_is_owned_once() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+             struct W { r: R, n: i64 }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let w = W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }};\n\
+             \x20            let W {{ r, n }} = w; println(f\"{{r.name}} {{n}}\") }}\n"
+            ),
+            &["n41 1", "drop 41 n41"],
+            "place-source",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(r: R) -> i64 {{ r.id }}\n\
+             \x20            fn main() {{ let w = W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }};\n\
+             \x20            let W {{ r, n }} = w; println(f\"{{take(r) + n}}\") }}\n"
+            ),
+            &["42", "drop 41 n41"],
+            "consumed-leaf",
+        );
+        // TWO heap-carrying leaves out of one source.
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+             struct V { a: R, b: R }\n\
+             fn main() { let v = V { a: R { id: 41, name: f\"n{41}\" },\n\
+             \x20                    b: R { id: 42, name: f\"m{42}\" } };\n\
+             \x20            let V { a, b } = v; println(f\"{a.name} {b.name}\") }\n",
+            &["n41 m42", "drop 42 m42", "drop 41 n41"],
+            "two-heap-leaves",
+        );
+        // THE MODEL — the field-access spelling of the same move, clean before
+        // this and after it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let w = W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }};\n\
+             \x20            let x = w.r; println(f\"{{x.name}} {{w.n}}\") }}\n"
+            ),
+            &["n41 1", "drop 41 n41"],
+            "field-access-model",
+        );
+        // The no-wrapper leaf, whose body is registered AFTER the chain's
+        // memory owner rather than instead of it.
+        assert_clean_asan_run(
+            "struct Res { id: i64, tag: String }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(f\"drop res {self.id} {self.tag}\") } }\n\
+             struct R { res: Res }\n\
+             struct W { r: R, n: i64 }\n\
+             fn main() { let w = W { r: R { res: Res { id: 41, tag: f\"t{1}\" } }, n: 1 };\n\
+             \x20            let W { r, n } = w; println(f\"{r.res.id + n}\") }\n",
+            &["42", "drop res 41 t1"],
+            "field-only-drop-leaf",
+        );
+    }
+
     /// B-2026-08-28-29 — a fresh-struct-source destructure owns its leaf's heap
     /// exactly once, at each of the four (source x leaf) combinations.
     ///

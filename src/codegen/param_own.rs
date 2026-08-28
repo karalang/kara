@@ -3227,6 +3227,17 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return None,
         };
+        self.field_move_out_struct_inst_by_name(obj_name, field)
+    }
+
+    /// [`Self::field_move_out_struct_inst`] addressed by NAME, for the
+    /// destructure spelling of the same move (B-2026-08-28-10), which has no
+    /// `FieldAccess` node to resolve the object and field from.
+    pub(super) fn field_move_out_struct_inst_by_name(
+        &self,
+        obj_name: &str,
+        field: &str,
+    ) -> Option<TypeExpr> {
         let obj_inst = self.type_decls.enum_inst_var_types.get(obj_name)?;
         let TypeKind::Path(op) = &obj_inst.kind else {
             return None;
@@ -3291,6 +3302,24 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::SelfValue => "self",
             _ => return,
         };
+        self.suppress_struct_field_move_by_name(s, field);
+    }
+
+    /// [`Self::suppress_struct_field_move_into_literal`] addressed by NAME
+    /// rather than by a `FieldAccess` expression (B-2026-08-28-10).
+    ///
+    /// A struct-pattern destructure moves the same field the field-access
+    /// spelling does — `let W { r, n } = w` and `let x = w.r` transfer `r`
+    /// identically — but has no `FieldAccess` node to hand over, and the
+    /// `zero_struct_field_move_cap` it used instead reaches only DIRECT
+    /// Vec/String/Map/Option fields. A nested STRUCT field's own heap survived
+    /// it, so the source freed a buffer the leaf had just taken: a double free
+    /// where the field-access spelling was clean.
+    ///
+    /// The `uam_copied_sites` check stays with the expression form above, which
+    /// is where a span exists to consult. A destructure leaf has no defensive
+    /// copy of its own, so the default — suppress — is the right one here.
+    pub(super) fn suppress_struct_field_move_by_name(&self, s: &str, field: &str) {
         let Some(slot) = self.variables.get(s).copied() else {
             return;
         };
@@ -3377,7 +3406,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // yields `None` → the name-shared base-layout suppression,
                         // unchanged.
                         let nsub = self
-                            .field_move_out_struct_inst(value)
+                            .field_move_out_struct_inst_by_name(s, field)
                             .map(|inst| self.generic_struct_subst_from_inst(name, &inst))
                             .filter(|s| !s.is_empty());
                         self.zero_struct_move_caps_mono(field_ptr, name, nsub.as_ref());

@@ -8200,6 +8200,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// leaving its own-body wrapper and any container-element walker in place
     /// (B-2026-08-03-8). Paired with a masked re-registration by
     /// `disarm_struct_field_bodies_at`.
+    /// B-2026-08-28-10 — does `name` currently OWN a struct field-bodies walk?
+    ///
+    /// The positive signal a destructure needs before taking a leaf's `Drop`
+    /// body off its source. An exclusion list ("not a param, not a `ref`") is
+    /// not enough: a CLOSURE parameter and a rebound param VIEW are neither,
+    /// yet their bodies are owned caller-side under the caller-retains
+    /// convention, so transferring produced a SECOND body — measured on
+    /// `|w: W| { let W { r, n } = w; .. }` and on the param-view rebind
+    /// fixture. Asking whether the action is actually here answers for every
+    /// such shape at once, including ones not yet enumerated.
+    pub(super) fn var_owns_struct_field_bodies(&self, name: &str) -> bool {
+        self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(action, CleanupAction::UserDrop { binding_name, kind, .. }
+                    if binding_name == name && *kind == UserDropKind::StructFieldBodies)
+            })
+        })
+    }
+
     pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {

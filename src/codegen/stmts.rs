@@ -11286,6 +11286,43 @@ impl<'ctx> super::Codegen<'ctx> {
             }));
         let fresh_call = fresh;
         let fresh = fresh || fresh_struct_literal;
+        // B-2026-08-28-10 — the owned LOCAL a place source names, when its own
+        // field-bodies walk is what currently runs the leaf's `Drop` body.
+        //
+        // `let w = W { r: R { .. }, n: 1 }; let W { r, n } = w; println(r.id);`
+        // ran the body BEFORE the `println` on both compiled backends and after
+        // it in the interpreter. Not a second body — the single body, attributed
+        // to the wrong owner: `w`'s walk fires at `w`'s live-range end, which is
+        // the destructure statement, while the leaf `r` lives on into the
+        // `println`. The interpreter places it at the leaf's end.
+        //
+        // THE SAME MOVE WRITTEN AS A FIELD ACCESS IS ALREADY CORRECT on every
+        // backend — `let x = w.r; println(x.id)` prints in the interpreter's
+        // order — because `disarm_struct_field_move_bodies` masks the field out
+        // of `w`'s walk and the destination registers its own. So this is the
+        // destructure spelling failing to do what its field-access twin does,
+        // and the fix below is that same pair of steps per bound leaf.
+        //
+        // THE GATE IS A POSITIVE SIGNAL, not an exclusion list, and that is
+        // measured rather than stylistic. A first cut excluded `ref` params,
+        // `owned_struct_params` and the current function's parameter names, and
+        // still doubled the body on two shapes that are none of those: a
+        // CLOSURE parameter (`|w: W| { let W { r, n } = w; .. }`) and a rebound
+        // param VIEW, whose bodies are owned caller-side under caller-retains.
+        // Asking whether the source is currently RUNNING the walk
+        // (`var_owns_struct_field_bodies`) answers for every such shape at once
+        // — there is nothing to transfer unless the source holds it. `ref`
+        // params stay excluded explicitly, since a borrow must never give away
+        // what it does not own even if an action is present.
+        let place_body_src: Option<String> = match (&value.kind, fresh) {
+            (ExprKind::Identifier(root), false)
+                if !self.borrow_vars.ref_params.contains_key(root.as_str())
+                    && self.var_owns_struct_field_bodies(root) =>
+            {
+                Some(root.clone())
+            }
+            _ => None,
+        };
 
         // Place-source (`let S { a, b } = s`) where the source struct `s` is
         // CALLEE-OWNED — a bare by-value param deep-copied at entry (#14/#17
@@ -11482,6 +11519,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // further down does not register a SECOND one for the same
                 // payload. See the comment there.
                 let mut leaf_cleanup_registered = false;
+                // B-2026-08-28-10 — set when the PLACE-source transfer below
+                // gives this leaf the whole-value wrapper. It has to gate the
+                // arm chain, not just `leaf_cleanup_registered`: the
+                // `callee_owned_src` arm runs AFTER the transfer and registers
+                // its own `track_struct_var`, so the leaf ended up with the
+                // wrapper AND a plain memory drop — two frees of one buffer,
+                // read straight off the emitted IR.
+                let mut place_leaf_took_memory = false;
                 // B-2026-08-28-29 root (b) — the leaf's user `Drop` BODY, which
                 // this arm never registered: `track_owned_destructure_field_cleanup`
                 // is memory-only, so a bound leaf whose type declares `impl Drop`
@@ -11517,7 +11562,69 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => false,
                 };
-                if wrapper_took_memory {
+                // B-2026-08-28-10 — a PLACE source's leaf takes the BODY, and
+                // the source gives it up. Two steps, exactly the pair
+                // `disarm_struct_field_move_bodies` performs for the
+                // field-access spelling of the same move:
+                //   * mask this field out of the SOURCE's field-bodies walk, so
+                //     the body stops firing at the source's live-range end;
+                //   * register it on the LEAF, where it fires at the leaf's.
+                //
+                // THE MEMORY HAS TO MOVE WITH THE BODY, which is measured
+                // rather than obvious: leaving the source's memory drop armed
+                // while the body moves LATER is a use-after-free — the body
+                // printed `drop 41 dro`, reading a `String` the source had
+                // already freed at the destructure statement. So the leaf takes
+                // the whole-value wrapper (body + fields + memory in one action)
+                // and the source is cap-zeroed at this field — the third step
+                // the field-access twin performs and the reason it is correct.
+                //
+                // TWO PLACEMENTS, because the leaf's memory owner differs by
+                // type and the body must always drain BEFORE it (the frame
+                // drains LIFO, so "before" means "registered later"):
+                //
+                //   * the leaf type declares its own `Drop` -> it takes the
+                //     WRAPPER here, pre-chain, and `place_leaf_took_memory`
+                //     stops the chain adding a second memory owner;
+                //   * it only CARRIES a Drop-bearing field -> there is no
+                //     wrapper to take, so the chain's memory registration
+                //     stands and the field-bodies walk is deferred to after it.
+                //     Registering it here instead drains it after the free and
+                //     prints from a freed buffer, measured.
+                let mut pending_place_bodies: Option<(String, PointerValue<'ctx>)> = None;
+                if let (Some(src), Some(tn)) = (&place_body_src, &leaf_struct_name) {
+                    let (src, tn) = (src.clone(), tn.clone());
+                    let src_ptr = self.variables.get(src.as_str()).map(|v| v.ptr);
+                    if let (Some(slot), Some(_)) = (self.variables.get(&name).copied(), src_ptr) {
+                        self.disarm_struct_field_bodies_at(&src, idx);
+                        let has_wrapper = self
+                            .program_snapshot
+                            .as_deref()
+                            .is_some_and(|p| p.drop_method_keys.contains_key(tn.as_str()))
+                            && self.drop_rc.user_drop_wrapper_fns.contains_key(tn.as_str());
+                        if !has_wrapper {
+                            pending_place_bodies = Some((tn.clone(), slot.ptr));
+                        }
+                        if has_wrapper
+                            && self
+                                .track_destructure_struct_leaf_user_drop(&tn, &name, slot.ptr, true)
+                        {
+                            place_leaf_took_memory = true;
+                            // `suppress_struct_field_move_by_name`, NOT
+                            // `zero_struct_field_move_cap`: the latter reaches
+                            // only DIRECT Vec/String/Map/Option fields, and a
+                            // nested STRUCT field's own heap survived it — the
+                            // source then freed a buffer the leaf had taken,
+                            // a double free where the field-access spelling of
+                            // the same move was clean. That spelling routes
+                            // through this suppressor, whose nested-aggregate
+                            // arm recurses into the moved-out struct's leaves.
+                            self.suppress_struct_field_move_by_name(&src, fname);
+                            leaf_cleanup_registered = true;
+                        }
+                    }
+                }
+                if wrapper_took_memory || place_leaf_took_memory {
                     leaf_cleanup_registered = true;
                 } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
                     if let Some(slot) = self.variables.get(&name).copied() {
@@ -11706,6 +11813,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
                         }
                     }
+                }
+                // B-2026-08-28-10 — the deferred half. Registered HERE, after
+                // every memory registration above, so the LIFO drain runs the
+                // bodies first and they read a buffer that is still live.
+                if let Some((tn, slot_ptr)) = pending_place_bodies {
+                    self.track_destructure_struct_leaf_user_drop(&tn, &name, slot_ptr, false);
                 }
             // B-2026-08-28-29 — `fresh_call`, NOT the literal-widened `fresh`.
             // A discarded field of a struct-LITERAL source is claimed by the

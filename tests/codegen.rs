@@ -12965,6 +12965,156 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-10 — a struct-pattern destructure of a PLACE source runs
+    /// its leaf's user `Drop` body at the LEAF's live-range end, on the leaf's
+    /// own value.
+    ///
+    /// The row measured this as a placement error — `drop 41` before the
+    /// `println` that reads the leaf, against the interpreter's after. It is
+    /// worse than that, and the heap-carrying rows are what show it: the body
+    /// was running on the SOURCE, which `bind_pattern` had already moved out of,
+    /// so it printed `drop 41 ` where the interpreter printed `drop 41 n41`. A
+    /// body observing an emptied field is a wrong-value bug wearing an ordering
+    /// bug's clothes.
+    ///
+    /// `field-access-model` is the row that made the fix a transcription rather
+    /// than an invention: `let x = w.r` is the SAME move, already correct on
+    /// every backend, because `disarm_struct_field_move_bodies` masks the field
+    /// out of `w`'s walk and the destination registers its own. The destructure
+    /// spelling simply never did that. Three steps carry over — disarm the
+    /// source's bodies, suppress its memory for that field, register the leaf.
+    ///
+    /// THE ROW'S OTHER TWO HALVES ARE ELSEWHERE, and are pinned here as
+    /// controls rather than restated: the CALL source it reported as running no
+    /// body at all was closed by B-2026-08-28-29, and the by-value PARAM source
+    /// is B-2026-08-28-19's caller-side-vs-scope-exit ordering, deliberately
+    /// untouched.
+    #[test]
+    fn e2e_place_source_destructure_runs_its_leaf_drop_body_at_the_leaf() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+             struct W { r: R, n: i64 }\n\
+             fn make() -> W { W { r: R { id: 41 }, n: 1 } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "place-source",
+                "fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let W { r, n } = w; println(f\"{r.id + n}\") }\n",
+                "42\ndrop 41\n",
+            ),
+            // TWO Drop-bearing fields — both move, and their relative order
+            // (reverse declaration) has to survive the transfer.
+            (
+                "two-fields",
+                "struct V { a: R, b: R }\n\
+                 fn main() { let v = V { a: R { id: 41 }, b: R { id: 42 } };\n\
+                 \x20            let V { a, b } = v; println(f\"{a.id + b.id}\") }\n",
+                "83\ndrop 42\ndrop 41\n",
+            ),
+            // The leaf CONSUMED by a call rather than read.
+            (
+                "consumed-leaf",
+                "fn take(r: R) -> i64 { r.id }\n\
+                 fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let W { r, n } = w; println(f\"{take(r) + n}\") }\n",
+                "42\ndrop 41\n",
+            ),
+            // THE MODEL — the same move written as a field access, correct on
+            // every backend before this and the shape the fix transcribes.
+            (
+                "field-access-model",
+                "fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let x = w.r; println(f\"{x.id + w.n}\") }\n",
+                "42\ndrop 41\n",
+            ),
+            // BOUNDARY — the leaf is bound but never READ, so both placements
+            // coincide. Correct before and after, and the reason the defect
+            // hides in the shapes people usually write.
+            (
+                "leaf-unread",
+                "fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let W { r, n } = w; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — a WILDCARD leaf, which never had a leaf to move to.
+            (
+                "wildcard-leaf-control",
+                "fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let W { r: _, n } = w; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — the CALL source, the row's other reported half, closed
+            // by B-2026-08-28-29.
+            (
+                "call-source-control",
+                "fn main() { let W { r, n } = make(); println(f\"{r.id + n}\") }\n",
+                "42\ndrop 41\n",
+            ),
+            // CONTROL — the TUPLE spelling, which has transferred since
+            // B-2026-08-28-1 and is what the struct path now matches.
+            (
+                "tuple-source-control",
+                "fn main() { let p = (R { id: 41 }, 1); let (r, n) = p;\n\
+                 \x20            println(f\"{r.id + n}\") }\n",
+                "42\ndrop 41\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // THE VALUE, not just its position. With a heap field the pre-fix body
+        // printed `drop 41 ` — the source copy `bind_pattern` had already moved
+        // out of — so this row fails on CONTENT even if a future regression
+        // happens to restore the ordering.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64, name: String }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+                 struct W { r: R, n: i64 }\n\
+                 fn main() { let w = W { r: R { id: 41, name: f\"n{41}\" }, n: 1 };\n\
+                 \x20            let W { r, n } = w; println(f\"{r.name} {n}\") }\n"
+            )
+            .as_deref(),
+            Some("n41 1\ndrop 41 n41\n"),
+            "heap-field-value"
+        );
+        // The leaf type declares NO `Drop` of its own but carries a Drop-bearing
+        // field. It has no wrapper to take, so the body is registered AFTER the
+        // memory owner rather than instead of it — the other half of the
+        // placement rule, and the row that catches getting it backwards
+        // (`drop res 41 ` off a freed buffer).
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64, tag: String }\n\
+                 impl Drop for Res { fn drop(mut ref self) { println(f\"drop res {self.id} {self.tag}\") } }\n\
+                 struct R { res: Res }\n\
+                 struct W { r: R, n: i64 }\n\
+                 fn main() { let w = W { r: R { res: Res { id: 41, tag: f\"t{1}\" } }, n: 1 };\n\
+                 \x20            let W { r, n } = w; println(f\"{r.res.id + n}\") }\n"
+            )
+            .as_deref(),
+            Some("42\ndrop res 41 t1\n"),
+            "field-only-drop-leaf"
+        );
+        // CONTROL — a CLOSURE parameter source. Its bodies are owned
+        // caller-side under caller-retains, so there is nothing to transfer;
+        // a first cut that gated on an exclusion list instead of on "does the
+        // source actually hold the walk" printed the body TWICE here.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+                 struct W { r: R, n: i64 }\n\
+                 fn main() { let f = |w: W| { let W { r, n } = w; r.id + n };\n\
+                 \x20            println(f\"{f(W { r: R { id: 41 }, n: 1 })}\"); println(\"end\"); }\n"
+            )
+            .as_deref(),
+            Some("42\ndrop 41\nend\n"),
+            "closure-param-source-control"
+        );
+    }
+
     /// B-2026-08-28-29 — a destructure of a FRESH STRUCT source runs its leaf's
     /// user `Drop` body, in both source spellings and for both leaf kinds.
     ///
