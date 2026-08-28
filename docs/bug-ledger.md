@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 218 | 2 |
+| leak | 218 | 1 |
 | run-vs-build | 208 | 3 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1175 | 7 |
+| codegen | 1175 | 6 |
 | typecheck | 278 | 0 |
 | interp | 225 | 4 |
 | other | 70 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1738 surfaced · 7 open · 1705 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1738 surfaced · 6 open · 1706 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
-| B-2026-08-28-49 | 2026-08-28 | codegen | low | TWO RESIDUALS OF B-2026-08-28-20, both pre-existing and measured identical before and after that row's fix. (1) The BOUND spelling `let h = make_outer(14).inner; println(h.tag);` leaks 3 bytes at -O2 and is CLEAN at -O0 -- a cleanup that runs but does not walk the field, not a missing dec. (2) A program with MORE THAN ONE shared-temp field read leaks exactly ONE box regardless of how many: one read is clean, two leak 42/2, three still leak 42/2, and a three-iteration loop leaks 84/4. A count flat in the straight-line case and growing in the loop points at a single slot or once-only emission being reused -- `deferred_shared_temp_release` is a single `Option` with a `debug_assert!` guarding exactly that reuse, and is the first thing to rule in or out. | — |
 | B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
 | B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
 | B-2026-08-28-63 | 2026-08-28 | interp+codegen | medium | A CONSUMING `match` / `if let` ARM THAT BINDS AN ENUM PAYLOAD OUT RUNS NO `Drop` BODY FOR IT ON ANY BACKEND, while the same arm binding a STRUCT payload runs one -- `match o { Some(e) => ... }` for `Option[E]` prints `got` and nothing else | — |
@@ -168,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1738 surfaced
 
 </details>
 
-### Fixed (1705)
+### Fixed (1706)
 
-<details><summary>1705 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1706 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1868,6 +1867,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1738 surfaced
 | B-2026-08-28-46 | interp+codegen | medium | A STRUCT HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM DIVERGES IN THE INTERPRETER-SILENT DIRECTION when it is never destructured: `let w = W { e: E.B… | 9727cdb |
 | B-2026-08-28-47 | interp+codegen | medium | A TUPLE HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND when it is never destructured: `let p = (E.B, 1); println(p.1)` is 0… | 9727cdb |
 | B-2026-08-28-48 | interp | low | A DISCARDED PAYLOAD-BEARING ENUM CTOR IN BARE STATEMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY IN THE INTERPRETER: `E.A(R { id: 41 });` is interp 1… | 4190c0a |
+| B-2026-08-28-49 | codegen | low | TWO RESIDUALS OF B-2026-08-28-20, both pre-existing and measured identical before and after that row's fix | 5885ba5 |
 | B-2026-08-28-50 | codegen | medium | AN UNBOUND DESTRUCTURE FIELD WHOSE TYPE HAS NO `Drop` LEAKS ON A STRUCT-LITERAL SOURCE: `let W { r: _, n } = W { r: R { . | bf7c226 |
 | B-2026-08-28-51 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k:… | 74223ee |
 | B-2026-08-28-54 | interp+codegen | medium | AN ENUM WITH NO OWN `Drop` BUT A DROP-BEARING PAYLOAD RUNS NO BODY ON ANY BACKEND when held as a struct field or tuple element: `enum E2 { A(R), B }`… | 0e872dd |
