@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 71 | 6 |
+| soundness | 72 | 6 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1153 | 17 |
+| codegen | 1154 | 17 |
 | typecheck | 278 | 0 |
-| interp | 211 | 7 |
+| interp | 212 | 7 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1715 surfaced · 17 open · 1672 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1716 surfaced · 17 open · 1673 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (17)
 
@@ -145,8 +145,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1715 surfaced
 | B-2026-08-28-32 | 2026-08-28 | codegen | low | A CONTAINER-ELEMENT HEAP READ CONSUMED BY AN UNBOUND TEMPORARY LEAKS: `println(Box2 { w: p[0].word }.w)`, `println((p[1].word, 9).0)`, and printing an `if`/`match`/block value without binding it all lose the deep clone the read emits -- 3 bytes in 1 allocation each under LSan. Pre-existing on the already-working FIELD spelling, which leaks the same shapes for the same byte counts; the BOUND form of every one is clean. The consuming temporary takes the clone over and then dies without freeing it. | — |
 | B-2026-08-28-38 | 2026-08-28 | codegen | medium | A CLOSURE'S BY-VALUE STRUCT PARAM RUNS NO USER `Drop` BODY ON EITHER COMPILED BACKEND while the interpreter runs one: `let f = |r: R| { r.id };` and the destructuring `|w: W| { let W { r, n } = w; … }` both print nothing under `karac run` and `karac build` where one `drop 41` is due. The TUPLE-param spelling of the same shape is correct compiled (1/1/1), which localizes this to a closure's struct param rather than to closures generally -- codegen appears not to treat it as an owned param for drop purposes | — |
 | B-2026-08-28-40 | 2026-08-28 | interp+codegen | medium | A WILDCARD DESTRUCTURE LEAF RUNS ONE `Drop` BODY WHERE THE SAME VALUE BOUND RUNS TWO, so a discarded aggregate's INNER object never gets its body: `let (_, n) = (E.A(R { id: 41 }), 1)` runs `drop E` on all three backends where `let e = E.A(R { id: 41 })` runs `drop E` + `drop R41` on all three. Backend-CONSISTENT, so no parity gate can report it -- the same failure shape the original B-2026-08-28-12 family had, one ownership level down | — |
-| B-2026-08-28-41 | 2026-08-28 | interp+codegen | medium | A PAYLOADLESS VARIANT OF AN OWN-`Drop` ENUM, DISCARDED BY `let _ =`, RUNS ZERO BODIES ON ALL THREE BACKENDS: `let _ = E.B;` where `impl Drop for E` prints nothing under `karac run --interp`, `karac run` and `karac build` alike, against design.md's "dropped exactly once at the live-range end of its final owner". Three controls isolate the discard site as the culprit -- the same value drops correctly when BOUND (`let e = E.B`), as a fresh ARGUMENT (`take(E.B)`), and through a tuple wildcard LEAF, all 1/1/1 | — |
 | B-2026-08-28-42 | 2026-08-28 | codegen | high | A HEAP FIELD READ OFF A FIELD-ROOTED CONTAINER IS NEVER CLONED AND DOUBLE-FREES: `h.xs[0].name` where `struct H { xs: Vec[R] }` and `struct R { id: i64, name: String }` aborts with `free(): double free detected in tcache 2` (rc 134) on both compiled backends, and so does the `ref self` twin `self.xs[0].name`, while `karac check` passes and `--interp` prints the field twice. The IDENTIFIER-rooted spelling of the same read is CLEAN, which is what isolates the container ROOT: `clone_vec_elem_heap_field_read` requires `ExprKind::Identifier` for the container. | — |
+| B-2026-08-28-43 | 2026-08-28 | interp+codegen | medium | TWO MORE SPELLINGS OF A DISCARDED PAYLOADLESS OWN-`Drop` ENUM VARIANT STILL RUN NO BODY: `let _ = B;` (the BARE spelling) is interp 1 / compiled 0, and the bare STATEMENT `E.B;` is 0/0/0. B-2026-08-28-41 fixed the qualified `let _ = E.B` on both backends; the bare `let` spelling is blocked by a deliberate invariant -- the aggregate registrar never matches an `Identifier` argument, since a let-bound enum's drop belongs to its binding and a second caller-side drop would be a double free -- and the bare statement is a different dispatch entirely | — |
 
 ### Relocated (2)
 
@@ -178,9 +178,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1715 surfaced
 
 </details>
 
-### Fixed (1672)
+### Fixed (1673)
 
-<details><summary>1672 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1673 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1856,6 +1856,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1715 surfaced
 | B-2026-08-28-36 | codegen | medium | A CONTAINER-ELEMENT TUPLE-INDEX READ WHOSE LEAF IS A WHOLE HEAP-CARRYING STRUCT LEAKS ITS CLONE when no destination adopts it: after B-2026-08-28-24… | 54ca269 |
 | B-2026-08-28-37 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String,… | 221cf4c |
 | B-2026-08-28-39 | interp | medium | A WHOLE-PATTERN WILDCARD DISCARD OF AN OWN-`Drop` ENUM OMITS THE PAYLOAD BODY IN THE INTERPRETER ONLY: `let _ = E.A(R { id: 41 });` prints `drop E` u… | 4997b9f |
+| B-2026-08-28-41 | interp+codegen | medium | A PAYLOADLESS VARIANT OF AN OWN-`Drop` ENUM, DISCARDED BY `let _ =`, RUNS ZERO BODIES ON ALL THREE BACKENDS: `let _ = E.B;` where `impl Drop for E` p… | b75a1f0 |
 
 </details>
 
