@@ -1528,6 +1528,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-56 — a tuple-typed destructure leaf owns its element's heap
+    /// even when the element type declares no `Drop`.
+    ///
+    /// B-2026-08-28-26 gave the tuple leaf its registration, gated on the
+    /// bodies walker existing. An element type with no `Drop` produces no
+    /// walker, so the whole registration — memory included — was skipped and
+    /// nothing owned the element. Same shape as B-2026-08-28-50, where a
+    /// discarded struct FIELD with no `Drop` got no walker and therefore no
+    /// owner; the halves now resolve independently.
+    ///
+    /// THE TWO SOURCES LEAK DIFFERENT AMOUNTS because they lose different
+    /// things, which is worth pinning rather than averaging: the fresh literal
+    /// has no owner for the element at all (98 bytes — the `Vec` buffer and its
+    /// element), while the place source's own walk still frees most of it and
+    /// loses only the inner `String` (2 bytes).
+    ///
+    /// The `Vec` is the repro, not the defect: a bare `String` element is
+    /// leak-clean in this shape only because LLVM deletes the whole dead
+    /// allocation chain. `mkv` builds its buffer through a runtime `push` the
+    /// optimizer cannot fold, which is the only reason the bytes are
+    /// observable — a fixture written the obvious way would pass against the
+    /// broken compiler.
+    #[test]
+    fn asan_drop_free_tuple_leaf_owns_its_element_heap() {
+        const N: &str = "struct R { id: i64, tags: Vec[String] }\n\
+             fn mkv(n: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f\"t{n}\"); v }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn main() {{ let (inner, n) = ((R {{ id: 41, tags: mkv(3) }}, 2), 1);\n\
+             \x20            println(f\"{{n}}\") }}\n"
+            ),
+            &["1"],
+            "fresh-literal-source",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn main() {{ let p = ((R {{ id: 41, tags: mkv(3) }}, 2), 1);\n\
+             \x20            let (inner, n) = p; println(f\"{{n}}\") }}\n"
+            ),
+            &["1"],
+            "place-source",
+        );
+        // NO no-destructure control here, deliberately. That shape LEAKS the
+        // same inner `String` — 2 bytes, measured identical before and after
+        // this fix — because the tuple binding's own aggregate drop does not
+        // reach the nested struct's `Vec` elements the way the leaf's
+        // `TypeExpr`-driven drop does. It is a pre-existing defect at a
+        // different site and is filed on its own row; asserting it clean here
+        // would be asserting something false.
+        // BOUNDARY — the same leaf with a Drop-BEARING element type, which the
+        // bodies walker does claim. It must stay at one body and one free.
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+             fn main() { let (inner, n) = ((R { id: 41, name: f\"n{41}\" }, 2), 1);\n\
+             \x20            println(f\"{n}\") }\n",
+            &["drop 41 n41", "1"],
+            "drop-bearing-element",
+        );
+    }
+
     /// B-2026-08-28-26 — a tuple-typed leaf that takes its inner element's
     /// `Drop` body takes the element's heap with it, exactly once.
     ///

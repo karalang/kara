@@ -12245,25 +12245,35 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.var_types
                                 .tuple_var_elem_tes
                                 .insert(name.clone(), inner_tes.clone());
-                            if let Some(bodies) =
-                                self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &inner_tes)
-                            {
-                                // MEMORY FIRST, then bodies. The frame drains
-                                // LIFO, so registering memory first is what
-                                // makes the bodies run BEFORE the buffers they
-                                // read are freed — the same ordering rule the
-                                // enum and container sites state.
-                                //
-                                // The memory half is not optional here, and the
-                                // measurement says so: the cap-zero below hands
-                                // this element's ownership away from the source,
-                                // so a bodies-only leaf leaves nobody freeing it
-                                // — 3 bytes leaked on a heap-carrying element,
-                                // the same shape B-2026-08-28-12 and -29 both
-                                // hit from their own sites.
-                                if let Some(mem) =
-                                    self.synthesize_tuple_drop_fn_te(agg_ty, &inner_tes)
-                                {
+                            // MEMORY FIRST, then bodies. The frame drains
+                            // LIFO, so registering memory first is what makes
+                            // the bodies run BEFORE the buffers they read are
+                            // freed — the same ordering rule the enum and
+                            // container sites state.
+                            //
+                            // The memory half is not optional, and the
+                            // measurement says so: the cap-zero below hands this
+                            // element's ownership away from the source, so a
+                            // bodies-only leaf leaves nobody freeing it — 3
+                            // bytes leaked on a heap-carrying element, the same
+                            // shape B-2026-08-28-12 and -29 both hit from their
+                            // own sites.
+                            //
+                            // B-2026-08-28-56 — THE TWO HALVES RESOLVE
+                            // INDEPENDENTLY. Gating memory on the bodies walker
+                            // existing meant a leaf whose element type declares
+                            // no `Drop` produced no walker, skipped the whole
+                            // registration, and so got no memory owner either.
+                            // Same shape as B-2026-08-28-50, where a discarded
+                            // field with no `Drop` got no walker and therefore
+                            // no owner. The cap-zero follows whether EITHER half
+                            // was taken: either one makes the leaf an owner the
+                            // source must stop competing with.
+                            let bodies =
+                                self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &inner_tes);
+                            let mem = self.synthesize_tuple_drop_fn_te(agg_ty, &inner_tes);
+                            if bodies.is_some() || mem.is_some() {
+                                if let Some(mem) = mem {
                                     if let Some(frame) =
                                         self.drop_rc.scope_cleanup_actions.last_mut()
                                     {
@@ -12275,13 +12285,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                         );
                                     }
                                 }
-                                self.track_user_drop_var_with_fn(
-                                    "",
-                                    name,
-                                    slot.ptr,
-                                    bodies,
-                                    UserDropKind::ContainerElemBodies,
-                                );
+                                if let Some(bodies) = bodies {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        name,
+                                        slot.ptr,
+                                        bodies,
+                                        UserDropKind::ContainerElemBodies,
+                                    );
+                                }
                                 self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
                             }
                         }
@@ -12349,17 +12361,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(inner_tes) = tuple_leaf_tes {
                         if let Some(slot) = self.variables.get(name.as_str()).copied() {
                             if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
-                                if let Some(bodies) =
-                                    self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &inner_tes)
-                                {
+                                // B-2026-08-28-56 — the two halves resolve
+                                // INDEPENDENTLY here too; see the place-source
+                                // sibling for why. A leaf whose element type has
+                                // no `Drop` still owns the element's heap on
+                                // this source, where nothing else owns it at all
+                                // — 98 bytes, against 2 on the place source,
+                                // because there the source's own walk still
+                                // frees the rest.
+                                let bodies =
+                                    self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &inner_tes);
+                                let mem = self.synthesize_tuple_drop_fn_te(agg_ty, &inner_tes);
+                                if bodies.is_some() || mem.is_some() {
                                     self.var_types
                                         .tuple_var_elem_tes
                                         .insert(name.clone(), inner_tes.clone());
                                     // Memory first, bodies second — LIFO drain,
                                     // so the bodies read live buffers.
-                                    if let Some(mem) =
-                                        self.synthesize_tuple_drop_fn_te(agg_ty, &inner_tes)
-                                    {
+                                    if let Some(mem) = mem {
                                         if let Some(frame) =
                                             self.drop_rc.scope_cleanup_actions.last_mut()
                                         {
@@ -12371,13 +12390,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                             );
                                         }
                                     }
-                                    self.track_user_drop_var_with_fn(
-                                        "",
-                                        name,
-                                        slot.ptr,
-                                        bodies,
-                                        UserDropKind::ContainerElemBodies,
-                                    );
+                                    if let Some(bodies) = bodies {
+                                        self.track_user_drop_var_with_fn(
+                                            "",
+                                            name,
+                                            slot.ptr,
+                                            bodies,
+                                            UserDropKind::ContainerElemBodies,
+                                        );
+                                    }
                                     continue;
                                 }
                             }
