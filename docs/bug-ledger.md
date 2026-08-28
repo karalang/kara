@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 207 | 1 |
+| leak | 208 | 1 |
 | run-vs-build | 193 | 7 |
 | missing-feature | 187 | 0 |
 | codegen-gap | 145 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1131 | 13 |
+| codegen | 1132 | 13 |
 | typecheck | 278 | 0 |
 | interp | 203 | 5 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1692 surfaced · 13 open · 1653 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1693 surfaced · 13 open · 1654 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (13)
 
@@ -137,12 +137,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1692 surfaced
 | B-2026-08-28-10 | 2026-08-28 | codegen | medium | A STRUCT-PATTERN destructure leaf's user `Drop` body is wrong in TWO OPPOSITE DIRECTIONS depending on the source: from a LOCAL it runs TOO EARLY (`drop 41` then `42`, against the interpreter's `42` then `drop 41`), and from a CALL it does not run AT ALL. `struct W { r: R, n: i64 }  let W { r, n } = w;` -- the struct twin of B-2026-08-28-1, whose helper `track_owned_destructure_field_cleanup` ends in the same bare `track_struct_var` tail with no `drop_method_keys` check | — |
 | B-2026-08-28-11 | 2026-08-28 | codegen | medium | A GENERIC struct leaf destructured out of a tuple never runs its Drop-bearing field's body on ANY source path -- local, call result and tuple literal all print it under `karac run --interp` and nothing compiled: `struct Box2[T] { v: T }  let (b, n) = (Box2[R] { v: R { id: 41 } }, 1);`. The leaf has no recorded instantiation, so the field-bodies substitution is empty and `Box2 { v: T }` is judged Drop-free through a bare `T` | — |
 | B-2026-08-28-12 | 2026-08-28 | interp+codegen | medium | A tuple-element WILDCARD drops the element ZERO TIMES ON ALL THREE BACKENDS: `let (_, n) = p;` where element 0 declares `impl Drop` runs the body under NEITHER `karac run --interp` NOR `karac run` NOR `karac build`, against design.md's guarantee that a value is dropped exactly once at its final owner's live-range end. NOT a run-vs-build divergence -- all three agree, so no A/B gate can see it. The non-tuple control `let _ = R { .. }` is correct on all three | — |
-| B-2026-08-28-14 | 2026-08-28 | codegen | medium | A `String` / `Vec` FIELD READ ON A SHARED-STRUCT TEMPORARY RECEIVER LEAKS THE BUFFER: `make().tag` where `make() -> shared Node` prints correctly and leaks 5 bytes under LSan, because the deep-clone that gives the read its own copy (`clone_shared_struct_heap_field_read`, in `exprs.rs`'s FieldAccess arm) runs AFTER `compile_field_access` has already released the temporary's last ref. The BOUND spelling (`let b = make(); b.tag`) is clean. The same ordering makes the block/`if` receiver spelling a heap-use-after-free, which is why B-2026-08-28-7 declines that field shape rather than compiling it. | — |
 | B-2026-08-28-15 | 2026-08-28 | codegen | high | PROJECTING A HEAP-CARRYING STRUCT ELEMENT OUT OF A TUPLE PARAM AND RETURNING IT DOUBLE-FREES: `fn take(p: (R, i64)) -> R { p.0 }` where `struct R { id: i64, name: String }` aborts with `free(): double free detected in tcache 2` (rc 134) under BOTH `karac run` and `karac build`, while `karac check` passes and `--interp` is correct. Fires with NO `impl Drop` anywhere, so it is pure memory. Four controls bound it to exactly this shape: the `let (r, n) = p; r` DESTRUCTURE spelling is clean, a STRUCT param's `w.r` projection is clean, a scalar-only `R` is clean, and a bare `String` element is clean | — |
 | B-2026-08-28-16 | 2026-08-28 | interp+codegen | medium | The B-2026-08-28-2 double `Drop` body SURVIVES when the tuple argument comes from a LOCAL instead of a literal: `let q = (R { id: 41 }, 1); let x = take(q);` still prints `drop 41` twice on all three backends after d5d7421. Same escaping-part asymmetry, different caller-side site -- the fresh-temp walk never sees a place argument, so this is the moved-out LOCAL's own cleanup firing alongside the result's. The control `-> i64` (returning the other element) is correctly 1 | — |
 | B-2026-08-28-17 | 2026-08-28 | interp+codegen | medium | THE STRUCT TWIN of B-2026-08-28-2: returning a field extracted from an owned STRUCT param runs its user `Drop` body TWICE on all three backends -- `struct W { r: R, n: i64 }  fn take(w: W) -> R { let W { r, n } = w; r }` prints `drop 41` twice, and so does the `w.r` projection spelling. The tuple fix's escape analysis already computes the struct-FIELD half (`ParamPart::Field`); what is missing is a per-field caller-side walk to apply it to | — |
 | B-2026-08-28-18 | 2026-08-28 | codegen | medium | A tuple param returned WHOLE and then destructured AT THE CALL SITE loses its element's user `Drop` body on both compiled backends: `fn take(p: (R, i64)) -> (R, i64) { p }  let x = take((R { id: 41 }, 1)); let (r, n) = x;` prints `drop 41` under `--interp` and NOTHING under `karac run` / `karac build`. The whole-param passthrough guard correctly hands ownership to the caller, and the caller's destructure of a CALL-RESULT LOCAL then registers no body for the leaf | — |
 | B-2026-08-28-19 | 2026-08-28 | interp+codegen | low | The caller-side fresh-temp argument `Drop` walk fires AT THE CALL in the interpreter and at SCOPE EXIT in both compiled backends, so a tuple-literal argument whose element dies inside the callee prints its body in a different ORDER on the two surfaces: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }` gives `drop 41 / 1` under `--interp` and `1 / drop 41` compiled. Counts agree (1/1/1) -- only sequence differs, which is why every count-based check in this family missed it | — |
+| B-2026-08-28-20 | 2026-08-28 | codegen | low | A BARE-`shared` FIELD READ OFF A SHARED TEMPORARY RECEIVER LEAKS THE INNER OBJECT'S PAYLOAD: `make_outer(12).inner.tag` prints `t12` on all three backends and leaks 3 bytes under LSan, because the `+1` that keeps the inner box alive across the outer temporary's recursive drop is never released by the consumer — and the BOUND spelling (`let h = make_outer(12).inner;`) leaks the same 3 bytes, so the binding's RC cleanup is not pairing with it either. Measured IDENTICALLY before and after B-2026-08-28-14, which added the `+1` only to restore the balance that fix's deep release would otherwise have broken. | — |
 
 ### Relocated (2)
 
@@ -174,9 +174,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1692 surfaced
 
 </details>
 
-### Fixed (1653)
+### Fixed (1654)
 
-<details><summary>1653 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1654 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1833,6 +1833,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1692 surfaced
 | B-2026-08-28-6 | codegen | medium | `Vec.binary_search` ACCEPTS EVERY ELEMENT TYPE `sort` DOES BUT LOWERS ONLY INTEGER AND String -- tuples, nested Vec, Array, derived-Ord structs/enums… | 09913ea |
 | B-2026-08-28-7 | codegen | medium | TWO MORE RECEIVER SHAPES the block-receiver fix does not reach, both still `karac check`-clean and interpreter-correct but failing `karac build` with… | dac56eb |
 | B-2026-08-28-13 | codegen | high | MOVING A `Vec` OUT OF A FIELD OF A BORROWED BINDING inside a GENERIC fn or impl DOUBLE-FREES the buffer under both compiled backends: `impl[T] Bag[T]… | e58aaef |
+| B-2026-08-28-14 | codegen | medium | A `String` / `Vec` FIELD READ ON A SHARED-STRUCT TEMPORARY RECEIVER LEAKS THE BUFFER: `make().tag` where `make() -> shared Node` prints correctly and… | e17e361 |
 
 </details>
 
