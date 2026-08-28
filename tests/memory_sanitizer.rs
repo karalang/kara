@@ -289,6 +289,130 @@ fn main() {
         );
     }
 
+    /// A bare-`shared` field read off a shared TEMPORARY, BOUND to a local,
+    /// releases the box exactly once (B-2026-08-28-49).
+    ///
+    /// `load_owned_shared_temp_field` emits a `+1` on the loaded inner pointer
+    /// so the receiver's recursive drop cannot free it out from under the
+    /// reader, and documents that `+1` as being taken over by the consumer —
+    /// "the let-stmt path … takes ownership of the +1". The `Option[shared T]`
+    /// arm it names does exactly that. The BARE `shared T` arm
+    /// (B-2026-08-28-14) never taught the let site, so the binding took its OWN
+    /// ref on top: two increments against one release, and the box was never
+    /// freed.
+    ///
+    /// THE ROW THIS CLOSES DESCRIBED TWO SEPARATE RESIDUALS, and they are one
+    /// defect seen through two different blind spots of the measurement:
+    ///
+    ///   * "the bound spelling leaks at -O2 and is CLEAN at -O0" — the leak is
+    ///     there at both levels. At -O0 the pointer is still sitting in the
+    ///     binding's alloca in a live stack frame at exit, so LSan calls it
+    ///     REACHABLE rather than leaked; -O2 drops the alloca and the same leak
+    ///     becomes visible.
+    ///
+    ///   * "one temp-read binding is clean, a second binding leaks one box, and
+    ///     the count does not scale with the reads" — every temp-read binding
+    ///     leaks its own box. Adding any second shared binding perturbs the
+    ///     frame enough that LSan can see one of them, which is what made the
+    ///     count look flat.
+    ///
+    /// Proven by re-running the one-binding program under
+    /// `LSAN_OPTIONS=use_stacks=0`: clean by default, 44 bytes in 2 allocations
+    /// with stack scanning off. That is why `two-bindings` leads this fixture
+    /// rather than the row's own one-binding repro — it is the shape the
+    /// harness's default LSan configuration can actually see. `one-binding` is
+    /// kept beside it and is honest about asserting less: it fails here only
+    /// once some later change makes its box unreachable.
+    ///
+    /// THE THREE CONTROLS ARE WHAT KEEP THE FIX FROM BEING A BLANKET
+    /// SUPPRESSION, and each was clean before and after:
+    ///   * `plain-bindings` — two ordinary shared locals, no temp read, so no
+    ///     `+1` was ever emitted and the binding inc must stay;
+    ///   * `identifier-receiver` — `let o = make_outer(1); let a = o.inner;`
+    ///     roots at an IDENTIFIER, never takes the read's `+1`, and needs its
+    ///     own inc. Suppressing here instead would be a use-after-free;
+    ///   * `unbound-chain` — B-2026-08-28-20's shape, which consumes the `+1`
+    ///     at the consuming site and must not be double-released.
+    #[test]
+    fn asan_bound_shared_temp_field_read_releases_once() {
+        const H: &str = "shared struct Node { v: i64, tag: String }\n\
+             shared struct Outer { id: i64, inner: Node }\n\
+             fn make(k: i64) -> Node { return Node { v: k, tag: f\"tag{k}\" }; }\n\
+             fn make_outer(k: i64) -> Outer { return Outer { id: k, inner: make(k) }; }\n";
+        for (label, body, want) in [
+            // The shape the harness's default LSan can see.
+            (
+                "two-bindings",
+                "fn main() { let a = make_outer(1).inner; println(a.tag);\n\
+                 \x20            let c = make(2); println(c.tag); }\n",
+                vec!["tag1", "tag2"],
+            ),
+            // The row's own repro. Asserts less than the rest by construction —
+            // see the doc above.
+            (
+                "one-binding",
+                "fn main() { let a = make_outer(1).inner; println(a.tag); }\n",
+                vec!["tag1"],
+            ),
+            // Separate block scopes — one box per binding before the fix, which
+            // is what ruled out a scope-exit ordering effect.
+            (
+                "separate-scopes",
+                "fn main() { { let a = make_outer(1).inner; println(a.tag); }\n\
+                 \x20            { let b = make_outer(2).inner; println(b.tag); } }\n",
+                vec!["tag1", "tag2"],
+            ),
+            // Three of them, to show the count scales with the reads once the
+            // measurement can see them all.
+            (
+                "three-bindings",
+                "fn main() { let a = make_outer(1).inner; let b = make_outer(2).inner;\n\
+                 \x20            let c = make_outer(3).inner;\n\
+                 \x20            println(a.tag); println(b.tag); println(c.tag); }\n",
+                vec!["tag1", "tag2", "tag3"],
+            ),
+            // Unbounded in a loop, which is why the row was not `wontfix`.
+            (
+                "loop",
+                "fn main() { for i in 0..3 { let a = make_outer(i).inner; println(a.tag); } }\n",
+                vec!["tag0", "tag1", "tag2"],
+            ),
+            // The field READ off the binding is a scalar — the leak is the
+            // binding's box, not anything about what was read from it.
+            (
+                "scalar-field-read",
+                "fn main() { let a = make_outer(7).inner; println(f\"{a.v}\");\n\
+                 \x20            let c = make(2); println(c.tag); }\n",
+                vec!["7", "tag2"],
+            ),
+            // CONTROL — no temp read anywhere, so no `+1` to take over.
+            (
+                "plain-bindings",
+                "fn main() { let a = make(1); println(a.tag);\n\
+                 \x20            let c = make(2); println(c.tag); }\n",
+                vec!["tag1", "tag2"],
+            ),
+            // CONTROL — an IDENTIFIER receiver, which never gets the read's
+            // `+1` and must keep its own inc.
+            (
+                "identifier-receiver",
+                "fn main() { let o = make_outer(1); let a = o.inner; println(a.tag);\n\
+                 \x20            let c = make(2); println(c.tag); }\n",
+                vec!["tag1", "tag2"],
+            ),
+            // CONTROL — B-2026-08-28-20's unbound chain, which consumes the
+            // `+1` at the consuming site.
+            (
+                "unbound-chain",
+                "fn main() { println(make_outer(1).inner.tag);\n\
+                 \x20            let c = make(2); println(c.tag); }\n",
+                vec!["tag1", "tag2"],
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &want, label);
+        }
+    }
+
     /// A fresh `Array[T, N]` temporary compared with `==` drops its elements
     /// (B-2026-08-27-30).
     ///

@@ -5973,7 +5973,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     // that single ref. Taking the inc anyway strands the count
                     // at 1 and leaks the box once per evaluation.
                     let transferred = std::mem::take(&mut self.block_tail_shared_transfer);
-                    if !is_fresh_construction && !b2_skip && !transferred && !frozen_alias {
+                    // B-2026-08-28-49 — a bare-`shared` FIELD READ off a shared
+                    // TEMPORARY (`let a = make_outer(1).inner;`) is the same
+                    // transfer one source-shape over. `load_owned_shared_temp_field`
+                    // emits a `+1` on the loaded inner pointer so the receiver's
+                    // recursive drop cannot free it out from under the reader, and
+                    // documents that `+1` as being taken over by the consumer —
+                    // "the let-stmt path … takes ownership of the +1". The
+                    // `Option[shared T]` arm it names does exactly that; the BARE
+                    // `shared T` arm (B-2026-08-28-14) never taught this site, so
+                    // the binding took its OWN ref on top and stranded the count at
+                    // 1: the box was never freed.
+                    //
+                    // The predicate is the same one B-2026-08-28-20 added to
+                    // `shared_type_for_call_like` — receiver is a call-like shared
+                    // temp, field is a bare `shared T` — so the two halves cannot
+                    // drift apart. `let o = make_outer(1); let a = o.inner;` roots
+                    // at an IDENTIFIER, never gets the read's `+1`, and must keep
+                    // its own inc; the recursion inside that resolver declines it.
+                    let read_transferred = matches!(&value.kind, ExprKind::FieldAccess { .. })
+                        && self.shared_type_for_call_like(value).is_some();
+                    if !is_fresh_construction
+                        && !b2_skip
+                        && !transferred
+                        && !read_transferred
+                        && !frozen_alias
+                    {
                         // Copying a shared pointer — increment refcount.
                         let ptr = val.into_pointer_value();
                         self.emit_refcount_inc(var_name, info.heap_type, ptr);
