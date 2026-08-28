@@ -1740,6 +1740,32 @@ impl<'ctx> super::Codegen<'ctx> {
         if !matches!(declared, Some(BasicMetadataTypeEnum::PointerType(_))) {
             let val = self.compile_expr(&arg.value)?;
             self.free_fresh_owned_heap_closure_arg(&arg.value, val);
+            // B-2026-08-28-38 — the caller-side owner for a BY-VALUE aggregate
+            // argument, which a closure call never registered. Under
+            // caller-retains a by-value struct param's user `Drop` body belongs
+            // to the CALLER, not the callee: the function path deliberately does
+            // NOT register one callee-side (the only such registration in
+            // `functions.rs` is coroutine-only, and its comment records that
+            // dropping every owned struct param there broke an E2E). Free
+            // functions get it from `track_inline_owned_aggregate_arg` at the
+            // call site; `compile_closure_call` had no equivalent, so
+            // `|r: R| { r.id }` ran ZERO bodies compiled against the
+            // interpreter's one. `free_fresh_owned_heap_closure_arg` above is
+            // the memory half and only covers a `{ptr,len,cap}` value — never a
+            // user struct, and never a body.
+            //
+            // TUPLE-SHAPED ARGUMENTS ARE EXCLUDED, and that exclusion is
+            // measured rather than cautious. A tuple argument to a closure
+            // ALREADY runs exactly one body per Drop-bearing element today, so
+            // it has an owner somewhere else; registering here as well doubled
+            // it — `|p: (R, i64)|` went 1 -> 2 and the two-dropper shape
+            // `|p: (R, R)|` went 2 -> 4 on both compiled backends. That is the
+            // double-free direction, not a bookkeeping detail, so this fires
+            // only for the shapes that genuinely have no owner: a named struct
+            // or an enum ctor temp.
+            if self.tuple_arg_elem_type_exprs(&arg.value).is_none() {
+                self.track_inline_owned_aggregate_arg(val, &arg.value, false);
+            }
             return Ok(val);
         }
         if let ExprKind::Identifier(name) = &arg.value.kind {

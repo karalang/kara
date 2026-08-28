@@ -1241,6 +1241,69 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-38 — a by-value aggregate argument to a CLOSURE is owned
+    /// exactly once.
+    ///
+    /// The body half was a run-vs-build divergence: a closure's by-value STRUCT
+    /// param ran zero `Drop` bodies compiled against the interpreter's one,
+    /// because `compile_closure_call` never registered the caller-side owner
+    /// that the free-function path gets from `track_inline_owned_aggregate_arg`.
+    /// This fixture is the half that decides whether the repair is safe, since
+    /// adding an owner is the double-free direction.
+    ///
+    /// `tuple-arg` is the row that constrains it. A tuple argument ALREADY had
+    /// an owner, so registering unconditionally gave it two — measured as body
+    /// counts going 1 -> 2, and 2 -> 4 for a two-dropper tuple, on both
+    /// compiled backends. At a heap-carrying element that is a double free
+    /// rather than a doubled println, which is what this fixture would catch and
+    /// the behavioural twin would not.
+    #[test]
+    fn asan_closure_by_value_aggregate_arg_is_owned_once() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        // The row's shape: a struct argument, previously owned by nobody.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let f = |r: R| {{ r.id }};\n\
+             \x20            println(f\"{{f(R {{ id: 41, name: f\"n{{41}}\" }})}}\"); }}\n"
+            ),
+            &["41", "drop 41 n41"],
+            "struct-arg",
+        );
+        // The same through a destructure in the body.
+        assert_clean_asan_run(
+            &format!("{H}struct W {{ r: R, n: i64 }}\n\
+             fn main() {{ let f = |w: W| {{ let W {{ r, n }} = w; r.id + n }};\n\
+             \x20            println(f\"{{f(W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }})}}\"); }}\n"),
+            &["42", "drop 41 n41"],
+            "struct-arg-destructured",
+        );
+        // CONSTRAINT — a tuple argument already had an owner. Registering a
+        // second one doubles the drop, which at a heap element is a double free.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let f = |p: (R, i64)| {{ let (r, n) = p; r.id + n }};\n\
+             \x20            println(f\"{{f((R {{ id: 41, name: f\"n{{41}}\" }}, 1))}}\"); }}\n"
+            ),
+            // The tuple argument's body fires BEFORE the print while the struct
+            // argument's fires after — the two are owned by different registrars
+            // firing at different points (the B-2026-08-28-19 ordering family).
+            // Counts are what this row is about; the order is recorded as
+            // measured rather than assumed.
+            &["drop 41 n41", "42"],
+            "tuple-arg",
+        );
+        // CONTROL — the free-function spelling, correct all along.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(r: R) -> i64 {{ r.id }}\n\
+             fn main() {{ println(f\"{{take(R {{ id: 41, name: f\"n{{41}}\" }})}}\"); }}\n"
+            ),
+            &["41", "drop 41 n41"],
+            "free-fn-control",
+        );
+    }
+
     #[test]
     fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
         for (label, decl, arg) in [

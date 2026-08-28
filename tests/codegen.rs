@@ -12948,6 +12948,79 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-38 — a by-value STRUCT argument to a closure runs its user
+    /// `Drop` body, matching the free-function spelling and the interpreter.
+    ///
+    /// Pre-fix it ran ZERO bodies on both compiled backends while `--interp`
+    /// ran one. Under caller-retains a by-value struct param's body belongs to
+    /// the CALLER: the function path gets it from
+    /// `track_inline_owned_aggregate_arg` at the call site, and
+    /// `compile_closure_call` had no equivalent. The only callee-side
+    /// registration in `functions.rs` is coroutine-only, and its comment
+    /// records that dropping every owned struct param there broke an E2E — so
+    /// the caller is the right owner, not the closure body.
+    ///
+    /// `tuple-arg-control` is the constraint rather than a passing detail. A
+    /// tuple argument ALREADY had an owner, so registering unconditionally gave
+    /// it two: measured 1 -> 2, and the two-dropper tuple 2 -> 4, on both
+    /// compiled backends. Tuple-shaped arguments are therefore excluded, and
+    /// this row and `two-dropper-tuple-control` are what hold that boundary.
+    /// The memory consequence — a double free at a heap-carrying element — is
+    /// pinned by `asan_closure_by_value_aggregate_arg_is_owned_once`.
+    #[test]
+    fn e2e_closure_by_value_struct_arg_runs_its_drop_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "struct-arg",
+                "fn main() { let f = |r: R| { r.id };\n\
+                 \x20            println(f\"{f(R { id: 41 })}\"); println(\"end\"); }\n",
+                "41\ndrop 41\nend\n",
+            ),
+            // The same with a destructure in the body.
+            (
+                "struct-arg-destructured",
+                "struct W { r: R, n: i64 }\n\
+                 fn main() { let f = |w: W| { let W { r, n } = w; r.id + n };\n\
+                 \x20            println(f\"{f(W { r: R { id: 41 }, n: 1 })}\"); println(\"end\"); }\n",
+                "42\ndrop 41\nend\n",
+            ),
+            // CONTROL — the free-function spelling, correct all along, and what
+            // identifies the closure as the variable.
+            (
+                "free-fn-control",
+                "fn take(r: R) -> i64 { r.id }\n\
+                 fn main() { println(f\"{take(R { id: 41 })}\"); println(\"end\"); }\n",
+                "41\ndrop 41\nend\n",
+            ),
+            // CONTROL — a TUPLE argument, which already had an owner. This is
+            // the row that goes to two bodies if the registration is not
+            // shape-gated.
+            (
+                "tuple-arg-control",
+                "fn main() { let f = |p: (R, i64)| { let (r, n) = p; r.id + n };\n\
+                 \x20            println(f\"{f((R { id: 41 }, 1))}\"); println(\"end\"); }\n",
+                "drop 41\n42\nend\n",
+            ),
+            // CONTROL — two droppers in one tuple argument: 2, never 4.
+            (
+                "two-dropper-tuple-control",
+                "fn main() { let f = |p: (R, R)| { let (a, b) = p; a.id + b.id };\n\
+                 \x20            println(f\"{f((R { id: 41 }, R { id: 42 }))}\");\n\
+                 \x20            println(\"end\"); }\n",
+                // Reverse element order, as measured — the tuple's elements are
+                // walked back to front by their existing owner. Recorded rather
+                // than assumed; the count is what this row constrains.
+                "drop 42\ndrop 41\n83\nend\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and
