@@ -32487,6 +32487,86 @@ fn test_wildcard_destructure_leaf_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-4 — a by-value param destructured inside a CLOSURE runs the
+/// element's user `Drop` body ONCE, not twice.
+///
+/// The let-destructure gate exists because a by-value param's bindings are
+/// views of the callee's entry copy, whose Drop observability belongs to the
+/// CALLER (caller-retains): the caller's fresh-temp argument walk is the single
+/// owner, so the callee must not also register slots. That gate resolved the
+/// callee's owned params against `program.items`, and a CLOSURE matches no
+/// top-level `Item::Function` — it contributed the empty set by construction,
+/// the gate never fired inside a closure body, and the element's body ran twice
+/// for one object: once from the callee's slot, once from the caller's walk,
+/// which fires for a closure call exactly as it does for a free fn.
+///
+/// The free-fn spelling of the identical body has been correct since
+/// B-2026-08-27-48, which is what isolated the closure as the variable rather
+/// than the destructure.
+///
+/// `ref-param-control` is the row this fix cannot express a filter for and so
+/// pins by measurement instead: a closure's params are `Pattern`s carrying no
+/// recorded type, so `ref` / `mut ref` cannot be filtered out the way the fn
+/// path filters them. Collecting only plain `Binding` patterns leaves a
+/// borrow-typed closure param correct, and this row is what says so.
+///
+/// The COMPILED backends agree at one on every row here. They do NOT agree on a
+/// closure's by-value STRUCT param, which runs zero bodies compiled — a
+/// separate defect on the other side of the same shape, filed rather than
+/// pinned here.
+#[test]
+fn test_closure_param_destructure_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        // The row's own repro.
+        (
+            "tuple-param-destructure",
+            "fn main() {\n\
+             \x20   let f = |p: (R, i64)| { let (r, n) = p; r.id + n };\n\
+             \x20   println(f\"{f((R { id: 41 }, 1))}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            "drop 41\n42\nend\n",
+        ),
+        // Two droppers in one param — pre-fix this ran FOUR bodies for two
+        // objects, so it pins that the gate retracts per frame and not once.
+        (
+            "two-droppers",
+            "fn main() {\n\
+             \x20   let f = |p: (R, R)| { let (a, b) = p; a.id + b.id };\n\
+             \x20   println(f\"{f((R { id: 41 }, R { id: 42 }))}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            "drop 41\ndrop 42\n83\nend\n",
+        ),
+        // CONTROL — the same body as a FREE FN, correct since B-2026-08-27-48.
+        // This is what isolates the closure rather than the destructure.
+        (
+            "free-fn-control",
+            "fn take(p: (R, i64)) -> i64 { let (r, n) = p; r.id + n }\n\
+             fn main() { println(f\"{take((R { id: 41 }, 1))}\"); println(\"end\"); }\n",
+            "drop 41\n42\nend\n",
+        ),
+        // CONTROL — a BORROW-typed closure param. The collection cannot filter
+        // by type, so this row is the evidence that not filtering is safe: the
+        // caller's binding owns the body and it fires once, at its live-range
+        // end.
+        (
+            "ref-param-control",
+            "fn main() {\n\
+             \x20   let g = R { id: 41 };\n\
+             \x20   let f = |r: ref R| { r.id };\n\
+             \x20   println(f\"{f(g)}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            "41\ndrop 41\nend\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-27-48, method leg — the same destructure inside an IMPL METHOD
 /// fires ONCE. This is the guard on the gate's other edge: a method frame's
 /// arguments get no caller-side fire (`run_fresh_temp_arg_drops` is wired

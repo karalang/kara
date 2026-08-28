@@ -2116,7 +2116,11 @@ impl<'a> super::Interpreter<'a> {
                 // this name) contributes an empty set, so the gate never
                 // fires inside closures.
                 self.owned_param_names_stack
-                    .push(self.owned_param_names_of_fn(&fn_name));
+                    .push(self.owned_param_names_of_call(
+                        &fn_name,
+                        &param_patterns,
+                        closure_env.is_some(),
+                    ));
                 self.owned_param_frame_is_method.push(false);
                 // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
                 // NAME with no frame scoping, so a callee that moves a payload
@@ -2451,6 +2455,43 @@ impl<'a> super::Interpreter<'a> {
             crate::ast::Item::Function(f) if f.name == fn_name => f.return_type.clone(),
             _ => None,
         })
+    }
+
+    /// B-2026-08-28-4 — the owned by-value param names of whatever `fn_name`
+    /// resolves to at THIS call: a top-level fn, or a CLOSURE bound to that
+    /// name.
+    ///
+    /// [`Self::owned_param_names_of_fn`] resolves against `program.items`, so a
+    /// closure matched nothing and contributed the empty set. The
+    /// let-destructure gate therefore never fired inside a closure body, its
+    /// leaves kept their Drop slots, and a destructure of a by-value closure
+    /// param ran the element's body TWICE — once from the callee's slot and
+    /// once from the caller's fresh-temp argument walk, which fires for a
+    /// closure call exactly as it does for a free fn. The free-fn spelling of
+    /// the same body has been correct since B-2026-08-27-48; the closure was
+    /// the one frame kind the gate could not see.
+    ///
+    /// A closure's params are `Pattern`s with no recorded type, so `ref` /
+    /// `mut ref` cannot be filtered out the way the fn path filters them. Only
+    /// plain `Binding` patterns are collected, and a borrow-typed closure param
+    /// is covered by a control in the regression test rather than by a filter
+    /// this shape cannot express.
+    fn owned_param_names_of_call(
+        &self,
+        fn_name: &str,
+        param_patterns: &[crate::ast::Pattern],
+        is_closure: bool,
+    ) -> std::collections::HashSet<String> {
+        if !is_closure {
+            return self.owned_param_names_of_fn(fn_name);
+        }
+        param_patterns
+            .iter()
+            .filter_map(|p| match &p.kind {
+                crate::ast::PatternKind::Binding(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {
