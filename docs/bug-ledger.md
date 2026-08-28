@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 218 | 2 |
-| run-vs-build | 207 | 2 |
+| run-vs-build | 208 | 3 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
 | codegen-gap | 147 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 79 | 3 |
+| soundness | 79 | 2 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1174 | 7 |
+| codegen | 1175 | 7 |
 | typecheck | 278 | 0 |
-| interp | 225 | 5 |
+| interp | 225 | 4 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1737 surfaced · 7 open · 1704 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1738 surfaced · 7 open · 1705 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -132,11 +132,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1737 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
 | B-2026-08-28-49 | 2026-08-28 | codegen | low | TWO RESIDUALS OF B-2026-08-28-20, both pre-existing and measured identical before and after that row's fix. (1) The BOUND spelling `let h = make_outer(14).inner; println(h.tag);` leaks 3 bytes at -O2 and is CLEAN at -O0 -- a cleanup that runs but does not walk the field, not a missing dec. (2) A program with MORE THAN ONE shared-temp field read leaks exactly ONE box regardless of how many: one read is clean, two leak 42/2, three still leak 42/2, and a three-iteration loop leaks 84/4. A count flat in the straight-line case and growing in the loop points at a single slot or once-only emission being reused -- `deferred_shared_temp_release` is a single `Option` with a `debug_assert!` guarding exactly that reuse, and is the first thing to rule in or out. | — |
-| B-2026-08-28-51 | 2026-08-28 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }` with `k = true` prints `drop 41` / `41` / `drop 41`. This is the OVER-SCHEDULE horn of B-2026-08-28-22's mechanism -- `merge_outer_states` deliberately re-marks a conditionally-moved place `Owned` and relies on a runtime cap/null guard that exists for MEMORY and does not exist for a user `Drop` BODY -- and it refutes that row's premise that the tree uniformly picked the missed-body direction | — |
 | B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
 | B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
 | B-2026-08-28-63 | 2026-08-28 | interp+codegen | medium | A CONSUMING `match` / `if let` ARM THAT BINDS AN ENUM PAYLOAD OUT RUNS NO `Drop` BODY FOR IT ON ANY BACKEND, while the same arm binding a STRUCT payload runs one -- `match o { Some(e) => ... }` for `Option[E]` prints `got` and nothing else | — |
 | B-2026-08-28-64 | 2026-08-28 | codegen | medium | `Option[K]` NEVER FREES A HEAP-CARRYING NESTED-STRUCT PAYLOAD while `Result[K, i64]` DOES: the plain `let` site calls `track_inline_result_payload_var` with no `Option` sibling for a struct/enum payload -- masked entirely by dead-malloc removal until some body reads the buffer | — |
+| B-2026-08-28-65 | 2026-08-28 | codegen | medium | A `return <local>` NESTED IN A BRANCH LOSES THE LOCAL'S `Drop` BODY ON THE PATH THAT NEVER TAKES THE RETURN, on all three COMPILED backends while the interpreter is correct: `fn take(k) -> R { let r = R { id: 41 }; if k { return r; } R { id: 99 } }` with `k = false` prints `99` / `drop 99` compiled and `drop 41` / `99` / `drop 99` under --interp. This is the UNDER-FIRE horn of B-2026-08-28-51's mechanism -- `suppress_cleanup_for_tail_return` statically REMOVES the action, disarming on every path including the ones that never reach the `return` -- and it is the half that row's fix deliberately did not touch, because un-removing an action is what changes the three frame-membership predicates | — |
 
 ### Relocated (2)
 
@@ -168,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1737 surfaced
 
 </details>
 
-### Fixed (1704)
+### Fixed (1705)
 
-<details><summary>1704 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1705 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1869,6 +1869,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1737 surfaced
 | B-2026-08-28-47 | interp+codegen | medium | A TUPLE HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND when it is never destructured: `let p = (E.B, 1); println(p.1)` is 0… | 9727cdb |
 | B-2026-08-28-48 | interp | low | A DISCARDED PAYLOAD-BEARING ENUM CTOR IN BARE STATEMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY IN THE INTERPRETER: `E.A(R { id: 41 });` is interp 1… | 4190c0a |
 | B-2026-08-28-50 | codegen | medium | AN UNBOUND DESTRUCTURE FIELD WHOSE TYPE HAS NO `Drop` LEAKS ON A STRUCT-LITERAL SOURCE: `let W { r: _, n } = W { r: R { . | bf7c226 |
+| B-2026-08-28-51 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k:… | 74223ee |
 | B-2026-08-28-54 | interp+codegen | medium | AN ENUM WITH NO OWN `Drop` BUT A DROP-BEARING PAYLOAD RUNS NO BODY ON ANY BACKEND when held as a struct field or tuple element: `enum E2 { A(R), B }`… | 0e872dd |
 | B-2026-08-28-55 | interp+codegen | medium | A `Vec` ELEMENT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND: `let mut v = Vec.new(); v.push(E.B)` is 0/0/0 while the TUPLE element of the same… | 0ad7a39 |
 | B-2026-08-28-56 | codegen | medium | A TUPLE-TYPED DESTRUCTURE LEAF WHOSE ELEMENT TYPE HAS NO `Drop` GETS NO MEMORY OWNER, on either source: `let (inner, n) = ((R { . | 3e4a63b |
