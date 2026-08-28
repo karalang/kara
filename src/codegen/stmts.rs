@@ -11958,11 +11958,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_extract_value(sv, idx as u32, "tuple.nested")
                         .unwrap();
                     if let BasicValueEnum::StructValue(inner_sv) = elem {
-                        // No element TypeExprs one level down (the outer vector
-                        // describes THIS level), so a nested wildcard keeps its
-                        // memory-only behaviour — a recorded residual, matching
-                        // the nested-struct arm below.
-                        self.track_tuple_destructure_leaf_cleanups(inner, inner_sv, None);
+                        // The outer vector describes THIS level, so peel the
+                        // nested element's own `TypeExpr` for the recursion.
+                        // Passing `None` here left a nested wildcard
+                        // memory-only, which agreed with the interpreter only
+                        // while the interpreter also stopped at the top level;
+                        // once it recurses, the two disagree. Both sides
+                        // recurse now.
+                        let inner_tes =
+                            elem_tes
+                                .and_then(|tes| tes.get(idx))
+                                .and_then(|te| match &te.kind {
+                                    TypeKind::Tuple(inner_tes) => Some(inner_tes.clone()),
+                                    _ => None,
+                                });
+                        self.track_tuple_destructure_leaf_cleanups(
+                            inner,
+                            inner_sv,
+                            inner_tes.as_deref(),
+                        );
                     }
                 }
                 // Nested struct pattern inside a tuple (`let (a, Foo { x }) = …`):
@@ -12030,15 +12044,50 @@ impl<'ctx> super::Codegen<'ctx> {
         // refcount header, so the plain-struct GEPs in the walker would be off
         // by it; the emitter declines such a type anyway, but bailing here keeps
         // the intent local.
-        if self.type_decls.shared_types.contains_key(&name)
-            || !self.type_decls.struct_types.contains_key(&name)
-        {
+        if self.type_decls.shared_types.contains_key(&name) {
             return;
         }
         let Some(cur_fn) = self.current_fn else {
             return;
         };
-        let Some(walker) = self.emit_struct_user_drop_bodies_only_fn(&name) else {
+        // A non-shared user ENUM leaf runs its LIVE VARIANT's payload bodies,
+        // through the same emitter the binding-leaf arm of
+        // `track_destructure_leaf_cleanup` uses. Without this arm the helper
+        // early-returned on any non-struct, so a discarded enum element ran no
+        // body on either compiled backend while the interpreter's
+        // `run_discarded_value_user_drops` ran one — a run-vs-build divergence
+        // on all three sources (place, call and tuple literal), measured.
+        //
+        // Bodies only, never `karac_drop_<E>`: the combined wrapper frees, and
+        // the free is what the `free_memory` argument exists to decide.
+        //
+        // An enum that declares its OWN `impl Drop` is EXCLUDED, and the
+        // exclusion is measured rather than cautious. The interpreter runs the
+        // OWN body only for such an enum and does NOT walk the payload (its
+        // `run_discarded_value_user_drops` states that rule and cites the probe
+        // behind it). This payload walker is therefore the wrong body for that
+        // shape: admitting it printed `drop R41` against the interpreter's
+        // `drop E` — a divergence of a NEW kind, where before there was simply
+        // no body. The right body lives on the `karac_drop_<E>` wrapper, which
+        // also frees, so wiring it needs the `free_memory` question answered
+        // for enums first. Left as a filed shape rather than guessed at.
+        let enum_payload_ok = self
+            .type_decls
+            .enum_layouts
+            .get(&name)
+            .is_some_and(|l| !l.is_shared)
+            && !self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(&name));
+        let walker = if enum_payload_ok {
+            self.emit_enum_payload_user_drop_bodies_fn(&name)
+        } else if self.type_decls.struct_types.contains_key(&name) {
+            self.emit_struct_user_drop_bodies_only_fn(&name)
+        } else {
+            None
+        };
+        let Some(walker) = walker else {
             return;
         };
         let synth = format!("__wildcard_discard_{}", self.indexed_elem_counter);
@@ -12047,7 +12096,19 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(slot, elem).unwrap();
         self.builder.build_call(walker, &[slot.into()], "").unwrap();
         if free_memory {
-            if let Some(mem) = self.emit_struct_drop_synthesis(&name) {
+            // The memory emitter has to match the type, and the ENUM half is
+            // measured, not assumed: without it the fresh-tuple enum row LEAKED
+            // its payload's `String` under LSan, because a fresh tuple temp
+            // carries no aggregate drop and the body alone frees nothing. The
+            // place source keeps `free_memory == false` and stays balanced by
+            // the source aggregate's own drop — the same per-site split the
+            // struct path already makes.
+            let mem = if self.type_decls.struct_types.contains_key(&name) {
+                self.emit_struct_drop_synthesis(&name)
+            } else {
+                self.emit_enum_drop_switch(&name)
+            };
+            if let Some(mem) = mem {
                 self.builder.build_call(mem, &[slot.into()], "").unwrap();
             }
         }

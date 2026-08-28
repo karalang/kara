@@ -12706,6 +12706,45 @@ fn main() {
                  fn main() { println(f\"{take(W { r: R { id: 41 }, n: 1 })}\") }\n",
                 "1\ndrop 41\n",
             ),
+            // An ENUM element's live-variant payload bodies, through the
+            // discard. The bodies helper early-returned on any non-struct, so
+            // every enum source ran no body compiled while the interpreter ran
+            // one — a run-vs-build divergence left behind by this row's first
+            // fix, on all three sources.
+            (
+                "enum-payload-place",
+                "enum E { A(R), B }\n\
+                 fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            (
+                "enum-payload-fresh-literal",
+                "enum E { A(R), B }\n\
+                 fn main() { let (_, n) = (E.A(R { id: 41 }), 1); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            (
+                "enum-payload-fresh-call",
+                "enum E { A(R), B }\n\
+                 fn mk() -> (E, i64) { (E.A(R { id: 41 }), 1) }\n\
+                 fn main() { let (_, n) = mk(); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // A wildcard inside a NESTED tuple pattern, both sources. The
+            // place-source walker recursed and the fresh path did not, and the
+            // interpreter stopped at the top level — so this shape diverged in
+            // one direction from a place source and agreed on ZERO from a
+            // literal. Both sides recurse now.
+            (
+                "nested-wildcard-place",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); let ((_, m), n) = p; println(f\"{m + n}\") }\n",
+                "drop 41\n3\n",
+            ),
+            (
+                "nested-wildcard-fresh-literal",
+                "fn main() { let ((_, m), n) = ((R { id: 41 }, 2), 1); println(f\"{m + n}\") }\n",
+                "drop 41\n3\n",
+            ),
             // CONTROL — a `match` arm's wildcard, correct before and after.
             // This is what shows the defect was specific to `let`.
             (

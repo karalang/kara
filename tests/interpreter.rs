@@ -32388,6 +32388,36 @@ fn test_wildcard_destructure_leaf_user_drop_body_runs_once() {
              fn main() { let (_, n) = mk(); println(f\"{n}\") }\n",
             "drop 41\n1\n",
         ),
+        // A wildcard inside a NESTED tuple pattern. The tree-walker collected
+        // only top-level wildcard positions, so this shape ran no body here
+        // while the compiled backends' place-source walker recursed and ran
+        // one — a run-vs-build divergence in the opposite direction from the
+        // one this row fixed. Both sides recurse now.
+        (
+            "nested-wildcard-place",
+            "fn main() { let p = ((R { id: 41 }, 2), 1); let ((_, m), n) = p; println(f\"{m + n}\") }\n",
+            "drop 41\n3\n",
+        ),
+        (
+            "nested-wildcard-fresh-literal",
+            "fn main() { let ((_, m), n) = ((R { id: 41 }, 2), 1); println(f\"{m + n}\") }\n",
+            "drop 41\n3\n",
+        ),
+        // An ENUM element's live-variant payload, the twin of the codegen
+        // rows: the tree-walker was already right here, so these pin the side
+        // that did not move while codegen caught up.
+        (
+            "enum-payload-place",
+            "enum E { A(R), B }\n\
+             fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "enum-payload-fresh-literal",
+            "enum E { A(R), B }\n\
+             fn main() { let (_, n) = (E.A(R { id: 41 }), 1); println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
         (
             "struct-fresh-call",
             "struct W { r: R, n: i64 }\n\

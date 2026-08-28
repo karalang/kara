@@ -1077,6 +1077,40 @@ fn main() {
                  \x20            let (_, _) = p; println(\"x\"); }\n",
                 vec!["drop 41 n41", "drop 42 n42", "x"],
             ),
+            // An ENUM element's live payload, which carries the heap here.
+            // The payload walker runs BODIES only and deliberately frees
+            // nothing — the source aggregate's own drop still owns the buffer —
+            // so this row is what catches getting that half wrong in either
+            // direction: a leak if the free moved, a double free if it were
+            // added.
+            (
+                "enum-payload-place",
+                "enum E { A(R), B }\n\
+                 fn main() { let p = (E.A(R { id: 41, name: f\"n{41}\" }), 1);\n\
+                 \x20            let (_, n) = p; println(f\"{n}\"); }\n",
+                vec!["drop 41 n41", "1"],
+            ),
+            (
+                "enum-payload-fresh-literal",
+                "enum E { A(R), B }\n\
+                 fn main() { let (_, n) = (E.A(R { id: 41, name: f\"n{41}\" }), 1);\n\
+                 \x20            println(f\"{n}\"); }\n",
+                vec!["drop 41 n41", "1"],
+            ),
+            // A NESTED wildcard, whose element the recursion now reaches on
+            // both the place and the fresh path.
+            (
+                "nested-wildcard-place",
+                "fn main() { let p = ((R { id: 41, name: f\"n{41}\" }, 2), 1);\n\
+                 \x20            let ((_, m), n) = p; println(f\"{m + n}\"); }\n",
+                vec!["drop 41 n41", "3"],
+            ),
+            (
+                "nested-wildcard-fresh-literal",
+                "fn main() { let ((_, m), n) = ((R { id: 41, name: f\"n{41}\" }, 2), 1);\n\
+                 \x20            println(f\"{m + n}\"); }\n",
+                vec!["drop 41 n41", "3"],
+            ),
             // CONTROL — a by-value param source, where the fix fires nothing.
             (
                 "param-tuple-control",

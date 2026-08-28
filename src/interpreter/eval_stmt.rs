@@ -1352,13 +1352,24 @@ impl<'a> super::Interpreter<'a> {
         let mut discarded: Vec<Value> = Vec::new();
         match (&pattern.kind, val) {
             (PatternKind::Tuple(pats), Value::Tuple(items)) => {
-                for (i, p) in pats.iter().enumerate() {
-                    if matches!(p.kind, PatternKind::Wildcard) {
-                        if let Some(v) = items.get(i) {
-                            discarded.push(v.clone());
+                // Recurses through NESTED tuple sub-patterns
+                // (`let ((_, m), n) = p;`). Stopping at the top level answered
+                // that shape differently from both compiled backends, whose
+                // place-source walker already recursed — measured as a
+                // run-vs-build divergence in the opposite direction from the
+                // one this row fixed.
+                fn collect(pats: &[Pattern], items: &[Value], out: &mut Vec<Value>) {
+                    for (p, v) in pats.iter().zip(items.iter()) {
+                        match (&p.kind, v) {
+                            (PatternKind::Wildcard, _) => out.push(v.clone()),
+                            (PatternKind::Tuple(inner), Value::Tuple(inner_items)) => {
+                                collect(inner, inner_items, out);
+                            }
+                            _ => {}
                         }
                     }
                 }
+                collect(pats, items, &mut discarded);
             }
             (PatternKind::Struct { fields, .. }, Value::Struct { fields: vals, .. }) => {
                 for fp in fields {
