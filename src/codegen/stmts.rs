@@ -11636,7 +11636,25 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return Ok(());
         };
-        if !self.expr_yields_fresh_owned_temp(value) {
+        // B-2026-08-28-1 — a tuple LITERAL RHS (`let (r, n) = (R { id: 41 }, 1)`)
+        // is a fresh owned temp in exactly the sense this site needs: the
+        // literal MOVES each element in, so after it is built nothing else will
+        // ever free those buffers or run those bodies. Without admitting it the
+        // destructure reached neither branch below — the general predicate said
+        // "not fresh" and `place_root_ident` said "not a place" — so the leaves
+        // registered no cleanup at all and the user body was silent on both
+        // compiled backends.
+        //
+        // Widened HERE rather than inside `expr_yields_fresh_owned_temp`, for
+        // the reason `expr_is_fresh_owned_array_temp` gives for its own split:
+        // that predicate is asked by many unrelated sites, and a tuple literal
+        // is not universally a fresh OWNED temp in their sense — `("aa", 1)`
+        // holds a rodata element. This site's leaf frees are cap-guarded, so a
+        // rodata element is a no-op here; that is a property of these drops, not
+        // of every consumer.
+        let fresh =
+            self.expr_yields_fresh_owned_temp(value) || matches!(&value.kind, ExprKind::Tuple(_));
+        if !fresh {
             // #21 — a PLACE source (`let (t, n) = h.pe`): the source struct's
             // `NestedTuple` drop now frees the tuple's enum / nested-struct
             // leaves. The fresh-temp path below tracks ALL leaves; here we touch
@@ -11659,11 +11677,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// struct drop skips it. Bails on a caller-retains root (`owned_struct_params`,
     /// whose deep-copy owns the buffer) or an unresolvable source.
     fn finish_place_source_tuple_destructure(&mut self, pats: &[Pattern], value: &Expr) {
-        match Self::place_root_ident(value) {
+        // B-2026-08-28-1 — a by-value tuple PARAM already owns its elements:
+        // `make_tuple_param_callee_owned` deep-copies each one at entry and
+        // registers a tuple drop that runs their user bodies. So the leaf must
+        // take the MEMORY (which the cap-zeroing below transfers) but must NOT
+        // register a second body — the interpreter runs exactly one, and adding
+        // the leaf's made a tuple-param destructure print it TWICE. A tuple
+        // LOCAL or call result has no such owner, which is why the same leaf
+        // needs the body there. `owned_struct_params` cannot make this
+        // distinction: it is populated for `Path`-typed params only, so a tuple
+        // param is absent from it and both sources look identical there.
+        let owner_runs_bodies = match Self::place_root_ident(value) {
             Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
-            Some(_) => {}
+            Some(root) => self.fn_ctx.current_fn_param_names.contains(root),
             None => return,
-        }
+        };
         let Some(elems) = self.place_chain_tuple_tes(value) else {
             return;
         };
@@ -11702,7 +11730,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.register_var_from_type_expr(name, &te);
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
-                self.track_destructure_leaf_cleanup(name, slot.ptr);
+                self.track_destructure_leaf_cleanup(name, slot.ptr, !owner_runs_bodies);
             }
             self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
         }
@@ -11719,7 +11747,9 @@ impl<'ctx> super::Codegen<'ctx> {
             match &pat.kind {
                 PatternKind::Binding(name) => {
                     if let Some(slot) = self.variables.get(name.as_str()).copied() {
-                        self.track_destructure_leaf_cleanup(name, slot.ptr);
+                        // A fresh owned temp has no named source to hold a
+                        // competing body, so the leaf always takes it.
+                        self.track_destructure_leaf_cleanup(name, slot.ptr, true);
                     }
                 }
                 // `let (a, _) = pair()` — the discarded element still owns its
@@ -11772,7 +11802,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// nothing. This is the registry-keyed analogue of
     /// `track_owned_destructure_field_cleanup` (which keys off a `TypeExpr` the
     /// tuple path doesn't have without an annotation).
-    fn track_destructure_leaf_cleanup(&mut self, name: &str, alloca: PointerValue<'ctx>) {
+    /// `register_user_bodies` is false only when the SOURCE already owns the
+    /// leaf's user `Drop` body (a by-value tuple param — see the call site);
+    /// the leaf then keeps its pre-existing memory-only registration.
+    fn track_destructure_leaf_cleanup(
+        &mut self,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+        register_user_bodies: bool,
+    ) {
         // String + Vec both register `vec_elem_types` (the buffer shape).
         if let Some(&elem) = self.var_types.vec_elem_types.get(name) {
             self.track_vec_var(alloca, Some(elem));
@@ -11840,12 +11878,104 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(layout) = self.type_decls.enum_layouts.get(&tn) {
                 if !layout.is_shared {
                     self.track_enum_var(&tn, alloca);
+                    // B-2026-08-28-1 (enum leg) — the live variant's
+                    // Drop-bearing PAYLOAD bodies, mirroring the simple-`let`
+                    // enum arm verbatim (see the `PatternKind::Binding` site
+                    // that pairs `track_enum_var` with this walker). Registered
+                    // AFTER the memory action on purpose: a frame drains LIFO,
+                    // so pushing memory first is what makes the body run before
+                    // the payload it reads is freed. Kept OUTSIDE
+                    // `track_enum_var` for the same reason that site states —
+                    // that helper self-filters on whether a payload owns HEAP,
+                    // and a payload whose fields are all scalars owns none yet
+                    // must still run its body.
+                    if let Some(bodies) = register_user_bodies
+                        .then(|| self.emit_enum_payload_user_drop_bodies_fn(&tn))
+                        .flatten()
+                    {
+                        self.track_user_drop_var_with_fn(
+                            "",
+                            name,
+                            alloca,
+                            bodies,
+                            UserDropKind::ContainerElemBodies,
+                        );
+                    }
                     return;
                 }
             }
             if self.type_decls.struct_types.contains_key(&tn)
                 && !self.type_decls.shared_types.contains_key(&tn)
             {
+                // B-2026-08-28-1 — a destructure leaf used to register the
+                // MEMORY drop only, so a leaf whose type declares `impl Drop`
+                // had its buffers freed and its user body silently skipped:
+                // `let p = (R { id: 41 }, 1); let (r, n) = p;` ran the body on
+                // the interpreter and on NEITHER compiled backend. Peak RSS was
+                // flat, which is what kept it out of the leak class and made it
+                // silent RAII instead — a `Drop` that closes a file or releases
+                // a lock simply did not happen once compiled.
+                //
+                // The three arms below are the simple-`let` path's cascade,
+                // transplanted. Keeping them in that order matters:
+                //  * an own `impl Drop` routes through the `karac_drop_<T>`
+                //    WRAPPER, which is body + fields + memory in ONE action, so
+                //    it must REPLACE the memory registration rather than join
+                //    it — registering both would free the same buffers twice;
+                //  * a type with no Drop of its own but a Drop-bearing FIELD has
+                //    no wrapper to hang off (nothing builds one for such a
+                //    type), so it takes the field-bodies walk on the `UserDrop`
+                //    channel PLUS the ordinary memory drop — disjoint work on
+                //    one slot, which is what keeps that arm additive;
+                //  * everything else keeps today's memory-only behaviour byte
+                //    for byte.
+                //
+                // `UserDrop` is the channel rather than `StructDrop` because
+                // only `UserDrop` fires at the binding's NLL live-range end,
+                // which is where the interpreter places the body. On
+                // `StructDrop` the body would print after the statements
+                // following the leaf's last use — a run-vs-build divergence in
+                // the exact output the parity gate compares.
+                let wrapper = (register_user_bodies
+                    && self
+                        .program_snapshot
+                        .as_deref()
+                        .is_some_and(|p| p.drop_method_keys.contains_key(&tn)))
+                .then(|| self.drop_rc.user_drop_wrapper_fns.get(&tn).copied())
+                .flatten();
+                if let Some(drop_fn) = wrapper {
+                    // Gated on the wrapper EXISTING, not merely on the type
+                    // declaring Drop: `track_user_drop_var` returns silently
+                    // when the cache has no entry, and taking this arm on a
+                    // miss would drop the memory registration too and turn a
+                    // missing body into a leak.
+                    self.track_user_drop_var_with_fn(
+                        &tn,
+                        name,
+                        alloca,
+                        drop_fn,
+                        UserDropKind::OwnWrapper,
+                    );
+                    return;
+                }
+                let subst = self
+                    .type_decls
+                    .enum_inst_var_types
+                    .get(name)
+                    .cloned()
+                    .map(|i| self.generic_struct_subst_from_inst(&tn, &i))
+                    .unwrap_or_default();
+                if register_user_bodies && self.type_runs_user_drop_mono(&tn, &subst) {
+                    if let Some(bodies_fn) = self.emit_user_drop_field_bodies_fn(&tn, &subst) {
+                        self.track_user_drop_var_with_fn(
+                            &tn,
+                            name,
+                            alloca,
+                            bodies_fn,
+                            UserDropKind::StructFieldBodies,
+                        );
+                    }
+                }
                 self.track_struct_var(&tn, alloca);
             }
         }

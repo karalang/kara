@@ -56472,6 +56472,106 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-1 — the MEMORY half of registering a user `Drop` body on a
+    /// destructure leaf.
+    ///
+    /// The fix routes a leaf whose type declares `impl Drop` through the
+    /// `karac_drop_<T>` WRAPPER, which is body + fields + memory in ONE action,
+    /// and therefore has to REPLACE the leaf's memory registration rather than
+    /// join it. Registering both frees the same buffers twice, so every case
+    /// here carries a heap `String` field: with an i64-only payload a double
+    /// free has nothing to free and ASAN stays quiet.
+    ///
+    /// The tuple-PARAM case is the control that must not double-DROP either —
+    /// its source already owns the elements, so the leaf takes memory only, and
+    /// the expected stdout below pins the body at exactly one occurrence.
+    ///
+    /// The rodata case guards the tuple-LITERAL widening: `("aa", 1)` holds a
+    /// static element, so a leaf free that was not cap-guarded would free
+    /// read-only memory.
+    #[test]
+    fn asan_user_drop_body_on_a_let_destructure_leaf() {
+        for (label, prog, want) in [
+            (
+                "tuple-local",
+                r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+fn main() {
+    let p = (R { id: 1, name: "payload-aa" }, 2);
+    let (r, n) = p;
+    println(f"n={r.id + n}");
+}
+"#,
+                &["n=3", "drop payload-aa"][..],
+            ),
+            (
+                "call-result",
+                r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+fn make() -> (R, i64) { return (R { id: 1, name: "payload-bb" }, 2); }
+fn main() {
+    let (r, n) = make();
+    println(f"n={r.id + n}");
+}
+"#,
+                &["n=3", "drop payload-bb"][..],
+            ),
+            (
+                "tuple-literal",
+                r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+fn main() {
+    let (r, n) = (R { id: 1, name: "payload-cc" }, 2);
+    println(f"n={r.id + n}");
+}
+"#,
+                &["n=3", "drop payload-cc"][..],
+            ),
+            (
+                "field-bearing-leaf",
+                r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct W { r: R }
+fn main() {
+    let p = (W { r: R { id: 1, name: "payload-dd" } }, 2);
+    let (w, n) = p;
+    println(f"n={w.r.id + n}");
+}
+"#,
+                &["n=3", "drop payload-dd"][..],
+            ),
+            (
+                "tuple-param-control",
+                r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+fn take(p: (R, i64)) {
+    let (r, n) = p;
+    println(f"n={r.id + n}");
+}
+fn main() { take((R { id: 1, name: "payload-ee" }, 2)); }
+"#,
+                &["n=3", "drop payload-ee"][..],
+            ),
+            (
+                "rodata-literal-element",
+                r#"
+fn main() {
+    let (a, b) = ("aa", 1);
+    println(f"{a}{b}");
+}
+"#,
+                &["aa1"][..],
+            ),
+        ] {
+            assert_clean_asan_run(prog, want, label);
+        }
+    }
+
     /// B-2026-08-27-50 — the element-type half of the same family, under ASAN.
     ///
     /// A generic callee's container param bound to a struct-field argument left

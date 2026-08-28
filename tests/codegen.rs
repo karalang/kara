@@ -12058,6 +12058,111 @@ fn main() {
         assert_eq!(run_program(nongeneric_control).as_deref(), Some("1\n"));
     }
 
+    /// B-2026-08-28-1 — a user `Drop` body must run for a struct DESTRUCTURED
+    /// out of a `let`, on the compiled backends as well as the interpreter.
+    ///
+    /// A destructure leaf registered its MEMORY drop only, never the
+    /// `karac_drop_<T>` wrapper that runs the body, so
+    /// `let p = (R { id: 41 }, 1); let (r, n) = p;` printed the body under
+    /// `karac run --interp` and NOTHING under `karac run` or `karac build`.
+    /// Peak RSS stayed flat (the buffers were freed), so this was silent RAII
+    /// rather than a leak: a `Drop` that closes a file or releases a lock did
+    /// not happen once compiled. The interpreter was right and both SHIPPED
+    /// backends were wrong, which is what made it high severity.
+    ///
+    /// The tuple-PARAM row is the load-bearing control, and it asserts ONE
+    /// body, not merely a non-empty one. A param already owns its elements
+    /// (`make_tuple_param_callee_owned` deep-copies them at entry and registers
+    /// a tuple drop that runs their bodies), so an unconditional leaf
+    /// registration makes it print TWICE — which is exactly what the first cut
+    /// of this fix did. `run_program` compares whole stdout, so a duplicated
+    /// body fails here.
+    #[test]
+    fn e2e_user_drop_body_runs_for_a_let_destructure_leaf() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n";
+        for (label, body, want) in [
+            // The row's own repro: the source is a tuple LOCAL.
+            (
+                "tuple-local",
+                "fn main() { let p = (R { id: 41 }, 1); let (r, n) = p; println(f\"{r.id + n}\"); }\n",
+                "42\ndrop 41\n",
+            ),
+            // The row's sibling: the source is a CALL RESULT.
+            (
+                "call-result",
+                "fn make() -> (R, i64) { return (R { id: 41 }, 1); }\n\
+                 fn main() { let (r, n) = make(); println(f\"{r.id + n}\"); }\n",
+                "42\ndrop 41\n",
+            ),
+            // A tuple LITERAL RHS reached NEITHER branch of the destructure
+            // finisher — not "fresh" by the general predicate, not a place —
+            // so its leaves registered no cleanup at all.
+            (
+                "tuple-literal",
+                "fn main() { let (r, n) = (R { id: 41 }, 1); println(f\"{r.id + n}\"); }\n",
+                "42\ndrop 41\n",
+            ),
+            // The leaf declares no Drop of its own but OWNS a Drop-bearing
+            // field: the second arm of the cascade, which has no wrapper to
+            // hang off and takes the field-bodies walk plus ordinary memory.
+            (
+                "field-bearing-leaf",
+                "struct W { r: R }\n\
+                 fn main() { let p = (W { r: R { id: 41 } }, 1); let (w, n) = p; println(f\"{w.r.id + n}\"); }\n",
+                "42\ndrop 41\n",
+            ),
+            // Both elements drop: the bodies run at each leaf's own NLL end.
+            (
+                "two-droppers",
+                "fn main() { let p = (R { id: 41 }, R { id: 7 }); let (a, b) = p; println(f\"{a.id + b.id}\"); }\n",
+                "48\ndrop 7\ndrop 41\n",
+            ),
+            // A nested tuple pattern, on the fresh path.
+            (
+                "nested-from-call",
+                "fn make() -> ((R, i64), i64) { return ((R { id: 41 }, 2), 1); }\n\
+                 fn main() { let ((r, m), n) = make(); println(f\"{r.id + m + n}\"); }\n",
+                "44\ndrop 41\n",
+            ),
+            // An ENUM leaf whose live variant carries a Drop-bearing payload —
+            // the enum arm of the same helper.
+            (
+                "enum-leaf-from-call",
+                "enum E { A(R), B }\n\
+                 fn make() -> (E, i64) { return (E.A(R { id: 41 }), 1); }\n\
+                 fn main() { let (e, n) = make(); println(f\"{n}\"); }\n",
+                "drop 41\n1\n",
+            ),
+            // Leaf inside a nested block: the body fires at the leaf's live-range
+            // end, BEFORE the statement following the block.
+            (
+                "inner-scope",
+                "fn main() { { let p = (R { id: 41 }, 1); let (r, n) = p; println(f\"{r.id + n}\"); } println(\"after\"); }\n",
+                "42\ndrop 41\nafter\n",
+            ),
+            // CONTROL — a tuple PARAM source, which was already correct. It must
+            // stay at exactly ONE body; the first cut of this fix printed two.
+            (
+                "tuple-param-control",
+                "fn take(p: (R, i64)) { let (r, n) = p; println(f\"{r.id + n}\"); }\n\
+                 fn main() { take((R { id: 41 }, 1)); }\n",
+                "42\ndrop 41\n",
+            ),
+            // CONTROL — the same local read by FIELD instead of destructured.
+            // Correct on all three backends before the fix, so it pins the gap
+            // to the destructuring `let` rather than to the tuple or the struct.
+            (
+                "field-read-control",
+                "fn main() { let p = (R { id: 41 }, 1); println(f\"{p.0.id + p.1}\"); }\n",
+                "42\ndrop 41\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

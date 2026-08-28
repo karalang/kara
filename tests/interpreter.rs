@@ -29181,6 +29181,64 @@ fn main() { let (s, n) = passthru((f"abc", 7)); println(f"{n} {s}"); }
 /// diverge (a silent 8-byte swap over a 16-byte tuple element, a segfault at a
 /// String element, a module-verification failure on the returning callee, and
 /// a `free(): double free` on the read-only `ref` spelling).
+/// B-2026-08-28-1 — the interpreter ORACLE for a user `Drop` body on a
+/// destructure leaf. Every case here was already correct under the tree walk;
+/// they are pinned because the compiled backends ran NONE of them, and the
+/// interpreter is the reference the codegen twin in `tests/codegen.rs` is
+/// asserted against.
+///
+/// Each case asserts the body fires exactly ONCE, and where it fires relative
+/// to the surrounding prints — the placement is the NLL live-range end of the
+/// LEAF, not scope exit, which is the property that decides which cleanup
+/// channel codegen has to use.
+#[test]
+fn user_drop_body_fires_once_for_a_let_destructure_leaf() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n";
+    for (label, body, want) in [
+        (
+            "tuple-local",
+            "fn main() { let p = (R { id: 41 }, 1); let (r, n) = p; println(f\"{r.id + n}\"); }\n",
+            "42\ndrop 41\n",
+        ),
+        (
+            "call-result",
+            "fn make() -> (R, i64) { return (R { id: 41 }, 1); }\n\
+             fn main() { let (r, n) = make(); println(f\"{r.id + n}\"); }\n",
+            "42\ndrop 41\n",
+        ),
+        (
+            "tuple-literal",
+            "fn main() { let (r, n) = (R { id: 41 }, 1); println(f\"{r.id + n}\"); }\n",
+            "42\ndrop 41\n",
+        ),
+        (
+            "field-bearing-leaf",
+            "struct W { r: R }\n\
+             fn main() { let p = (W { r: R { id: 41 } }, 1); let (w, n) = p; println(f\"{w.r.id + n}\"); }\n",
+            "42\ndrop 41\n",
+        ),
+        (
+            "two-droppers",
+            "fn main() { let p = (R { id: 41 }, R { id: 7 }); let (a, b) = p; println(f\"{a.id + b.id}\"); }\n",
+            "48\ndrop 7\ndrop 41\n",
+        ),
+        (
+            "tuple-param",
+            "fn take(p: (R, i64)) { let (r, n) = p; println(f\"{r.id + n}\"); }\n\
+             fn main() { take((R { id: 41 }, 1)); }\n",
+            "42\ndrop 41\n",
+        ),
+        (
+            "inner-scope",
+            "fn main() { { let p = (R { id: 41 }, 1); let (r, n) = p; println(f\"{r.id + n}\"); } println(\"after\"); }\n",
+            "42\ndrop 41\nafter\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 #[test]
 fn container_argument_from_a_struct_field_round_trips() {
     // The row's own repro: a nameless tuple element, inside a generic impl.
