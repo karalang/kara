@@ -4153,14 +4153,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // name, which must keep refusing loudly rather than resolve to
                 // some unrelated struct that happens to share a field name.
                 if let Some(elems) = self.call_return_tuple_tes(object) {
-                    if let Some(TypeKind::Path(p)) = elems.get(*index as usize).map(|t| &t.kind) {
-                        if let Some(n) = p.segments.last() {
-                            if self.type_decls.struct_field_names.contains_key(n.as_str())
-                                || self.type_decls.enum_layouts.contains_key(n.as_str())
-                                || self.type_decls.shared_types.contains_key(n.as_str())
-                            {
-                                return Some(n.clone());
-                            }
+                    if let Some(te) = elems.get(*index as usize) {
+                        // B-2026-08-28-28 — resolves a GENERIC callee's element
+                        // by binding the callee's type parameter at this call
+                        // site, and keeps the fail-closed gate for everything
+                        // it cannot bind.
+                        if let Some(n) = self.call_tuple_elem_type_name(object, te) {
+                            return Some(n);
                         }
                     }
                 }

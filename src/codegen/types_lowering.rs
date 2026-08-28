@@ -1196,6 +1196,73 @@ impl<'ctx> super::Codegen<'ctx> {
         super::helpers::array_inner_type_expr(ret)
     }
 
+    /// Does this name identify a type codegen has a layout for?
+    ///
+    /// The shared form of the fail-closed gate the tuple-element resolvers
+    /// apply (B-2026-08-28-3 / -34 / -28): an element that names no such type
+    /// must keep refusing loudly rather than resolve to whatever unrelated
+    /// struct happens to declare the field being read.
+    pub(super) fn is_known_layout_type_name(&self, name: &str) -> bool {
+        self.type_decls.struct_field_names.contains_key(name)
+            || self.type_decls.enum_layouts.contains_key(name)
+            || self.type_decls.shared_types.contains_key(name)
+    }
+
+    /// Resolve one callee-declared tuple element to a concrete type NAME at a
+    /// specific CALL SITE, substituting the CALLEE's type parameters
+    /// (B-2026-08-28-28).
+    ///
+    /// [`Self::call_return_tuple_tes`] reads the callee's DECLARED return type,
+    /// so a generic callee's `-> (T, i64)` yields the bare parameter name.
+    /// B-2026-08-28-3 deliberately let that refuse loudly rather than record
+    /// `"T"`, because a consumer taking it at face value would resolve a field
+    /// read against whatever unrelated struct also declares that field — the
+    /// silent-wrong-answer trade B-2026-08-27-49 measured and rejected. This is
+    /// the other half of that decision: bind `T` for THIS call instead of
+    /// guessing.
+    ///
+    /// The binding comes from `call_type_subs`, the typechecker's per-call-site
+    /// record, flattened through the active monomorph's `type_subst_names` so a
+    /// generic call nested inside a monomorph resolves the OUTER parameter too.
+    /// That is the same table and the same flattening `compile_generic_call`
+    /// uses to pick the monomorph, so the name resolved here is by construction
+    /// the one whose layout the call will actually run against.
+    ///
+    /// NOT `subst_monomorph_type_params`, which substitutes the ENCLOSING
+    /// function's parameters. Applying that here would answer with the caller's
+    /// binding for a same-named parameter — right only by coincidence, and
+    /// wrong precisely when both are generic.
+    ///
+    /// Fail-closed at both steps: an unrecorded call site, an unbound
+    /// parameter, or a binding that names no known layout all yield `None`, so
+    /// the shape keeps refusing loudly exactly as it did.
+    pub(super) fn call_tuple_elem_type_name(
+        &self,
+        call: &Expr,
+        elem_te: &TypeExpr,
+    ) -> Option<String> {
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return None;
+        };
+        let name = p.segments.last()?;
+        if self.is_known_layout_type_name(name) {
+            return Some(name.clone());
+        }
+        let concrete = self
+            .span_tables
+            .call_type_subs
+            .get(&(call.span.offset, call.span.length))?
+            .get(name)?;
+        let resolved = self
+            .mono_state
+            .type_subst_names
+            .get(concrete)
+            .cloned()
+            .unwrap_or_else(|| concrete.clone());
+        self.is_known_layout_type_name(&resolved)
+            .then_some(resolved)
+    }
+
     /// The TUPLE half of [`Self::call_slice_return_elem_te`]: the element
     /// `TypeExpr`s of a callee declared `-> (A, B, ...)`.
     ///
@@ -1230,7 +1297,24 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         };
-        match &self.fn_sig.fn_return_type_exprs.get(key.as_str())?.kind {
+        // B-2026-08-28-28 — a GENERIC callee is never `declare_function`'d (only
+        // its monomorphs are), so it has no `fn_return_type_exprs` entry at
+        // all and the tuple arm answered `None` before it could even see the
+        // element. `mono_state.generic_fns` carries the generic AST keyed by
+        // the same name, which is where `compile_generic_call` reads it from
+        // too — so the declared return type is available, it was simply being
+        // looked for in the table that by construction cannot hold it.
+        let ret = self
+            .fn_sig
+            .fn_return_type_exprs
+            .get(key.as_str())
+            .or_else(|| {
+                self.mono_state
+                    .generic_fns
+                    .get(key.as_str())
+                    .and_then(|f| f.return_type.as_ref())
+            })?;
+        match &ret.kind {
             TypeKind::Tuple(elems) => Some(elems.clone()),
             _ => None,
         }

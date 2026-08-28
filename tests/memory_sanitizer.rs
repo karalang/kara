@@ -57840,6 +57840,48 @@ fn main() {
         );
     }
 
+    /// A HEAP field read through a GENERIC callee's tuple element —
+    /// `firstof(R { … }).0.name` where `fn firstof[T](x: T) -> (T, i64)`
+    /// (B-2026-08-28-28).
+    ///
+    /// That fix made the shape COMPILE for the first time, which is the point
+    /// at which this family has produced a fresh ownership defect four times
+    /// running (B-2026-08-27-49, -3, -34, and the tuple temp of -27). It does
+    /// NOT here, and this test is what says so rather than an assumption: the
+    /// fresh-tuple-temp registration from B-2026-08-28-27 and the projected-
+    /// element handover from B-2026-08-28-3 already cover the generic callee,
+    /// because both key on the SHAPE of the projection and neither cares
+    /// whether the callee's return type was written generically.
+    ///
+    /// So this is a guard on that coverage rather than a fix's gate: it fails
+    /// if a future change to either registration starts distinguishing generic
+    /// callees. Bound, unbound and consumed reads are all here for that reason,
+    /// and the container is re-read at the end.
+    #[test]
+    fn test_generic_callee_tuple_element_heap_read_is_owned() {
+        let src = r#"
+struct R { id: i64, name: String }
+
+fn firstof[T](x: T) -> (T, i64) { return (x, 1); }
+
+fn main() {
+    let q = firstof(R { id: 1, name: f"n{41}" });
+    println(q.0.name);
+    println(firstof(R { id: 2, name: f"m{2}" }).0.name);
+    let w = firstof(R { id: 3, name: f"p{3}" }).0.name;
+    println(w);
+    println(q.0.id);
+    println(q.1);
+    println(q.0.name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &["n41", "m2", "p3", "1", "1", "n41"],
+            "generic-callee-tuple-element-heap-read",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

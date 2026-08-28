@@ -109382,6 +109382,73 @@ fn main() {
         );
     }
 
+    /// A field read through a GENERIC callee's tuple element —
+    /// `let q = firstof(Tag { n: 9 }); q.0.n` where
+    /// `fn firstof[T](x: T) -> (T, i64)` (B-2026-08-28-28).
+    ///
+    /// B-2026-08-28-3 read the callee's DECLARED return type, which for a
+    /// generic callee is `(T, i64)` — the type PARAMETER — and deliberately let
+    /// that refuse loudly rather than record `"T"`, because a consumer taking
+    /// it at face value resolves the read against whatever unrelated struct
+    /// also declares the field. This binds `T` for the call instead of guessing.
+    ///
+    /// TWO INSTANTIATIONS OF THE SAME GENERIC FUNCTION ARE THE POINT. `Tag` and
+    /// `Other` both declare an `n`, at DIFFERENT indices, and both are passed
+    /// to the same `firstof`. A resolution that bound `T` once — last writer
+    /// wins, the failure mode `emit_clone_fn_for_type_expr` actually had under
+    /// B-2026-07-12-16 — prints one of them wrong rather than refusing, and
+    /// nothing else in the fixture would notice.
+    ///
+    /// The remaining rows cover the sources the binding has to come through: an
+    /// UNBOUND call result (no binding to key on), a generic callee nested
+    /// inside another monomorph (the outer parameter must flatten), and a
+    /// generic METHOD (a different callee key).
+    #[test]
+    fn test_e2e_field_read_through_a_generic_callees_tuple_element() {
+        let src = r#"
+struct Tag { n: i64, a: i64 }
+struct Other { a: i64, n: i64 }
+struct Box3 { k: i64 }
+
+fn firstof[T](x: T) -> (T, i64) { return (x, 1); }
+fn outer[U](y: U) -> i64 { let q = firstof(y); return q.1; }
+
+impl Box3 { fn pair[T](ref self, x: T) -> (T, i64) { return (x, self.k); } }
+
+fn main() {
+    let a = firstof(Tag { n: 9, a: 99 });
+    let b = firstof(Other { a: 5, n: 42 });
+    println(a.0.n);
+    println(a.0.a);
+    println(b.0.n);
+    println(b.0.a);
+    println(firstof(Tag { n: 7, a: 77 }).0.n);
+    println(outer(Tag { n: 1, a: 2 }));
+    let c = Box3 { k: 5 };
+    let d = c.pair(Tag { n: 3, a: 4 });
+    println(d.0.n);
+    println(d.1);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // 9/99 then 42/5: one binding shared across both instantiations reads
+        // `Other` at `Tag`'s index for `n` (or the reverse) and prints 5 or 99.
+        assert_eq!(
+            expected, "9\n99\n42\n5\n7\n1\n3\n5\n",
+            "interpreter oracle is wrong for a generic callee's tuple element",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a generic callee's tuple element must bind its type parameter per call",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///

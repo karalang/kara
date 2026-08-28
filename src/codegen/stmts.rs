@@ -7591,23 +7591,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.call_return_tuple_tes(value).map(|elems| {
                                 elems
                                     .iter()
-                                    .map(|e| match &e.kind {
-                                        TypeKind::Path(p) => p.segments.last().filter(|n| {
-                                            self.type_decls
-                                                .struct_field_names
-                                                .contains_key(n.as_str())
-                                                || self
-                                                    .type_decls
-                                                    .enum_layouts
-                                                    .contains_key(n.as_str())
-                                                || self
-                                                    .type_decls
-                                                    .shared_types
-                                                    .contains_key(n.as_str())
-                                        }),
-                                        _ => None,
-                                    })
-                                    .map(|n| n.cloned())
+                                    // B-2026-08-28-28 — binds a GENERIC
+                                    // callee's element at this call site, and
+                                    // keeps recording `None` for anything it
+                                    // cannot bind.
+                                    .map(|e| self.call_tuple_elem_type_name(value, e))
                                     .collect()
                             })
                         });
