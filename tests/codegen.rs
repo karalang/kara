@@ -13181,9 +13181,13 @@ fn main() {
                  \x20            let W { r, n } = w; println(f\"{n}\") }\n",
                 "drop 41\n1\n",
             ),
-            // CONTROL — a by-value PARAM source. Its drop fires after the
-            // call's own output, which is the ordering the interpreter agrees
-            // with.
+            // CONTROL — a by-value PARAM source, pinned at the COMPILED
+            // ordering. The interpreter disagrees with it (`drop 41` before the
+            // `1`), and that split is B-2026-08-28-19: the caller-side
+            // fresh-temp argument walk fires at the call there and at scope exit
+            // here. Neither this row nor B-2026-08-28-10 touches it; the row is
+            // here so a future ownership change cannot move the compiled side
+            // without someone noticing.
             (
                 "param-source-control",
                 "fn take(w: W) -> i64 { let W { r, n } = w; n }\n\
