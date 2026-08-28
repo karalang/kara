@@ -529,3 +529,34 @@ pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Functi
     f.generic_params = merged;
     f
 }
+
+/// Is the primitive named `name` compared and widened as UNSIGNED — i.e. must
+/// an integer compare on it pick `ULT`/`UGT` over `SLT`/`SGT`, and a widening
+/// of it `zext` rather than `sext`?
+///
+/// ONE list, consulted by every site that makes that choice, because the
+/// duplicated copies are what drifted apart (B-2026-08-28-5). Five separate
+/// enumerations of this question existed — the lowered-binop dispatch in
+/// `assoc_call.rs`, two thunk-selection lists in `vec_method.rs`, the
+/// `expr_is_unsigned_int` syntactic walk in `expr_ops.rs`, and the comparator
+/// family's `Body::IntScalar { signed }` — and only the LAST one had `bool`.
+/// So `Vec[Vec[bool]].sort()` (comparator family) ordered correctly while
+/// `Vec[bool].sort()` and `false < true` (the other lists) inverted. A comment
+/// cannot hold five lists in step; a shared function can.
+///
+/// `bool` belongs here because it lowers to `i1`, whose only set value reads
+/// as `-1` when interpreted as signed — so `true < false` answers "true" and
+/// every bool ordering reverses. `char` lowers to `i32` and every valid scalar
+/// value is below `2^31`, so signed and unsigned agree on it in practice; it
+/// is listed for uniformity with the comparator family, not to fix a live
+/// defect.
+///
+/// `uint` is not a spelling the lexer or the stdlib produces — it appears only
+/// in two of the codegen lists this replaces. It is carried through so folding
+/// those lists together changes no behaviour, rather than silently dropped.
+pub(super) fn primitive_name_is_unsigned(name: &str) -> bool {
+    matches!(
+        name,
+        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "uint" | "bool" | "char"
+    )
+}

@@ -1485,8 +1485,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     let lhs = self.compile_expr(&_args[0].value)?;
                     let rhs = self.compile_expr(&_args[1].value)?;
                     self.tracing.current_span = op_span;
-                    let is_unsigned =
-                        matches!(type_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
+                    // `bool` and `char` are here via the shared predicate,
+                    // not spelled out: this list omitted them, so `a < b` on
+                    // two bools emitted `icmp slt i1` and every bool ordering
+                    // inverted (B-2026-08-28-5).
+                    let is_unsigned = super::helpers::primitive_name_is_unsigned(type_name);
                     // Narrow integers (8/16/32-bit) are real fixed-width types
                     // (design.md § Integer overflow): normalize both operands
                     // to i64 (matching the interpreter, which evaluates all

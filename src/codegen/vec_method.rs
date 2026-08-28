@@ -477,6 +477,16 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_name: &str,
     ) -> Result<IntValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
+        // NOT `helpers::primitive_name_is_unsigned`, deliberately (B-2026-08-28-5).
+        // Every other signedness list in codegen now routes through that shared
+        // predicate; this one cannot, because `is_uint` is also half of `is_int`
+        // just below — it doubles as the "which element types does binary_search
+        // support at all?" set. Folding the predicate in here would silently
+        // WIDEN support to `bool` and `char` rather than fix a signedness bug:
+        // both are absent from the SIGNED list too, so `Vec[bool].binary_search`
+        // errors at build today instead of inverting. Widening it is
+        // B-2026-08-28-6's work (teaching binary_search the comparator family),
+        // where it can carry its own gate and fixtures.
         let is_uint = matches!(elem_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
         let is_int =
             is_uint || matches!(elem_name, "i8" | "i16" | "i32" | "i64" | "i128" | "isize");
@@ -6973,10 +6983,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Narrower ints, String, floats, and compound elements keep the
                 // comparator-thunk path below.
                 if elem_ty.is_int_type() && elem_ty.into_int_type().get_bit_width() == 64 {
-                    let unsigned = matches!(
-                        self.vec_elem_type_name(var_name).as_deref(),
-                        Some("u8" | "u16" | "u32" | "u64" | "usize" | "uint")
-                    );
+                    let unsigned = self
+                        .vec_elem_type_name(var_name)
+                        .as_deref()
+                        .is_some_and(super::helpers::primitive_name_is_unsigned);
                     let data_ptr_ptr = self
                         .builder
                         .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
@@ -7028,10 +7038,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Unsigned element widths compare unsigned so a high-bit-set
                     // value doesn't sort to the front (B-2026-07-04-8) — matches
                     // the interpreter's `Vec[uN].sort()`.
-                    let unsigned = matches!(
-                        self.vec_elem_type_name(var_name).as_deref(),
-                        Some("u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "uint")
-                    );
+                    // Shared predicate, not a local list: this one omitted
+                    // `bool`, so `Vec[bool].sort()` asked for a SIGNED thunk
+                    // and sorted descending (B-2026-08-28-5).
+                    let unsigned = self
+                        .vec_elem_type_name(var_name)
+                        .as_deref()
+                        .is_some_and(super::helpers::primitive_name_is_unsigned);
                     self.emit_default_sort_thunk(elem_ty, unsigned)
                 } else if self.vec_elem_type_name(var_name).as_deref() == Some("String") {
                     self.emit_default_sort_thunk_string()
@@ -8940,10 +8953,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(p) => {
                     let head = p.segments.first().map(String::as_str).unwrap_or("");
                     match head {
-                        "i8" | "i16" | "i32" | "i64" | "isize" => Body::IntScalar { signed: true },
-                        "u8" | "u16" | "u32" | "u64" | "usize" | "bool" | "char" => {
-                            Body::IntScalar { signed: false }
-                        }
+                        // The SET of scalar names with a comparator body is
+                        // unchanged; only the `signed` FLAG is single-sourced
+                        // now (B-2026-08-28-5). This arm was the one list that
+                        // already had `bool` right, which is what made the
+                        // other four visible as drift rather than as a design.
+                        "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64"
+                        | "usize" | "bool" | "char" => Body::IntScalar {
+                            signed: !super::helpers::primitive_name_is_unsigned(head),
+                        },
                         "f32" | "f64" => Body::FloatScalar,
                         // B-2026-08-27-11 — `?`, not `expect`. The arm is keyed on
                         // the bare NAME, and a user may declare a type of that name

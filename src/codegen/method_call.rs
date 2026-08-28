@@ -5072,13 +5072,31 @@ impl<'ctx> super::Codegen<'ctx> {
             let rhs = self.compile_expr(&args[0].value)?;
             if let (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) = (lhs, rhs) {
                 let i64_t = self.context.i64_type();
+                // B-2026-08-28-5: this pair was hardcoded SIGNED, so `.cmp` was
+                // the one comparison spelling that never learned its operands'
+                // signedness — while its `<` / `.lt` sibling has carried it
+                // since B-2026-07-04-8. Measured before the fix, against the
+                // interpreter: `false.cmp(true)` answered `Greater` (an `i1`
+                // read as signed makes `true` -1), and so did every unsigned
+                // integer whose value sets the top bit of its width —
+                // `(200u8).cmp(100u8)` and `(4_000_000_000u32).cmp(1u32)` both
+                // answered `Less`. Deriving the flag here rather than adding a
+                // bool special-case is what keeps `.cmp` and `<` from
+                // disagreeing again.
+                let unsigned =
+                    self.expr_is_unsigned_int(object) || self.expr_is_unsigned_int(&args[0].value);
+                let (lt_pred, gt_pred) = if unsigned {
+                    (IntPredicate::ULT, IntPredicate::UGT)
+                } else {
+                    (IntPredicate::SLT, IntPredicate::SGT)
+                };
                 let lt = self
                     .builder
-                    .build_int_compare(IntPredicate::SLT, l, r, "cmp.lt")
+                    .build_int_compare(lt_pred, l, r, "cmp.lt")
                     .unwrap();
                 let gt = self
                     .builder
-                    .build_int_compare(IntPredicate::SGT, l, r, "cmp.gt")
+                    .build_int_compare(gt_pred, l, r, "cmp.gt")
                     .unwrap();
                 let zero = i64_t.const_zero();
                 let one = i64_t.const_int(1, false);

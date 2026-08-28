@@ -107621,14 +107621,12 @@ fn main() {
             ("i64", "i64", "[3, 1, 2]", "f\"{e}\""),
             ("u8", "u8", "[3, 1, 2]", "f\"{e}\""),
             ("char", "char", "['c', 'a', 'b']", "f\"{e}\""),
-            // `bool` is DELIBERATELY absent, and its absence is a finding, not
-            // a gap in the table: this differential caught `Vec[bool].sort()`
-            // sorting DESCENDING on all three compiled surfaces while the
-            // interpreter sorts ascending, and `false < true` answering `false`
-            // when compiled. Both trace to bool lowering as a SIGNED `i1`, so
-            // `true` is -1 and every bool comparison inverts. Filed as
-            // B-2026-08-28-5 and fixed separately; this row goes back in with
-            // that fix, and until it does an entry here would assert the bug.
+            // Restored with B-2026-08-28-5's fix. This table is what found
+            // that bug: the row was held out while `Vec[bool].sort()` sorted
+            // DESCENDING on all three compiled surfaces (bool lowers to `i1`,
+            // whose set value reads as -1 when interpreted as signed), because
+            // an entry here would have asserted the bug rather than caught it.
+            ("bool", "bool", "[true, false, true]", "f\"{e}\""),
             ("String", "String", "[\"c\", \"a\"]", "f\"{e}\""),
             (
                 "F64",
@@ -107699,6 +107697,128 @@ fn main() {
                 "[{label}] compiled `Vec[{elem}].sort()` must match the interpreter"
             );
         }
+    }
+
+    /// Primitive comparison and widening are signedness-aware, and `bool`
+    /// counts as unsigned (B-2026-08-28-5).
+    ///
+    /// `bool` lowers to `i1`, whose one set value reads as `-1` when
+    /// interpreted as SIGNED. Five separate codegen lists answered "is this
+    /// name unsigned?" and only one of them — the comparator family — had
+    /// `bool`, so the ordering of a bool was correct through a tuple, a nested
+    /// `Vec`, or a derived struct field, and INVERTED everywhere else:
+    /// `false < true` answered `false`, `Vec[bool].sort()` sorted descending,
+    /// `false.cmp(true)` answered `Greater`, and `true as i64` produced `-1`.
+    /// Silent wrong answers on all three compiled surfaces, with the
+    /// interpreter correct.
+    ///
+    /// Rows 05-07 are the reason this test also covers unsigned INTEGERS.
+    /// `.cmp` was the one comparison spelling with no signedness input at all
+    /// — hardcoded `SLT`/`SGT` — so it was wrong for every unsigned value that
+    /// sets the top bit of its width, not only for bool. Fixing bool's `.cmp`
+    /// means giving that site a signedness flag, and once the flag exists the
+    /// integer rows come with it; leaving them untested would leave the wider
+    /// half of the same defect unpinned.
+    ///
+    /// Row 06 is the one that could not be caught by a run-vs-build
+    /// differential before this fix, and is worth keeping for that reason
+    /// alone: the INTERPRETER's `.cmp` dropped signedness too, so both
+    /// backends agreed on `Less` for `u64.MAX.cmp(1)`. The two-backend
+    /// comparison below only sees it because both sides were fixed.
+    ///
+    /// Row 10 is the over-correction guard, and it is GREEN before the fix by
+    /// design — it exists to catch the failure mode of the FIX (making every
+    /// integer unsigned would satisfy every other row here), not to reproduce
+    /// the bug.
+    ///
+    /// Pinned to LITERAL expected output, not merely twinned against the
+    /// interpreter. The interpreter is the oracle for the bool rows, but it
+    /// was itself wrong on row 06, so a pure twin would have happily certified
+    /// a shared wrong answer — the exact shape this bug took.
+    #[test]
+    fn test_e2e_bool_and_unsigned_comparisons_are_not_signed() {
+        let src = r#"
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    // 01 — the operators, on literals and on bindings.
+    let f = false;
+    let t = true;
+    println(f"01 {false < true} {false <= true} {true > false} {true >= false}");
+    println(f"02 {f < t} {f <= t} {t > f} {t >= f}");
+
+    // 03 — `.cmp` on bool, literal and bound receiver.
+    println(f"03 {tag(false.cmp(true))} {tag(true.cmp(false))} {tag(t.cmp(t))}");
+
+    // 04 — `Vec[bool].sort()`. Starts descending, so an unsorted or
+    // reverse-sorted result is visible.
+    let mut v: Vec[bool] = [true, false, true, false];
+    v.sort();
+    let mut s = "";
+    for e in v { s = s + f"{e} "; }
+    println(f"04 {s}");
+
+    // 05-07 — unsigned integers whose value sets the top bit of the width.
+    let a: u8 = 200;
+    let b: u8 = 100;
+    let c: u64 = 18446744073709551615u64;
+    let d: u64 = 1;
+    let g: u32 = 4000000000;
+    let h: u32 = 1;
+    println(f"05 {tag(a.cmp(b))}");
+    println(f"06 {tag(c.cmp(d))}");
+    println(f"07 {tag(g.cmp(h))}");
+
+    // 08 — widening a bool. `sext` of `i1` gives -1 / 255; `zext` gives 1.
+    let w1 = t as i64;
+    let w2 = t as u8;
+    let w3 = t as i32;
+    println(f"08 {w1} {w2} {w3}");
+
+    // 09 — equality and branching must be untouched by the signedness change.
+    if t { println("09 true true"); } else { println("09 BAD"); }
+
+    // 10 — the over-correction guard. Making EVERY integer unsigned would
+    // satisfy every row above; a signed receiver must stay signed.
+    let s1: i64 = 0 - 5;
+    let s2: i64 = 1;
+    println(f"10 {tag(s1.cmp(s2))} {s1 < s2}");
+}
+"#;
+        // Every value here is the mathematically correct answer, written out
+        // rather than borrowed from a backend: `false < true`, `false.cmp(true)`
+        // is `Less` (0), sorting ascending puts `false` first, 200 > 100,
+        // u64.MAX > 1, 4e9 > 1, and `true` widens to 1 at every width.
+        let expected = "01 true true true true\n\
+                        02 true true true true\n\
+                        03 0 2 1\n\
+                        04 false false true true \n\
+                        05 2\n\
+                        06 2\n\
+                        07 2\n\
+                        08 1 1 1\n\
+                        09 true true\n\
+                        10 0 true\n";
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        assert_eq!(
+            interp_out.join(""),
+            expected,
+            "the interpreter must produce the mathematically correct answers — \
+             row 06 is the one it used to get wrong"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled bool / unsigned comparisons must be unsigned, not signed"
+        );
     }
 
     /// `.cmp()` on a receiver with NO NAME TO LOOK UP — a struct literal, a

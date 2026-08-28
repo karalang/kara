@@ -4549,10 +4549,17 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     fn expr_is_unsigned_int_syntactic(&self, expr: &Expr) -> bool {
+        // Single-sourced (B-2026-08-28-5). The local list this replaces omitted
+        // `bool`, so `true as i64` SIGN-extended the `i1` and produced -1 where
+        // the interpreter produced 1 (and `true as u8` produced 255).
         fn is_uint_name(s: &str) -> bool {
-            matches!(s, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
+            super::helpers::primitive_name_is_unsigned(s)
         }
         match &expr.kind {
+            // A bool LITERAL has no declared-type name for the arms below to
+            // read, and `false.cmp(true)` / `true as i64` are exactly the
+            // spellings that reach codegen without a binding to look up.
+            ExprKind::Bool(_) => true,
             // Suffixed literal — the suffix is authoritative.
             ExprKind::Integer(_, Some(suf)) => matches!(
                 suf,

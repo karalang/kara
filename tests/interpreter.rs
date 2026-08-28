@@ -19467,6 +19467,60 @@ fn main() {
     assert_eq!(out, "0\n1\n2\n0\n0\n0\n2\n2\n");
 }
 
+/// `.cmp()` carries operand signedness under the tree-walker
+/// (B-2026-08-28-5).
+///
+/// The tree-walker stores every integer width in an i64/i128 carrier, so a
+/// `u64` / `usize` value at or above 2^63 rides as a NEGATIVE two's-complement
+/// number. `<` has reinterpreted those bits since B-2026-07-04-8; `.cmp` never
+/// did, so `u64.MAX.cmp(1u64)` answered `Less`.
+///
+/// This half is invisible to the E2E twin in `tests/codegen.rs`, and was
+/// invisible to every run-vs-build differential the repo has: codegen's `.cmp`
+/// was hardcoded signed too, so the two backends AGREED on the wrong answer.
+/// It only surfaced when the compiled side was fixed and the twin started
+/// failing. Pinning literal output here is what keeps it from regressing back
+/// into agreement, and this is also its only coverage on the default
+/// `cargo test` leg.
+///
+/// The `bool` rows belong with the integers rather than in a test of their
+/// own: `bool` is an unsigned 1-bit integer, and it is the member of this
+/// class that the compiled backends got wrong.
+#[test]
+fn cmp_carries_operand_signedness_under_the_tree_walker() {
+    let out = run_no_errors(
+        r#"
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    let a: u8 = 200;
+    let b: u8 = 100;
+    let c: u64 = 18446744073709551615u64;
+    let d: u64 = 1;
+    let e: usize = 9223372036854775808u64 as usize;
+    let f: usize = 1;
+    let g: i64 = 0 - 5;
+    let h: i64 = 1;
+    println(f"{tag(a.cmp(b))}");
+    println(f"{tag(c.cmp(d))}");
+    println(f"{tag(e.cmp(f))}");
+    println(f"{tag(g.cmp(h))}");
+    println(f"{tag(false.cmp(true))}");
+    println(f"{tag(true.cmp(false))}");
+    println(f"{tag(true.cmp(true))}");
+}
+"#,
+    );
+    // 200 > 100, u64.MAX > 1, 2^63 > 1 — then the SIGNED row, which must stay
+    // signed: -5 < 1 is `Less`, and would read as `Greater` if the fix had
+    // made every integer unsigned instead of consulting the operand's type.
+    assert_eq!(out, "2\n2\n2\n0\n0\n2\n1\n");
+}
+
 /// `.cmp()` on a TUPLE under the tree-walker (B-2026-08-27-41).
 ///
 /// `tests/codegen.rs` is entirely `#[cfg(feature = "llvm")]`, so without a

@@ -3190,7 +3190,53 @@ impl<'a> super::Interpreter<'a> {
         ) {
             if method == "cmp" && args.len() == 1 {
                 let other = self.eval_expr_inner(&args[0].value);
-                let ord = value_compare(&obj, &other);
+                // `.cmp` has to recover operand signedness from the receiver
+                // span exactly as the `.lt` / `.gt` arm below does — the same
+                // B-2026-07-04-8 unsigned-64-bit model. It did not, so a `u64`
+                // / `usize` / `u128` value riding as a negative two's-complement
+                // carrier compared as signed: `u64.MAX.cmp(1u64)` answered
+                // `Less` (B-2026-08-28-5).
+                //
+                // This half was INVISIBLE to the usual run-vs-build
+                // differential, because codegen's `.cmp` was signed too and
+                // the two backends agreed on the wrong answer. It surfaced
+                // only when the codegen side was fixed.
+                //
+                // Routing through `eval_binary` rather than reimplementing the
+                // comparison is the point: `.cmp` and `<` now share one
+                // implementation and cannot drift apart again. Gated on a hint
+                // being present, so every other operand shape (String, floats,
+                // signed ints, bool) keeps `value_compare` unchanged.
+                let unsigned_hint = self
+                    .span_unsigned_int_width(&object.span)
+                    .or_else(|| self.span_unsigned_int_width(&args[0].value.span));
+                let ord = match unsigned_hint {
+                    Some(_) => {
+                        let is_lt = self.eval_binary(
+                            &BinOp::Lt,
+                            obj.clone(),
+                            other.clone(),
+                            span,
+                            unsigned_hint,
+                        );
+                        let is_eq = self.eval_binary(
+                            &BinOp::Eq,
+                            obj.clone(),
+                            other.clone(),
+                            span,
+                            unsigned_hint,
+                        );
+                        match (is_lt, is_eq) {
+                            (Value::Bool(true), _) => std::cmp::Ordering::Less,
+                            (_, Value::Bool(true)) => std::cmp::Ordering::Equal,
+                            (Value::Bool(false), Value::Bool(false)) => std::cmp::Ordering::Greater,
+                            // Neither comparison produced a bool — not a shape
+                            // the hint applies to; fall back rather than guess.
+                            _ => value_compare(&obj, &other),
+                        }
+                    }
+                    None => value_compare(&obj, &other),
+                };
                 return Value::EnumVariant {
                     enum_name: "Ordering".to_string(),
                     variant: match ord {
