@@ -3330,7 +3330,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .any(|e| self.tuple_elem_is_movable_drop_struct_place(e));
                     if any_place {
                         let elems = elems.clone();
-                        self.track_discarded_tuple_elem_bodies(&elems, val);
+                        self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
                     }
                 }
                 self.drain_top_frame_with_emit();
@@ -14299,10 +14299,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// this is its bodies complement, registered AFTER it so the LIFO drain
     /// runs bodies before frees. A heapless Drop element (`Res { id }`) has
     /// no memory registration at all — this walk is then the only work.
+    /// `skip` — B-2026-08-28-2 — top-level element indices whose body must NOT
+    /// be registered here because the callee hands that element back through
+    /// its return value, making the caller's consumer of the RESULT its owner.
+    /// Empty at every site that is not a by-value call argument, and empty for
+    /// the overwhelmingly common argument too; when it IS empty the emitted
+    /// walker and its cached symbol name are byte-identical to what this
+    /// emitted before the parameter existed.
     pub(super) fn track_discarded_tuple_elem_bodies(
         &mut self,
         elems: &[Expr],
         val: BasicValueEnum<'ctx>,
+        skip: &[usize],
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
@@ -14311,7 +14319,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|e| self.infer_discard_elem_te(e))
             .collect();
-        let Some(bodies) = self.emit_discarded_tuple_elem_bodies_fn(agg_ty, &elem_tes) else {
+        let Some(bodies) = self.emit_discarded_tuple_elem_bodies_fn(agg_ty, &elem_tes, skip) else {
             return;
         };
         let Some(cur_fn) = self
@@ -14403,6 +14411,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         agg_ty: inkwell::types::StructType<'ctx>,
         elem_tes: &[crate::ast::TypeExpr],
+        skip: &[usize],
     ) -> Option<inkwell::values::FunctionValue<'ctx>> {
         use crate::ast::TypeKind;
         enum ElemWork<'ctx2> {
@@ -14412,6 +14421,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let mut work: Vec<(u32, ElemWork<'ctx>)> = Vec::new();
         for (i, te) in elem_tes.iter().enumerate() {
+            // B-2026-08-28-2 — this element escapes through the callee's
+            // return value; its body belongs to the result's owner.
+            if skip.contains(&i) {
+                continue;
+            }
             let i = i as u32;
             match &te.kind {
                 TypeKind::Tuple(inner) => {
@@ -14421,7 +14435,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     else {
                         continue;
                     };
-                    if let Some(f) = self.emit_discarded_tuple_elem_bodies_fn(inner_ty, inner) {
+                    if let Some(f) = self.emit_discarded_tuple_elem_bodies_fn(inner_ty, inner, &[])
+                    {
                         work.push((i, ElemWork::Walker(f)));
                     }
                 }
@@ -14457,8 +14472,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if work.is_empty() {
             return None;
         }
+        // The walker is CACHED by symbol name, so the skip set has to be part
+        // of it: two calls to the same callee shape with different escaping
+        // elements would otherwise share one walker and the first would win.
+        // An empty skip appends nothing, keeping every pre-existing symbol
+        // name exactly as it was.
+        let skip_sig = if skip.is_empty() {
+            String::new()
+        } else {
+            let mut idx: Vec<usize> = skip.to_vec();
+            idx.sort_unstable();
+            idx.dedup();
+            format!(
+                "_skip{}",
+                idx.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        };
         let fn_name = format!(
-            "__karac_dropbodies_tuple_te_{}",
+            "__karac_dropbodies_tuple_te_{}{skip_sig}",
             Self::tuple_te_sig(elem_tes)
         );
         if let Some(f) = self.module.get_function(&fn_name) {

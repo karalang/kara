@@ -2483,6 +2483,29 @@ impl<'a> super::Interpreter<'a> {
     /// `track_inline_owned_aggregate_arg` shapes exactly (fixed there as
     /// B-2026-07-01-6); bare Identifier args are the caller binding's own
     /// drop. Shared types are excluded (their teardown is refcount-driven).
+    /// B-2026-08-28-2 — which top-level PARTS of by-value argument slot
+    /// `arg_index` the named callee hands back through its return value. Thin
+    /// lookup over [`crate::ast::fn_returns_param_parts`]; empty for an unknown
+    /// name, a method, or any shape that analysis declines to classify (it
+    /// under-approximates on purpose — see its doc). Codegen twin:
+    /// `callee_returned_param_parts` in `call_dispatch.rs`.
+    fn callee_returned_param_parts(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> Vec<crate::ast::ParamPart> {
+        self.program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::ast::Item::Function(f) if f.name == callee_name => {
+                    Some(crate::ast::fn_returns_param_parts(f, arg_index))
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     fn run_fresh_temp_arg_drops(
         &mut self,
         callee_name: &str,
@@ -2534,7 +2557,28 @@ impl<'a> super::Interpreter<'a> {
                     // wildcard-let widening must not reach here; the full
                     // suite caught the double fire on `take_tuple((h, 20))`).
                     if self.discard_tuple_all_elems_safe(elems, items, false) {
-                        self.run_discarded_value_user_drops(Value::Tuple(items.clone()));
+                        // B-2026-08-28-2 — per-ELEMENT, not per-argument. The
+                        // whole-param passthrough guard at the top of this loop
+                        // only fires when the callee hands `p` back BARE; a
+                        // callee that extracts one element and returns THAT
+                        // (`fn take(p: (R, i64)) -> R { let (r, n) = p; r }`)
+                        // slips past it, so the element's body ran here AND
+                        // again at the result's owner. Skipping the whole walk
+                        // instead would be a different soundness hole: measured
+                        // on `fn take(p: (R, R)) -> R { let (a, b) = p; a }`, it
+                        // suppresses element 1's only body. So drop the escaping
+                        // elements from the walk and keep the rest.
+                        //
+                        // Unrolling the tuple here is otherwise identical to the
+                        // `Value::Tuple` arm of `run_discarded_value_user_drops`,
+                        // which is exactly this loop without the filter.
+                        let escaping = self.callee_returned_param_parts(callee_name, i);
+                        for (idx, item) in items.iter().enumerate() {
+                            if escaping.contains(&crate::ast::ParamPart::TupleIndex(idx)) {
+                                continue;
+                            }
+                            self.run_discarded_value_user_drops(item.clone());
+                        }
                     }
                 }
                 continue;

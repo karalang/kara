@@ -12253,6 +12253,125 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-2 — a user `Drop` body ran TWICE FOR ONE OBJECT when the
+    /// callee pulled an element out of an owned TUPLE PARAM and RETURNED it.
+    ///
+    /// `fn take(p: (R, i64)) -> R { let (r, n) = p; r }` called as
+    /// `take((R { id: 41 }, 1))` printed `drop 41` twice under `--interp`,
+    /// LLJIT and AOT alike. One body came from the caller's fresh-temp
+    /// argument walk, which fires every element of a tuple-LITERAL argument on
+    /// the theory that the whole temp dies inside the call; the other from the
+    /// result binding's own live-range end. Exactly one `R` is ever
+    /// constructed, so both prints are one object's body running twice.
+    ///
+    /// BACKEND-CONSISTENT, which is why nothing caught it: every parity
+    /// harness in the tree compares the backends against each other and they
+    /// AGREE here, at the wrong number. The 31-shape destructure matrix swept
+    /// for B-2026-08-27-48 marks this shape "OK" on an interp-vs-AOT
+    /// comparison — it takes counting the CONSTRUCTIONS to see it.
+    ///
+    /// `two-droppers` is the row that constrains the FIX rather than just
+    /// reproducing the bug, and it is why the guard is per-ELEMENT. The
+    /// obvious reading of "the callee returns it" — suppress the caller's walk
+    /// for the whole argument — fixes element 0 and takes element 1's body
+    /// from one to ZERO, trading a double body for a missing one. Any version
+    /// that is not element-precise fails this row.
+    ///
+    /// `tuple-index-return` shows the trigger is NOT the destructure the row
+    /// was filed against: `p.0` returned directly is the same defect with no
+    /// `let` anywhere. What the two spellings share is that the escaping value
+    /// is a PART of the param, which the whole-param passthrough guard
+    /// (`fn_returns_param`, unchanged here) cannot express.
+    ///
+    /// The last three rows are CONTROLS that were already correct and must
+    /// stay correct: returning the OTHER element (so the dropper really does
+    /// die inside the call, and its caller-side body is the only one there
+    /// is), returning the param BARE (the pre-existing whole-param guard), and
+    /// a non-tuple param. Twin: `tests/interpreter.rs`'s
+    /// `test_returned_tuple_param_element_user_drop_body_runs_once`.
+    #[test]
+    fn e2e_user_drop_body_of_a_returned_tuple_param_element_runs_once() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "destructure-return",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // Same, spelled with an explicit `return`.
+            (
+                "explicit-return",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; return r; }\n\
+                 fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // No destructure at all — a direct tuple-index projection.
+            (
+                "tuple-index-return",
+                "fn take(p: (R, i64)) -> R { p.0 }\n\
+                 fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // The RESULT is discarded, so the escaping element's owner is the
+            // discarded temp. Still exactly one body.
+            (
+                "result-discarded",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { take((R { id: 41 }, 1)); println(\"end\"); }\n",
+                "drop 41\nend\n",
+            ),
+            // BOTH elements drop and only element 0 escapes: 41 leaves through
+            // the result, 42 dies in the call. One body each, never two and
+            // never none.
+            (
+                "two-droppers",
+                "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
+                 fn main() { let x = take((R { id: 41 }, R { id: 42 })); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\ndrop 42\n",
+            ),
+            // Two calls — the per-callee answer is not cached across sites in a
+            // way that leaks between them.
+            (
+                "two-calls",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\");\n\
+                 \x20            let y = take((R { id: 42 }, 2)); println(f\"{y.id}\"); }\n",
+                "41\ndrop 41\n42\ndrop 42\n",
+            ),
+            // CONTROL — the callee returns the OTHER element, so the dropper
+            // dies inside the call and the caller's walk is its ONLY body.
+            // Suppressing per-argument instead of per-element takes this to
+            // zero.
+            (
+                "other-element-control",
+                "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
+                 fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x}\"); }\n",
+                "1\ndrop 41\n",
+            ),
+            // CONTROL — the param returned BARE, already handled by the
+            // whole-param passthrough guard this fix deliberately leaves alone.
+            (
+                "bare-param-control",
+                "fn take(r: R) -> R { r }\n\
+                 fn main() { let x = take(R { id: 41 }); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // CONTROL — nothing escapes at all; the whole temp dies in the call.
+            (
+                "nothing-escapes-control",
+                "fn take(p: (R, i64)) { let (r, n) = p; println(f\"{r.id + n}\"); }\n\
+                 fn main() { take((R { id: 41 }, 1)); println(\"end\"); }\n",
+                "42\ndrop 41\nend\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

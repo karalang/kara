@@ -32123,6 +32123,91 @@ fn test_tuple_param_destructure_single_caller_fire() {
     );
 }
 
+/// B-2026-08-28-2, interpreter leg — one user `Drop` body per object when the
+/// callee returns an element pulled out of an owned tuple param.
+///
+/// Pre-fix this printed `drop 41` twice for a single `R`: once from
+/// `run_fresh_temp_arg_drops`' tuple arm, which fires every element of a
+/// tuple-LITERAL argument, and once at the result binding's end. All three
+/// backends did it, so the defect was invisible to every run-vs-build gate —
+/// they agreed, at the wrong number.
+///
+/// The ORDER differs from the compiled twin on the two rows where an element
+/// dies inside the call (`two-droppers`, `other-element-control`): this
+/// backend fires the caller-side walk AT the call, codegen defers it to the
+/// caller's scope exit. That split is older than this fix and untouched by it
+/// — neither of those elements is one the fix removes from the walk — so the
+/// expectations here are the interpreter's own, not a relaxation. Twin:
+/// `tests/codegen.rs`'s
+/// `e2e_user_drop_body_of_a_returned_tuple_param_element_runs_once`.
+#[test]
+fn test_returned_tuple_param_element_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "destructure-return",
+            "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+             fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "explicit-return",
+            "fn take(p: (R, i64)) -> R { let (r, n) = p; return r; }\n\
+             fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // No destructure anywhere — the same defect through a direct
+        // projection, which is what showed the trigger is a PART of the param
+        // escaping rather than the `let` the row was filed against.
+        (
+            "tuple-index-return",
+            "fn take(p: (R, i64)) -> R { p.0 }\n\
+             fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "result-discarded",
+            "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+             fn main() { take((R { id: 41 }, 1)); println(\"end\") }\n",
+            "drop 41\nend\n",
+        ),
+        // Both elements drop, only element 0 escapes. This is the row that
+        // forces the guard to be per-element: suppressing the whole argument
+        // fixes 41 and silences 42.
+        (
+            "two-droppers",
+            "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
+             fn main() { let x = take((R { id: 41 }, R { id: 42 })); println(f\"{x.id}\") }\n",
+            "drop 42\n41\ndrop 41\n",
+        ),
+        // CONTROL — the OTHER element is returned, so the dropper dies in the
+        // call and the caller-side walk is its only body.
+        (
+            "other-element-control",
+            "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
+             fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x}\") }\n",
+            "drop 41\n1\n",
+        ),
+        // CONTROL — param returned BARE, the pre-existing whole-param guard.
+        (
+            "bare-param-control",
+            "fn take(r: R) -> R { r }\n\
+             fn main() { let x = take(R { id: 41 }); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // CONTROL — nothing escapes; the whole temp dies in the call.
+        (
+            "nothing-escapes-control",
+            "fn take(p: (R, i64)) { let (r, n) = p; println(f\"{r.id + n}\") }\n\
+             fn main() { take((R { id: 41 }, 1)); println(\"end\") }\n",
+            "42\ndrop 41\nend\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-27-48, method leg — the same destructure inside an IMPL METHOD
 /// fires ONCE. This is the guard on the gate's other edge: a method frame's
 /// arguments get no caller-side fire (`run_fresh_temp_arg_drops` is wired

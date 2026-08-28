@@ -2114,7 +2114,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // so the caller's orphaned original leaked 48 bytes.
                 || self.arg_is_entry_copied_heap_tuple(&a.value, &name, i)
             {
-                self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
+                let escaping_parts = self.callee_returned_param_parts(&name, i);
+                self.track_inline_owned_aggregate_arg_parts(
+                    val,
+                    &a.value,
+                    escapes_frame,
+                    &escaping_parts,
+                );
             }
             // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
             // `Option[Vec]` binding MOVED by value into a user function that
@@ -3386,7 +3392,70 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         arg_escapes_frame: bool,
     ) {
-        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_escapes_frame, None, false)
+        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_escapes_frame, None, false, &[])
+    }
+
+    /// [`Self::track_inline_owned_aggregate_arg`] carrying the callee's
+    /// per-ELEMENT escape set (B-2026-08-28-2). Used by the two by-value CALL
+    /// ARGUMENT sites, where the callee is known by name and a tuple element it
+    /// returns must not have its body registered caller-side. Every other site
+    /// keeps the plain wrapper and its empty set. Interp twin: the tuple arm of
+    /// `run_fresh_temp_arg_drops`.
+    pub(super) fn track_inline_owned_aggregate_arg_parts(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        arg: &Expr,
+        arg_escapes_frame: bool,
+        escaping_parts: &[crate::ast::ParamPart],
+    ) {
+        self.track_inline_owned_aggregate_arg_inst(
+            val,
+            arg,
+            arg_escapes_frame,
+            None,
+            false,
+            escaping_parts,
+        )
+    }
+
+    /// B-2026-08-28-2 — which top-level PARTS of by-value argument slot
+    /// `arg_index` the named callee hands back through its return value. Thin
+    /// lookup over [`crate::ast::fn_returns_param_parts`]; empty for an unknown
+    /// name, a method, or any shape that analysis declines to classify (it
+    /// under-approximates on purpose — see its doc). Interp twin:
+    /// `callee_returned_param_parts` in `interpreter/eval_call.rs`.
+    pub(super) fn callee_returned_param_parts(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> Vec<crate::ast::ParamPart> {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return Vec::new();
+        };
+        program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::ast::Item::Function(f) if f.name == callee_name => {
+                    Some(crate::ast::fn_returns_param_parts(f, arg_index))
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// The tuple-INDEX half of a [`Self::callee_returned_param_parts`] answer,
+    /// in the shape `track_discarded_tuple_elem_bodies` takes its skip list.
+    /// Struct-field parts are dropped here because the struct-argument arm has
+    /// no per-field body registration to suppress — see the row's remainder.
+    pub(super) fn tuple_indices_of(parts: &[crate::ast::ParamPart]) -> Vec<usize> {
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                crate::ast::ParamPart::TupleIndex(i) => Some(*i),
+                crate::ast::ParamPart::Field(_) => None,
+            })
+            .collect()
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] with the struct-literal arg's
@@ -3421,6 +3490,7 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_escapes_frame: bool,
         mono_inst: Option<TypeExpr>,
         callee_entry_copies_mono: bool,
+        escaping_parts: &[crate::ast::ParamPart],
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
@@ -3718,7 +3788,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         .iter()
                         .all(|e| self.discard_tuple_elem_is_fresh_expr(e))
                 {
-                    self.track_discarded_tuple_elem_bodies(tuple_elems, val);
+                    // B-2026-08-28-2 — per-ELEMENT. `arg_escapes_frame` above is
+                    // the WHOLE-param question; a callee that extracts one
+                    // element and returns THAT passes it while still handing the
+                    // element to the caller's result owner, so its body ran here
+                    // and again there. Suppressing the whole registration
+                    // instead loses the bodies of the elements that really do
+                    // die in the call, so the escaping ones are skipped
+                    // individually. Interp twin: `run_fresh_temp_arg_drops`.
+                    let skip = Self::tuple_indices_of(escaping_parts);
+                    self.track_discarded_tuple_elem_bodies(tuple_elems, val, &skip);
                 }
             }
         } else if let Some(name) = self.owned_struct_temp_arg_name(arg) {

@@ -863,6 +863,78 @@ fn main() {
     /// so it is NOT the wrong-monomorph family and a String-only test would not
     /// have pinned the scalar half. The `(i64, Bag[T])` row is here because
     /// tuple POSITION was an early wrong guess — it fails in either slot.
+    /// B-2026-08-28-2 — the MEMORY half of the double-body row: when the
+    /// callee pulls a heap-carrying element out of an owned tuple param and
+    /// RETURNS it, is the extra user `Drop` body accompanied by an extra
+    /// RELEASE?
+    ///
+    /// The row could not answer that from stdout. It observed `drop 41` twice
+    /// for one `R` on all three backends, noted the program still exits 0 with
+    /// a `String` field, and left the question open with a request for exactly
+    /// this fixture. Answered here: the pre-fix double body is bodies ONLY —
+    /// the same program under ASAN + LSan is clean before the fix as well as
+    /// after, so the memory side was balanced throughout and the defect never
+    /// had a use-after-free or a leak in it.
+    ///
+    /// That is worth pinning rather than dropping, for two reasons. It bounds
+    /// the row honestly (a wrong side-effect count, not corruption), and it is
+    /// the direction a REGRESSION would take: the fix suppresses a caller-side
+    /// registration, and suppressing one element too many — or suppressing the
+    /// memory walk along with the bodies — turns this into a leak that no
+    /// stdout assertion in the pair of behavioural twins would notice.
+    ///
+    /// `two-droppers` carries the same load here as in those twins: element 0
+    /// escapes through the result and element 1 dies in the call, so an
+    /// argument-wide suppression leaks element 1's buffer.
+    ///
+    /// The `p.0` PROJECTION spelling is deliberately absent, and its absence is
+    /// a finding rather than an oversight. At a heap-carrying `R` it is a
+    /// genuine heap-use-after-free — the projection copies the element's
+    /// control block while the source tuple still frees the buffer, so the
+    /// result's `Drop` body reads freed memory — and it reproduces IDENTICALLY
+    /// on a compiler built without this fix, so it is neither caused nor
+    /// repaired here. It is filed as its own row; adding it to this fixture
+    /// would only make this test red for someone else's bug. The behavioural
+    /// twins DO cover that spelling, at a scalar `R` where no buffer exists to
+    /// dangle, which is what makes the body-count claim complete without
+    /// dragging the memory defect in.
+    #[test]
+    fn asan_returned_tuple_param_element_drop_body_is_memory_balanced() {
+        const DROPPER: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        for (label, body, want) in [
+            (
+                "destructure-return",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x.id}\"); }\n",
+                vec!["41", "drop 41 n41"],
+            ),
+            (
+                "result-discarded",
+                "fn take(p: (R, i64)) -> R { let (r, n) = p; r }\n\
+                 fn main() { take((R { id: 41, name: f\"n{41}\" }, 1)); println(\"end\"); }\n",
+                vec!["drop 41 n41", "end"],
+            ),
+            (
+                "two-droppers",
+                "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, R { id: 42, name: f\"n{42}\" }));\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                vec!["41", "drop 41 n41", "drop 42 n42"],
+            ),
+            // CONTROL — the dropper dies inside the call; its buffer must still
+            // be released exactly once.
+            (
+                "other-element-control",
+                "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x}\"); }\n",
+                vec!["1", "drop 41 n41"],
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);
+        }
+    }
+
     #[test]
     fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
         for (label, decl, arg) in [

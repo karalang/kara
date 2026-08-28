@@ -1442,6 +1442,290 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     walk_block(&f.body, param_name)
 }
 
+/// One top-level PART of an owned aggregate parameter — a tuple element or a
+/// struct field. See [`fn_returns_param_parts`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParamPart {
+    /// Tuple element `p.<n>`, or leaf `<n>` of a one-level tuple destructure.
+    TupleIndex(usize),
+    /// Struct field `p.<name>`, or the leaf a one-level struct pattern binds
+    /// from field `<name>`.
+    Field(String),
+}
+
+/// B-2026-08-28-2 — the ELEMENT-PRECISE sibling of [`fn_returns_param`]: WHICH
+/// top-level parts of owned aggregate parameter `arg_index` can reach a return
+/// site.
+///
+/// [`fn_returns_param`] answers a WHOLE-param question — it recognizes the
+/// param used bare at a return site, or moved bare into a returned aggregate
+/// literal, and nothing finer. That is the right question for its own callers
+/// and it is deliberately left untouched here: eight codegen ownership sites
+/// read it, several of them documented as turning a leak into corruption if
+/// its answer moves.
+///
+/// The caller-side fresh-temp TUPLE walk needs a finer answer. It fires the
+/// user `Drop` bodies of every element of a tuple-literal argument, on the
+/// theory that the whole temp dies inside the call. When the callee extracts
+/// one element and returns it, that element's owner is the caller's consumer
+/// of the RESULT, and firing here runs its body a second time:
+///
+///     fn take(p: (R, i64)) -> R { let (r, n) = p; r }
+///     let x = take((R { id: 41 }, 1));   // `drop 41` twice, all backends
+///
+/// Suppressing the whole walk is NOT the fix. Measured on the two-dropper
+/// shape `fn take(p: (R, R)) -> R { let (a, b) = p; a }`, blanket suppression
+/// trades a double body on element 0 for a MISSING body on element 1 — one
+/// soundness hole for another. Hence per-part.
+///
+/// Routes recognized from the param to a return site:
+///   * a direct projection — `p.0`, `p.field`;
+///   * a ONE-LEVEL destructure — `let (a, b) = p;`, `let S { x, y } = p;` —
+///     whose leaf binding is returned, including through a `let` alias chain;
+///   * either of those moved into a returned aggregate literal (`(r, 9)`,
+///     `Holder { r, .. }`), matching `fn_returns_param`'s own aggregate rule.
+///
+/// DELIBERATELY UNDER-APPROXIMATE. Any shape it cannot classify — a NESTED
+/// destructure, a projection of a projection, an element leaving through a
+/// container or a call — yields no part, leaving that shape exactly as it
+/// behaves today. The asymmetry is the whole point and runs opposite to
+/// `fn_returns_param`'s: a MISSED escape keeps the pre-existing double body
+/// (no worse than before), while a FALSE escape would suppress the only body
+/// that runs and silently drop the side effect. When in doubt, report nothing.
+///
+/// Shadowing is tracked rather than ignored for the same reason: a `let` that
+/// re-binds an alias name to something unrelated REMOVES it from the alias
+/// set, so `let (a, b) = p; let a = other(); a` does not report element 0.
+pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> {
+    let Some(param) = f.params.get(arg_index) else {
+        return Vec::new();
+    };
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return Vec::new();
+    };
+
+    /// What `e` denotes relative to the param: `Some(None)` = the whole param,
+    /// `Some(Some(part))` = one top-level part of it, `None` = unrelated.
+    fn denote(e: &Expr, aliases: &[(String, Option<ParamPart>)]) -> Option<Option<ParamPart>> {
+        match &e.kind {
+            ExprKind::Identifier(n) => aliases.iter().find(|(a, _)| a == n).map(|(_, p)| p.clone()),
+            // A projection is classified only off the WHOLE param; a
+            // projection of an already-projected part (`p.0.1`) is a nested
+            // shape this deliberately declines to model.
+            ExprKind::TupleIndex { object, index } => match denote(object, aliases)? {
+                None => Some(Some(ParamPart::TupleIndex(*index as usize))),
+                Some(_) => None,
+            },
+            ExprKind::FieldAccess { object, field } => match denote(object, aliases)? {
+                None => Some(Some(ParamPart::Field(field.clone()))),
+                Some(_) => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn set_alias(aliases: &mut Vec<(String, Option<ParamPart>)>, name: &str, p: Option<ParamPart>) {
+        if let Some(slot) = aliases.iter_mut().find(|(a, _)| a == name) {
+            slot.1 = p;
+        } else {
+            aliases.push((name.to_string(), p));
+        }
+    }
+
+    fn clear_alias(aliases: &mut Vec<(String, Option<ParamPart>)>, name: &str) {
+        aliases.retain(|(a, _)| a != name);
+    }
+
+    /// Record every name a `let` in this block makes denote the param or one
+    /// of its parts, and un-record any alias the same `let` shadows.
+    fn grow_block(b: &Block, aliases: &mut Vec<(String, Option<ParamPart>)>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    let d = denote(value, aliases);
+                    match (&pattern.kind, &d) {
+                        (PatternKind::Binding(n), Some(p)) => set_alias(aliases, n, p.clone()),
+                        (PatternKind::Binding(n), None) => clear_alias(aliases, n),
+                        // One-level destructure OF THE WHOLE PARAM: each leaf
+                        // binding denotes its own element / field.
+                        (PatternKind::Tuple(pats), Some(None)) => {
+                            for (i, p) in pats.iter().enumerate() {
+                                if let PatternKind::Binding(n) = &p.kind {
+                                    set_alias(aliases, n, Some(ParamPart::TupleIndex(i)));
+                                }
+                            }
+                        }
+                        (PatternKind::Struct { fields, .. }, Some(None)) => {
+                            for fp in fields {
+                                match &fp.pattern {
+                                    // `W { r, n }` — shorthand binds the field
+                                    // name itself.
+                                    None => set_alias(
+                                        aliases,
+                                        &fp.name,
+                                        Some(ParamPart::Field(fp.name.clone())),
+                                    ),
+                                    // `W { r: inner, .. }` — renamed leaf.
+                                    Some(p) => {
+                                        if let PatternKind::Binding(n) = &p.kind {
+                                            set_alias(
+                                                aliases,
+                                                n,
+                                                Some(ParamPart::Field(fp.name.clone())),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    grow_expr(value, aliases);
+                }
+                StmtKind::Expr(e) => grow_expr(e, aliases),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            grow_expr(fe, aliases);
+        }
+    }
+
+    fn grow_expr(e: &Expr, aliases: &mut Vec<(String, Option<ParamPart>)>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => grow_block(b, aliases),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                grow_block(then_block, aliases);
+                if let Some(x) = else_branch.as_deref() {
+                    grow_expr(x, aliases);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                grow_block(then_block, aliases);
+                if let Some(x) = else_branch.as_deref() {
+                    grow_expr(x, aliases);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    grow_expr(&a.body, aliases);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => grow_block(body, aliases),
+            ExprKind::Return(Some(inner)) => grow_expr(inner, aliases),
+            _ => {}
+        }
+    }
+
+    /// Parts handed across the frame boundary by a RETURNED expression —
+    /// directly, or moved into a returned aggregate literal. A whole-param
+    /// return contributes nothing: that is `fn_returns_param`'s answer, and
+    /// its callers already act on it before this is consulted.
+    fn yielded(e: &Expr, aliases: &[(String, Option<ParamPart>)], out: &mut Vec<ParamPart>) {
+        match &e.kind {
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    yielded(&f.value, aliases, out);
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                for el in elems {
+                    yielded(el, aliases, out);
+                }
+            }
+            _ => {
+                if let Some(Some(part)) = denote(e, aliases) {
+                    if !out.contains(&part) {
+                        out.push(part);
+                    }
+                }
+            }
+        }
+    }
+
+    fn scan_expr(e: &Expr, aliases: &[(String, Option<ParamPart>)], out: &mut Vec<ParamPart>) {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => {
+                yielded(inner, aliases, out);
+                scan_expr(inner, aliases, out);
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => scan_block(b, aliases, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                scan_block(then_block, aliases, out);
+                if let Some(x) = else_branch.as_deref() {
+                    scan_expr(x, aliases, out);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                scan_block(then_block, aliases, out);
+                if let Some(x) = else_branch.as_deref() {
+                    scan_expr(x, aliases, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    yielded(&a.body, aliases, out);
+                    scan_expr(&a.body, aliases, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => scan_block(body, aliases, out),
+            _ => {}
+        }
+    }
+
+    fn scan_block(b: &Block, aliases: &[(String, Option<ParamPart>)], out: &mut Vec<ParamPart>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) => scan_expr(e, aliases, out),
+                StmtKind::Let { value, .. } => scan_expr(value, aliases, out),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            yielded(fe, aliases, out);
+            scan_expr(fe, aliases, out);
+        }
+    }
+
+    let mut aliases: Vec<(String, Option<ParamPart>)> = vec![(param_name.clone(), None)];
+    grow_block(&f.body, &mut aliases);
+    let mut out = Vec::new();
+    scan_block(&f.body, &aliases, &mut out);
+    out
+}
+
 /// B-2026-08-09-15 — the PAYLOAD sibling of [`fn_returns_param`]: does `f`
 /// return a value that a `match` / `if let` bound OUT of parameter `arg_index`?
 ///

@@ -2120,12 +2120,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.arg_is_entry_copied_heap_struct(&a.value)
                 || self.arg_is_entry_copied_heap_tuple(&a.value, name, i)
             {
+                let escaping_parts = self.callee_returned_param_parts(name, i);
                 self.track_inline_owned_aggregate_arg_inst(
                     val,
                     &a.value,
                     escapes_frame,
                     mono_agg[i].1.clone(),
                     mono_agg[i].0,
+                    &escaping_parts,
                 );
             }
         }
