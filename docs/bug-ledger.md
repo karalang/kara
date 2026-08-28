@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 217 | 2 |
+| leak | 217 | 1 |
 | run-vs-build | 207 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1172 | 11 |
+| codegen | 1172 | 10 |
 | typecheck | 278 | 0 |
 | interp | 224 | 8 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced · 11 open · 1698 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced · 10 open · 1699 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced
 | B-2026-08-28-57 | 2026-08-28 | interp+codegen | medium | AN `Array[E, N]` OF AN OWN-`Drop` ENUM DIVERGES TWICE OVER: the interpreter runs both bodies IMMEDIATELY and the compiled backends run them at SCOPE EXIT, and the compiled side additionally LOSES the payload body -- `let a: Array[E, 2] = [E.B, E.A(R{3})]` is interp `dE dE dR3 mid end` vs compiled `mid end dE dE` | — |
 | B-2026-08-28-58 | 2026-08-28 | interp+codegen | medium | AN `Option[E]` HOLDING AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND -- `let o: Option[E] = Some(E.B)` is 0/0/0 and the payload variant loses `dR` too; the `Option` sibling of B-2026-08-28-55's `Vec` element, still open after that fix | — |
 | B-2026-08-28-59 | 2026-08-28 | codegen | medium | A NAMED TUPLE-DESTRUCTURE LEAF OF ENUM TYPE LOSES THE ENUM'S OWN `Drop` BODY ON BOTH COMPILED BACKENDS while the interpreter runs it: `let (gv, gn) = (E.A(R{5}), 6);` is interp 1 / jit 0 / build 0, and the compiled side still runs the PAYLOAD body, so it is the enum's own body alone that is lost | — |
-| B-2026-08-28-60 | 2026-08-28 | codegen | low | AN UNDESTRUCTURED TUPLE LOSES THE INNER HEAP OF A NESTED STRUCT ELEMENT: `let p = ((R { tags: mkv(3) }, 2), 1); println(p.1)` where `R` declares no `Drop` leaks the `Vec`'s inner `String` -- the tuple binding's own aggregate drop frees the outer buffer but not its elements, where the DESTRUCTURED spelling of the same tuple is now clean (B-2026-08-28-56) | — |
 | B-2026-08-28-62 | 2026-08-28 | interp+codegen | medium | A BY-VALUE PARAM THAT ESCAPES THROUGH A CALL in return position runs its `Drop` body TWICE on all three backends: `fn outer(y: R) -> (BoxR, i64) { return src(y); }` with `let (d, n) = outer(R { id: 49 });` prints `drop 49` twice for one `R`. `fn_returns_param` models the param used BARE at a return site and the param moved into a returned aggregate LITERAL; a param handed to another CALL whose result is returned is a THIRD escape route it does not model, so the caller-side walk fires alongside the eventual owner's. Backend-consistent, and independent of genericity -- the generic and non-generic spellings double identically. | — |
 
 ### Relocated (2)
@@ -172,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced
 
 </details>
 
-### Fixed (1698)
+### Fixed (1699)
 
-<details><summary>1698 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1699 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1875,6 +1874,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced
 | B-2026-08-28-54 | interp+codegen | medium | AN ENUM WITH NO OWN `Drop` BUT A DROP-BEARING PAYLOAD RUNS NO BODY ON ANY BACKEND when held as a struct field or tuple element: `enum E2 { A(R), B }`… | 0e872dd |
 | B-2026-08-28-55 | interp+codegen | medium | A `Vec` ELEMENT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND: `let mut v = Vec.new(); v.push(E.B)` is 0/0/0 while the TUPLE element of the same… | 0ad7a39 |
 | B-2026-08-28-56 | codegen | medium | A TUPLE-TYPED DESTRUCTURE LEAF WHOSE ELEMENT TYPE HAS NO `Drop` GETS NO MEMORY OWNER, on either source: `let (inner, n) = ((R { . | 3e4a63b |
+| B-2026-08-28-60 | codegen | low | AN UNDESTRUCTURED TUPLE LOSES THE INNER HEAP OF A NESTED STRUCT ELEMENT: `let p = ((R { tags: mkv(3) }, 2), 1); println(p.1)` where `R` declares no `… | 6c0a296 |
 | B-2026-08-28-61 | codegen | medium | A GENERIC CALLEE'S tuple element still loses its Drop-bearing field's body when destructured at the call site: `fn src[T](x: T) -> (Box2[T], i64)` wi… | dc01eb1 |
 
 </details>
