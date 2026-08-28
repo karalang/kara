@@ -1263,6 +1263,75 @@ impl<'ctx> super::Codegen<'ctx> {
             .then_some(resolved)
     }
 
+    /// B-2026-08-28-61 — instantiate a callee-declared element `TypeExpr`'s
+    /// generic ARGUMENTS at a specific CALL SITE: `Box2[T]` becomes `Box2[R]`
+    /// for `src(R { .. })`.
+    ///
+    /// The sibling [`Self::call_tuple_elem_type_name`] answers the same question
+    /// one level shallower — it resolves an element that IS a bare parameter to
+    /// a type name. This one keeps the element's own head and substitutes inside
+    /// its arguments, which is what a generic wrapper (`-> (Box2[T], i64)`)
+    /// needs: the head `Box2` was never in doubt, `T` always was.
+    ///
+    /// Same two tables and the same flattening as the sibling: the typechecker's
+    /// per-call-site `call_type_subs`, read through the active monomorph's
+    /// `type_subst_names` so a generic call nested inside a monomorph resolves
+    /// the OUTER parameter too.
+    ///
+    /// `None` when nothing was substituted, which keeps the caller on its
+    /// existing path rather than handing it a copy of what it already had.
+    pub(super) fn call_site_instantiated_te(&self, call: &Expr, te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args = p.generic_args.as_ref()?;
+        let subs = self
+            .span_tables
+            .call_type_subs
+            .get(&(call.span.offset, call.span.length))?;
+        let mut any = false;
+        let out: Vec<GenericArg> = args
+            .iter()
+            .map(|a| {
+                let GenericArg::Type(t) = a else {
+                    return a.clone();
+                };
+                let TypeKind::Path(ap) = &t.kind else {
+                    return a.clone();
+                };
+                if ap.segments.len() != 1 || ap.generic_args.is_some() {
+                    return a.clone();
+                }
+                let Some(concrete) = subs.get(&ap.segments[0]) else {
+                    return a.clone();
+                };
+                let resolved = self
+                    .mono_state
+                    .type_subst_names
+                    .get(concrete)
+                    .cloned()
+                    .unwrap_or_else(|| concrete.clone());
+                any = true;
+                GenericArg::Type(TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: vec![resolved],
+                        generic_args: None,
+                        span: t.span,
+                    }),
+                    span: t.span,
+                })
+            })
+            .collect();
+        any.then(|| TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: p.segments.clone(),
+                generic_args: Some(out),
+                span: te.span,
+            }),
+            span: te.span,
+        })
+    }
+
     /// The TUPLE half of [`Self::call_slice_return_elem_te`]: the element
     /// `TypeExpr`s of a callee declared `-> (A, B, ...)`.
     ///

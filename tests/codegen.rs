@@ -12032,6 +12032,77 @@ fn main() {
         }
     }
 
+    /// A GENERIC CALLEE's tuple element runs its Drop-bearing field's body at a
+    /// call-site destructure (B-2026-08-28-61).
+    ///
+    /// B-2026-08-28-11 fixed the three sources that spell a CONCRETE `Box2[R]`.
+    /// A generic wrapper declares `-> (Box2[T], i64)`, so the element type read
+    /// from that declaration is a bare `Box2[T]` and `T` is bound only at the
+    /// call site — the leaf recorded nothing and the body was silent on both
+    /// compiled backends.
+    ///
+    /// Recording `Box2[T]` instead is NOT a partial answer, which is why -11
+    /// filed this rather than reaching for it: such a record satisfies the
+    /// instantiation lookup and stops it before the arm that would resolve `T`,
+    /// and while landing -11 that turned a missing body into an OVER-FREE of the
+    /// caller's buffer. The fix substitutes at the call site instead, through the
+    /// same `call_type_subs` table B-2026-08-28-28 used to name a generic
+    /// callee's element — one level deeper, inside the element's own arguments.
+    ///
+    /// `scalar-param` and `other-drop-type` are what make that substitution
+    /// per-call-site rather than per-callee: one `src[T]` is called at three
+    /// instantiations in one program, and each leaf must answer for its own.
+    ///
+    /// The NESTED-generic spelling (`fn outer[U](y: U) -> (Box2[U], i64) {
+    /// src(y) }`) is deliberately absent. It runs the body TWICE — but so does
+    /// its fully non-generic twin, on both backends and before this fix, because
+    /// a param escaping through a CALL in return position is a route
+    /// `fn_returns_param` does not model. That is B-2026-08-28-62, an older and
+    /// separate defect; this fix simply brings the generic spelling into line
+    /// with the non-generic one rather than inheriting an accidental silence.
+    #[test]
+    fn e2e_generic_callee_tuple_leaf_runs_its_field_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+             struct S { sid: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"drop S{self.sid}\") } }\n\
+             struct Box2[T] { v: T }\n\
+             fn src[T](x: T) -> (Box2[T], i64) { return (Box2[T] { v: x }, 1); }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "generic-callee",
+                "fn main() { let (a, n) = src(R { id: 47 }); println(f\"{n}\"); }\n",
+                "drop 47\n1\n",
+            ),
+            // CONTROL — the SAME callee at a scalar instantiation must stay
+            // silent, which is what makes the substitution per-call-site.
+            (
+                "scalar-param",
+                "fn main() { let (b, n) = src(9); println(f\"{n}\"); }\n",
+                "1\n",
+            ),
+            // The same callee at a DIFFERENT Drop type, in the same program as
+            // the first — neither leaf may be handed the other's answer.
+            (
+                "other-drop-type",
+                "fn main() { let (a, n) = src(R { id: 47 }); println(f\"{n}\");\n\
+                 \x20            let (c, m) = src(S { sid: 3 }); println(f\"{m}\"); }\n",
+                "drop 47\n1\ndrop S3\n1\n",
+            ),
+            // The leaf is READ, so the body lands after the read.
+            (
+                "used-leaf",
+                "fn main() { let (e, n) = src(R { id: 50 });\n\
+                 \x20            println(f\"{e.v.id}\"); println(f\"{n}\"); }\n",
+                "50\ndrop 50\n1\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-27-44 — a heap-bearing TUPLE argument whose value ESCAPES the
     /// caller's frame. The callee entry-copies the tuple param and the COPY is
     /// what flows onward, so the caller's ORIGINAL is orphaned; unfixed, each

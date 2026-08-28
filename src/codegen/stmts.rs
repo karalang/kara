@@ -12089,7 +12089,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // returning a tuple. `None` (any other fresh temp) leaves the wildcard
         // exactly as it behaved before — memory only.
         let elem_tes = self.tuple_arg_elem_type_exprs(value);
-        self.track_tuple_destructure_leaf_cleanups(pats, sv, elem_tes.as_deref());
+        self.track_tuple_destructure_leaf_cleanups(pats, sv, elem_tes.as_deref(), value);
         Ok(())
     }
 
@@ -12336,6 +12336,7 @@ impl<'ctx> super::Codegen<'ctx> {
         pats: &[Pattern],
         sv: inkwell::values::StructValue<'ctx>,
         elem_tes: Option<&[TypeExpr]>,
+        source: &Expr,
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             match &pat.kind {
@@ -12360,6 +12361,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // beside the local one, failing for the same reason at a
                     // different site.
                     if let Some(te) = elem_tes.and_then(|tes| tes.get(idx)).cloned() {
+                        // B-2026-08-28-61 — a GENERIC callee declares its element
+                        // as `Box2[T]`, and `T` is bound only at the call site.
+                        // Recording that bare-parameter spelling is worse than
+                        // recording nothing (it satisfies the lookup and stops it
+                        // before the arm that would resolve `T` — B-2026-08-27-36,
+                        // and measured as an over-free while landing
+                        // B-2026-08-28-11), so instantiate it here instead.
+                        let te = self.call_site_instantiated_te(source, &te).unwrap_or(te);
                         self.record_generic_struct_inst(name, &te);
                     }
                     let tuple_leaf_tes =
@@ -12478,6 +12487,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             inner,
                             inner_sv,
                             inner_tes.as_deref(),
+                            source,
                         );
                     }
                 }
