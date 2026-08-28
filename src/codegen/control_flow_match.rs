@@ -954,7 +954,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 // move like any other, but this tail position is not on
                 // `suppress_inline_option_result_binding_move`'s roster, so the
                 // payload-view neutralizer needs its own call here.
-                self.suppress_boxed_payload_view_move(&arm.body);
+                //
+                // B-2026-08-28-66 — through the arm's TAIL, not `arm.body`
+                // itself. `suppress_boxed_payload_view_move` keys on an
+                // `ExprKind::Identifier` and an arm written with braces
+                // (`Some(r) => { r }`) is a Block, so it returned early and the
+                // box's interior walk stayed armed beside the destination's own
+                // drop: one buffer, two owners. Measured on
+                // `let k = match o { Some(r) => { r } .. }` over
+                // `Option[R]`, `R { id: i64, name: String }` (4 words, so the
+                // payload BOXES): `karac run` aborts with a glibc double free
+                // and the AOT binary reports `Invalid free()` under valgrind
+                // with 11 allocs / 12 frees at -O0 — while the identical
+                // program written `Some(r) => r` is clean at 11/11. The braces
+                // were the whole difference.
+                //
+                // Same hole the f-string neutralizer below already closes for
+                // its own shape, and for the same stated reason: an
+                // `ExprKind::Identifier`-only guard does not see a block tail.
+                // It is CLEAN at -O2, so the default leg cannot catch this.
+                //
+                // Gated on `branch_value_is_owned`, and that guard is REQUIRED
+                // rather than defensive: neutralizing assumes the destination
+                // registers a drop of its own, and a DISCARDED match result has
+                // no destination at all. Without it, `match o { Some(r) => { r } .. };`
+                // in statement position went from 11 allocs / 11 frees to
+                // 11 / 10 with 2 bytes definitely lost — trading the double
+                // free for a leak. The pre-existing bare-tail call never needed
+                // the guard only because it never reached a block-tail arm.
+                // The guard applies to the BARE tail as well, which fixes a
+                // second, pre-existing shape rather than merely preserving it:
+                // `match o { Some(r) => r, .. };` in statement position was
+                // already neutralizing the box against a destination that does
+                // not exist, and leaked 2 bytes (10 allocs / 9 frees) while
+                // running no body on ANY backend. Both spellings now neutralize
+                // exactly when something downstream owns the result.
+                if self.branch_value_is_owned(scrutinee) {
+                    self.suppress_boxed_payload_view_move(Self::block_tail_expr(&arm.body));
+                }
                 // …and the payload's BODIES walk with it. Every other move
                 // position reaches `disarm_container_bodies_move_sources` (let
                 // RHS, aggregate literal) or `disarm_container_bodies_for_arg`

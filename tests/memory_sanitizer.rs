@@ -15905,6 +15905,83 @@ fn main() {
     /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
     /// seed back out to leave `i`, and each byte-read arm contributes 1 —
     /// `8i + 4` per iteration, so `8 * (0+…+39) + 40 * 4 = 6400`.
+    /// B-2026-08-28-66 — a `match` arm written with BRACES that yields its
+    /// bound boxed payload double-frees that payload's interior.
+    ///
+    /// Four arm-tail neutralizers in `compile_match` key on `arm.body` being an
+    /// `ExprKind::Identifier`. An arm written `Some(r) => { r }` is a Block, so
+    /// `suppress_boxed_payload_view_move` returned early and the box's interior
+    /// walk stayed armed beside the destination binding's own drop — one buffer,
+    /// two owners.
+    ///
+    /// THE BRACES WERE THE WHOLE DIFFERENCE, which is what localized it: the
+    /// identical program written `Some(r) => r` was clean at 11 allocs / 11
+    /// frees, while `Some(r) => { r }` aborted `karac run` with a glibc double
+    /// free and reported `Invalid free()` under valgrind at 11 / 12. It is the
+    /// same hole the f-string neutralizer beside it already documents closing
+    /// for its own shape ("its `ExprKind::Identifier`-only guard returns early").
+    ///
+    /// Reaches only a BOXED payload — `R { id: i64, name: String }` is 4 words
+    /// against `Option`'s 3-word area — which is why the same program with a
+    /// scalar-only payload is correct today and why this cannot be found by
+    /// widening the body-count fixtures.
+    ///
+    /// The `branch_value_is_owned` guard is REQUIRED, not defensive:
+    /// neutralizing assumes a destination that registers its own drop, and a
+    /// DISCARDED result has none. Arm C pins that — without the guard it went
+    /// from 11/11 to 11/10 with 2 bytes lost, trading the double free for a
+    /// leak. The guard applies to the BARE tail too, which fixes a second
+    /// pre-existing shape rather than merely preserving it:
+    /// `match o { Some(r) => r, .. };` in statement position leaked 2 bytes
+    /// (10 allocs / 9 frees) and is now 10/10.
+    ///
+    /// COVERAGE. Pre-fix this program ABORTS on both compiled backends
+    /// (`free(): double free detected in tcache 2`) while the interpreter
+    /// prints all 16 lines, so it is red by CRASH rather than by count — and
+    /// unlike most of this family that holds at the default `-O2` as well as
+    /// under `KARAC_OPT_LEVEL=0`. The reduced single-binding shape behind it
+    /// is `-O0`-only, which is why the row records both. Bodies read their
+    /// buffer (`contains`) and every payload is seeded from the opaque
+    /// `env.args().len()`, so no arm can be folded away.
+    #[test]
+    fn asan_braced_arm_yielding_boxed_payload_is_owned_once() {
+        // A and B each keep a payload alive to a binding, one body apiece.
+        // Arm C contributes NONE: a discarded match result inside a loop runs
+        // no body on ANY backend — measured identical before and after this
+        // fix and identical across interp / LLJIT / AOT, so it is a
+        // pre-existing backend-AGREED gap, not this row. C earns its place by
+        // pinning the `branch_value_is_owned` guard's MEMORY claim, which is
+        // the half that regressed without it.
+        let expected: Vec<&str> = vec!["dtrue"; 16];
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        // A — BRACED arm yielding the binding, result bound: the reported shape.
+        let oa: Option[R] = Option.Some(R { id: n + i, name: "row-" + (n + i).to_string() });
+        let ka = match oa { Option.Some(r) => { r } Option.None => { R { id: 0, name: "z".to_string() } } };
+        // B — the BARE spelling of the same thing, which was already correct.
+        let ob: Option[R] = Option.Some(R { id: n + i, name: "row-" + (n + i).to_string() });
+        let kb = match ob { Option.Some(r) => r, Option.None => R { id: 0, name: "z".to_string() } };
+        // C — braced arm, result DISCARDED: nothing downstream owns it, so the
+        // neutralizer must NOT fire.
+        let oc: Option[R] = Option.Some(R { id: n + i, name: "row-" + (n + i).to_string() });
+        match oc { Option.Some(r) => { r } Option.None => { R { id: 0, name: "z".to_string() } } };
+        i = i + 1;
+    }
+}
+"#,
+            &expected,
+            "braced-arm-yielding-boxed-payload",
+            8,
+        );
+    }
+
     /// B-2026-08-28-64 — a BOXED enum payload's interior is never walked, so
     /// its heap leaks while the box itself is freed correctly.
     ///
