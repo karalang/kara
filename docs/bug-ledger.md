@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 217 | 2 |
-| run-vs-build | 206 | 6 |
+| run-vs-build | 207 | 6 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
 | codegen-gap | 147 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1170 | 12 |
+| codegen | 1171 | 12 |
 | typecheck | 278 | 0 |
 | interp | 223 | 8 |
 | other | 70 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1733 surfaced · 12 open · 1695 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1734 surfaced · 12 open · 1696 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-28-11 | 2026-08-28 | codegen | medium | A GENERIC struct leaf destructured out of a tuple never runs its Drop-bearing field's body on ANY source path -- local, call result and tuple literal all print it under `karac run --interp` and nothing compiled: `struct Box2[T] { v: T }  let (b, n) = (Box2[R] { v: R { id: 41 } }, 1);`. The leaf has no recorded instantiation, so the field-bodies substitution is empty and `Box2 { v: T }` is judged Drop-free through a bare `T` | — |
 | B-2026-08-28-16 | 2026-08-28 | interp+codegen | medium | The B-2026-08-28-2 double `Drop` body SURVIVES when the tuple argument comes from a LOCAL instead of a literal: `let q = (R { id: 41 }, 1); let x = take(q);` still prints `drop 41` twice on all three backends after d5d7421. Same escaping-part asymmetry, different caller-side site -- the fresh-temp walk never sees a place argument, so this is the moved-out LOCAL's own cleanup firing alongside the result's. The control `-> i64` (returning the other element) is correctly 1 | — |
 | B-2026-08-28-19 | 2026-08-28 | interp+codegen | low | The caller-side fresh-temp argument `Drop` walk fires AT THE CALL in the interpreter and at SCOPE EXIT in both compiled backends, so a tuple-literal argument whose element dies inside the callee prints its body in a different ORDER on the two surfaces: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }` gives `drop 41 / 1` under `--interp` and `1 / drop 41` compiled. Counts agree (1/1/1) -- only sequence differs, which is why every count-based check in this family missed it | — |
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
@@ -142,6 +141,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1733 surfaced
 | B-2026-08-28-58 | 2026-08-28 | interp+codegen | medium | AN `Option[E]` HOLDING AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND -- `let o: Option[E] = Some(E.B)` is 0/0/0 and the payload variant loses `dR` too; the `Option` sibling of B-2026-08-28-55's `Vec` element, still open after that fix | — |
 | B-2026-08-28-59 | 2026-08-28 | codegen | medium | A NAMED TUPLE-DESTRUCTURE LEAF OF ENUM TYPE LOSES THE ENUM'S OWN `Drop` BODY ON BOTH COMPILED BACKENDS while the interpreter runs it: `let (gv, gn) = (E.A(R{5}), 6);` is interp 1 / jit 0 / build 0, and the compiled side still runs the PAYLOAD body, so it is the enum's own body alone that is lost | — |
 | B-2026-08-28-60 | 2026-08-28 | codegen | low | AN UNDESTRUCTURED TUPLE LOSES THE INNER HEAP OF A NESTED STRUCT ELEMENT: `let p = ((R { tags: mkv(3) }, 2), 1); println(p.1)` where `R` declares no `Drop` leaks the `Vec`'s inner `String` -- the tuple binding's own aggregate drop frees the outer buffer but not its elements, where the DESTRUCTURED spelling of the same tuple is now clean (B-2026-08-28-56) | — |
+| B-2026-08-28-61 | 2026-08-28 | codegen | medium | A GENERIC CALLEE'S tuple element still loses its Drop-bearing field's body when destructured at the call site: `fn src[T](x: T) -> (Box2[T], i64)` with `let (b, n) = src(R { id: 47 });` prints `drop 47` under `--interp` and nothing on either compiled backend. The three CONCRETE sources B-2026-08-28-11 measured are fixed; this one is not, because the element type read from the callee's declaration IS the bare `Box2[T]` and binding `T` needs the CALL SITE's substitution -- the B-2026-08-28-28 machinery rather than -11's. | — |
 
 ### Relocated (2)
 
@@ -173,9 +173,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1733 surfaced
 
 </details>
 
-### Fixed (1695)
+### Fixed (1696)
 
-<details><summary>1695 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1696 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1836,6 +1836,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1733 surfaced
 | B-2026-08-28-8 | codegen | medium | A NESTED TUPLE PATTERN never runs its inner leaf's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let ((r, m), n… | 919f31e |
 | B-2026-08-28-9 | codegen | medium | An ENUM leaf destructured out of a tuple LOCAL never runs its live variant's payload `Drop` body: `enum E { A(R), B } let p = (E.A(R { id: 41 }), 1);… | 919f31e |
 | B-2026-08-28-10 | codegen | medium | A STRUCT-PATTERN destructure leaf's user `Drop` body is wrong in TWO OPPOSITE DIRECTIONS depending on the source: from a LOCAL it runs TOO EARLY (`dr… | f723dde |
+| B-2026-08-28-11 | codegen | medium | A GENERIC struct leaf destructured out of a tuple never runs its Drop-bearing field's body on ANY source path -- local, call result and tuple literal… | 821d5ab |
 | B-2026-08-28-12 | interp+codegen | medium | A tuple-element WILDCARD drops the element ZERO TIMES ON ALL THREE BACKENDS: `let (_, n) = p;` where element 0 declares `impl Drop` runs the body und… | 429977d |
 | B-2026-08-28-13 | codegen | high | MOVING A `Vec` OUT OF A FIELD OF A BORROWED BINDING inside a GENERIC fn or impl DOUBLE-FREES the buffer under both compiled backends: `impl[T] Bag[T]… | e58aaef |
 | B-2026-08-28-14 | codegen | medium | A `String` / `Vec` FIELD READ ON A SHARED-STRUCT TEMPORARY RECEIVER LEAKS THE BUFFER: `make().tag` where `make() -> shared Node` prints correctly and… | e17e361 |
