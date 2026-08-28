@@ -15905,6 +15905,75 @@ fn main() {
     /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
     /// seed back out to leave `i`, and each byte-read arm contributes 1 —
     /// `8i + 4` per iteration, so `8 * (0+…+39) + 40 * 4 = 6400`.
+    /// B-2026-08-28-68 — a `Result` with ONE side boxed lost the OTHER side's
+    /// inline payload walk, and the obvious fix for that then leaked the box.
+    ///
+    /// TWO defects, one shape, and both halves are pinned here because fixing
+    /// either alone is a regression:
+    ///
+    ///   * `track_inline_result_payload_var` opened with a name-keyed early
+    ///     return on `boxed_enum_payload_vars`. That set records the BINDING,
+    ///     and the let site inserts it as soon as EITHER half boxes — so a
+    ///     `Result` with one boxed half returned before reaching either side's
+    ///     walk, including the inline half whose payload nothing else frees.
+    ///     The per-side gates just below it (`ok_boxed` / `err_boxed`,
+    ///     B-2026-08-06-26) already express the hazard correctly; the
+    ///     binding-keyed return fired first and made them unreachable.
+    ///   * Narrowing that return alone then broke
+    ///     `asan_boxed_result_payload_no_inline_cleanup`, because the consuming
+    ///     arm's disarm calls `zero_result_payload_area`, which zeroes fields
+    ///     `1..n` — EVERY payload word, including word 0, where a boxed side
+    ///     keeps its box POINTER. Nulling it makes the `BoxedEnumDrop` guard
+    ///     skip and the box leaks (128 direct + 64 indirect bytes, 31 allocs /
+    ///     27 frees). Its doc calls whole-area zeroing a "safe superset", which
+    ///     it is only while both sides are inline.
+    ///
+    /// The MIRROR is what shows the per-side gates were the intended mechanism:
+    /// B-2026-08-06-26's own note says the sides are gated independently "so a
+    /// boxed `Ok` beside an inline-heap `Err` keeps the `Err` drop it still
+    /// needs" — and that exact program (arm C) leaked 2 bytes.
+    ///
+    /// NOT enum-specific: every arm here has a plain struct payload and no user
+    /// enum anywhere. Boxedness of the OTHER side is the whole trigger, which is
+    /// what separates this from B-2026-08-28-64.
+    ///
+    /// Arm A boxes nothing and was already clean — the control that isolates the
+    /// trigger to the widened half. Arm D drives the disarm path with a
+    /// consuming `match`, which is the half that regressed.
+    #[test]
+    fn asan_result_with_one_boxed_side_keeps_the_other_sides_walk() {
+        let expected: Vec<&str> = vec!["dtrue"; 32];
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R2 { id: i64, name: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
+struct Wide { a: i64, b: i64, c: i64, d: i64, e: i64, f: i64 }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        // A — control: neither side boxes, already clean before the fix.
+        let a: Result[R2, i64] = Result.Ok(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        // B — inline `Ok` with heap beside a BOXED `Err`: the reported shape.
+        let b: Result[R2, Wide] = Result.Ok(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        // C — the mirror: BOXED `Ok` beside an inline-heap `Err`, the case
+        // B-2026-08-06-26's per-side gates were written to preserve.
+        let c: Result[Wide, R2] = Result.Err(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        // D — a CONSUMING arm over a one-side-boxed Result, which runs the
+        // disarm. Whole-area zeroing here nulls the box pointer and leaks.
+        let d: Result[R2, Wide] = Result.Ok(R2 { id: n + i, name: "row-" + (n + i).to_string() });
+        match d { Result.Ok(x) => { if x.name.contains("row") { } } Result.Err(_) => {} }
+        i = i + 1;
+    }
+}
+"#,
+            &expected,
+            "result-one-boxed-side-keeps-other-walk",
+            8,
+        );
+    }
+
     /// B-2026-08-28-66 — a `match` arm written with BRACES that yields its
     /// bound boxed payload double-frees that payload's interior.
     ///

@@ -6968,7 +6968,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Res` body that `karac run` never printed and freeing whatever those
         // words happened to hold. Benign only because the trailing words were
         // zero, so every `cap > 0` guard skipped.
-        if self.payload_vars.boxed_enum_payload_vars.contains(var_name) {
+        if self.payload_vars.boxed_enum_payload_vars.contains(var_name)
+            && Self::result_payload_tes(result_te).is_none()
+        {
             return;
         }
         let (ok_payload_elem_ty, err_payload_elem_ty) = self

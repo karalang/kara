@@ -8784,6 +8784,48 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
             return;
         };
+        // B-2026-08-28-68 — `zero_result_payload_area` zeroes fields `1..n`,
+        // i.e. EVERY payload word. Its own doc calls that a "safe superset",
+        // and it is — while both sides are INLINE. When the side this arm
+        // MATCHED is heap-BOXED, word 0 holds the box POINTER, and nulling it
+        // makes the `BoxedEnumDrop` tag/pointer guard skip: the box and its
+        // interior leak (measured 128 direct + 64 indirect bytes over two `Ok`
+        // iterations, 31 allocs / 27 frees).
+        //
+        // A boxed side has no inline action to disarm in the first place — its
+        // payload belongs to that `BoxedEnumDrop` — so the whole suppression is
+        // a no-op there and the correct move is to leave the slot alone.
+        //
+        // The matched side's boxedness is read off the ARMED ACTION rather than
+        // re-derived from the type: a `BoxedEnumDrop` on this slot guarded on
+        // this variant's discriminant IS the statement "this side is boxed and
+        // owned elsewhere". That also keeps the two in step by construction —
+        // if the registration ever declines to box, there is no action to find
+        // and the zeroing resumes.
+        //
+        // Zeroing only the overlay's `cap` word instead was tried and is WRONG:
+        // a struct-with-heap inline payload cap-guards on the concrete struct's
+        // own field offsets, which is exactly why this zeroes the whole area,
+        // and disarming only `cap` left that walk armed beside the arm's
+        // binding — an ASAN double-free.
+        let matched_tag = layout.tags.get(variant.unwrap_or_default()).copied();
+        let matched_side_is_boxed = matched_tag.is_some_and(|tag| {
+            self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+                frame.iter().any(|a| {
+                    matches!(
+                        a,
+                        super::state::CleanupAction::BoxedEnumDrop {
+                            enum_slot,
+                            some_tag,
+                            ..
+                        } if *enum_slot == slot.ptr && *some_tag == tag
+                    )
+                })
+            })
+        });
+        if matched_side_is_boxed {
+            return;
+        }
         self.zero_result_payload_area(layout.llvm_type, slot.ptr, "respl.suppress");
     }
 
