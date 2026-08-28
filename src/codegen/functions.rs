@@ -2577,6 +2577,98 @@ impl<'ctx> super::Codegen<'ctx> {
                 // moved onward could not be suppressed and would double-free
                 // (the failure mode that broke the tracing-builder E2E when the
                 // general param loop tried to drop every owned struct param).
+                // B-2026-08-28-22 — CONDITIONALLY-RETURNED owned param: take
+                // ownership of the BODY back into the callee, guarded per path.
+                //
+                // An owned by-value param is caller-drops, and the caller
+                // declines wherever `fn_returns_param` sees the value leaving.
+                // That predicate answers over the UNION of return sites, so on a
+                // branchy callee the caller declines on EVERY path while only
+                // one path actually returns it — and whichever value died inside
+                // the call lost its user `Drop` body on all four surfaces.
+                //
+                // The flip is the coroutine precedent below, with two
+                // differences that are the whole safety argument:
+                //
+                //  * BODIES ONLY. `track_user_drop_var` would install the
+                //    binding's own wrapper, which frees the fields as well as
+                //    running the body — and the caller still owns the memory, so
+                //    a heap-carrying param double-freed (measured: `free():
+                //    double free detected in tcache 2` under the JIT on a struct
+                //    with a `String` field). `emit_struct_user_drop_bodies_only_fn`
+                //    frees nothing, which is exactly the split this row needs:
+                //    the row's own finding is that these channels lost a BODY
+                //    while the memory registrations stayed correct.
+                //  * GUARDED PER PATH by B-2026-08-28-51's conditional-move
+                //    flag. The registration alone would fire on the path that
+                //    DID return the param; `arm_conditional_move_tail_flag`
+                //    clears the flag in the returning arm's own basic block, so
+                //    only the path where the value actually died runs the body.
+                //
+                // `fn_conditionally_returns_param_bare` admits only shapes whose
+                // escape routes that flag provably clears — see its doc for the
+                // aggregate-literal route it must exclude, and why.
+                // FREE FUNCTIONS ONLY. A method reaches its caller through
+                // `method_call.rs`, whose argument handling is a separate path
+                // from `call_dispatch.rs`'s, and it does NOT decline the body
+                // drop for a conditionally-returned arg. Registering here as
+                // well produced two bodies for one object — measured
+                // `drop 41` / `drop 41` / `99` / `drop 99` on all three
+                // compiled backends for `impl B2 { fn pick(ref self, r: R, k:
+                // bool) -> R { if k { r } else { R { id: 99 } } } }`. The
+                // callee-side flip is only ever sound where the caller has
+                // already stood down, so the method half needs its caller
+                // audited first and is filed as B-2026-08-28-70 rather than
+                // guessed at here. A method is named `Type.method` at this
+                // point (`self` occupying param 0), so the `.` is the
+                // discriminator.
+                // NON-GENERIC ONLY, alongside free-functions-only. A generic
+                // callee is compiled through `compile_mono_function`, which has
+                // its own param loop; registering there passed the body-count
+                // tests but printed a CORRUPTED name for a heap-carrying param
+                // — measured `drop dr` where `drop i1` was due, on all three
+                // compiled backends, for `fn genf[T](r: R, k: bool, t: T) -> R`
+                // with `struct R { id: i64, name: String }`. The mono param
+                // slot does not hold what this walker expects (the value
+                // appears to arrive indirectly there), so the bodies-only fn
+                // reads a pointer as a struct. Declining on BOTH backends
+                // keeps the four surfaces identical on today's behaviour
+                // rather than trading a missed body for garbage output;
+                // filed as B-2026-08-28-71.
+                if func.generic_params.is_none()
+                    && !func.name.contains('.')
+                    && !self.is_coroutine_compiled(&func.name)
+                    && crate::ast::fn_conditionally_returns_param_bare(func, i)
+                    && !crate::ast::fn_moves_param_into_outliving_place(func, i)
+                {
+                    if let TypeKind::Path(path) = &param.ty.kind {
+                        if let Some(struct_name) = path.segments.first() {
+                            let has_user_drop = self
+                                .program_snapshot
+                                .as_deref()
+                                .map(|p| p.drop_method_keys.contains_key(struct_name))
+                                .unwrap_or(false);
+                            if has_user_drop
+                                && !self
+                                    .type_decls
+                                    .shared_types
+                                    .contains_key(struct_name.as_str())
+                            {
+                                if let Some(bodies) =
+                                    self.emit_struct_user_drop_bodies_only_fn(struct_name)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &param_name,
+                                        alloca,
+                                        bodies,
+                                        crate::codegen::state::UserDropKind::StructFieldBodies,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 if self.is_coroutine_compiled(&func.name) {
                     if let TypeKind::Path(path) = &param.ty.kind {
                         if let Some(struct_name) = path.segments.first() {

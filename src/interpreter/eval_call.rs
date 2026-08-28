@@ -2156,6 +2156,16 @@ impl<'a> super::Interpreter<'a> {
                     std::mem::take(&mut self.moved_out_tuple_elem_bodies),
                     std::mem::take(&mut self.moved_out_struct_field_bodies),
                 );
+                // B-2026-08-28-22 — hand the callee ownership of the `Drop`
+                // BODY of any owned param it returns on some tail paths and not
+                // others. The caller has already declined its side for every
+                // path (`fn_returns_param` answers over the UNION of return
+                // sites), so without this the value that actually died inside
+                // the call ran no body at all. Seeded here, immediately before
+                // the body, so `eval_block_inner` adopts it into the body
+                // block's own cleanup; the arm tail that returns the param
+                // disarms it through `record_conditional_move_tail`.
+                self.pending_param_drop_bindings = self.cond_returned_param_drop_names(&fn_name);
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
@@ -2492,6 +2502,54 @@ impl<'a> super::Interpreter<'a> {
                 _ => None,
             })
             .collect()
+    }
+
+    /// B-2026-08-28-22 — the owned params of `fn_name` whose `Drop` body this
+    /// frame must own, because the function returns them on some tail paths and
+    /// not others.
+    ///
+    /// The admission rule is `fn_conditionally_returns_param_bare` — shared
+    /// with codegen, so both backends flip ownership for exactly the same set
+    /// of parameters rather than agreeing by convention. The value must
+    /// currently be a plain struct with a user `Drop`: a shared struct drops
+    /// through the RC path and never this drain, and the enum-payload channel
+    /// is a different registration this row does not touch.
+    fn cond_returned_param_drop_names(&self, fn_name: &str) -> Vec<String> {
+        // Free functions only — the method caller path does not stand down for
+        // a conditionally-returned arg, so flipping ownership there yields two
+        // bodies. See the codegen twin's comment (B-2026-08-28-70).
+        if fn_name.contains('.') {
+            return Vec::new();
+        }
+        let Some(f) = self.program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => Some(f),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+        // Generics decline on both backends — see the codegen twin's comment
+        // (B-2026-08-28-71). Applying it here alone would fix the interpreter
+        // and leave codegen on the old behaviour, converting a shared bug into
+        // a run-vs-build divergence.
+        if f.generic_params.is_some() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (i, p) in f.params.iter().enumerate() {
+            let Some(name) = p.name() else { continue };
+            if !crate::ast::fn_conditionally_returns_param_bare(f, i)
+                || crate::ast::fn_moves_param_into_outliving_place(f, i)
+            {
+                continue;
+            }
+            let Some(Value::Struct { name: tn, .. }) = self.env.get(name) else {
+                continue;
+            };
+            if self.program.drop_method_keys.contains_key(tn.as_str()) {
+                out.push(name.to_string());
+            }
+        }
+        out
     }
 
     fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {

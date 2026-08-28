@@ -111,6 +111,16 @@ impl<'a> super::Interpreter<'a> {
         for name in std::mem::take(&mut self.pending_arm_drop_bindings) {
             cleanup.push(CleanupAction::Drop { name });
         }
+        // B-2026-08-28-22 — the same adoption for a conditionally-returned
+        // owned param, seeded by the call. Gated on `is_fn_body` so it reaches
+        // only the callee's own body block; a nested block inside that body
+        // must NOT own the slot, or `record_conditional_move_tail` would treat
+        // the binding as this block's and decline to disarm it.
+        if is_fn_body {
+            for name in std::mem::take(&mut self.pending_param_drop_bindings) {
+                cleanup.push(CleanupAction::Drop { name });
+            }
+        }
         // Sub-step 3 (NLL placement): pre-compute each owned binding's
         // last-use statement index. After every successful statement,
         // any `Drop` slot whose binding's last use was that statement

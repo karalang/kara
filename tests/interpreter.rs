@@ -32604,20 +32604,202 @@ fn test_conditionally_moved_local_user_drop_body_runs_once() {
              fn main() { let x = take(); println(f\"{x.id}\") }\n",
             "41\ndrop 41\n",
         ),
-        // CONTROL — a PARAM at a branch tail was already correct on both
-        // directions (the whole-param passthrough guard covers it) and must
-        // stay so.
+        // CONTROL — a PARAM at a branch tail on the direction that MOVES.
+        // Correct before and after: the caller declines its side (the callee
+        // returns the param) and the callee's own guard is cleared on this
+        // path, so exactly one body runs.
         (
             "param-branch-tail-moved",
             "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
              fn main() { let x = take(R { id: 41 }, true); println(f\"{x.id}\") }\n",
             "41\ndrop 41\n",
         ),
+        // B-2026-08-28-22 — the SAME program on the direction that does NOT
+        // move. `R{41}` dies inside the callee and must run its body there.
+        //
+        // This case was added alongside the one above as a second control, on
+        // the belief stated in the old comment here — that a param at a branch
+        // tail "was already correct on both directions". It was not: this
+        // direction is B-2026-08-28-22's headline program, and the expectation
+        // recorded was that row's defect (`99` / `drop 99`, R{41}'s body
+        // lost), pinned as if it were intended. Both backends now run it.
         (
             "param-branch-tail-not-moved",
             "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
              fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+    ] {
+        let heap = "struct H { id: i64, name: String }\n\
+             impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\") } }\n";
+        assert_eq!(run(&format!("{DROPPER}{heap}{body}")), want, "{label}");
+    }
+}
+
+/// B-2026-08-28-22 — a callee that returns an owned param on SOME tail paths
+/// and not others now runs that param's user `Drop` body on the paths where it
+/// dies, instead of nowhere.
+///
+/// An owned by-value param is caller-drops, and the caller declines wherever
+/// `fn_returns_param` sees the value leaving. That predicate answers over the
+/// UNION of a callee's return sites, so on a branchy callee the caller stood
+/// down on EVERY path while only one path actually returned the value — and
+/// whichever object died inside the call lost its body on all four surfaces.
+/// The controls are what make it a static-vs-dynamic mismatch rather than a
+/// missing case: the SAME program with `k` flipped was already correct, so the
+/// callee, the argument and the predicate's answer are identical and only the
+/// branch taken differs.
+///
+/// The fix is the callee-local ownership flip the row's addendum names, built
+/// on B-2026-08-28-51's per-path conditional-move flag, with two constraints
+/// that are the whole safety argument:
+///
+///   * BODIES ONLY (`emit_struct_user_drop_bodies_only_fn`). The caller still
+///     owns the memory; installing the binding's own wrapper double-freed a
+///     heap-carrying param. The row's own finding is that these channels lost a
+///     BODY while the memory registrations stayed correct.
+///   * ADMITTED ONLY WHERE THE FLAG CAN CLEAR
+///     (`fn_conditionally_returns_param_bare`). `aggregate-return-declined`
+///     below is why: `fn_returns_param` counts a struct/tuple-literal return as
+///     an escape, the flag does not clear on one, and admitting it produced a
+///     double body plus a read of the dropped value.
+///
+/// NOT the intersect-across-return-sites change the row warned about — the
+/// union answer is untouched, so nothing depending on it moves. The
+/// registration is added ARMED and then guarded, so `has_armed_user_drop`,
+/// `has_armed_own_user_drop` and `has_armed_container_elem_bodies` answer for
+/// these params where they previously had nothing to answer for.
+///
+/// Twin: `tests/codegen.rs`'s `e2e_conditionally_returned_param_user_drop_body_runs_once`, whose expectations are
+/// these verbatim — the row is about the four surfaces agreeing, so a
+/// divergence shows up as one of the two tests failing.
+#[test]
+fn test_conditionally_returned_param_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        // The row's headline program, on the direction where the param DIES
+        // INSIDE THE CALLEE. Pre-fix `99` / `drop 99` on all four surfaces: the
+        // caller declined its side because the callee returns `r` on SOME path,
+        // and the callee had no registration at all, so R{41}'s body ran nowhere.
+        (
+            "if-else-not-moved",
+            "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // CONTROL — the same program on the direction that DOES move. Correct
+        // before and after; the guard is cleared on this path, so adding the
+        // registration must not make it fire twice.
+        (
+            "if-else-moved",
+            "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, true); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // `match` arms clear the flag through `control_flow_match.rs` rather
+        // than the block-tail site, so both channels need covering.
+        (
+            "match-not-moved",
+            "fn take(r: R, k: i64) -> R { match k { 1 => { r } _ => { R { id: 99 } } } }\n\
+             fn main() { let x = take(R { id: 41 }, 2); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // An `else if` chain — the escaping property has to recurse through the
+        // nested `if` to reach the leaf tails.
+        (
+            "else-if-chain-not-moved",
+            "fn take(r: R, k: i64) -> R { if k == 1 { r } else if k == 2 { R { id: 98 } } \
+             else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, 3); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // TWO owned params, one returned. The one that dies runs its body where
+        // it dies; the one handed back runs its body at the caller.
+        (
+            "two-params-one-returned",
+            "fn take(a: R, b: R, k: bool) -> R { if k { a } else { b } }\n\
+             fn main() { let x = take(R { id: 41 }, R { id: 42 }, true); \
+             println(f\"{x.id}\") }\n",
+            "drop 42\n41\ndrop 41\n",
+        ),
+        // The call DISCARDED rather than bound. Both objects die here and each
+        // runs exactly one body.
+        (
+            "discarded-call",
+            "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { take(R { id: 41 }, false) println(\"end\") }\n",
+            "drop 41\ndrop 99\nend\n",
+        ),
+        // BOUNDARY — an AGGREGATE-LITERAL return route. `fn_returns_param`
+        // counts `Holder { r: r }` as an escape (it recurses into struct and
+        // tuple literals) but the conditional-move flag only clears on a BARE
+        // identifier, so admitting this shape leaves the callee running a body
+        // for a value that left the frame. Measured with it admitted:
+        // `drop 41` / `41` / `drop 41` on all three compiled backends — a double
+        // body plus a read of the dropped value.
+        (
+            "aggregate-return-declined",
+            "struct Holder { r: R }\n\
+             fn take(r: R, k: bool) -> Holder { if k { Holder { r: r } } \
+             else { Holder { r: R { id: 99 } } } }\n\
+             fn main() { let x = take(R { id: 41 }, true); println(f\"{x.r.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // BOUNDARY — a `return` statement inside a branch. Codegen clears the
+        // flag at match arms and block tails but NOT at a `return` operand (it
+        // suppresses those statically), so this route is outside the mechanism
+        // and the predicate declines it. Still the pre-fix output; that shape is
+        // B-2026-08-28-65 / -52.
+        (
+            "return-in-branch-declined",
+            "fn take(r: R, k: bool) -> R { if k { return r } R { id: 99 } }\n\
+             fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\") }\n",
             "99\ndrop 99\n",
+        ),
+        // BOUNDARY — a GENERIC callee, declined on BOTH backends. A monomorph is
+        // compiled through `compile_mono_function`, which has its own param
+        // loop; registering there passed every body-count case but printed a
+        // CORRUPTED name for a heap-carrying param (`drop dr` where `drop i1`
+        // was due, all three compiled backends), because the mono param slot
+        // does not hold what the bodies-only walker expects. Declining on both
+        // keeps the four surfaces identical on today's behaviour instead of
+        // trading a missed body for garbage; filed as B-2026-08-28-71.
+        (
+            "generic-callee-declined",
+            "fn take[T](r: R, k: bool, t: T) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, false, 7); println(f\"{x.id}\") }\n",
+            "99\ndrop 99\n",
+        ),
+        // BOUNDARY — the callee never returns the param, so the caller already
+        // owned the drop and nothing changes.
+        (
+            "never-returns-param",
+            "fn take(r: R, k: bool) -> i64 { if k { 1 } else { 2 } }\n\
+             fn main() { let x = take(R { id: 41 }, false); println(f\"{x}\") }\n",
+            "drop 41\n2\n",
+        ),
+        // BOUNDARY — an UNCONDITIONAL return. One leaf tail, no branch, nothing
+        // to guard: the predicate requires a path that does NOT yield the param.
+        (
+            "unconditional-return",
+            "fn take(r: R) -> R { r }\n\
+             fn main() { let x = take(R { id: 41 }); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // A HEAP-CARRYING param. The registration is BODIES-ONLY: the caller
+        // still owns the memory, so installing the binding's own `Drop` wrapper
+        // here (which frees the fields too) double-freed — measured `free():
+        // double free detected in tcache 2` under the JIT. The ASAN twin
+        // `asan_conditionally_returned_param_bodies_are_memory_balanced` pins
+        // the memory side.
+        (
+            "heap-payload-not-moved",
+            "fn take(h: H, k: bool) -> H { if k { h } \
+             else { H { id: 99, name: f\"n99\" } } }\n\
+             fn main() { let x = take(H { id: 41, name: f\"n41\" }, false); \
+             println(f\"{x.id}\") }\n",
+            "drop n41\n99\ndrop n99\n",
         ),
     ] {
         let heap = "struct H { id: i64, name: String }\n\

@@ -1442,6 +1442,216 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     walk_block(&f.body, param_name)
 }
 
+/// B-2026-08-28-22 — is `f`'s positional parameter `arg_index` returned on SOME
+/// tail paths and not others, by a route the conditional-move drop flag can
+/// actually clear?
+///
+/// [`fn_returns_param`] answers over the UNION of return sites, which is what
+/// makes it conservative-true on a branchy callee: the caller then suppresses
+/// its side of the drop on EVERY path, and whichever value actually died inside
+/// the call loses its user `Drop` body. This predicate identifies the subset of
+/// that shape where the callee can take ownership back safely, so the fix is a
+/// callee-local ownership flip guarded by B-2026-08-28-51's per-path flag
+/// rather than a change to the union answer (which would restore the DOUBLE
+/// body the union was chosen to avoid).
+///
+/// TRUE requires all four, and each one is load-bearing:
+///
+///   1. Some leaf tail of the body's tail expression IS the bare parameter.
+///      Bare because `arm_conditional_move_tail_flag` (codegen) and
+///      `record_conditional_move_tail` (interpreter) both key on
+///      `ExprKind::Identifier`; they are what clear the flag on the escaping
+///      path, so an escape they cannot see would leave the callee dropping a
+///      value that left the frame.
+///   2. Some OTHER leaf tail does not mention the parameter at all — the
+///      conditionality this row is about. An unconditionally-returned param has
+///      no missed body to recover, so registering one is pure risk.
+///   3. No leaf tail mentions the parameter in any OTHER way. This is the one
+///      that rules out the aggregate-literal route `if k { H { r: r } } else
+///      { .. }`, which [`fn_returns_param`] counts as an escape (via its
+///      `expr_is_ident` recursion into struct/tuple literals) but the flag
+///      never clears. Measured with that route admitted: `drop 41` / `41` /
+///      `drop 41` on all three compiled backends — a double body plus a read of
+///      the dropped value, exactly the defect the union answer exists to
+///      prevent.
+///   4. No `return` statement anywhere in the body mentions the parameter.
+///      Codegen clears the flag at match arms and block tails but NOT at a
+///      `return` operand (it suppresses those statically instead), so a
+///      `return`-borne escape is outside this mechanism's reach. That shape is
+///      B-2026-08-28-65 / -52 and is deliberately left to them.
+///
+/// Paired with `!`[`fn_moves_param_into_outliving_place`] at the call site: a
+/// param stored into `self` or a `ref` param outlives the frame by a route with
+/// no tail at all.
+///
+/// The conservative direction is unchanged from the rest of this family — a
+/// shape this predicate declines keeps today's missed body, which is a
+/// leak-of-side-effect, never a double drop and never a memory fault.
+pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return false;
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+    let name = param_name.as_str();
+
+    /// May `e` mention `name`? Conservative in the DECLINING direction: any
+    /// shape not explicitly recognized answers `true`, which fails condition 3
+    /// and leaves that function on today's behaviour. Adding a shape here can
+    /// only ever admit more programs, never silently widen an escape route.
+    fn may_mention(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::Bool(_) => false,
+            ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|p| match p {
+                crate::ast::ParsedInterpolationPart::Text(_) => false,
+                crate::ast::ParsedInterpolationPart::Expr(e, _) => may_mention(e, name),
+            }),
+            ExprKind::StructLiteral { fields, .. } => {
+                fields.iter().any(|f| may_mention(&f.value, name))
+            }
+            ExprKind::Tuple(elems) => elems.iter().any(|el| may_mention(el, name)),
+            ExprKind::Binary { left, right, .. } => {
+                may_mention(left, name) || may_mention(right, name)
+            }
+            ExprKind::Unary { operand, .. } => may_mention(operand, name),
+            ExprKind::FieldAccess { object, .. } => may_mention(object, name),
+            _ => true,
+        }
+    }
+    fn is_bare(e: &Expr, name: &str) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+    }
+    /// The leaf tails of an escaping tail position, following exactly the
+    /// branch structure `note_escaping_site` pushes escaping-ness down through.
+    /// A branch arm with no tail expression contributes the branch expression
+    /// itself, which `may_mention` then answers `true` for — declining rather
+    /// than guessing what a tail-less arm does.
+    fn leaf_tails<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &e.kind {
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                match &then_block.final_expr {
+                    Some(t) => leaf_tails(t, out),
+                    None => out.push(e),
+                }
+                match else_branch {
+                    Some(x) => leaf_tails(x, out),
+                    None => out.push(e),
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    leaf_tails(&arm.body, out);
+                }
+            }
+            ExprKind::Block(b) => match &b.final_expr {
+                Some(t) => leaf_tails(t, out),
+                None => out.push(e),
+            },
+            _ => out.push(e),
+        }
+    }
+    /// Condition 4 — any `return` operand that may mention the parameter.
+    /// Mirrors [`fn_returns_param`]'s traversal so the two agree on where a
+    /// return site can appear.
+    fn return_mentions_expr(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => {
+                may_mention(inner, name) || return_mentions_expr(inner, name)
+            }
+            ExprKind::Return(None) => false,
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => return_mentions_block(b, name),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                return_mentions_block(then_block, name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| return_mentions_expr(x, name))
+            }
+            ExprKind::Match { arms, .. } => {
+                arms.iter().any(|a| return_mentions_expr(&a.body, name))
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => return_mentions_block(body, name),
+            _ => false,
+        }
+    }
+    fn return_mentions_block(b: &Block, name: &str) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => return_mentions_expr(e, name),
+            StmtKind::Let { value, .. } => return_mentions_expr(value, name),
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| return_mentions_expr(fe, name))
+    }
+
+    if return_mentions_block(&f.body, name) {
+        return false;
+    }
+
+    let Some(tail) = f.body.final_expr.as_deref() else {
+        return false;
+    };
+    let mut leaves = Vec::new();
+    leaf_tails(tail, &mut leaves);
+    // A single leaf is the unconditional shape — no branch, nothing to guard.
+    if leaves.len() < 2 {
+        return false;
+    }
+    let mut yields_bare = false;
+    let mut yields_nothing = false;
+    for leaf in leaves {
+        if is_bare(leaf, name) {
+            yields_bare = true;
+        } else if may_mention(leaf, name) {
+            // Condition 3 — an escape route the flag cannot clear.
+            return false;
+        } else {
+            yields_nothing = true;
+        }
+    }
+    yields_bare && yields_nothing
+}
+
 /// B-2026-08-28-62 — the THIRD escape route for a by-value parameter: `f` hands
 /// it to ANOTHER CALL whose result is returned.
 ///

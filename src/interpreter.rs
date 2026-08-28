@@ -598,6 +598,15 @@ pub struct Interpreter<'a> {
     /// executor, so `eval_match` fires any leftovers itself (conservatively)
     /// and clears the list.
     pub(crate) pending_arm_drop_bindings: Vec<String>,
+    /// B-2026-08-28-22 — owned params whose `Drop` BODY this frame has taken
+    /// ownership of, because the callee returns them on some tail paths and not
+    /// others. Seeded immediately before [`Self::eval_body_growing`] and
+    /// drained into the function body block's cleanup by `eval_block_inner`,
+    /// exactly as `pending_arm_drop_bindings` seeds a match arm's bindings.
+    /// From there the binding is an ordinary `Drop` slot, so
+    /// `record_conditional_move_tail` disarms it on the path that actually
+    /// returned the value — the interpreter twin of codegen's per-path `i1`.
+    pub(crate) pending_param_drop_bindings: Vec<String>,
     /// B-2026-07-30-11 (Map-values leg) — the resolved `Map[K, V]`
     /// instantiation per let-bound variable, recorded through the SAME
     /// static chain codegen's `__karac_dropelems_map_*` registration uses
@@ -943,6 +952,7 @@ impl<'a> Interpreter<'a> {
             moved_out_user_drop_bindings: HashSet::new(),
             cond_move_escaping_sites: HashSet::new(),
             pending_arm_drop_bindings: Vec::new(),
+            pending_param_drop_bindings: Vec::new(),
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,

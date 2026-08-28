@@ -59564,6 +59564,68 @@ fn main() {
             "shared-temp-receiver-heap-field-read",
         );
     }
+    /// B-2026-08-28-22 — the MEMORY half of the conditionally-returned-param
+    /// body fix. The codegen and interpreter twins pin the body COUNTS; this
+    /// pins that recovering those bodies moved no free.
+    ///
+    /// The registration is deliberately BODIES-ONLY
+    /// (`emit_struct_user_drop_bodies_only_fn`): an owned by-value param is
+    /// caller-drops for MEMORY whoever runs the body, so the callee must run
+    /// the body and free nothing. Installing the binding's own `Drop` wrapper
+    /// instead — which frees the fields too — double-freed a heap-carrying
+    /// param, measured as `free(): double free detected in tcache 2` under the
+    /// JIT on the `cond` shape below.
+    ///
+    /// That is why every struct here carries a `String` rather than the
+    /// `i64`-only struct the body tests use: an `i64` payload has nothing to
+    /// double-free, so the plain-wrapper version of this fix passed every
+    /// body-count case in the tree while corrupting the heap. Both directions
+    /// of each branch are exercised — the path that RETURNS the param must
+    /// free at the caller and nowhere else, the path that does not must free
+    /// inside the callee having just run the body there.
+    ///
+    /// `agg` is the DECLINED aggregate-literal route, included because
+    /// admitting it ran one object's body twice; it must stay memory-clean
+    /// either way.
+    #[test]
+    fn asan_conditionally_returned_param_bodies_are_memory_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct Wrap { r: R }
+fn cond(r: R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
+fn cond_match(r: R, k: i64) -> R { match k { 1 => { r } _ => { R { id: 98, name: f"n98" } } } }
+fn two(a: R, b: R, k: bool) -> R { if k { a } else { b } }
+fn agg(r: R, k: bool) -> Wrap { if k { Wrap { r: r } } else { Wrap { r: R { id: 95, name: f"n95" } } } }
+fn main() {
+    let base: i64 = env.args().len();
+    let a = cond(R { id: base, name: f"a{base}" }, false);
+    println(f"{a.id}");
+    let b = cond(R { id: base, name: f"b{base}" }, true);
+    println(f"{b.id}");
+    let c = cond_match(R { id: base, name: f"c{base}" }, 2);
+    println(f"{c.id}");
+    let d = cond_match(R { id: base, name: f"d{base}" }, 1);
+    println(f"{d.id}");
+    let g = two(R { id: base, name: f"g{base}" }, R { id: base, name: f"h{base}" }, true);
+    println(f"{g.id}");
+    let i = agg(R { id: base, name: f"j{base}" }, true);
+    println(f"{i.r.id}");
+    let j = agg(R { id: base, name: f"k{base}" }, false);
+    println(f"{j.r.id}");
+    cond(R { id: base, name: f"l{base}" }, false);
+    println("end");
+}
+"#,
+            &[
+                "drop a1", "99", "drop n99", "1", "drop b1", "drop c1", "98", "drop n98", "1",
+                "drop d1", "drop h1", "1", "drop g1", "1", "drop j1", "95", "drop n95", "drop l1",
+                "drop n99", "end",
+            ],
+            "conditionally-returned-param-bodies",
+        );
+    }
 
     /// B-2026-08-28-15 — a heap-carrying element moved out of an owned tuple
     /// by `.N` at an ESCAPING position leaves the frame; the tuple's own
