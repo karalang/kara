@@ -12778,6 +12778,92 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-31 — an enum declaring its OWN `impl Drop`, discarded by a
+    /// wildcard destructure leaf, runs that body on the compiled backends.
+    ///
+    /// Pre-fix the interpreter ran `drop E` and both compiled backends ran
+    /// nothing. B-2026-08-28-30 had wired a payload walker for payload-only
+    /// enums and deliberately EXCLUDED an own-`Drop` enum, because pointing the
+    /// payload walker at one prints the payload's body (`drop R41`) instead of
+    /// the enum's own — a different divergence, not a smaller one.
+    ///
+    /// The right walker turns out to be the bodies-only one the STRUCT leaf
+    /// already uses: for an enum name it finds `owns_body` true and the
+    /// struct-field walk `None`, so it emits a call to `<E>.drop` and nothing
+    /// else. `payload-only-control` pins that the two walkers stay separate.
+    ///
+    /// ONE body is the target, not two, and `struct-field-sibling` is why: the
+    /// same enum discarded through a STRUCT pattern's wildcard field already ran
+    /// `drop E` and only that, on all three backends, before this fix. Making
+    /// the tuple leaf run two would have put it out of step with its own
+    /// sibling.
+    ///
+    /// `bound-control` shows what a NON-discarded enum of the same type does —
+    /// both bodies, on every backend. That the discard path runs one where a
+    /// binding runs two is a real gap, but a backend-CONSISTENT one, so it is
+    /// filed rather than pinned here.
+    #[test]
+    fn e2e_own_drop_enum_discarded_by_wildcard_leaf_runs_its_body() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "place-source",
+                "fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p;\n\
+                 \x20            println(f\"{n}\"); }\n",
+                "drop E\n1\n",
+            ),
+            (
+                "fresh-tuple-source",
+                "fn main() { let (_, n) = (E.A(R { id: 41 }), 1); println(f\"{n}\"); }\n",
+                "drop E\n1\n",
+            ),
+            // A payloadless variant — the compiled zero was about the OWN body,
+            // not about reaching a payload.
+            (
+                "no-payload-variant",
+                "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\"); }\n",
+                "drop E\n1\n",
+            ),
+            // CONTROL — the STRUCT-pattern sibling, already 1 on all three
+            // backends before this fix, and the reason one body is the target.
+            (
+                "struct-field-sibling",
+                "struct W { e: E, n: i64 }\n\
+                 fn main() { let w = W { e: E.A(R { id: 41 }), n: 1 };\n\
+                 \x20            let W { e: _, n } = w; println(f\"{n}\"); }\n",
+                "drop E\n1\n",
+            ),
+            // CONTROL — a BOUND enum of the same type runs both bodies.
+            (
+                "bound-control",
+                "fn main() { let e = E.A(R { id: 41 }); println(\"mid\"); }\n",
+                "drop E\ndrop R41\nmid\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
+    /// B-2026-08-28-30's payload-only enum leg, kept beside its own-`Drop`
+    /// sibling: an enum with NO `impl Drop` of its own still runs its live
+    /// variant's payload body when discarded by a wildcard leaf. The two
+    /// walkers are selected by different predicates and must not collapse into
+    /// one — this row fails if the own-`Drop` arm ever swallows the
+    /// payload-only case.
+    #[test]
+    fn e2e_payload_only_enum_discarded_by_wildcard_leaf_runs_payload_body() {
+        let prog = "enum E { A(R), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn main() { let p = (E.A(R { id: 41 }), 1); let (_, n) = p; println(f\"{n}\"); }\n";
+        assert_eq!(run_program(prog).as_deref(), Some("drop R41\n1\n"));
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

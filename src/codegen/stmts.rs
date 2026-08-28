@@ -12097,16 +12097,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Bodies only, never `karac_drop_<E>`: the combined wrapper frees, and
         // the free is what the `free_memory` argument exists to decide.
         //
-        // An enum that declares its OWN `impl Drop` is EXCLUDED, and the
-        // exclusion is measured rather than cautious. The interpreter runs the
-        // OWN body only for such an enum and does NOT walk the payload (its
-        // `run_discarded_value_user_drops` states that rule and cites the probe
-        // behind it). This payload walker is therefore the wrong body for that
-        // shape: admitting it printed `drop R41` against the interpreter's
-        // `drop E` — a divergence of a NEW kind, where before there was simply
-        // no body. The right body lives on the `karac_drop_<E>` wrapper, which
-        // also frees, so wiring it needs the `free_memory` question answered
-        // for enums first. Left as a filed shape rather than guessed at.
+        // An enum that declares its OWN `impl Drop` is excluded from THIS
+        // walker, and the exclusion is measured rather than cautious: the
+        // payload walker is the wrong body for that shape — admitting it
+        // printed the payload's `drop R41` against the interpreter's `drop E`.
+        // It takes the bodies-only walker instead, selected just below
+        // (B-2026-08-28-31).
         let enum_payload_ok = self
             .type_decls
             .enum_layouts
@@ -12116,9 +12112,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 .program_snapshot
                 .as_deref()
                 .is_some_and(|p| p.drop_method_keys.contains_key(&name));
+        // B-2026-08-28-31 — an enum that declares its OWN `impl Drop` takes the
+        // BODIES-ONLY walker, not the payload one. `emit_struct_user_drop_-
+        // bodies_only_fn` is named for structs but is exactly right here: for an
+        // enum name it finds `owns_body` true and the struct field-bodies walk
+        // `None`, so it emits a walker that calls `<E>.drop` and nothing else —
+        // no payload walk, no frees.
+        //
+        // ONE body, matching the interpreter, and matching the STRUCT-field
+        // sibling that already agrees on all three backends
+        // (`let W { e: _, n } = w` over an own-`Drop` enum field runs `drop E`
+        // and only that, 1/1/1). Reaching for the combined `karac_drop_<E>`
+        // wrapper — body AND memory — is what the row worried this needed, and
+        // it is not: the memory half below already routes an enum through
+        // `emit_enum_drop_switch`, so the `free_memory` question is answered
+        // per-site here exactly as it is for a struct.
+        let own_drop_enum = self
+            .type_decls
+            .enum_layouts
+            .get(&name)
+            .is_some_and(|l| !l.is_shared)
+            && self
+                .program_snapshot
+                .as_deref()
+                .is_some_and(|p| p.drop_method_keys.contains_key(&name));
         let walker = if enum_payload_ok {
             self.emit_enum_payload_user_drop_bodies_fn(&name)
-        } else if self.type_decls.struct_types.contains_key(&name) {
+        } else if own_drop_enum || self.type_decls.struct_types.contains_key(&name) {
             self.emit_struct_user_drop_bodies_only_fn(&name)
         } else {
             None

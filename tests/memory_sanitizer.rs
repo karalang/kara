@@ -1185,6 +1185,62 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-31 — an enum that declares its OWN `impl Drop`, discarded
+    /// by a wildcard destructure leaf, runs its own body once and stays memory
+    /// balanced.
+    ///
+    /// The body half was a run-vs-build divergence: the interpreter ran
+    /// `drop E` and both compiled backends ran nothing. This fixture is about
+    /// the other half, which is what the row wanted answered before the shape
+    /// could be wired — whether the bodies-only walker leaves the payload's
+    /// heap owned exactly once.
+    ///
+    /// It does, and the two sources answer it differently, which is the same
+    /// per-site `free_memory` split B-2026-08-28-12 established by measurement:
+    /// a FRESH tuple temp carries no aggregate drop of its own, so the discard
+    /// site frees; a PLACE source is freed by the source aggregate's own drop,
+    /// so it must not. Reaching for the combined `karac_drop_<E>` wrapper —
+    /// body AND memory in one — is what the row expected this to need, and
+    /// would have double-freed the place row.
+    #[test]
+    fn asan_own_drop_enum_discarded_by_wildcard_leaf_is_balanced() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        // FRESH tuple literal source — nothing else owns the temp, so the
+        // discard site frees the payload's buffer.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let (_, n) = (E.A(R {{ id: 41, name: f\"n{{41}}\" }}), 1);\n\
+             \x20            println(f\"{{n}}\"); }}\n"
+            ),
+            &["drop E", "1"],
+            "fresh-tuple",
+        );
+        // PLACE source — the local `p`'s own drop frees it; freeing here too
+        // would be a second free.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = (E.A(R {{ id: 41, name: f\"n{{41}}\" }}), 1);\n\
+             \x20            let (_, n) = p; println(f\"{{n}}\"); }}\n"
+            ),
+            &["drop E", "1"],
+            "place-source",
+        );
+        // CONTROL — the same enum BOUND rather than discarded, which runs both
+        // bodies on every backend and is the shape the discard path is measured
+        // against.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let e = E.A(R {{ id: 41, name: f\"n{{41}}\" }});\n\
+             \x20            println(\"mid\"); }}\n"
+            ),
+            &["drop E", "drop R41", "mid"],
+            "bound-control",
+        );
+    }
+
     #[test]
     fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
         for (label, decl, arg) in [
