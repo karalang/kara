@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 215 | 3 |
+| leak | 215 | 2 |
 | run-vs-build | 202 | 7 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1160 | 14 |
+| codegen | 1160 | 13 |
 | typecheck | 278 | 0 |
 | interp | 216 | 8 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced · 15 open · 1682 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced · 14 open · 1683 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (15)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced
 | B-2026-08-28-22 | 2026-08-28 | interp+codegen | medium | ALL THREE interprocedural escape predicates UNION over a callee's return sites, so a BRANCHY callee loses the user `Drop` body of whichever value actually died in the call: `fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }` called with `k = false` never runs R{41}'s body on any backend. Long-standing and deliberate rather than a regression -- `fn_returns_param_payload` documents the trade in as many words, and the whole-param leg predates the tuple/field part channel that inherited it from B-2026-08-28-2/-17 | — |
 | B-2026-08-28-23 | 2026-08-28 | interp+codegen | low | A NESTED PROJECTION out of an owned struct param still double-runs the field's user `Drop` body: `fn take(w: W) -> R { w.inner.r }` prints `drop 41` twice for one `R` on all three backends. This is `fn_returns_param_parts`' DOCUMENTED under-approximation working as designed -- it classifies a projection only off the WHOLE param and declines a projection-of-a-projection by construction, which leaves the pre-existing double body (the safe direction) -- so closing it widens the ANALYSIS, not the two caller-side sites B-2026-08-28-17 finished | — |
 | B-2026-08-28-26 | 2026-08-28 | codegen | medium | A TUPLE-TYPED BINDING LEAF loses its inner element's user `Drop` body when the source is a tuple LOCAL: `let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` / `karac build`. The leaf is a `PatternKind::Binding` whose element `TypeExpr` is a `TypeKind::Tuple`, so it clears the place-source walker's PATTERN test and then exits at its `TypeKind::Path` test -- one step past where B-2026-08-28-8's nested-PATTERN spelling failed | — |
-| B-2026-08-28-44 | 2026-08-28 | codegen | low | TWO SHAPES OF THE B-2026-08-28-32 FAMILY STILL LEAK, on mechanisms that row's fix does not touch: a container-element heap read consumed by an unbound TUPLE LITERAL (`println((p[1].word, 9).0)`) or handed out of a MATCH ARM (`println(match c { true => p[1].word, ... })`) loses the clone -- 3 bytes in 1 allocation apiece at -O0. The `if` spelling of the identical match program is CLEAN, so the two branch forms already disagree, and the tuple literal declines for a different reason again: the projected element's TypeExpr is resolved from the CALLEE's return type and a literal has no callee. | — |
 | B-2026-08-28-46 | 2026-08-28 | interp+codegen | medium | A STRUCT HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM DIVERGES IN THE INTERPRETER-SILENT DIRECTION when it is never destructured: `let w = W { e: E.B, n: 1 }; println(w.n)` runs `drop E` on both compiled backends and NOTHING in the interpreter -- the opposite direction from every neighbouring row in this family | — |
 | B-2026-08-28-47 | 2026-08-28 | interp+codegen | medium | A TUPLE HOLDING A UNIT VARIANT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND when it is never destructured: `let p = (E.B, 1); println(p.1)` is 0/0/0, while the same tuple DESTRUCTURED through a wildcard leaf is 1/1/1 -- backend-consistent, so no parity gate can report it | — |
 | B-2026-08-28-48 | 2026-08-28 | interp | low | A DISCARDED PAYLOAD-BEARING ENUM CTOR IN BARE STATEMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY IN THE INTERPRETER: `E.A(R { id: 41 });` is interp 1 / compiled 2, the statement-position twin of the `let _ =` shape B-2026-08-28-39 settled at two | — |
@@ -176,9 +175,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced
 
 </details>
 
-### Fixed (1682)
+### Fixed (1683)
 
-<details><summary>1682 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1683 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1863,6 +1862,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced
 | B-2026-08-28-41 | interp+codegen | medium | A PAYLOADLESS VARIANT OF AN OWN-`Drop` ENUM, DISCARDED BY `let _ =`, RUNS ZERO BODIES ON ALL THREE BACKENDS: `let _ = E.B;` where `impl Drop for E` p… | b75a1f0 |
 | B-2026-08-28-42 | codegen | high | A HEAP FIELD READ OFF A FIELD-ROOTED CONTAINER IS NEVER CLONED AND DOUBLE-FREES: `h.xs[0].name` where `struct H { xs: Vec[R] }` and `struct R { id: i… | ed405c3 |
 | B-2026-08-28-43 | interp+codegen | medium | TWO MORE SPELLINGS OF A DISCARDED PAYLOADLESS OWN-`Drop` ENUM VARIANT STILL RUN NO BODY: `let _ = B;` (the BARE spelling) is interp 1 / compiled 0, a… | d5dbdcb |
+| B-2026-08-28-44 | codegen | low | TWO SHAPES OF THE B-2026-08-28-32 FAMILY STILL LEAK: a container-element heap read consumed by an unbound TUPLE LITERAL (`println((p[1].word, 9).0)`)… | 6ca7ed6 |
 | B-2026-08-28-45 | interp+codegen | medium | A FRESH STRUCT LITERAL DESTRUCTURED IN THE SAME STATEMENT LOSES ITS WILDCARD FIELD'S `Drop` BODY on both compiled backends: `let W { e: _, n } = W {… | 05fefaa |
 
 </details>
