@@ -1515,6 +1515,70 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-26 — a tuple-typed leaf that takes its inner element's
+    /// `Drop` body takes the element's heap with it, exactly once.
+    ///
+    /// The body half was a run-vs-build divergence. The memory half is what the
+    /// fix had to get right alongside it, and the first cut did not: the leaf
+    /// registered BODIES only while the cap-zero handed the element's ownership
+    /// away from the source, so nothing freed it — 3 bytes leaked on a
+    /// heap-carrying element. The same shape B-2026-08-28-12 and -29 each hit
+    /// from their own sites, which is why the memory registration is paired
+    /// with the cap-zero rather than left to the source.
+    ///
+    /// The two sources answer differently and both are here: a PLACE source's
+    /// element is cap-zeroed out of the source's walk, while a FRESH one has no
+    /// named source to disarm.
+    #[test]
+    fn asan_tuple_typed_binding_leaf_owns_its_inner_element_once() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = ((R {{ id: 41, name: f\"n{{41}}\" }}, 2), 1);\n\
+             \x20            let (inner, n) = p; println(f\"{{n}}\") }}\n"
+            ),
+            &["drop 41 n41", "1"],
+            "place-source",
+        );
+        // The leaf READ before it dies — a wrong owner shows up here as a
+        // use-after-free rather than as a count.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = ((R {{ id: 41, name: f\"n{{41}}\" }}, 2), 1);\n\
+             \x20            let (inner, n) = p; println(f\"{{inner.0.name}} {{n}}\") }}\n"
+            ),
+            &["n41 1", "drop 41 n41"],
+            "place-source-leaf-used",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let (inner, n) = ((R {{ id: 41, name: f\"n{{41}}\" }}, 2), 1);\n\
+             \x20            println(f\"{{n}}\") }}\n"
+            ),
+            &["drop 41 n41", "1"],
+            "fresh-literal-source",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn mk() -> ((R, i64), i64) {{ ((R {{ id: 41, name: f\"n{{41}}\" }}, 2), 1) }}\n\
+             \x20            fn main() {{ let (inner, n) = mk(); println(f\"{{n}}\") }}\n"
+            ),
+            &["drop 41 n41", "1"],
+            "call-source",
+        );
+        // CONTROL — the same source never destructured, where the source's own
+        // walk owns the element. Clean before this fix and after it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = ((R {{ id: 41, name: f\"n{{41}}\" }}, 2), 1);\n\
+             \x20            println(f\"{{p.1}}\") }}\n"
+            ),
+            &["1", "drop 41 n41"],
+            "no-destructure-control",
+        );
+    }
+
     /// B-2026-08-28-50 — an UNBOUND destructure field of a struct-LITERAL
     /// source is owned exactly once whether or not its type has a `Drop`.
     ///

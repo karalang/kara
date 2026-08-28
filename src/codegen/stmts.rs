@@ -12215,6 +12215,80 @@ impl<'ctx> super::Codegen<'ctx> {
             let PatternKind::Binding(name) = &pat.kind else {
                 continue;
             };
+            // B-2026-08-28-26 — a TUPLE-TYPED leaf BOUND rather than
+            // destructured (`let p = ((R { .. }, 2), 1); let (inner, n) = p;`).
+            // It clears the nested-PATTERN recursion above, because it is a
+            // `Binding` and not a `Tuple` pattern, and then exits at the
+            // `TypeKind::Path` test below — one step past where
+            // B-2026-08-28-8's nested-pattern spelling failed, and silent for
+            // the same reason.
+            //
+            // It needs a DIFFERENT channel from the enum / nested-struct leaves
+            // below: `track_destructure_leaf_cleanup` dispatches off the
+            // String/Vec/Map/Set/struct side-tables and a tuple leaf is none of
+            // them. The tuple channel is the pair the let-site for a tuple
+            // BINDING uses — `emit_tuple_elem_user_drop_bodies_fn` on the
+            // `ContainerElemBodies` (NLL) channel — so the body lands where the
+            // interpreter puts it rather than merely being counted.
+            //
+            // The cap-zero at the bottom of this loop is what keeps it at one
+            // body: the SOURCE's own walk does reach this element (the
+            // undestructured control runs it on every surface), so the leaf can
+            // only take the body by taking the element with it.
+            if let TypeKind::Tuple(inner_tes) = &te.kind {
+                if !owner_runs_bodies {
+                    let inner_tes = inner_tes.clone();
+                    self.register_var_from_type_expr(name, &te);
+                    let slot = self.variables.get(name.as_str()).copied();
+                    if let Some(slot) = slot {
+                        if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
+                            self.var_types
+                                .tuple_var_elem_tes
+                                .insert(name.clone(), inner_tes.clone());
+                            if let Some(bodies) =
+                                self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &inner_tes)
+                            {
+                                // MEMORY FIRST, then bodies. The frame drains
+                                // LIFO, so registering memory first is what
+                                // makes the bodies run BEFORE the buffers they
+                                // read are freed — the same ordering rule the
+                                // enum and container sites state.
+                                //
+                                // The memory half is not optional here, and the
+                                // measurement says so: the cap-zero below hands
+                                // this element's ownership away from the source,
+                                // so a bodies-only leaf leaves nobody freeing it
+                                // — 3 bytes leaked on a heap-carrying element,
+                                // the same shape B-2026-08-28-12 and -29 both
+                                // hit from their own sites.
+                                if let Some(mem) =
+                                    self.synthesize_tuple_drop_fn_te(agg_ty, &inner_tes)
+                                {
+                                    if let Some(frame) =
+                                        self.drop_rc.scope_cleanup_actions.last_mut()
+                                    {
+                                        frame.push(
+                                            crate::codegen::state::CleanupAction::StructDrop {
+                                                struct_alloca: slot.ptr,
+                                                drop_fn: mem,
+                                            },
+                                        );
+                                    }
+                                }
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    name,
+                                    slot.ptr,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
+                                );
+                                self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             // Only ENUM / nested-STRUCT leaves are newly freed by `NestedTuple`;
             // Vec/String leaves keep the existing source-owns behavior.
             let TypeKind::Path(p) = &te.kind else {
@@ -12254,6 +12328,61 @@ impl<'ctx> super::Codegen<'ctx> {
         for (idx, pat) in pats.iter().enumerate() {
             match &pat.kind {
                 PatternKind::Binding(name) => {
+                    // B-2026-08-28-26, fresh-source half — a TUPLE-TYPED leaf.
+                    // `track_destructure_leaf_cleanup` dispatches off the
+                    // String/Vec/Map/Set/struct side-tables and a tuple leaf is
+                    // none of them, so it registered nothing and the inner
+                    // element's body was silent — the same loss as the
+                    // place-source spelling, one path over.
+                    //
+                    // No cap-zero here, unlike the place sibling: a fresh temp
+                    // has no named source holding a competing claim, which is
+                    // the same reason the comment below gives for passing
+                    // `true`.
+                    let tuple_leaf_tes =
+                        elem_tes
+                            .and_then(|tes| tes.get(idx))
+                            .and_then(|te| match &te.kind {
+                                TypeKind::Tuple(inner) => Some(inner.clone()),
+                                _ => None,
+                            });
+                    if let Some(inner_tes) = tuple_leaf_tes {
+                        if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                            if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
+                                if let Some(bodies) =
+                                    self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &inner_tes)
+                                {
+                                    self.var_types
+                                        .tuple_var_elem_tes
+                                        .insert(name.clone(), inner_tes.clone());
+                                    // Memory first, bodies second — LIFO drain,
+                                    // so the bodies read live buffers.
+                                    if let Some(mem) =
+                                        self.synthesize_tuple_drop_fn_te(agg_ty, &inner_tes)
+                                    {
+                                        if let Some(frame) =
+                                            self.drop_rc.scope_cleanup_actions.last_mut()
+                                        {
+                                            frame.push(
+                                                crate::codegen::state::CleanupAction::StructDrop {
+                                                    struct_alloca: slot.ptr,
+                                                    drop_fn: mem,
+                                                },
+                                            );
+                                        }
+                                    }
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        name,
+                                        slot.ptr,
+                                        bodies,
+                                        UserDropKind::ContainerElemBodies,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                    }
                     if let Some(slot) = self.variables.get(name.as_str()).copied() {
                         // A fresh owned temp has no named source to hold a
                         // competing body, so the leaf always takes it.

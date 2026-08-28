@@ -13393,6 +13393,102 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-26 — a TUPLE-TYPED leaf BOUND out of a tuple destructure
+    /// runs its inner element's user `Drop` body, at the interpreter's
+    /// placement.
+    ///
+    /// The leaf is a `PatternKind::Binding` whose element `TypeExpr` is a
+    /// `TypeKind::Tuple`, so it clears the place-source walker's PATTERN test —
+    /// which B-2026-08-28-8 taught to recurse — and then exits at that walker's
+    /// `TypeKind::Path` test, one step later and silent for the same reason.
+    ///
+    /// IT NEEDS A DIFFERENT CHANNEL from the enum / nested-struct leaves beside
+    /// it: `track_destructure_leaf_cleanup` dispatches off the
+    /// String/Vec/Map/Set/struct side-tables and a tuple leaf is none of them.
+    /// The tuple channel is the pair the let-site for a tuple BINDING uses —
+    /// `emit_tuple_elem_user_drop_bodies_fn` on the `ContainerElemBodies` (NLL)
+    /// channel, over `synthesize_tuple_drop_fn_te` for the memory.
+    ///
+    /// PLACEMENT IS PART OF THE CLAIM, not just the count, which the row asked
+    /// be settled with the fix rather than after it. `leaf-unused` and
+    /// `leaf-used` differ only in whether the bound leaf is read, and the body
+    /// moves from before the `println` to after it on every backend — the NLL
+    /// end of the leaf's live range, which is where the interpreter puts it.
+    ///
+    /// BOTH SOURCE KINDS, because they run through different functions
+    /// (`place_source_tuple_leaf_cleanups` and
+    /// `track_tuple_destructure_leaf_cleanups`) and only the place spelling is
+    /// in the row. Fixing one would have left the other silent beside it.
+    #[test]
+    fn e2e_tuple_typed_binding_leaf_runs_its_inner_drop_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro: PLACE source, leaf bound and unread, so the
+            // body belongs at the destructure.
+            (
+                "place-source-leaf-unused",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;\n\
+                 \x20            println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // The same leaf READ — the body moves after the read.
+            (
+                "place-source-leaf-used",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); let (inner, n) = p;\n\
+                 \x20            println(f\"{inner.1 + n}\") }\n",
+                "3\ndrop 41\n",
+            ),
+            // FRESH tuple-literal source — the sibling path, not in the row.
+            (
+                "fresh-literal-source",
+                "fn main() { let (inner, n) = ((R { id: 41 }, 2), 1); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // FRESH call source, same path.
+            (
+                "call-source",
+                "fn mk() -> ((R, i64), i64) { ((R { id: 41 }, 2), 1) }\n\
+                 fn main() { let (inner, n) = mk(); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // TWO Drop-bearing elements inside the bound tuple.
+            (
+                "two-inner-elements",
+                "fn main() { let p = ((R { id: 41 }, R { id: 42 }), 1); let (inner, n) = p;\n\
+                 \x20            println(f\"{n}\") }\n",
+                "drop 41\ndrop 42\n1\n",
+            ),
+            // DEPTH — a doubly nested tuple bound at the middle level.
+            (
+                "triple-nesting",
+                "fn main() { let p = (((R { id: 41 }, 3), 2), 1); let (mid, n) = p;\n\
+                 \x20            println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — the nested-PATTERN spelling, which B-2026-08-28-8 fixed
+            // and which this must not disturb.
+            (
+                "nested-pattern-control",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); let ((r, m), n) = p;\n\
+                 \x20            println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — the same source NEVER destructured. Correct on every
+            // surface before this, and the row that proves the source's own walk
+            // does reach this element — which is why the leaf can only take the
+            // body by taking the element with it.
+            (
+                "no-destructure-control",
+                "fn main() { let p = ((R { id: 41 }, 2), 1); println(f\"{p.1}\") }\n",
+                "1\ndrop 41\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-10 — a struct-pattern destructure of a PLACE source runs
     /// its leaf's user `Drop` body at the LEAF's live-range end, on the leaf's
     /// own value.
