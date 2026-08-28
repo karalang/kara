@@ -1654,7 +1654,25 @@ impl<'ctx> super::Codegen<'ctx> {
         payload_variant: &str,
         inner_struct_name: Option<&str>,
     ) {
-        let inner_drop_fn = inner_struct_name.and_then(|n| self.emit_struct_drop_synthesis(n));
+        // B-2026-08-28-64 — a boxed payload name is a user struct OR a user
+        // enum (`boxed_enum_payload_variants` admits both). The struct
+        // synthesis answers `None` for an enum name, so an enum payload used to
+        // land here with no inner drop at all and `BoxedEnumDrop` freed the box
+        // over an unwalked interior. `emit_enum_drop_switch` is the enum's
+        // MEMORY-only synthesis (`__karac_drop_<E>`: walks `field_drop_kinds`
+        // and frees, runs no user body) — the same one
+        // `emit_drop_fn_for_type_expr` routes an enum to, and the reason this
+        // resolves the name directly instead of going through that dispatcher
+        // is that the dispatcher's `karac_drop_<T>` module lookup can return
+        // the user-drop WRAPPER for a `Drop`-bearing enum, which would run the
+        // body a second time on the memory channel (B-2026-08-28-58 leg A).
+        //
+        // Ordered struct-first so every existing struct payload keeps the exact
+        // fn it resolved before; the enum arm only fills the `None`.
+        let inner_drop_fn = inner_struct_name.and_then(|n| {
+            self.emit_struct_drop_synthesis(n)
+                .or_else(|| self.emit_enum_drop_switch(n))
+        });
         self.track_boxed_enum_var_with_inner_drop(
             name,
             enum_slot,

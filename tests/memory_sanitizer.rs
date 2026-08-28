@@ -15905,6 +15905,84 @@ fn main() {
     /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
     /// seed back out to leave `i`, and each byte-read arm contributes 1 —
     /// `8i + 4` per iteration, so `8 * (0+…+39) + 40 * 4 = 6400`.
+    /// B-2026-08-28-64 — a BOXED enum payload's interior is never walked, so
+    /// its heap leaks while the box itself is freed correctly.
+    ///
+    /// `boxed_enum_payload_variants` names the boxed payload so
+    /// `track_boxed_enum_var` can resolve an inner drop for it, and its filter
+    /// admitted `struct_types` ALONE. `Option[K]` over `enum K { A(R2), B }`
+    /// therefore resolved no name at all, `BoxedEnumDrop` ran with
+    /// `inner_drop_fn: None`, and `R2`'s `String` was stranded behind a box
+    /// that was itself freed correctly.
+    ///
+    /// NOT the `Option`-vs-`Result` asymmetry it first reads as. The `Result`
+    /// twin (`Result[K, i64]`) is clean only because `K` fits `Result`'s
+    /// 5-word area and stays INLINE, where `track_inline_result_payload_var`
+    /// already walks it; widen the other half past that area
+    /// (`Result[K, Wide]`) and the `Result` leaks the identical 2 bytes.
+    /// BOXEDNESS is the predictor and it cuts across both enums. The
+    /// `Result`-one-side-boxed residue is a different mechanism — a
+    /// per-BINDING guard where the boxing is per-SIDE — and is B-2026-08-28-68,
+    /// deliberately not pinned here.
+    ///
+    /// COVERAGE, and the part that is load-bearing rather than decorative: the
+    /// `Drop` body READS the payload buffer (`contains` scans its bytes). With
+    /// the body suppressed, or reading only the scalar `self.id`, nothing
+    /// observes that buffer, LLVM deletes the `malloc` outright, and the shape
+    /// is CLEAN against the broken compiler — the same mask this row's parent
+    /// (B-2026-08-28-58) tripped over. The payload is seeded from the opaque
+    /// `env.args().len()` for the same reason, while the body prints a
+    /// seed-INDEPENDENT `contains` result so the expectation cannot drift with
+    /// the harness's argv.
+    ///
+    /// Four registration paths share the one boxed action, so all four run: a
+    /// plain `let`, a wildcard `match` (non-consuming — the let-site action
+    /// still fires), a by-value call (which also exercises the
+    /// `boxed_struct_payload_vars` arg-site skip the widened filter now admits
+    /// enums to), and a rebind move. A CONSUMING `match` arm is deliberately
+    /// absent: it currently runs no body at all on any backend, which is
+    /// B-2026-08-28-63 and not this row — pinning its count here would make
+    /// this test fail the moment that row is fixed.
+    ///
+    /// Pre-fix this is RED at every opt level (2 B definitely lost per shape,
+    /// measured -O0/-O1/-O2), so it does not depend on the default leg.
+    #[test]
+    fn asan_boxed_enum_option_payload_interior_is_walked() {
+        // 4 shapes x 8 iterations, one body each, all seed-independent.
+        let expected: Vec<&str> = vec!["dtrue"; 32];
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R2 { id: i64, name: String }
+impl Drop for R2 { fn drop(mut ref self) { println(f"d{self.name.contains("row")}") } }
+enum K { A(R2), B }
+
+fn take(o: Option[K]) -> i64 { 1 }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        // A — plain `let`, the shape the row reports.
+        let a: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        // B — wildcard `match`: non-consuming, so the let-site action still fires.
+        let b: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        match b { Option.Some(_) => {} Option.None => {} }
+        // C — by-value call: the arg-site move must leave exactly one owner.
+        let c: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        let _ = take(c);
+        // D — rebind move: the destination owns the box, the source disarms.
+        let d: Option[K] = Option.Some(K.A(R2 { id: n + i, name: "row-" + (n + i).to_string() }));
+        let e = d;
+        i = i + 1;
+    }
+}
+"#,
+            &expected,
+            "boxed-enum-option-payload-interior",
+            8,
+        );
+    }
+
     #[test]
     fn asan_boxed_struct_option_payload_by_value_call_no_leak_no_double_free() {
         assert_clean_asan_run_min_allocs(

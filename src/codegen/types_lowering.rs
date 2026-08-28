@@ -4168,12 +4168,53 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let ll = self.llvm_type_for_type_expr(arg);
             if Self::llvm_type_word_count(ll) > area {
+                // B-2026-08-28-64 — a boxed payload that is a user ENUM
+                // counts here exactly as a user struct does. The filter used to
+                // admit `struct_types` alone, so `Option[K]` with
+                // `enum K { A(R2), B }` (R2 owning a `String`) resolved
+                // `inner_struct = None`, `track_boxed_enum_var` derived no
+                // `inner_drop_fn`, and `BoxedEnumDrop` freed the BOX while
+                // nothing ever walked `K`'s interior — the payload's `String`
+                // leaked. Measured on that shape: 11 allocs / 10 frees, 2 B
+                // definitely lost at every opt level.
+                //
+                // NOT an `Option`-vs-`Result` asymmetry, which is how the shape
+                // first read. `Result[K, i64]` is clean only because K fits
+                // `Result`'s 5-word area and stays INLINE, where
+                // `track_inline_result_payload_var` already walks it. Widen the
+                // payload past that area and the `Result` leaks identically:
+                // `Result[K, Wide]` loses the same 2 bytes. Boxedness is the
+                // predictor, and it cuts across both enums.
+                //
+                // `Option` / `Result` are excluded deliberately. A boxed payload
+                // that is itself one of them is the ENVELOPE-CHAIN shape
+                // (`deeper_tags`, B-2026-08-07-6), whose walk is mutually
+                // exclusive with an inner payload drop — naming one here would
+                // route those shapes down the wrong branch at the let site and
+                // trip `track_boxed_enum_var_with_chain`'s debug assert. Shared
+                // enums lower to a 1-word RC pointer and never box.
                 let inner_struct = match &arg.kind {
                     TypeKind::Path(ip) => ip
                         .segments
                         .last()
                         .map(|s| s.as_str())
-                        .filter(|n| self.type_decls.struct_types.contains_key(*n))
+                        .filter(|n| {
+                            // The struct half is verbatim what this filter has
+                            // always admitted — generic payloads included, which
+                            // is why the enum disjunct carries its own
+                            // `generic_args` guard rather than the arm doing it
+                            // for both.
+                            self.type_decls.struct_types.contains_key(*n)
+                                || (ip.generic_args.is_none()
+                                    && *n != "Option"
+                                    && *n != "Result"
+                                    && !self.type_decls.shared_types.contains_key(*n)
+                                    && self
+                                        .type_decls
+                                        .enum_layouts
+                                        .get(*n)
+                                        .is_some_and(|l| !l.is_shared))
+                        })
                         .map(|n| n.to_string()),
                     _ => None,
                 };
