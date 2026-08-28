@@ -108537,6 +108537,101 @@ fn main() {
         );
     }
 
+    /// A struct field read THROUGH A TUPLE ELEMENT whose tuple came from a
+    /// CALL — `make().0.id` and `let q = make(); q.0.id` (B-2026-08-28-3).
+    ///
+    /// Both failed `karac build` on the loud "cannot resolve field ... its type
+    /// was not recorded" guard while `karac check` accepted them and the
+    /// interpreter answered them, and the boundary was where the TUPLE's value
+    /// came from rather than how the read was spelled: `q.0.n` is identical in
+    /// the passing and failing lines, and only the initializer of `q` differs.
+    /// The element type of a tuple resolved through a place chain or a literal;
+    /// a call matched neither source.
+    ///
+    /// `Other` and `Tag` both declare an `n`, at DIFFERENT indices, which is
+    /// what makes this fixture able to fail rather than merely refuse. Trading
+    /// the loud gap for a silent wrong answer would be strictly worse than the
+    /// bug — B-2026-08-27-49 measured exactly that outcome from the naive
+    /// version of its own fix — so the collision is deliberate at every row:
+    ///
+    ///   - the shadowing block reads a call-bound `x` that shadows an outer
+    ///     tuple local of the OTHER struct, and prints 42 afterwards to prove
+    ///     the registry was restored rather than clobbered;
+    ///   - `q.0.a` pins the SECOND field, so an off-by-one index that happens
+    ///     to satisfy `n` still fails;
+    ///   - `deep().0.inner.m` is a nested read, where this arm types the
+    ///     receiver of the second hop rather than the first.
+    ///
+    /// The method-call and associated-function rows are the other two callee
+    /// spellings that key `fn_return_type_exprs`; without them the fix could be
+    /// keyed on a bare `Identifier` callee alone and still look complete.
+    #[test]
+    fn test_e2e_struct_field_read_through_a_tuple_element_from_a_call() {
+        let src = r#"
+struct Other { a: i64, n: i64 }
+struct Tag { n: i64, a: i64 }
+struct Inner { m: i64 }
+struct Outer { inner: Inner, k: i64 }
+
+struct Holder { seed: i64 }
+impl Holder {
+    fn pair(ref self) -> (Tag, i64) { return (Tag { n: self.seed, a: 51 }, 2); }
+    fn origin() -> (Tag, i64) { return (Tag { n: 100, a: 52 }, 3); }
+}
+
+fn make() -> (Tag, i64) { return (Tag { n: 7, a: 99 }, 1); }
+fn deep() -> (Outer, i64) { return (Outer { inner: Inner { m: 5 }, k: 6 }, 8); }
+
+fn main() {
+    let x = (Other { a: 5, n: 42 }, 0);
+    println(x.0.n);
+
+    let q = make();
+    println(q.0.n);
+    println(q.0.a);
+    println(make().0.n);
+
+    {
+        let x = make();
+        println(x.0.n);
+    }
+    println(x.0.n);
+
+    println(deep().0.inner.m);
+    let d = deep();
+    println(d.0.inner.m);
+    println(d.0.k);
+
+    let h = Holder { seed: 11 };
+    let p = h.pair();
+    println(p.0.n);
+    println(h.pair().0.n);
+    println(Holder.origin().0.n);
+    let o = Holder.origin();
+    println(o.0.n);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Row 5 is the shadowed read: 7 is the call-bound `Tag`'s `n`. 99 would
+        // mean it typed as the outer `Other` and landed on `Tag.a`; 42 would
+        // mean it read the outer binding outright. Row 6 back at 42 is the
+        // restore.
+        assert_eq!(
+            expected, "42\n7\n99\n7\n7\n42\n5\n5\n6\n11\n11\n100\n100\n",
+            "interpreter oracle is wrong for a tuple-element field read",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a tuple element's struct type must resolve when the tuple came from a call",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///

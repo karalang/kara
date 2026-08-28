@@ -1404,6 +1404,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         if !self.expr_yields_fresh_owned_temp(object)
             && !self.value_block_hands_out_its_tail(object)
+            && !self.projects_struct_out_of_a_fresh_tuple_temp(object)
         {
             return;
         }
@@ -1430,6 +1431,37 @@ impl<'ctx> super::Codegen<'ctx> {
             field.to_string(),
             (object.span.offset, object.span.length),
         ));
+    }
+
+    /// A struct element PROJECTED out of a FRESH TUPLE temp — `make().0.name`
+    /// where `make -> (Person, i64)` (B-2026-08-28-3).
+    ///
+    /// The second defect that fix exposed, and the same one B-2026-08-27-49
+    /// hit: teaching the resolver to name this receiver made the shape COMPILE
+    /// for the first time, which made its OWNERSHIP reachable for the first
+    /// time — and nothing owned it. Measured, `println(make(1).0.name)` emitted
+    /// no drop at all against the sibling `println(plain(1).name)`'s
+    /// `__freshtemp_fldobj` slot plus `__karac_drop_struct_Person`, so every
+    /// heap field of the projected element leaked, the read one and the unread
+    /// ones alike.
+    ///
+    /// The reason the general predicate misses it is structural rather than
+    /// incidental: [`Self::expr_yields_fresh_owned_temp`] asks what KIND of
+    /// expression produced the value, and a `TupleIndex` is a projection, not a
+    /// producer. Its base is the producer, so this asks the same question one
+    /// hop down.
+    ///
+    /// SEPARATE from the general predicate for the reason B-2026-08-27-35 set
+    /// out for the array-literal sibling: many unrelated sites ask that one, and
+    /// a tuple-index place rooted at a BINDING (`q.0` after `let q = make()`) is
+    /// emphatically not a fresh owned temp — the binding owns it and already
+    /// drops it. Only a call/method-call/value-block base qualifies, which is
+    /// what the recursion below is restricted to.
+    fn projects_struct_out_of_a_fresh_tuple_temp(&self, expr: &Expr) -> bool {
+        let ExprKind::TupleIndex { object, .. } = &expr.kind else {
+            return false;
+        };
+        self.expr_yields_fresh_owned_temp(object) || self.value_block_hands_out_its_tail(object)
     }
 
     /// Move-consumer companion of
@@ -4002,6 +4034,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(t.as_str())
                         .and_then(|names| names.get(*index as usize))
                         .and_then(|n| n.clone());
+                }
+                // B-2026-08-28-3 — an UNBOUND call result (`make().0.id`).
+                // Neither source above can see it: a call is not a place, and
+                // there is no binding to key the per-variable registry on. Read
+                // the element off the callee's declared tuple return type, and
+                // accept it only when it names a type codegen has a layout for
+                // — a generic callee's `-> (T, i64)` yields the bare param
+                // name, which must keep refusing loudly rather than resolve to
+                // some unrelated struct that happens to share a field name.
+                if let Some(elems) = self.call_return_tuple_tes(object) {
+                    if let Some(TypeKind::Path(p)) = elems.get(*index as usize).map(|t| &t.kind) {
+                        if let Some(n) = p.segments.last() {
+                            if self.type_decls.struct_field_names.contains_key(n.as_str())
+                                || self.type_decls.enum_layouts.contains_key(n.as_str())
+                                || self.type_decls.shared_types.contains_key(n.as_str())
+                            {
+                                return Some(n.clone());
+                            }
+                        }
+                    }
                 }
                 None
             }

@@ -56902,6 +56902,62 @@ fn main() {
         assert_clean_asan_run(src, &["ada", "4"], "if-receiver-heap-field-read");
     }
 
+    /// A HEAP field read on a struct PROJECTED OUT OF A FRESH TUPLE TEMP —
+    /// `make().0.name` where `make -> (Person, i64)` (B-2026-08-28-3).
+    ///
+    /// Third in the line the block- and `if`-receiver gates above started, and
+    /// for the same reason: making the shape RESOLVE made it compile for the
+    /// first time, which made its ownership reachable for the first time — and
+    /// nothing owned it. Measured before the fix, this program emitted no drop
+    /// at all, against the sibling `println(plain(1).name)`'s
+    /// `__freshtemp_fldobj` slot plus `__karac_drop_struct_Person`.
+    ///
+    /// `expr_yields_fresh_owned_temp` asks what KIND of expression produced a
+    /// value, and a `TupleIndex` is a projection rather than a producer, so the
+    /// fresh-temp registration had to learn to look one hop down at the base.
+    ///
+    /// Every row reads a DIFFERENT field, because the leak was exactly the read
+    /// field's buffer and nothing else: a fixture that always read `name` would
+    /// pass against a fix that only rescued the first field. `age` is the
+    /// control that allocates nothing of its own, `move-let` is the consuming
+    /// position — where the read field's cap is zeroed and the binding becomes
+    /// its sole owner, so a fix that dropped unconditionally would double-free
+    /// here rather than leak — and the last two rows are the already-working
+    /// bound and non-tuple spellings, which must stay clean.
+    #[test]
+    fn test_heap_field_read_on_a_fresh_tuple_temp_is_leak_free() {
+        let src = r#"
+struct Person { name: String, note: String, age: i64 }
+
+fn make(k: i64) -> (Person, i64) {
+    return (
+        Person { name: "ada".to_string(), note: "unread".to_string(), age: k },
+        k + 1,
+    );
+}
+
+fn plain(k: i64) -> Person {
+    return Person { name: "ada".to_string(), note: "unread".to_string(), age: k };
+}
+
+fn main() {
+    println(make(1).0.name);
+    println(make(2).0.note);
+    println(make(3).0.age);
+    let w = make(4).0.name;
+    println(w);
+    let q = make(5);
+    println(q.0.name);
+    println(plain(6).name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &["ada", "unread", "3", "ada", "ada", "ada"],
+            "fresh-tuple-temp-heap-field-read",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

@@ -1196,6 +1196,46 @@ impl<'ctx> super::Codegen<'ctx> {
         super::helpers::array_inner_type_expr(ret)
     }
 
+    /// The TUPLE half of [`Self::call_slice_return_elem_te`]: the element
+    /// `TypeExpr`s of a callee declared `-> (A, B, ...)`.
+    ///
+    /// B-2026-08-28-3 — a struct field read through a tuple element resolves
+    /// the element's type name through the tuple's element `TypeExpr`s, and
+    /// the only sources for those were a place chain (`h.ps.0`) and the
+    /// per-variable registry populated from a tuple LITERAL or a tuple
+    /// ANNOTATION. A tuple that came from a CALL matched neither, so
+    /// `make().0.id` — and `let q = make(); q.0.id`, spelled identically to
+    /// the working literal-bound case — hit the loud "cannot resolve field
+    /// ... its type was not recorded" gap while `karac check` and the
+    /// interpreter both accepted them.
+    ///
+    /// The callee's DECLARED return type is full-fidelity by construction,
+    /// the same standard the annotation source meets. A generic callee whose
+    /// element is its own type parameter (`fn first[T]() -> (T, i64)`) yields
+    /// the bare param name, which names no struct — the callers gate on that,
+    /// so the shape keeps refusing loudly rather than resolving to a wrong
+    /// layout.
+    pub(super) fn call_return_tuple_tes(&self, expr: &Expr) -> Option<Vec<TypeExpr>> {
+        let key = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fname) => fname.clone(),
+                // An associated function (`Grid.origin()`) is declared under
+                // its qualified `Type.method` name — the same key
+                // `declare_function` uses for impl methods.
+                ExprKind::Path { segments, .. } if segments.len() == 2 => segments.join("."),
+                _ => return None,
+            },
+            ExprKind::MethodCall { object, method, .. } => {
+                format!("{}.{}", self.inferred_receiver_type(object)?, method)
+            }
+            _ => return None,
+        };
+        match &self.fn_sig.fn_return_type_exprs.get(key.as_str())?.kind {
+            TypeKind::Tuple(elems) => Some(elems.clone()),
+            _ => None,
+        }
+    }
+
     /// Look up the element LLVM type of a known sequence variable (Array,
     /// Vec, or Slice).
     pub(super) fn infer_elem_from_source(&self, object: &Expr) -> Option<BasicTypeEnum<'ctx>> {

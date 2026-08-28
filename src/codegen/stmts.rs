@@ -7525,6 +7525,47 @@ impl<'ctx> super::Codegen<'ctx> {
                                 Some(elems.iter().map(|e| self.type_name_of(e)).collect())
                             }
                             _ => None,
+                        })
+                        // B-2026-08-28-3 — a tuple bound from a CALL
+                        // (`let q = make();` where `make -> (R, i64)`) matched
+                        // neither source above, so `q.0.id` hit the loud
+                        // "cannot resolve field" gap while the identical read on
+                        // a literal-bound tuple built and ran. The callee's
+                        // declared return type is full-fidelity by construction
+                        // — the same standard the annotation arm meets — so it
+                        // belongs on this chain rather than behind a separate
+                        // lookup at the read site (which would also have to
+                        // re-derive the binding, and would miss shadowing:
+                        // `shadow.rs` already snapshots this registry).
+                        //
+                        // An element that does not name a type codegen has a
+                        // layout for is recorded as `None`, not as its bare
+                        // spelling: a generic callee's `-> (T, i64)` must keep
+                        // refusing loudly rather than resolve `T` to whatever
+                        // unrelated struct shares the field name being read.
+                        .or_else(|| {
+                            self.call_return_tuple_tes(value).map(|elems| {
+                                elems
+                                    .iter()
+                                    .map(|e| match &e.kind {
+                                        TypeKind::Path(p) => p.segments.last().filter(|n| {
+                                            self.type_decls
+                                                .struct_field_names
+                                                .contains_key(n.as_str())
+                                                || self
+                                                    .type_decls
+                                                    .enum_layouts
+                                                    .contains_key(n.as_str())
+                                                || self
+                                                    .type_decls
+                                                    .shared_types
+                                                    .contains_key(n.as_str())
+                                        }),
+                                        _ => None,
+                                    })
+                                    .map(|n| n.cloned())
+                                    .collect()
+                            })
                         });
                     if let Some(names) = elem_names {
                         self.var_types
