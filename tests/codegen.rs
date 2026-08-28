@@ -12965,6 +12965,119 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-29 — a destructure of a FRESH STRUCT source runs its leaf's
+    /// user `Drop` body, in both source spellings and for both leaf kinds.
+    ///
+    /// TWO SEPARABLE ROOTS, which is why fixing either alone leaves half the
+    /// surface broken:
+    ///
+    ///   (a) `expr_yields_fresh_owned_temp` admits only `Call` / `MethodCall`,
+    ///       so a struct LITERAL source reached NO arm of the leaf loop. The
+    ///       TUPLE path took exactly this widening in B-2026-08-28-1; the
+    ///       struct spelling never did.
+    ///   (b) even on the admitted CALL spelling, a BOUND leaf registered memory
+    ///       cleanup and no user body — `track_owned_destructure_field_cleanup`
+    ///       is memory-only, while the tuple path's leaf has carried the body
+    ///       cascade since B-2026-08-28-1. That cascade is now SHARED rather
+    ///       than transplanted a second time.
+    ///
+    /// The rows below cross the two axes deliberately: `bound-call` fails on
+    /// (b) alone, `wildcard-literal` on (a) alone, and `bound-literal` needs
+    /// both. `field-only-drop` is the third leaf kind — a type with no `Drop`
+    /// of its own but a Drop-bearing FIELD, which takes the field-bodies walk
+    /// rather than the wrapper.
+    ///
+    /// THE CONTROLS ARE WHAT LOCALIZE IT to a fresh STRUCT source rather than
+    /// to struct destructures generally: place, param and tuple sources were
+    /// all correct on all three backends before this and must stay at one.
+    #[test]
+    fn e2e_fresh_struct_source_destructure_runs_its_leaf_drop_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+             struct W { r: R, n: i64 }\n\
+             fn mk() -> W { W { r: R { id: 41 }, n: 1 } }\n";
+        for (label, body, want) in [
+            // (b) alone — the CALL source was admitted; the bound leaf ran no body.
+            (
+                "bound-call",
+                "fn main() { let W { r, n } = mk(); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // (a) and (b) together — a LITERAL source reached no arm at all.
+            (
+                "bound-literal",
+                "fn main() { let W { r, n } = W { r: R { id: 41 }, n: 1 }; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // (a) alone — B-2026-08-28-12's wildcard arm lives inside the gate,
+            // so it never ran on the literal spelling.
+            (
+                "wildcard-literal",
+                "fn main() { let W { r: _, n } = W { r: R { id: 41 }, n: 1 }; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — the wildcard leaf over a CALL source, B-2026-08-28-12's
+            // own fix. Correct before this and pinned so the widening does not
+            // take it to two.
+            (
+                "wildcard-call-control",
+                "fn main() { let W { r: _, n } = mk(); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — a PLACE source.
+            (
+                "place-source-control",
+                "fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let W { r, n } = w; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — a by-value PARAM source. Its drop fires after the
+            // call's own output, which is the ordering the interpreter agrees
+            // with.
+            (
+                "param-source-control",
+                "fn take(w: W) -> i64 { let W { r, n } = w; n }\n\
+                 fn main() { println(f\"{take(mk())}\") }\n",
+                "1\ndrop 41\n",
+            ),
+            // CONTROL — the TUPLE spelling, which got this cascade in
+            // B-2026-08-28-1 and is the model the struct path now shares.
+            (
+                "tuple-source-control",
+                "fn main() { let p = (R { id: 41 }, 1); let (r, n) = p; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // The leaf type declares no `Drop` of its own but CARRIES a Drop-bearing
+        // field — the arm that takes the field-bodies walk PLUS the ordinary
+        // memory drop, rather than the whole-value wrapper. Its own header.
+        const F: &str = "struct Res { id: i64 }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(f\"drop res {self.id}\") } }\n\
+             struct R { res: Res }\n\
+             struct W { r: R, n: i64 }\n";
+        assert_eq!(
+            run_program(&format!(
+                "{F}fn mk() -> W {{ W {{ r: R {{ res: Res {{ id: 41 }} }}, n: 1 }} }}\n\
+                 \x20            fn main() {{ let W {{ r, n }} = mk(); println(f\"{{n}}\") }}\n"
+            ))
+            .as_deref(),
+            Some("drop res 41\n1\n"),
+            "field-only-drop-call"
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{F}fn main() {{ let w = W {{ r: R {{ res: Res {{ id: 41 }} }}, n: 1 }};\n\
+                 \x20            let W {{ r, n }} = w; println(f\"{{n}}\") }}\n"
+            ))
+            .as_deref(),
+            Some("drop res 41\n1\n"),
+            "field-only-drop-place-control"
+        );
+    }
+
     /// B-2026-08-28-43 — the BARE spelling of a unit variant (`B`, not `E.B`)
     /// runs its enum's `Drop` body at every FRESH-TEMP position, and the bare
     /// STATEMENT spellings run it at all.

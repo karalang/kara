@@ -11238,6 +11238,54 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Question(inner) => self.expr_yields_fresh_owned_temp(inner),
             _ => self.expr_yields_fresh_owned_temp(value),
         };
+        // B-2026-08-28-29 root (a) — a struct LITERAL source
+        // (`let W { r, n } = W { r: R { .. }, n: 1 }`).
+        // `expr_yields_fresh_owned_temp` admits only `Call` / `MethodCall`, so
+        // this spelling reached NO arm of the leaf loop below: it ran no user
+        // `Drop` body on either compiled backend, and — measured separately, on
+        // a heap field with no `Drop` anywhere — LEAKED that field outright.
+        // The TUPLE path took exactly this widening in B-2026-08-28-1
+        // (`|| matches!(&value.kind, ExprKind::Tuple(_))`); the struct spelling
+        // never got the equivalent.
+        //
+        // Restricted to a plain struct literal: an enum struct-VARIANT literal
+        // (`E.V { .. }`) is a different value with its own payload machinery,
+        // and a SHARED struct is RC-owned.
+        //
+        // TWO NAMES FOR THE TWO SOURCE KINDS, because the arms below do NOT all
+        // want the same answer, and which arm wants which is measured rather
+        // than reasoned about. Under valgrind, on a heap-carrying field:
+        //
+        //   BOUND leaf, literal source     3 bytes LEAKED   -> needs `fresh`
+        //   BOUND leaf, call source        clean
+        //   BOUND leaf, place source       clean
+        //   UNBOUND field, literal source, Drop-bearing type:
+        //       both the discard walker below and the unbound-field arm at the
+        //       bottom of the loop claiming it   11 allocs / 12 frees, ABORT
+        //
+        // So `fresh` (the BOUND-leaf arms) admits the literal, and `fresh_call`
+        // (the UNBOUND-field arm) does not: a bound leaf moves the field out
+        // and must own it, while an unbound one is already claimed by the
+        // discard walker just below and a second claim is a double free. That
+        // asymmetry is why the widening cannot be a single flag — the shape the
+        // row warned about ("a fresh struct temp already carries its own
+        // whole-aggregate drop... adding a free here is the B-2026-08-28-12
+        // double free") is real, and it is real at exactly ONE of these arms.
+        //
+        // What made the literal look owned everywhere is that the same programs
+        // are leak-clean while the leaf goes unused: LLVM deletes the dead
+        // allocation chain, the masking B-2026-08-28-12's row records.
+        // Registering a `Drop` body makes the buffer observably live and turns
+        // the mask off — which is how a bodies-only first cut of THIS fix
+        // produced a fresh 3-byte leak, the same trap one direction over.
+        let fresh_struct_literal = matches!(&value.kind, ExprKind::StructLiteral { path, .. }
+        if path.len() == 1
+            && path.last().is_some_and(|n| {
+                self.type_decls.struct_types.contains_key(n.as_str())
+                    && !self.type_decls.shared_types.contains_key(n.as_str())
+            }));
+        let fresh_call = fresh;
+        let fresh = fresh || fresh_struct_literal;
 
         // Place-source (`let S { a, b } = s`) where the source struct `s` is
         // CALLEE-OWNED — a bare by-value param deep-copied at entry (#14/#17
@@ -11398,13 +11446,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_extract_value(sv, idx as u32, "sfield.discard")
                 {
-                    // FRESH source only (see the `fresh` guard above), and
-                    // BODIES only: unlike the tuple path, a fresh STRUCT source
-                    // already carries its own drop for the whole aggregate, so
-                    // freeing the discarded field here is a second free —
-                    // measured as an ASAN `double-free` on
-                    // `let W { r: _, n } = mk()` at a heap-carrying field.
-                    self.run_discarded_leaf_user_drop_bodies(&field_te, elem, false);
+                    // FRESH source only (see the `fresh` guard above), and the
+                    // MEMORY half follows the SOURCE KIND — the per-site
+                    // `free_memory` split, answered by measurement at each site
+                    // rather than inferred from freshness:
+                    //
+                    //   * a CALL temp is already owned for the whole aggregate,
+                    //     so freeing the discarded field here is a SECOND free
+                    //     — measured as an ASAN `double-free` on
+                    //     `let W { r: _, n } = mk()` at a heap-carrying field
+                    //     (B-2026-08-28-12);
+                    //   * a struct LITERAL temp is owned by nothing, so NOT
+                    //     freeing here leaks it — measured under valgrind at
+                    //     3 bytes on the same field, once the body this arm
+                    //     registers makes the buffer live enough to survive DCE
+                    //     (B-2026-08-28-29).
+                    //
+                    // This arm is therefore the literal source's sole owner of
+                    // a discarded Drop-bearing field, which is why the
+                    // unbound-field arm at the bottom of the loop stays on
+                    // `fresh_call`: both claiming it aborts at 12 frees for 11
+                    // allocs. A discarded field whose type has no `Drop` gets no
+                    // walker here and so no owner either — a pre-existing leak
+                    // on this source, unchanged by this fix and filed on its own
+                    // row rather than folded in.
+                    self.run_discarded_leaf_user_drop_bodies(&field_te, elem, fresh_struct_literal);
                 }
             }
 
@@ -11416,7 +11482,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 // further down does not register a SECOND one for the same
                 // payload. See the comment there.
                 let mut leaf_cleanup_registered = false;
-                if fresh && self.destructure_field_needs_cleanup(&field_te) {
+                // B-2026-08-28-29 root (b) — the leaf's user `Drop` BODY, which
+                // this arm never registered: `track_owned_destructure_field_cleanup`
+                // is memory-only, so a bound leaf whose type declares `impl Drop`
+                // had its buffers freed and its body silently skipped, on both
+                // compiled backends, while the interpreter ran it. The TUPLE
+                // path has carried the equivalent since B-2026-08-28-1
+                // (`track_destructure_leaf_cleanup`'s struct arm); this is the
+                // same cascade, now shared rather than transplanted.
+                //
+                // Both fresh sources hand the leaf an unowned aggregate — the
+                // call temp because its own cleanup is suppressed once a leaf
+                // takes it, the literal because nothing ever owned it — so the
+                // leaf takes the whole-value WRAPPER (body + fields + memory in
+                // one action) and the memory registration below is skipped for
+                // it. `owns_memory` stays a parameter because the tuple path's
+                // wildcard sibling answers it differently at the same type.
+                let leaf_struct_name = match &field_te.kind {
+                    TypeKind::Path(p) => p.segments.last().cloned().filter(|s| {
+                        self.type_decls.struct_types.contains_key(s.as_str())
+                            && !self.type_decls.shared_types.contains_key(s.as_str())
+                    }),
+                    _ => None,
+                };
+                let wrapper_took_memory = match (&leaf_struct_name, fresh) {
+                    (Some(tn), true) => {
+                        let tn = tn.clone();
+                        match self.variables.get(&name).copied() {
+                            Some(slot) => self.track_destructure_struct_leaf_user_drop(
+                                &tn, &name, slot.ptr, true,
+                            ),
+                            None => false,
+                        }
+                    }
+                    _ => false,
+                };
+                if wrapper_took_memory {
+                    leaf_cleanup_registered = true;
+                } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
                     if let Some(slot) = self.variables.get(&name).copied() {
                         self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
                         leaf_cleanup_registered = true;
@@ -11604,7 +11707,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-            } else if (fresh || boxed_view_src) && self.destructure_field_needs_cleanup(&field_te) {
+            // B-2026-08-28-29 — `fresh_call`, NOT the literal-widened `fresh`.
+            // A discarded field of a struct-LITERAL source is claimed by the
+            // discard walker higher in this loop; letting this arm claim it too
+            // aborts at 12 frees for 11 allocs (measured). The bound-leaf arms
+            // above take the widened flag, because a bound leaf moves the field
+            // out and nothing else follows it.
+            } else if (fresh_call || boxed_view_src)
+                && self.destructure_field_needs_cleanup(&field_te)
+            {
                 // Unbound heap field (`items: _` or dropped by `..`): no
                 // binding to free it, so stash a copy in a synthetic slot and
                 // queue its cleanup — otherwise the buffer leaks.
@@ -12224,6 +12335,108 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `register_user_bodies` is false only when the SOURCE already owns the
     /// leaf's user `Drop` body (a by-value tuple param — see the call site);
     /// the leaf then keeps its pre-existing memory-only registration.
+    /// The user-`Drop` half of a destructure LEAF whose type is a non-shared
+    /// struct, in the two ownership flavours the leaf sources need. Returns
+    /// `true` when it registered an action that ALSO owns the leaf's memory, so
+    /// the caller must not add a memory drop of its own.
+    ///
+    /// The three arms are the simple-`let` path's cascade, and keeping them in
+    /// this order matters:
+    ///
+    ///   * an own `impl Drop` routes through the `karac_drop_<T>` WRAPPER,
+    ///     which is body + fields + memory in ONE action, so it must REPLACE
+    ///     the caller's memory registration rather than join it — registering
+    ///     both frees the same buffers twice;
+    ///   * a type with no `Drop` of its own but a Drop-bearing FIELD has no
+    ///     wrapper to hang off (nothing builds one for such a type), so it
+    ///     takes the field-bodies walk on the `UserDrop` channel PLUS the
+    ///     caller's ordinary memory drop — disjoint work on one slot, which is
+    ///     what keeps that arm additive;
+    ///   * everything else registers nothing here and keeps the caller's
+    ///     memory-only behaviour byte for byte.
+    ///
+    /// `UserDrop` is the channel rather than `StructDrop` because only
+    /// `UserDrop` fires at the binding's NLL live-range end, which is where the
+    /// interpreter places the body. On `StructDrop` the body would print after
+    /// the statements following the leaf's last use — a run-vs-build divergence
+    /// in the exact output the parity gate compares.
+    ///
+    /// B-2026-08-28-29 — `owns_memory` is the parameter that lets the STRUCT
+    /// destructure share this, and it is the whole safety argument for doing
+    /// so. A fresh CALL source hands the leaf an aggregate nothing else owns,
+    /// so the wrapper is right there. A fresh struct LITERAL source does NOT:
+    /// its temp already carries a whole-aggregate drop (measured — the
+    /// programs are leak-clean today with no leaf registration at all), so a
+    /// leaf taking the wrapper would free the same buffers a second time. That
+    /// source passes `false` and gets the BODIES-ONLY walker instead, which is
+    /// the same per-site `free_memory` split B-2026-08-28-12 established by
+    /// measurement and B-2026-08-28-36 and -40 re-measured.
+    fn track_destructure_struct_leaf_user_drop(
+        &mut self,
+        tn: &str,
+        name: &str,
+        alloca: PointerValue<'ctx>,
+        owns_memory: bool,
+    ) -> bool {
+        let declares_drop = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(tn));
+        if owns_memory {
+            // Gated on the wrapper EXISTING, not merely on the type declaring
+            // Drop: `track_user_drop_var` returns silently when the cache has
+            // no entry, and taking this arm on a miss would suppress the
+            // caller's memory registration too and turn a missing body into a
+            // leak.
+            if let Some(drop_fn) = declares_drop
+                .then(|| self.drop_rc.user_drop_wrapper_fns.get(tn).copied())
+                .flatten()
+            {
+                self.track_user_drop_var_with_fn(
+                    tn,
+                    name,
+                    alloca,
+                    drop_fn,
+                    UserDropKind::OwnWrapper,
+                );
+                return true;
+            }
+        } else if declares_drop {
+            // BODIES ONLY — the memory belongs to the source aggregate. The
+            // same walker the wildcard leaf uses, which for a struct name emits
+            // the own `<T>.drop` plus the field-bodies walk and frees nothing.
+            if let Some(w) = self.emit_struct_user_drop_bodies_only_fn(tn) {
+                self.track_user_drop_var_with_fn(
+                    tn,
+                    name,
+                    alloca,
+                    w,
+                    UserDropKind::StructFieldBodies,
+                );
+            }
+            return false;
+        }
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(tn, &i))
+            .unwrap_or_default();
+        if self.type_runs_user_drop_mono(tn, &subst) {
+            if let Some(bodies_fn) = self.emit_user_drop_field_bodies_fn(tn, &subst) {
+                self.track_user_drop_var_with_fn(
+                    tn,
+                    name,
+                    alloca,
+                    bodies_fn,
+                    UserDropKind::StructFieldBodies,
+                );
+            }
+        }
+        false
+    }
+
     fn track_destructure_leaf_cleanup(
         &mut self,
         name: &str,
@@ -12355,45 +12568,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `StructDrop` the body would print after the statements
                 // following the leaf's last use — a run-vs-build divergence in
                 // the exact output the parity gate compares.
-                let wrapper = (register_user_bodies
-                    && self
-                        .program_snapshot
-                        .as_deref()
-                        .is_some_and(|p| p.drop_method_keys.contains_key(&tn)))
-                .then(|| self.drop_rc.user_drop_wrapper_fns.get(&tn).copied())
-                .flatten();
-                if let Some(drop_fn) = wrapper {
-                    // Gated on the wrapper EXISTING, not merely on the type
-                    // declaring Drop: `track_user_drop_var` returns silently
-                    // when the cache has no entry, and taking this arm on a
-                    // miss would drop the memory registration too and turn a
-                    // missing body into a leak.
-                    self.track_user_drop_var_with_fn(
-                        &tn,
-                        name,
-                        alloca,
-                        drop_fn,
-                        UserDropKind::OwnWrapper,
-                    );
+                if register_user_bodies
+                    && self.track_destructure_struct_leaf_user_drop(&tn, name, alloca, true)
+                {
                     return;
-                }
-                let subst = self
-                    .type_decls
-                    .enum_inst_var_types
-                    .get(name)
-                    .cloned()
-                    .map(|i| self.generic_struct_subst_from_inst(&tn, &i))
-                    .unwrap_or_default();
-                if register_user_bodies && self.type_runs_user_drop_mono(&tn, &subst) {
-                    if let Some(bodies_fn) = self.emit_user_drop_field_bodies_fn(&tn, &subst) {
-                        self.track_user_drop_var_with_fn(
-                            &tn,
-                            name,
-                            alloca,
-                            bodies_fn,
-                            UserDropKind::StructFieldBodies,
-                        );
-                    }
                 }
                 self.track_struct_var(&tn, alloca);
             }

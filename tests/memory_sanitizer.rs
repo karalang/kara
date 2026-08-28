@@ -1262,6 +1262,97 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-29 — a fresh-struct-source destructure owns its leaf's heap
+    /// exactly once, at each of the four (source x leaf) combinations.
+    ///
+    /// The body half was a run-vs-build divergence. This is the half that
+    /// decides whether closing it is safe, and the row named the risk in
+    /// advance: "adding a body to a discarded fresh struct element WITHOUT
+    /// checking ownership produced an ASAN `double-free`, since a fresh struct
+    /// temp — unlike a fresh TUPLE temp — already carries its own
+    /// whole-aggregate drop. Any fix here must answer 'who already frees this'
+    /// per source kind rather than assuming freshness implies unowned."
+    ///
+    /// Measured, the answer is not uniform, and BOTH errors were reached before
+    /// the split below settled:
+    ///
+    ///   * a BOUND leaf over a struct LITERAL owns the field outright — it
+    ///     moves out, and nothing follows it. Leaving the memory registration
+    ///     on the narrow `fresh` LEAKED 3 bytes here;
+    ///   * an UNBOUND field over the same source is claimed by the discard
+    ///     walker instead, and letting the unbound-field arm claim it as well
+    ///     ABORTED at 12 frees for 11 allocs.
+    ///
+    /// The `-control` rows are the shapes that were already balanced and had to
+    /// stay so; `no-drop-*` carries no `Drop` at all, which is what proves the
+    /// memory answers are about ownership rather than about the body.
+    #[test]
+    fn asan_fresh_struct_source_destructure_owns_its_leaf_once() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+             struct W { r: R, n: i64 }\n\
+             fn mk() -> W { W { r: R { id: 41, name: f\"n{41}\" }, n: 1 } }\n";
+        assert_clean_asan_run(
+            &format!("{H}fn main() {{ let W {{ r, n }} = mk(); println(f\"{{n}}\") }}\n"),
+            &["drop 41 n41", "1"],
+            "bound-call",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let W {{ r, n }} = W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }};\n\
+             \x20            println(f\"{{n}}\") }}\n"
+            ),
+            &["drop 41 n41", "1"],
+            "bound-literal",
+        );
+        // The row's own double-free warning, at the arm where it is real.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let W {{ r: _, n }} = W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }};\n\
+             \x20            println(f\"{{n}}\") }}\n"
+            ),
+            &["drop 41 n41", "1"],
+            "wildcard-literal",
+        );
+        assert_clean_asan_run(
+            &format!("{H}fn main() {{ let W {{ r: _, n }} = mk(); println(f\"{{n}}\") }}\n"),
+            &["drop 41 n41", "1"],
+            "wildcard-call-control",
+        );
+        // A CONSUMED leaf — the buffer outlives the destructure and is read
+        // before it dies, so a wrong owner shows up as a use-after-free rather
+        // than as a count.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let W {{ r, n }} = mk(); println(f\"{{r.name}} {{n}}\") }}\n"
+            ),
+            &["n41 1", "drop 41 n41"],
+            "consumed-leaf",
+        );
+        // NO `Drop` anywhere. The bound-literal row here is a pre-existing
+        // 3-byte LEAK that the same widening closes, and it is the measurement
+        // that shows the literal source owns nothing — no body is in play to
+        // keep the buffer alive, so DCE cannot be masking the answer.
+        const N: &str = "struct R { id: i64, name: String }\n\
+             struct W { r: R, n: i64 }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn main() {{ let W {{ r, n }} = W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }};\n\
+             \x20            println(f\"{{r.name}} {{n}}\") }}\n"
+            ),
+            &["n41 1"],
+            "no-drop-bound-literal",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{N}fn mk() -> W {{ W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }} }}\n\
+             \x20            fn main() {{ let W {{ r, n }} = mk(); println(f\"{{r.name}} {{n}}\") }}\n"
+            ),
+            &["n41 1"],
+            "no-drop-bound-call-control",
+        );
+    }
+
     /// B-2026-08-28-43 — a BARE unit variant of an own-`impl Drop` enum is
     /// owned exactly once at each fresh-temp position.
     ///
