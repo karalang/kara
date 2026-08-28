@@ -1734,16 +1734,96 @@ fn main() {
             "result-nested-struct-heap",
         );
         // MOVED OUT by a consuming arm — the destination owns the payload, so
-        // the source's walk must stay retracted. A per-owner rather than
-        // per-value widening double-frees here.
+        // the source's walk must stay retracted and the BINDING's registration
+        // is the only one that fires. A per-owner rather than per-value
+        // widening double-frees here.
+        //
+        // The expectation was `got` alone when written, because the arm
+        // binding ran no body at all; B-2026-08-28-63 gave it one. The memory
+        // claim is untouched — one body, one free.
         assert_clean_asan_run(
             &format!(
                 "{H}fn main() {{ let o: Option[E] = Some(E.A(f\"n{{7}}\"));\n\
              \x20            match o {{ Some(e) => {{ println(\"got\") }}\n\
              \x20                       None => {{ println(\"none\") }} }} }}\n"
             ),
-            &["got"],
+            &["got", "drop E"],
             "consuming-match-moved-out",
+        );
+    }
+
+    /// B-2026-08-28-63 — the memory half of running a consuming arm's bound
+    /// ENUM payload's `Drop` body.
+    ///
+    /// The registration is bodies-only (`__karac_dropbodies_only_<E>` runs the
+    /// own body plus the live variant's payload walk and frees nothing), while
+    /// the payload's MEMORY stays with `track_enum_var`'s `EnumDrop` on the
+    /// inline slot or with the box drop on the wide one. Two actions over one
+    /// slot is the arrangement that double-frees if the bodies leg also freed,
+    /// so every row carries a heap `String` the newly-running body reads.
+    ///
+    /// `escaping-tail` is the row that holds the consumption gate: the arm's
+    /// value IS the binding, so the match result owns it and the arm must
+    /// register nothing. Without the gate this is a double free, not just a
+    /// doubled line.
+    #[test]
+    fn asan_consuming_arm_enum_payload_bodies_are_memory_balanced() {
+        const H: &str = "enum G { A(String), B }\n\
+             impl Drop for G { fn drop(mut ref self) { println(\"drop G\") } }\n";
+        // BOXED payload — wider than the `Option` area, so the box owns the
+        // memory and the bodies walk must only read it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            match o {{ Some(g) => {{ println(\"got\") }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+            ),
+            &["got", "drop G"],
+            "boxed-heap-payload",
+        );
+        // INLINE payload whose PAYLOAD STRUCT owns the heap — the other
+        // registration site, reached through `track_enum_var`'s slot.
+        assert_clean_asan_run(
+            "enum H2 { A(R2), B }\n\
+             struct R2 { id: i64, name: String }\n\
+             impl Drop for R2 { fn drop(mut ref self) { println(f\"drop R{self.name}\") } }\n\
+             fn main() { let r: Result[H2, i64] = Ok(H2.A(R2 { id: 5, name: f\"n{5}\" }));\n\
+             \x20            match r { Ok(h) => { println(\"got\") }\n\
+             \x20                      Err(n) => { println(\"err\") } } }\n",
+            &["got", "drop Rn5"],
+            "inline-nested-struct-heap",
+        );
+        // ESCAPING — the arm hands the payload to the match's result. The
+        // consumption gate must keep the arm from registering, or the body and
+        // the free both run twice.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            let k = match o {{ Some(g) => {{ g }} None => {{ G.B }} }};\n\
+             \x20            println(\"kept\"); }}\n"
+            ),
+            &["drop G", "kept"],
+            "escaping-tail",
+        );
+        // MOVED to a sink — the callee's owned param owns it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn sink(g: G) {{ println(\"sank\") }}\n\
+             fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            match o {{ Some(g) => {{ sink(g) }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+            ),
+            &["sank", "drop G"],
+            "moved-to-sink",
+        );
+        // IF LET — the second registration path, same claim.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            if let Some(g) = o {{ println(\"got\") }} }}\n"
+            ),
+            &["got", "drop G"],
+            "if-let",
         );
     }
 

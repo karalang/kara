@@ -209,8 +209,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
+        // B-2026-08-28-63 — the `if let` / `while let` copy of the `match`
+        // arm's borrowed-only set. Same gate, same reason: a payload binding
+        // the block CONSUMES has handed its `Drop` body to whoever took it.
+        let saved_arm_borrowed_names =
+            std::mem::take(&mut self.pattern_state.pattern_binding_arm_borrowed_only_names);
+        {
+            let mut names: Vec<String> = Vec::new();
+            Self::collect_variant_payload_binding_names(pattern, false, &mut names);
+            self.pattern_state.pattern_binding_arm_borrowed_only_names = names
+                .into_iter()
+                .filter(|n| super::consume_class::binding_only_borrowed_block(n, then_block))
+                .collect();
+        }
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
+        self.pattern_state.pattern_binding_arm_borrowed_only_names = saved_arm_borrowed_names;
         self.pattern_state.current_variant_payload_bindings.clear();
         bind_res?;
         // Slice 3s (B-2026-07-01-12): clone an ESCAPING borrow-mode payload
@@ -612,8 +626,22 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
+        // B-2026-08-28-63 — the `if let` / `while let` copy of the `match`
+        // arm's borrowed-only set. Same gate, same reason: a payload binding
+        // the block CONSUMES has handed its `Drop` body to whoever took it.
+        let saved_arm_borrowed_names =
+            std::mem::take(&mut self.pattern_state.pattern_binding_arm_borrowed_only_names);
+        {
+            let mut names: Vec<String> = Vec::new();
+            Self::collect_variant_payload_binding_names(pattern, false, &mut names);
+            self.pattern_state.pattern_binding_arm_borrowed_only_names = names
+                .into_iter()
+                .filter(|n| super::consume_class::binding_only_borrowed_block(n, body))
+                .collect();
+        }
         let bind_res = self.bind_pattern_values(pattern, val);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
+        self.pattern_state.pattern_binding_arm_borrowed_only_names = saved_arm_borrowed_names;
         self.pattern_state.current_variant_payload_bindings.clear();
         bind_res?;
         if self.pattern_state.pattern_binding_is_borrow {

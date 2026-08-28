@@ -14021,6 +14021,142 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-63 — a consuming `match` / `if let` arm that binds an ENUM
+    /// payload out runs that enum's `Drop` body, exactly as the same arm
+    /// binding a STRUCT payload already did.
+    ///
+    /// `struct-control` is what localizes the bug: identical program one type
+    /// over, correct on every backend before the fix. The enum spelling ran
+    /// NOTHING anywhere — agreed silence, so no A/B gate could report it — and
+    /// the reason is that the arm's registration was struct-keyed on both
+    /// sides (`track_enum_var` registers the payload's MEMORY and no body).
+    ///
+    /// `boxed-heap-payload` is the second registration site. An enum wider than
+    /// the `Option` payload area is heap-boxed, so the inline arm declines on
+    /// word count and a different branch has to carry it. It is here because
+    /// fixing only the inline one made the interpreter fire where codegen
+    /// stayed silent — turning agreed silence into a real divergence, which is
+    /// worse than the bug.
+    ///
+    /// `escaping-enum-tail` is what keeps the new registration from
+    /// double-firing: an arm whose VALUE is the binding hands it to the match's
+    /// result, which registers its own drop, so registering here as well would
+    /// run the body twice. The gate is the arm's consumption classifier.
+    ///
+    /// The STRUCT spelling of that shape is NOT pinned here, deliberately: it
+    /// already printed the body twice on both compiled backends against the
+    /// interpreter's one, long before any enum registration existed, and it is
+    /// filed on its own row. Applying this same gate to the struct arm was
+    /// tried and reverted — it suppressed three bodies that must run
+    /// (`e2e_let_else_moved_payload_single_drop`,
+    /// `e2e_owned_self_enum_receiver_single_fire`,
+    /// `test_e2e_result_struct_payload_field_freed_and_single_body`), because
+    /// the classifier calls "consuming" several shapes that transfer nothing,
+    /// and `let ... else` never populates the set at all. That is a separate
+    /// slice, not a rider on this one.
+    #[test]
+    fn e2e_consuming_arm_runs_the_bound_enum_payloads_drop_body() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             enum G { A(String), B }\n\
+             impl Drop for G { fn drop(mut ref self) { println(\"drop G\") } }\n\
+             enum H { A(R), B }\n\
+             enum J { A(i64), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn sink(e: E) { println(\"sank\") }\n";
+        for (label, body, want) in [
+            (
+                "match-enum-payload",
+                "fn main() { let o: Option[E] = Some(E.A(R { id: 1 }));\n\
+                 \x20            match o { Some(e) => { println(\"got\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "got\ndrop E\ndrop R1\n",
+            ),
+            (
+                "if-let-enum-payload",
+                "fn main() { let o: Option[E] = Some(E.B);\n\
+                 \x20            if let Some(e) = o { println(\"got\") } }\n",
+                "got\ndrop E\n",
+            ),
+            (
+                "result-enum-payload",
+                "fn main() { let o: Result[E, i64] = Ok(E.B);\n\
+                 \x20            match o { Ok(e) => { println(\"got\") }\n\
+                 \x20                      Err(n) => { println(\"err\") } } }\n",
+                "got\ndrop E\n",
+            ),
+            // -54's predicate at this position: no own `Drop`, Drop-bearing
+            // payload.
+            (
+                "payload-only-enum",
+                "fn main() { let o: Option[H] = Some(H.A(R { id: 4 }));\n\
+                 \x20            match o { Some(h) => { println(\"got\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "got\ndrop R4\n",
+            ),
+            // The BOXED registration site — payload wider than the area.
+            (
+                "boxed-heap-payload",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            match o { Some(g) => { println(\"got\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "got\ndrop G\n",
+            ),
+            // CONTROL — the struct spelling, correct before the fix, pinned so
+            // the two cannot drift apart.
+            (
+                "struct-control",
+                "fn main() { let o: Option[R] = Some(R { id: 2 });\n\
+                 \x20            match o { Some(r) => { println(\"got\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "got\ndrop R2\n",
+            ),
+            // ESCAPING — the arm's value IS the binding, so the match result
+            // owns it and only the destination fires. The struct spelling of
+            // this printed the body twice on both compiled backends before the
+            // consumption gate went in.
+            (
+                "escaping-enum-tail",
+                "fn main() { let o: Option[E] = Some(E.B);\n\
+                 \x20            let k = match o { Some(e) => { e } None => { E.B } };\n\
+                 \x20            println(\"kept\"); }\n",
+                "drop E\nkept\n",
+            ),
+            // MOVED ON to a sink — the callee owns it and fires once.
+            (
+                "moved-to-sink",
+                "fn main() { let o: Option[E] = Some(E.B);\n\
+                 \x20            match o { Some(e) => { sink(e) }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "sank\ndrop E\n",
+            ),
+            // NO-BIND arm — the scrutinee still owns the payload, so its own
+            // walk fires and the arm registers nothing.
+            (
+                "no-bind-wildcard-arm",
+                "fn main() { let o: Option[E] = Some(E.A(R { id: 1 }));\n\
+                 \x20            match o { Some(_) => { println(\"some\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "some\ndrop E\ndrop R1\n",
+            ),
+            // BOUNDARY — an enum with no `Drop` anywhere registers nothing.
+            (
+                "no-drop-enum-payload",
+                "fn main() { let o: Option[J] = Some(J.A(2));\n\
+                 \x20            match o { Some(x) => { println(\"got\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "got\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-28-57 — a fixed `Array[T, N]`'s elements run their user
     /// `Drop` bodies, at the binding's live-range end, on every backend.
     ///

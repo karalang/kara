@@ -78,13 +78,32 @@ impl<'a> super::Interpreter<'a> {
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
                         for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
                         {
-                            let is_drop_struct = match self.env.get(&n) {
+                            // B-2026-08-28-63 — a user ENUM payload is a real
+                            // Drop slot too. The struct-only bind below meant a
+                            // consuming arm that took an enum out
+                            // (`match o { Some(e) => .. }` for `Option[E]`) ran
+                            // NO body for it, while the same arm binding a
+                            // STRUCT payload ran one. Both backends agreed on
+                            // zero, so no A/B gate could report it.
+                            //
+                            // `type_name_runs_user_drop` is the same predicate
+                            // the payload-bodies registration uses, so an enum
+                            // with no `Drop` of its own but a Drop-bearing
+                            // variant payload qualifies here exactly as it does
+                            // there. Option/Result are excluded: a nested
+                            // built-in payload rides its own walker.
+                            let is_drop_binding = match self.env.get(&n) {
                                 Some(Value::Struct { name: tn, .. }) => {
                                     self.program.drop_method_keys.contains_key(&tn)
                                 }
+                                Some(Value::EnumVariant { enum_name: en, .. })
+                                    if en != "Option" && en != "Result" =>
+                                {
+                                    self.type_name_runs_user_drop(&en, &mut Vec::new())
+                                }
                                 _ => false,
                             };
-                            if is_drop_struct {
+                            if is_drop_binding {
                                 self.pending_arm_drop_bindings.push(n);
                             }
                         }
@@ -172,6 +191,25 @@ impl<'a> super::Interpreter<'a> {
                                     fields,
                                 },
                             );
+                        }
+                    // B-2026-08-28-63 — the NON-BLOCK arm body's copy of the
+                    // same widening. A block body drains through
+                    // `eval_block_inner`'s adopted Drop slots (where
+                    // `invoke_user_drop_if_applicable` already answers for an
+                    // enum); this leg fires the leftovers by hand and so needs
+                    // the enum case spelled out: own body first, then the live
+                    // variant's payload bodies — the order every other walk in
+                    // this family uses.
+                    } else if let Some(v @ Value::EnumVariant { .. }) = self.env.get(&n) {
+                        let Value::EnumVariant { enum_name: en, .. } = &v else {
+                            unreachable!("matched EnumVariant above")
+                        };
+                        if en != "Option" && en != "Result" {
+                            let en = en.clone();
+                            if self.program.drop_method_keys.contains_key(&en) {
+                                self.run_user_drop_body_on_value(&en, v.clone());
+                            }
+                            self.run_enum_payload_user_drops_value(&v);
                         }
                     }
                 }
@@ -528,7 +566,7 @@ impl<'a> super::Interpreter<'a> {
         self.type_name_runs_user_drop(head, &mut Vec::new())
     }
 
-    fn type_name_runs_user_drop(&self, name: &str, seen: &mut Vec<String>) -> bool {
+    pub(crate) fn type_name_runs_user_drop(&self, name: &str, seen: &mut Vec<String>) -> bool {
         if self.program.drop_method_keys.contains_key(name) {
             return true;
         }

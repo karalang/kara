@@ -1049,13 +1049,24 @@ impl<'a> super::Interpreter<'a> {
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
                     for n in stash_names {
-                        let is_drop_struct = match self.env.get(&n) {
+                        // B-2026-08-28-63 — the `if let` / `while let` copies of
+                        // the `match` arm gate in `pattern_match.rs`. All three
+                        // bound an enum payload without registering a Drop slot
+                        // for it, so the body ran nowhere; they have to move
+                        // together or the same program prints differently
+                        // depending on which spelling consumed the payload.
+                        let is_drop_binding = match self.env.get(&n) {
                             Some(Value::Struct { name: tn, .. }) => {
                                 self.program.drop_method_keys.contains_key(&tn)
                             }
+                            Some(Value::EnumVariant { enum_name: en, .. })
+                                if en != "Option" && en != "Result" =>
+                            {
+                                self.type_name_runs_user_drop(&en, &mut Vec::new())
+                            }
                             _ => false,
                         };
-                        if is_drop_struct {
+                        if is_drop_binding {
                             self.pending_arm_drop_bindings.push(n);
                         }
                     }
@@ -1190,13 +1201,24 @@ impl<'a> super::Interpreter<'a> {
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
                     for n in stash_names {
-                        let is_drop_struct = match self.env.get(&n) {
+                        // B-2026-08-28-63 — the `if let` / `while let` copies of
+                        // the `match` arm gate in `pattern_match.rs`. All three
+                        // bound an enum payload without registering a Drop slot
+                        // for it, so the body ran nowhere; they have to move
+                        // together or the same program prints differently
+                        // depending on which spelling consumed the payload.
+                        let is_drop_binding = match self.env.get(&n) {
                             Some(Value::Struct { name: tn, .. }) => {
                                 self.program.drop_method_keys.contains_key(&tn)
                             }
+                            Some(Value::EnumVariant { enum_name: en, .. })
+                                if en != "Option" && en != "Result" =>
+                            {
+                                self.type_name_runs_user_drop(&en, &mut Vec::new())
+                            }
                             _ => false,
                         };
-                        if is_drop_struct {
+                        if is_drop_binding {
                             self.pending_arm_drop_bindings.push(n);
                         }
                     }

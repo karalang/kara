@@ -107,6 +107,13 @@ pub(crate) struct PatternState<'ctx> {
     /// Per-ARM, unlike the scrutinee flags around it, because it is a property
     /// of the arm body rather than of the value being matched.
     pub(crate) pattern_binding_arm_only_borrows: bool,
+    /// B-2026-08-28-63 — the payload binding NAMES the arm currently being
+    /// bound merely reads. Per-BINDING where its sibling above is per-arm,
+    /// because a multi-binding pattern can borrow one payload and move
+    /// another. Gates the arm-binding `Drop`-body registration: a consumed
+    /// binding has handed its body to whatever took it, and firing here too
+    /// runs it twice.
+    pub(crate) pattern_binding_arm_borrowed_only_names: std::collections::HashSet<String>,
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
     /// B-2026-08-02-25 (match-arm leg) — the `(slot, walker)` of the armed
     /// `__karac_dropelems_opt_*` / `__karac_dropelems_res_*` payload-bodies

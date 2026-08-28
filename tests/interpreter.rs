@@ -33347,6 +33347,101 @@ fn test_own_drop_enum_member_runs_its_body_when_never_destructured() {
     );
 }
 
+/// B-2026-08-28-63, interpreter leg — the twin of
+/// `codegen::e2e_consuming_arm_runs_the_bound_enum_payloads_drop_body`.
+///
+/// The interpreter's gate was the same struct-only bind, in three copies —
+/// the `match` arm stash in `pattern_match.rs` and the `if let` / `while let`
+/// stashes in `eval_expr.rs` — so all three bound an enum payload without
+/// giving it a Drop slot. They have to move together, or the same program
+/// prints differently depending on which spelling consumed the payload, which
+/// is why `if-let` is a row here beside `match`.
+#[test]
+fn consuming_arm_runs_the_bound_enum_payloads_drop_body() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         enum G { A(String), B }\n\
+         impl Drop for G { fn drop(mut ref self) { println(\"drop G\") } }\n\
+         enum H { A(R), B }\n\
+         enum J { A(i64), B }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+         fn sink(e: E) { println(\"sank\") }\n";
+    for (label, body, want) in [
+        (
+            "match-enum-payload",
+            "fn main() { let o: Option[E] = Some(E.A(R { id: 1 }));\n\
+             \x20            match o { Some(e) => { println(\"got\") }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "got\ndrop E\ndrop R1\n",
+        ),
+        (
+            "if-let-enum-payload",
+            "fn main() { let o: Option[E] = Some(E.B);\n\
+             \x20            if let Some(e) = o { println(\"got\") } }\n",
+            "got\ndrop E\n",
+        ),
+        (
+            "result-enum-payload",
+            "fn main() { let o: Result[E, i64] = Ok(E.B);\n\
+             \x20            match o { Ok(e) => { println(\"got\") }\n\
+             \x20                      Err(n) => { println(\"err\") } } }\n",
+            "got\ndrop E\n",
+        ),
+        (
+            "payload-only-enum",
+            "fn main() { let o: Option[H] = Some(H.A(R { id: 4 }));\n\
+             \x20            match o { Some(h) => { println(\"got\") }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "got\ndrop R4\n",
+        ),
+        (
+            "heap-payload",
+            "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+             \x20            match o { Some(g) => { println(\"got\") }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "got\ndrop G\n",
+        ),
+        (
+            "struct-control",
+            "fn main() { let o: Option[R] = Some(R { id: 2 });\n\
+             \x20            match o { Some(r) => { println(\"got\") }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "got\ndrop R2\n",
+        ),
+        (
+            "escaping-enum-tail",
+            "fn main() { let o: Option[E] = Some(E.B);\n\
+             \x20            let k = match o { Some(e) => { e } None => { E.B } };\n\
+             \x20            println(\"kept\"); }\n",
+            "drop E\nkept\n",
+        ),
+        (
+            "moved-to-sink",
+            "fn main() { let o: Option[E] = Some(E.B);\n\
+             \x20            match o { Some(e) => { sink(e) }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "sank\ndrop E\n",
+        ),
+        (
+            "no-bind-wildcard-arm",
+            "fn main() { let o: Option[E] = Some(E.A(R { id: 1 }));\n\
+             \x20            match o { Some(_) => { println(\"some\") }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "some\ndrop E\ndrop R1\n",
+        ),
+        (
+            "no-drop-enum-payload",
+            "fn main() { let o: Option[J] = Some(J.A(2));\n\
+             \x20            match o { Some(x) => { println(\"got\") }\n\
+             \x20                      None => { println(\"none\") } } }\n",
+            "got\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-57, interpreter leg — the PARITY PIN for the compiled fix.
 ///
 /// Unlike its siblings this one was green before the fix and after it: the
@@ -33486,19 +33581,22 @@ fn own_drop_enum_as_optres_payload_runs_its_body() {
         assert_eq!(run(&format!("{H}{body}")), want, "{label}");
     }
     // The MOVE-OUT peer, and the reason this fix cannot double-fire: a
-    // consuming `match` arm binds the payload out, so the source's walk must
-    // stay retracted. Both backends print `got` and no body here — the
-    // consuming arm losing the bound enum's own body is a SEPARATE
-    // pre-existing gap (measured identical before this fix, and filed on its
-    // own row); what this row pins is that the source does not fire twice.
+    // consuming `match` arm binds the payload out, so the SOURCE's walk must
+    // stay retracted and only the BINDING's registration fires.
+    //
+    // This row read `got` alone when it was written, and said so: the
+    // consuming arm losing the bound enum's body was a separate pre-existing
+    // gap, filed as B-2026-08-28-63 and fixed there. The binding now runs its
+    // body once, which is what the updated expectation pins — the claim is
+    // unchanged (exactly one fire), only the count it was measuring against.
     assert_eq!(
         run(&format!(
             "{H}fn main() {{ let o: Option[E] = Some(E.A(R {{ id: 8 }}));\n\
              \x20            match o {{ Some(e) => {{ println(\"got\") }}\n\
              \x20                       None => {{ println(\"none\") }} }} }}\n"
         )),
-        "got\n",
-        "consuming-match-does-not-double-fire"
+        "got\ndrop E\ndrop R8\n",
+        "consuming-match-fires-exactly-once"
     );
 }
 

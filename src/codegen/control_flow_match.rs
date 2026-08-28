@@ -542,6 +542,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         &arm.body,
                         arm.guard.as_ref(),
                     );
+                // B-2026-08-28-63 — the payload bindings this arm merely READS.
+                // A binding the arm CONSUMES (returns as the arm's value,
+                // passes to a sink, rebinds) has handed its `Drop` body to
+                // whoever took it, so registering one here as well runs the
+                // body twice; measured `dE dE kept` for
+                // `let k = match o { Some(e) => { id(e) } .. }` and
+                // `dR1 dR1 kept` for the struct spelling, against one in the
+                // interpreter. Same classifier the flag above is built from,
+                // applied per BINDING rather than per arm because a
+                // multi-binding pattern can borrow one payload and move
+                // another. Saved/restored: a nested `match` inside this body
+                // rebinds through the same field.
+                let saved_arm_borrowed_names =
+                    std::mem::take(&mut self.pattern_state.pattern_binding_arm_borrowed_only_names);
+                {
+                    let mut names: Vec<String> = Vec::new();
+                    Self::collect_variant_payload_binding_names(&arm.pattern, false, &mut names);
+                    self.pattern_state.pattern_binding_arm_borrowed_only_names = names
+                        .into_iter()
+                        .filter(|n| {
+                            super::consume_class::binding_only_borrowed(n, &arm.body)
+                                && arm.guard.as_ref().is_none_or(|g| {
+                                    super::consume_class::binding_only_borrowed(n, g)
+                                })
+                        })
+                        .collect();
+                }
                 let handled_via_ptr = if let Some((scrut_ptr, pointee_ty)) = scrut_ref_ptr {
                     self.bind_pattern_values_via_ptr(&arm.pattern, scrut_ptr, pointee_ty)?
                         .is_some()
@@ -550,10 +577,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if handled_via_ptr {
                     self.pattern_state.pattern_binding_arm_only_borrows = saved_arm_borrows;
+                    self.pattern_state.pattern_binding_arm_borrowed_only_names =
+                        saved_arm_borrowed_names.clone();
                 }
                 if !handled_via_ptr {
                     self.bind_pattern_values(&arm.pattern, scrut)?;
                     self.pattern_state.pattern_binding_arm_only_borrows = saved_arm_borrows;
+                    self.pattern_state.pattern_binding_arm_borrowed_only_names =
+                        saved_arm_borrowed_names.clone();
                     self.pattern_state.current_variant_payload_bindings.clear();
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)

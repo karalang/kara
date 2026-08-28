@@ -1144,6 +1144,44 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .filter(|_| {
                                     !self.pattern_state.pattern_binding_scrutinee_is_owned_param
                                 });
+                            // B-2026-08-28-63 — a boxed user ENUM payload takes
+                            // this branch too. The inline enum arm below handles
+                            // a payload that fits the area; one wider than it
+                            // (`enum G { A(String), B }` is 4 words against
+                            // `Option`'s 3) is heap-BOXED, so that arm declines
+                            // on word count and the body had no owner at all —
+                            // the same hole this branch was built to close for a
+                            // wide STRUCT payload. Without it the interpreter
+                            // fires the body and neither compiled backend does,
+                            // which is a divergence rather than the agreed
+                            // silence the row started from.
+                            //
+                            // `emit_struct_user_drop_bodies_only_fn` is
+                            // name-driven and already answers for an enum
+                            // (B-2026-08-28-40), so only the type gate and the
+                            // word-count probe need widening.
+                            let tn_is_boxable_payload =
+                                (self.type_decls.struct_types.contains_key(tn)
+                                    || (!matches!(tn, "Option" | "Result")
+                                        && self
+                                            .type_decls
+                                            .enum_layouts
+                                            .get(tn)
+                                            .is_some_and(|l| !l.is_shared)))
+                                    && !self.type_decls.shared_types.contains_key(tn);
+                            let area = self.pattern_state.pattern_binding_scrutinee_optres_area;
+                            let tn_wider_than_area = self
+                                .type_decls
+                                .struct_types
+                                .get(tn)
+                                .map(|st| Self::llvm_type_word_count((*st).into()))
+                                .or_else(|| {
+                                    self.type_decls
+                                        .enum_layouts
+                                        .get(tn)
+                                        .map(|l| Self::llvm_type_word_count(l.llvm_type.into()))
+                                })
+                                .is_some_and(|w| w > area);
                             let is_boxed_optres_drop_payload = self
                                 .pattern_state
                                 .pattern_binding_scrutinee_is_option_result
@@ -1152,17 +1190,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .pattern_binding_scrutinee_is_fresh_owning_temp
                                     || rehome_src.is_some())
                                 && !self.pattern_state.pattern_binding_scrutinee_is_shared_enum
-                                && self.type_decls.struct_types.contains_key(tn)
-                                && !self.type_decls.shared_types.contains_key(tn)
-                                && self.pattern_state.pattern_binding_scrutinee_optres_area > 0
-                                && self.type_decls.struct_types.get(tn).is_some_and(|st| {
-                                    Self::llvm_type_word_count((*st).into())
-                                        > self.pattern_state.pattern_binding_scrutinee_optres_area
-                                })
+                                && tn_is_boxable_payload
+                                && area > 0
+                                && tn_wider_than_area
                                 && self
                                     .pattern_state
                                     .current_variant_payload_bindings
-                                    .contains(name.as_str());
+                                    .contains(name.as_str())
+                                // The consumption gate applies to the ENUM half
+                                // only. A boxed enum the arm hands on — its
+                                // value is the arm's tail, so the match result
+                                // owns it — otherwise runs the body twice
+                                // (measured `drop G drop G kept`, ASAN-clean but
+                                // doubled). The STRUCT half deliberately keeps
+                                // its old admit: applying the same gate there
+                                // suppressed three bodies that must run, because
+                                // the classifier calls "consuming" several
+                                // shapes that transfer nothing and `let ... else`
+                                // never populates the set. That is a separate
+                                // slice; see the row.
+                                && (self.type_decls.struct_types.contains_key(tn)
+                                    || self
+                                        .pattern_state
+                                        .pattern_binding_arm_borrowed_only_names
+                                        .contains(name.as_str()));
                             // B-2026-08-04-2 — record the binding as a VIEW of
                             // the box so each MOVE site can neutralize the box's
                             // inner walk. Deliberately a WIDER gate than the
@@ -1269,6 +1320,49 @@ impl<'ctx> super::Codegen<'ctx> {
                             if is_inline_optres_enum_payload {
                                 let tn = tn.to_string();
                                 self.track_enum_var(&tn, alloca);
+                                // B-2026-08-28-63 — `track_enum_var` registers
+                                // the payload's MEMORY (an `EnumDrop` over the
+                                // binding's slot) and nothing else, so a
+                                // consuming arm that bound an own-`Drop` enum
+                                // out ran no BODY for it — on any backend,
+                                // which is why no A/B gate reported it. The
+                                // struct arm above already splits the two
+                                // channels this way (`track_user_drop_var`
+                                // beside `track_struct_var`); this is the enum
+                                // sibling of that split.
+                                //
+                                // `emit_struct_user_drop_bodies_only_fn` is
+                                // name-driven and already answers for an enum
+                                // (B-2026-08-28-40 gave it the payload-walk
+                                // leg), so it returns own body + live variant's
+                                // payload bodies and frees nothing — which is
+                                // what keeps it from colliding with the
+                                // `EnumDrop` on the same slot. It declines for
+                                // an enum with neither, so a payload-free enum
+                                // registers nothing.
+                                // Only when the arm READS the binding. One it
+                                // consumes — returns as the arm's value, hands
+                                // to a sink, rebinds — has given its body to
+                                // whoever took it, and a registration here runs
+                                // it a second time.
+                                let arm_borrows = self
+                                    .pattern_state
+                                    .pattern_binding_arm_borrowed_only_names
+                                    .contains(name.as_str());
+                                if !arm_borrows {
+                                    // fall through: no bodies registration
+                                } else if let Some(f) =
+                                    self.emit_struct_user_drop_bodies_only_fn(&tn)
+                                {
+                                    let name_owned = name.clone();
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &name_owned,
+                                        alloca,
+                                        f,
+                                        UserDropKind::StructFieldBodies,
+                                    );
+                                }
                             }
                         }
                     }
