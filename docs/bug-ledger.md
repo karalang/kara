@@ -1818,7 +1818,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1679 surfaced
 | B-2026-08-27-47 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { . | fa6d35a |
 | B-2026-08-27-48 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p:… | b0dac13 |
 | B-2026-08-27-50 | codegen | high | A GENERIC FN'S CONTAINER PARAM BOUND TO A FIELD-ACCESS ARGUMENT loses its ELEMENT TYPE, because every resolver that recovers an element keys on the a… | 4e5bdc0 |
-| B-2026-08-27-51 | codegen | medium | `Vec[Option[T]].sort()` IS CHECK-GREEN, SORTS CORRECTLY UNDER `--interp`, AND REFUSES TO BUILD -- `Vec.sort()`'s codegen element-type dispatch has it… | cbc761b |
+| B-2026-08-27-51 | codegen | medium | `Vec[Option[T]].sort()` IS CHECK-GREEN, SORTS CORRECTLY UNDER `--interp`, AND REFUSES TO BUILD -- `Vec.sort()`'s codegen element-type dispatch has it… | 12b88f9 |
 | B-2026-08-27-52 | codegen | high | A READ-ONLY `ref` CONTAINER PARAM OF A GENERIC CALLEE, GIVEN A STRUCT-FIELD ARGUMENT, DOUBLE-FREES the field's buffer: the mono argument path compute… | 4e5bdc0 |
 
 </details>
