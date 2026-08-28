@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 309 | 1 |
 | leak | 206 | 0 |
 | missing-feature | 187 | 0 |
-| run-vs-build | 183 | 3 |
-| codegen-gap | 143 | 0 |
+| run-vs-build | 185 | 4 |
+| codegen-gap | 144 | 1 |
 | double-free | 142 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
+| soundness | 63 | 1 |
 | other | 63 | 0 |
-| soundness | 62 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1110 | 3 |
+| codegen | 1114 | 7 |
 | typecheck | 278 | 0 |
-| interp | 197 | 1 |
+| interp | 199 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,16 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1671 surfaced · 4 open · 1641 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1675 surfaced · 7 open · 1642 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-27-48 | 2026-08-27 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; r.id + n }` prints `drop 41` twice under `karac run --interp` and once under `karac build`. Isolated to the destructuring -- a bare struct param and a tuple param read by FIELD are both correct -- so the param's own drop and the binding's drop both fire. The interpreter-side twin of B-2026-08-27-37, which was codegen's DOUBLE FREE on the same source shape | — |
 | B-2026-08-27-49 | 2026-08-27 | codegen | medium | A FIELD READ ON A BLOCK-EXPRESSION RECEIVER never lowers: `{ let x = make(); x }.n` fails `karac build` with "codegen: cannot resolve field 'n' on this receiver (its type was not recorded for codegen)", while `karac check` accepts it and the interpreter answers it. Binding the block to a local first (`let t = { ... }; t.n`) builds and runs. It reaches ordinary source through a LOWERING: `rewrite_enum_literal_method_call` rewrites `Color.Red.to_tag().n` into exactly this shape, so a program containing no block at all fails to build with a diagnostic naming a receiver the author never wrote. | — |
 | B-2026-08-27-50 | 2026-08-27 | codegen | high | A GENERIC FN'S CONTAINER PARAM BOUND TO A FIELD-ACCESS ARGUMENT loses its ELEMENT TYPE, because every resolver that recovers an element keys on the argument's BINDING NAME and a field access has none. `swap01(mut self.xs)` from a generic-impl method swaps 8 bytes of a 16-byte tuple element -- SILENT wrong answer on the compiled backends, correct under the interpreter -- and SEGFAULTS at a String element. NOT tuple-specific, which is what separates it from B-2026-08-27-40 | — |
 | B-2026-08-27-51 | 2026-08-27 | codegen | medium | `Vec[Option[T]].sort()` IS CHECK-GREEN, SORTS CORRECTLY UNDER `--interp`, AND REFUSES TO BUILD -- `Vec.sort()`'s codegen element-type dispatch has its own gate, independent of `type_supports_ord`, so B-2026-08-27-47's narrowing does not reach it. Loud, not silent. | — |
+| B-2026-08-28-1 | 2026-08-28 | codegen | high | BOTH COMPILED BACKENDS RUN NO USER `Drop` BODY AT ALL for a struct DESTRUCTURED out of a tuple that is NOT a param -- a tuple LOCAL or a CALL RESULT: `let p = (R { id: 41 }, 1); let (r, n) = p;` prints `drop 41` under `karac run --interp` and NOTHING under `karac run` or `karac build`. Measured 0 of 40 bodies over a loop. The BUFFERS are still freed (peak RSS flat at ~2.3 MB across 300k iterations, matching the non-destructuring control), so this is the OBSERVABLE-EFFECTS half of drop only -- and it is the SHIPPED path that is wrong, which is the exact reason B-2026-08-27-48 stayed medium and this does not | — |
+| B-2026-08-28-2 | 2026-08-28 | interp+codegen | medium | A user `Drop` body runs TWICE FOR ONE OBJECT on ALL THREE BACKENDS when a struct destructured out of a tuple param is RETURNED: `fn take(p: (R, i64)) -> R { let (r, n) = p; r }` prints `drop 41` twice under `--interp`, LLJIT and AOT alike. Only one `R` is ever constructed. Backend-CONSISTENT, which is why no run-vs-build parity test can see it -- the whole destructure matrix agrees here, at the wrong number | — |
+| B-2026-08-28-3 | 2026-08-28 | codegen | medium | A STRUCT FIELD READ THROUGH A TUPLE ELEMENT never lowers when the tuple came from a CALL: `let q = make(); q.0.id` (and `make().0.id`) fail `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)", while the SAME read on a tuple LITERAL local (`let q = (R { id: 41 }, 1); q.0.id`) builds and runs. `karac check` accepts both and the interpreter answers both. One more unhandled receiver shape on the surface B-2026-08-27-49 is open against | — |
+| B-2026-08-28-4 | 2026-08-28 | interp+codegen | medium | A tuple-param destructure inside a CLOSURE is wrong on BOTH backends and in OPPOSITE directions: `let f = |p: (R, i64)| { let (r, n) = p; r.id + n };` runs the user `Drop` body TWICE under `karac run --interp` and ZERO times under `karac build`, for one object. The free-fn spelling of the same body is correct (1/1/1) after B-2026-08-27-48, which is what makes the closure the variable | — |
 
 ### Relocated (2)
 
@@ -165,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1671 surfaced
 
 </details>
 
-### Fixed (1641)
+### Fixed (1642)
 
-<details><summary>1641 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1642 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1812,6 +1815,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1671 surfaced
 | B-2026-08-27-45 | interp+codegen | low | `Slice[T]` ORDERING operators never lower, while `karac check` accepts them -- the last member of the tuple/array family: `a < b` on two `Slice[i64]`… | 5c715cb |
 | B-2026-08-27-46 | interp | high | `.cmp()` WITH AN ENUM-VARIANT LITERAL AS THE RECEIVER answers a CONSTANT under the interpreter, independent of both operands -- `E.A.cmp(E.B)`, `E.B.… | 87210fe |
 | B-2026-08-27-47 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { . | fa6d35a |
+| B-2026-08-27-48 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p:… | b0dac13 |
 
 </details>
 
