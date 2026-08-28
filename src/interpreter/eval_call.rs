@@ -2650,7 +2650,46 @@ impl<'a> super::Interpreter<'a> {
                 // interpreter's value model releases the memory when the
                 // `Value` is dropped, exactly as on the working `let`-bound
                 // path (`invoke_user_drop_if_applicable`'s no-own-Drop arm).
-                self.drop_user_drop_fields_of_value(v);
+                //
+                // B-2026-08-28-17 — but not the fields the callee hands BACK.
+                // The whole-param passthrough guard at the top of this loop only
+                // fires when the callee returns `w` bare; one that extracts a
+                // field and returns THAT (`fn take(w: W) -> R { let W { r, n } =
+                // w; r }`, or the `w.r` spelling) slips past it, so `r`'s body
+                // ran here and again at the result's owner. Skipping the whole
+                // walk instead loses the bodies of the fields that really do die
+                // in the call (`struct W { a: R, b: R }` returning `a` needs
+                // `b`'s), so the escaping fields are masked out individually.
+                //
+                // Masking the VALUE rather than threading a gate through the
+                // walker is the B-2026-08-03-8 pattern, and works for the same
+                // reason: the walk resolves each declared field through
+                // `fields.get(..)` and skips a missing one, so its two dozen
+                // other callers are untouched. Codegen twin: the struct arm of
+                // `track_inline_owned_aggregate_arg_inst` re-emits the walker
+                // with the same field indices masked.
+                let escaping: Vec<String> = self
+                    .callee_returned_param_parts(callee_name, i)
+                    .into_iter()
+                    .filter_map(|p| match p {
+                        crate::ast::ParamPart::Field(n) => Some(n),
+                        crate::ast::ParamPart::TupleIndex(_) => None,
+                    })
+                    .collect();
+                match v {
+                    super::value::Value::Struct { name, fields } if !escaping.is_empty() => {
+                        let mut fields = fields.clone();
+                        for f in &escaping {
+                            fields.remove(f);
+                        }
+                        let masked = super::value::Value::Struct {
+                            name: name.clone(),
+                            fields,
+                        };
+                        self.drop_user_drop_fields_of_value(&masked);
+                    }
+                    _ => self.drop_user_drop_fields_of_value(v),
+                }
             }
         }
     }

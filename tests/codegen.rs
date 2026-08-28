@@ -12372,6 +12372,183 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-17 — the STRUCT twin of
+    /// `e2e_user_drop_body_of_a_returned_tuple_param_element_runs_once`: a
+    /// field extracted out of an owned STRUCT param and returned ran its user
+    /// `Drop` body TWICE. Same two owners as the tuple leg — the caller-side
+    /// fresh-temp argument walk, which fires every Drop-bearing field of a
+    /// struct-LITERAL argument on the theory that the whole temp dies inside
+    /// the call, plus the result binding's own live-range end — and
+    /// backend-consistent for the same reason, so no parity harness saw it.
+    ///
+    /// The fix is the same shape as the tuple one and reuses its analysis:
+    /// `fn_returns_param_parts` already emitted `ParamPart::Field`, and what
+    /// was missing was a per-field caller-side site to apply it at. Codegen
+    /// masks the escaping indices out of `__karac_dropbodies_<T>` (the
+    /// pre-existing `_skipping` emitter, whose symbol name folds in the
+    /// surviving index list); the interpreter removes the fields from the
+    /// `Value::Struct` before the walk, the B-2026-08-03-8 masking pattern.
+    ///
+    /// `two-droppers-a` / `two-droppers-b` are the rows that constrain the fix
+    /// rather than just reproducing the bug, and they are why the mask is
+    /// per-FIELD. Suppressing the walk for the whole argument — the obvious
+    /// reading of "the callee returns it" — fixes the escaping field and takes
+    /// the OTHER field's body from one to zero. Both orders are pinned so a
+    /// mask that is off by one field fails one of them.
+    ///
+    /// `projection-return` shows the trigger is not the destructure the row
+    /// was filed against: `w.r` returned directly is the same defect with no
+    /// `let` anywhere, exactly as `p.0` was on the tuple leg. What the
+    /// spellings share is that a PART of the param escapes, which the
+    /// whole-param passthrough guard (`fn_returns_param`, untouched here)
+    /// cannot express.
+    ///
+    /// `two-callees` guards the symbol memo: two callees over the SAME struct
+    /// type disagree about which field escapes, so a mask that leaked between
+    /// them through `__karac_dropbodies_W` would give one of the two the
+    /// other's answer.
+    ///
+    /// The last three rows are CONTROLS that were already correct and must
+    /// stay correct: returning a non-field (`-> i64`, so the fields really do
+    /// die in the call and the caller-side walk is their only body), returning
+    /// the param BARE (the pre-existing whole-param guard), and a two-dropper
+    /// struct nothing escapes from. Twin: `tests/interpreter.rs`'s
+    /// `test_returned_struct_param_field_user_drop_body_runs_once`.
+    ///
+    /// Three neighbouring shapes are deliberately NOT here, each filed rather
+    /// than pinned so this fixture asserts only counts that are actually
+    /// right: a parent struct that declares its OWN `Drop` (B-2026-08-28-21 —
+    /// a different registration channel, the full `karac_drop_<T>` wrapper,
+    /// which does not decompose into a maskable bodies half); a callee that
+    /// yields a different field on each BRANCH (B-2026-08-28-22 — the analysis
+    /// unions over return sites, so both get masked and whichever one died in
+    /// the call loses its body, the same conservative-true trade
+    /// `fn_returns_param` already makes for the whole-param case); and a
+    /// NESTED projection `w.inner.r` (B-2026-08-28-23 — the analysis declines
+    /// to classify it, so the pre-fix double body survives).
+    #[test]
+    fn e2e_user_drop_body_of_a_returned_struct_param_field_runs_once() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "destructure-return",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // No destructure at all — a direct field projection.
+            (
+                "projection-return",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { w.r }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // Same, spelled with an explicit `return`.
+            (
+                "explicit-return",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; return r; }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // RENAMED destructure leaf — the escaping part is keyed by the
+            // FIELD name, not the binding the pattern introduces for it.
+            (
+                "renamed-leaf",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r: inner, n } = w; inner }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // BOTH fields drop and only `a` escapes: 41 leaves through the
+            // result, 42 dies in the call. One body each, never two, never none.
+            (
+                "two-droppers-a",
+                "struct W { a: R, b: R }\n\
+                 fn take(w: W) -> R { let W { a, b } = w; a }\n\
+                 fn main() { let x = take(W { a: R { id: 41 }, b: R { id: 42 } });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "drop 42\n41\ndrop 41\n",
+            ),
+            // The same struct with the OTHER field escaping — pins the mask to
+            // the right index rather than merely to "one of them".
+            (
+                "two-droppers-b",
+                "struct W { a: R, b: R }\n\
+                 fn take(w: W) -> R { let W { a, b } = w; b }\n\
+                 fn main() { let x = take(W { a: R { id: 41 }, b: R { id: 42 } });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "drop 41\n42\ndrop 42\n",
+            ),
+            // The field escapes INSIDE a returned struct literal rather than
+            // bare — `yielded` recurses through the literal to find it.
+            (
+                "escape-via-struct-literal",
+                "struct W { r: R, n: i64 }\n\
+                 struct Q { r: R }\n\
+                 fn take(w: W) -> Q { let W { r, n } = w; Q { r: r } }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 });\n\
+                 \x20            println(f\"{x.r.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // The RESULT is discarded, so the escaping field's owner is the
+            // discarded temp. Still exactly one body.
+            (
+                "result-discarded",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { take(W { r: R { id: 41 }, n: 1 }); println(\"end\"); }\n",
+                "drop 41\nend\n",
+            ),
+            // Two callees over the SAME struct type disagreeing about which
+            // field escapes — the symbol memo must not hand one the other's mask.
+            (
+                "two-callees",
+                "struct W { r: R, n: i64 }\n\
+                 fn keep(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn eat(w: W) -> i64 { let W { r, n } = w; n }\n\
+                 fn main() { let a = keep(W { r: R { id: 41 }, n: 1 }); println(f\"{a.id}\");\n\
+                 \x20            let b = eat(W { r: R { id: 42 }, n: 2 }); println(f\"{b}\"); }\n",
+                "41\ndrop 41\ndrop 42\n2\n",
+            ),
+            // CONTROL — the callee returns a NON-field, so the dropper dies
+            // inside the call and the caller's walk is its ONLY body.
+            // Suppressing per-argument instead of per-field takes this to zero.
+            (
+                "no-field-escapes-control",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> i64 { let W { r, n } = w; n }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x}\"); }\n",
+                "drop 41\n1\n",
+            ),
+            // CONTROL — the param returned BARE, already handled by the
+            // whole-param passthrough guard this fix deliberately leaves alone.
+            (
+                "bare-param-control",
+                "fn take(r: R) -> R { r }\n\
+                 fn main() { let x = take(R { id: 41 }); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // CONTROL — two droppers and NOTHING escapes; both bodies fire in
+            // the call, in reverse declaration order.
+            (
+                "nothing-escapes-control",
+                "struct W { a: R, b: R }\n\
+                 fn take(w: W) -> i64 { let W { a, b } = w; 7 }\n\
+                 fn main() { let x = take(W { a: R { id: 41 }, b: R { id: 42 } });\n\
+                 \x20            println(f\"{x}\"); }\n",
+                "drop 42\ndrop 41\n7\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

@@ -935,6 +935,91 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-17 — the MEMORY half of the struct-twin double-body row,
+    /// and the place where the struct leg and the tuple leg genuinely differ.
+    ///
+    /// The behavioural twins prove the pre-fix double `Drop` body is gone at a
+    /// scalar `R`. This asks the question they cannot: with a heap-carrying `R`,
+    /// was the extra body accompanied by an extra RELEASE, and does masking a
+    /// field out of the caller-side walk leak the fields it no longer visits?
+    /// Answer on both counts is no — clean under ASAN + LSan before the fix as
+    /// well as after — so the defect was a wrong side-effect count throughout,
+    /// never corruption. Pinning that bounds the row honestly and guards the
+    /// direction a regression would take: the fix SUPPRESSES a caller-side
+    /// registration, and suppressing one field too many — or letting the mask
+    /// reach the memory walk instead of the bodies walk — becomes a leak that no
+    /// stdout assertion in either behavioural twin would notice.
+    ///
+    /// The `w.r` PROJECTION row is present here, and that is the asymmetry
+    /// worth recording. Its tuple counterpart `p.0` had to be left OUT of
+    /// `asan_returned_tuple_param_element_drop_body_is_memory_balanced`: at a
+    /// heap-carrying element it is a real double free (B-2026-08-28-15),
+    /// reproducing identically on a compiler built without that fix. The struct
+    /// spelling has no such hazard — measured rc 0 with correct output on all
+    /// five shapes here — so this fixture covers both spellings at a heap type,
+    /// which the tuple one cannot. Same-looking syntax, different memory
+    /// outcome, and the difference is a property of the two lowerings rather
+    /// than of the Drop-body fix either row is about.
+    ///
+    /// `two-droppers` carries the same load as in the behavioural twins: `a`
+    /// escapes through the result and `b` dies in the call, so an
+    /// argument-wide suppression leaks `b`'s buffer rather than merely
+    /// miscounting a println.
+    #[test]
+    fn asan_returned_struct_param_field_drop_body_is_memory_balanced() {
+        const DROPPER: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        for (label, body, want) in [
+            (
+                "destructure-return",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { let x = take(W { r: R { id: 41, name: f\"n{41}\" }, n: 1 });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                vec!["41", "drop 41 n41"],
+            ),
+            // The spelling its tuple counterpart cannot test at a heap type.
+            (
+                "projection-return",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { w.r }\n\
+                 fn main() { let x = take(W { r: R { id: 41, name: f\"n{41}\" }, n: 1 });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                vec!["41", "drop 41 n41"],
+            ),
+            (
+                "result-discarded",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { take(W { r: R { id: 41, name: f\"n{41}\" }, n: 1 });\n\
+                 \x20            println(\"end\"); }\n",
+                vec!["drop 41 n41", "end"],
+            ),
+            // `a` escapes, `b` dies in the call — both buffers released once.
+            (
+                "two-droppers",
+                "struct W { a: R, b: R }\n\
+                 fn take(w: W) -> R { let W { a, b } = w; a }\n\
+                 fn main() { let x = take(W { a: R { id: 41, name: f\"n{41}\" },\n\
+                 \x20                          b: R { id: 42, name: f\"n{42}\" } });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                vec!["drop 42 n42", "41", "drop 41 n41"],
+            ),
+            // CONTROL — nothing escapes; the field dies inside the call and its
+            // buffer must still be released exactly once.
+            (
+                "no-field-escapes-control",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> i64 { let W { r, n } = w; n }\n\
+                 fn main() { let x = take(W { r: R { id: 41, name: f\"n{41}\" }, n: 1 });\n\
+                 \x20            println(f\"{x}\"); }\n",
+                vec!["drop 41 n41", "1"],
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);
+        }
+    }
+
     #[test]
     fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
         for (label, decl, arg) in [

@@ -3293,12 +3293,32 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         type_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
+        self.field_bodies_fn_for_owned_temp_skipping(type_name, &std::collections::HashSet::new())
+    }
+
+    /// [`Self::field_bodies_fn_for_owned_temp`] with a set of field indices
+    /// MASKED OUT of the walk — the fields of this temp that the callee hands
+    /// back through its return value, whose bodies the RESULT's owner runs
+    /// (B-2026-08-28-17). A separate entry point rather than a widened
+    /// signature because the other four callers of the plain form register a
+    /// temp nobody is extracting fields out of; `emit_user_drop_field_bodies_-
+    /// fn_skipping` already folds the surviving index list into the symbol
+    /// name, so a masked walker never aliases the full one in the module memo.
+    pub(super) fn field_bodies_fn_for_owned_temp_skipping(
+        &mut self,
+        type_name: &str,
+        skip: &std::collections::HashSet<usize>,
+    ) -> Option<FunctionValue<'ctx>> {
         if !self.type_decls.struct_types.contains_key(type_name)
             || !self.type_runs_user_drop(type_name, &mut Vec::new())
         {
             return None;
         }
-        self.emit_user_drop_field_bodies_fn(type_name, &std::collections::HashMap::new())
+        self.emit_user_drop_field_bodies_fn_skipping(
+            type_name,
+            &std::collections::HashMap::new(),
+            skip,
+        )
     }
 
     /// The struct type name of an argument expression that materializes a FRESH
@@ -3446,14 +3466,42 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// The tuple-INDEX half of a [`Self::callee_returned_param_parts`] answer,
     /// in the shape `track_discarded_tuple_elem_bodies` takes its skip list.
-    /// Struct-field parts are dropped here because the struct-argument arm has
-    /// no per-field body registration to suppress — see the row's remainder.
+    /// Struct-field parts are not tuple elements; they are resolved by
+    /// [`Self::escaping_field_indices`] instead.
     pub(super) fn tuple_indices_of(parts: &[crate::ast::ParamPart]) -> Vec<usize> {
         parts
             .iter()
             .filter_map(|p| match p {
                 crate::ast::ParamPart::TupleIndex(i) => Some(*i),
                 crate::ast::ParamPart::Field(_) => None,
+            })
+            .collect()
+    }
+
+    /// The struct-FIELD half of a [`Self::callee_returned_param_parts`] answer,
+    /// resolved against `struct_name`'s DECLARED field order into the index set
+    /// `field_bodies_fn_for_owned_temp_skipping` masks with (B-2026-08-28-17).
+    ///
+    /// A name the struct does not declare is dropped rather than erroring: the
+    /// analysis reports a field name lifted off the callee's source, and this
+    /// resolves it against the layout the argument actually has. Dropping an
+    /// unresolvable one keeps the walk at its pre-fix (over-firing) behaviour,
+    /// which is the safe direction — a WRONGLY masked field would suppress the
+    /// only body that runs, the same asymmetry `fn_returns_param_parts`
+    /// under-approximates for.
+    pub(super) fn escaping_field_indices(
+        &self,
+        struct_name: &str,
+        parts: &[crate::ast::ParamPart],
+    ) -> std::collections::HashSet<usize> {
+        let Some(names) = self.type_decls.struct_field_names.get(struct_name) else {
+            return std::collections::HashSet::new();
+        };
+        parts
+            .iter()
+            .filter_map(|p| match p {
+                crate::ast::ParamPart::Field(n) => names.iter().position(|f| f == n),
+                crate::ast::ParamPart::TupleIndex(_) => None,
             })
             .collect()
     }
@@ -3912,7 +3960,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 let field_bodies_fn = if arg_escapes_frame || clone_temp {
                     None
                 } else {
-                    self.field_bodies_fn_for_owned_temp(&name)
+                    // B-2026-08-28-17 — per-FIELD, the struct twin of the
+                    // per-element tuple filter above. `arg_escapes_frame` is the
+                    // WHOLE-param question; a callee that extracts one field and
+                    // returns THAT (`fn take(w: W) -> R { let W { r, n } = w; r }`,
+                    // or the `w.r` spelling) passes it while still handing the
+                    // field to the caller's result owner, so the field's body ran
+                    // here AND there. Suppressing the whole walk instead loses the
+                    // bodies of the fields that really do die in the call —
+                    // measured on `struct W { a: R, b: R }` returning `a`, which
+                    // needs `b`'s body and not `a`'s. Interp twin:
+                    // `run_fresh_temp_arg_drops`' masked-value call.
+                    let skip = self.escaping_field_indices(&name, escaping_parts);
+                    self.field_bodies_fn_for_owned_temp_skipping(&name, &skip)
                 };
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);
                 let src_heap_copyable = !llvm_heap

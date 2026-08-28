@@ -1487,13 +1487,36 @@ pub enum ParamPart {
 ///   * either of those moved into a returned aggregate literal (`(r, 9)`,
 ///     `Holder { r, .. }`), matching `fn_returns_param`'s own aggregate rule.
 ///
-/// DELIBERATELY UNDER-APPROXIMATE. Any shape it cannot classify — a NESTED
-/// destructure, a projection of a projection, an element leaving through a
-/// container or a call — yields no part, leaving that shape exactly as it
-/// behaves today. The asymmetry is the whole point and runs opposite to
-/// `fn_returns_param`'s: a MISSED escape keeps the pre-existing double body
-/// (no worse than before), while a FALSE escape would suppress the only body
-/// that runs and silently drop the side effect. When in doubt, report nothing.
+/// DELIBERATELY UNDER-APPROXIMATE ON SHAPE. Any shape it cannot classify — a
+/// NESTED destructure, a projection of a projection, an element leaving
+/// through a container or a call — yields no part, leaving that shape exactly
+/// as it behaves today. A MISSED escape keeps the pre-existing double body, no
+/// worse than before, whereas a FALSE escape would suppress the only body that
+/// runs. When the shape is in doubt, report nothing.
+///
+/// CONSERVATIVE-TRUE ACROSS RETURN SITES, which is the opposite direction and
+/// is called out separately because the paragraph above reads like a blanket
+/// promise and is not one. The result is the UNION over every return site, so a
+/// callee that yields a different part on each branch reports both:
+///
+/// ```text
+/// fn take(w: W, k: bool) -> R { let W { a, b } = w; if k { a } else { b } }
+/// ```
+///
+/// Only one of `a`/`b` escapes on any given run, so masking both loses the
+/// body of whichever one died in the call. That is a real lost side effect,
+/// and it is nonetheless the ESTABLISHED trade on this channel rather than a
+/// regression against it: [`fn_returns_param`] answers true for the same mixed
+/// path (`fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }`
+/// called with `k = false` prints only the fresh value's body — measured, and
+/// far older than this fn), and [`fn_returns_param_payload`] documents the
+/// choice explicitly: a missed body, never a double drop, and never a memory
+/// fault, since nothing on this channel frees.
+///
+/// Intersecting across return sites instead would swap that trade — the mixed
+/// path would go back to the DOUBLE body this predicate exists to remove —
+/// and would put the part channel out of step with both siblings. Tracked as
+/// its own row so the whole family moves together if it ever moves.
 ///
 /// Shadowing is tracked rather than ignored for the same reason: a `let` that
 /// re-binds an alias name to something unrelated REMOVES it from the alias
