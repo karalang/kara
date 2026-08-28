@@ -1375,6 +1375,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .soa_return_local_names(&func.body)
             .into_iter()
             .collect();
+        // B-2026-08-28-51 — conditional-move drop flags are ALLOCAS, so they
+        // are function-scoped and MUST NOT survive into the next body; a stale
+        // pointer here would guard one function's drop on another's stack slot.
+        // (`cond_move_escaping_sites` is span-keyed and deliberately kept: a
+        // site's escaping-ness is a static property of the source location, so
+        // it stays true across monomorphizations of the same body.)
+        self.drop_rc.cond_move_drop_flags.clear();
+        // The first of the three escaping sites: a function body's tail value
+        // goes to the caller. The other two — `let` initializers and `return`
+        // operands — are seeded per statement in `compile_stmt`.
+        if let Some(tail) = func.body.final_expr.as_deref() {
+            self.note_escaping_site(tail);
+        }
         self.payload_vars.inline_option_payload_vars.clear();
         self.payload_vars.boxed_enum_payload_vars.clear();
         self.payload_vars.boxed_optres_payload_view_vars.clear();

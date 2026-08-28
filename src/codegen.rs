@@ -5754,6 +5754,8 @@ impl<'ctx> Codegen<'ctx> {
                 zero_inited_vec_slots: rustc_hash::FxHashSet::default(),
                 inline_optres_retained_sources: std::collections::HashSet::new(),
                 scope_cleanup_actions: Vec::new(),
+                cond_move_escaping_sites: std::collections::HashSet::new(),
+                cond_move_drop_flags: HashMap::new(),
                 deep_copy_rc_inc_bare_shared: false,
                 enum_drop_fns: HashMap::new(),
                 struct_drop_fns: HashMap::new(),

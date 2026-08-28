@@ -777,6 +777,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // the move-aware tail handling `compile_function` applies to a
             // function's tail return.
             if let Some(tail) = block.final_expr.as_deref() {
+                // B-2026-08-28-51 — the CONDITIONAL-MOVE half of the
+                // suppression below, and the case that family structurally
+                // cannot reach. A bare identifier at the tail of a branch ARM
+                // in escaping position is moved out on the path through that
+                // arm and dies in place on every other one; the static
+                // retraction can only disarm on ALL paths or none. Clear a
+                // per-binding `i1` in THIS arm's basic block instead, and let
+                // the drain read it.
+                self.arm_conditional_move_tail_flag(tail);
                 self.suppress_block_tail_cleanup(tail);
                 // B-2026-08-26-12 — the `Option[shared T]` sibling of the
                 // plain-`shared` retain `suppress_block_tail_cleanup` reaches
@@ -3155,6 +3164,12 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        // B-2026-08-28-51 — the other two escaping sites: `let x = <expr>;` and
+        // `return <expr>;`. Seeded before the statement compiles, so a branch
+        // arm reached while compiling it already knows its tail escapes. Same
+        // rule and same two positions as the interpreter's
+        // `note_escaping_stmt_sites`.
+        self.note_escaping_stmt_sites(stmt);
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
         // binding name is in `snapshot_replay`, skip the original

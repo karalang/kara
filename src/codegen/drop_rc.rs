@@ -52,6 +52,46 @@ pub(crate) struct DropRc<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// B-2026-08-28-51 — spans (`(offset, length)`, the shape every other span
+    /// table uses) of expressions known to sit in an ESCAPING position: one
+    /// whose value is handed to an owner rather than discarded. Seeded at the
+    /// three escaping sites — a function body's tail, a `return` operand, a
+    /// `let` initializer — and extended lazily through branch structure, so
+    /// each arm tail of an escaping `if` / `match` / block is escaping too.
+    ///
+    /// The interpreter keeps the identical set by the identical rule
+    /// (`Interpreter::note_escaping_site`), which is what makes the two
+    /// backends agree here by construction rather than by convention.
+    ///
+    /// Not cleared, including per function, matching the interpreter — see the
+    /// caveat on `Interpreter::cond_move_escaping_sites` for why that symmetry
+    /// is worth more than the smaller collision window clearing would buy on
+    /// this side alone.
+    pub(crate) cond_move_escaping_sites: std::collections::HashSet<(usize, usize)>,
+    /// B-2026-08-28-51 — per-binding CONDITIONAL-MOVE drop flags: an `i1`
+    /// alloca that is `true` while the binding still owns its value and
+    /// `false` once a branch arm has moved it out.
+    ///
+    /// This is the runtime bit the row says both backends lack. A value moved
+    /// on SOME paths and dead on others cannot be resolved statically, and the
+    /// two existing channels guess in opposite directions: `merge_outer_states`
+    /// re-marks the place `Owned` and leans on a cap/null guard that protects
+    /// MEMORY but cannot stop a user `Drop` BODY running twice, while the
+    /// move-suppression family removes the action on ALL paths and under-fires.
+    ///
+    /// Allocated LAZILY, at the arm tail that moves the binding, because that
+    /// is the first point the shape is known — the `let` that registered the
+    /// action was compiled earlier. The alloca and its `true` init go in the
+    /// function's ENTRY block, which dominates every path, so the `false`
+    /// store in the arm's own basic block is the only path-dependent write.
+    ///
+    /// Scoped deliberately narrowly: only a binding actually reached as an
+    /// escaping branch-arm tail gets a flag, so the action stays armed for
+    /// everything else and `has_armed_user_drop` /
+    /// `has_armed_own_user_drop` / `has_armed_container_elem_bodies` answer
+    /// exactly as they did before. That is what keeps this slice off the
+    /// predicate question the row warns about.
+    pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
     /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
     /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
     /// more than once would otherwise collect one identical `{null, 0, 0}`

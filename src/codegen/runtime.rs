@@ -7995,9 +7995,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `emit_cleanup_action`: that arm also flushes
                     // `pending_box_field_zeroes` (B-2026-08-18-4), which is
                     // scope-exit-ordered work this early fire must not do.
-                    self.builder
-                        .build_call(*drop_fn, &[(*ptr).into()], &format!("nll.drop.{name}"))
-                        .unwrap();
+                    // B-2026-08-28-51 — guarded like the scope-exit funnel. A
+                    // `let y = if k { r } else { s };` makes the BRANCH each
+                    // local's last use, so a conditionally-moved binding lands
+                    // on this channel rather than at scope exit.
+                    let call_name = format!("nll.drop.{name}");
+                    self.emit_user_drop_call_guarded(name, *drop_fn, *ptr, &call_name);
                 }
                 // Rebuild the action and hand it to the shared per-action
                 // emitter rather than open-coding the dec here — the
@@ -8092,6 +8095,207 @@ impl<'ctx> super::Codegen<'ctx> {
                 matches!(action, CleanupAction::UserDrop { binding_name, .. } if binding_name == name)
             })
         })
+    }
+
+    /// B-2026-08-28-51 — record that `expr` sits in an ESCAPING position (its
+    /// value is handed to an owner rather than discarded) and push that
+    /// property down through branch structure, so every arm tail of an
+    /// escaping `if` / `if let` / `match` / block is escaping too.
+    ///
+    /// Seeded at the three escaping sites: a function body's tail, a `return`
+    /// operand, and a `let` initializer. Escaping-ness is a STATIC property of
+    /// a syntactic site, so growing the set on demand is equivalent to
+    /// precomputing it, and idempotent — the early return on an already-known
+    /// site is what bounds the recursion.
+    ///
+    /// Character-for-character the same rule as
+    /// `Interpreter::note_escaping_site`, seeded at the same three positions.
+    /// That is deliberate: it is what makes the two backends classify the same
+    /// sites by construction rather than by convention.
+    ///
+    /// A DISCARDED `if` statement is deliberately not a seed. Its arm tails go
+    /// nowhere, and treating one as a move would take a program that runs one
+    /// body today to zero.
+    pub(super) fn note_escaping_site(&mut self, expr: &Expr) {
+        if !self
+            .drop_rc
+            .cond_move_escaping_sites
+            .insert((expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    self.note_escaping_site(t);
+                }
+                if let Some(e) = else_branch {
+                    self.note_escaping_site(e);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.note_escaping_site(&arm.body);
+                }
+            }
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    self.note_escaping_site(t);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// B-2026-08-28-51 — seed [`Self::note_escaping_site`] for the two escaping
+    /// STATEMENT positions, `let x = <expr>;` and `return <expr>;`. The
+    /// interpreter's `note_escaping_stmt_sites` is the same rule.
+    pub(super) fn note_escaping_stmt_sites(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => self.note_escaping_site(value),
+            StmtKind::Expr(e) => {
+                if let ExprKind::Return(Some(inner)) = &e.kind {
+                    self.note_escaping_site(inner);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// B-2026-08-28-51 — get (or lazily create) the conditional-move drop flag
+    /// for `name`.
+    ///
+    /// The alloca and its `true` initializer go at the end of the function's
+    /// ENTRY block, which dominates every path — mirroring
+    /// [`Self::null_init_slot_in_entry_block`]. Creating it lazily at the move
+    /// site is what makes this work without a pre-pass: the `let` that
+    /// registered the drop action was compiled long before the branch that
+    /// reveals the binding is conditionally moved, and an entry-block init is
+    /// correct no matter how late it is emitted.
+    fn cond_move_drop_flag_for(&mut self, name: &str) -> Option<PointerValue<'ctx>> {
+        if let Some(p) = self.drop_rc.cond_move_drop_flags.get(name) {
+            return Some(*p);
+        }
+        let fn_val = self.current_fn?;
+        let entry = fn_val.get_first_basic_block()?;
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let bool_t = self.context.bool_type();
+        let slot = b.build_alloca(bool_t, &format!("cmflag.{name}")).ok()?;
+        b.build_store(slot, bool_t.const_int(1, false)).ok()?;
+        self.drop_rc
+            .cond_move_drop_flags
+            .insert(name.to_string(), slot);
+        Some(slot)
+    }
+
+    /// B-2026-08-28-51 — clear the conditional-move drop flag for a bare
+    /// identifier at the tail of a branch ARM in escaping position.
+    ///
+    /// The store lands in the ARM's own basic block, so it executes only on the
+    /// path that actually moved the value — which is precisely the runtime bit
+    /// the static move-suppression family cannot express. The drain reads the
+    /// flag and skips the body when it is false; every path that did not move
+    /// the binding still sees the entry block's `true` and drops as before.
+    ///
+    /// Restricted to a binding owned by an ENCLOSING frame. One registered in
+    /// the innermost frame is the ordinary tail-move the static suppressor
+    /// already handles correctly, and its scoping — the retraction only reaches
+    /// the frame that owns the action — is exactly why that case never needed a
+    /// runtime bit.
+    /// B-2026-08-28-51 — emit a user-`Drop` wrapper call, guarded by the
+    /// binding's conditional-move flag when it has one.
+    ///
+    /// Both places that fire a `UserDrop` action route through here: the
+    /// scope-exit drain and the NLL live-range-end fire in
+    /// [`Self::fire_due_user_drops`]. They need the same guard for the same
+    /// reason, and a conditionally-moved binding can reach EITHER — shape A
+    /// (`fn take(k) -> R { let r = ...; if k { r } else { ... } }`) fires at
+    /// scope exit, while `let y = if k { r } else { s };` fires at the NLL
+    /// point, because there the branch IS the binding's last use.
+    ///
+    /// A binding with no flag — everything but the branch-tail shape — takes
+    /// the unguarded call, byte-identical to before.
+    fn emit_user_drop_call_guarded(
+        &self,
+        binding_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        call_name: &str,
+    ) {
+        let flagged = self
+            .drop_rc
+            .cond_move_drop_flags
+            .get(binding_name)
+            .copied()
+            .zip(self.current_fn);
+        let Some((flag, fn_val)) = flagged else {
+            self.builder
+                .build_call(drop_fn, &[ptr.into()], call_name)
+                .unwrap();
+            return;
+        };
+        let live = self.context.append_basic_block(fn_val, "cmdrop.live");
+        let cont = self.context.append_basic_block(fn_val, "cmdrop.cont");
+        let armed = self
+            .builder
+            .build_load(self.context.bool_type(), flag, "cmdrop.armed")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(armed, live, cont)
+            .unwrap();
+        self.builder.position_at_end(live);
+        self.builder
+            .build_call(drop_fn, &[ptr.into()], call_name)
+            .unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+    }
+
+    pub(super) fn arm_conditional_move_tail_flag(&mut self, expr: &Expr) {
+        if !self
+            .drop_rc
+            .cond_move_escaping_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return;
+        };
+        let name = name.clone();
+        let depth = self.drop_rc.scope_cleanup_actions.len();
+        if depth == 0 {
+            return;
+        }
+        let in_enclosing = self.drop_rc.scope_cleanup_actions[..depth - 1]
+            .iter()
+            .any(|frame| {
+                frame.iter().any(|a| {
+                    matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == &name)
+                })
+            });
+        if !in_enclosing {
+            return;
+        }
+        let Some(flag) = self.cond_move_drop_flag_for(&name) else {
+            return;
+        };
+        let bool_t = self.context.bool_type();
+        let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
     }
 
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
@@ -10775,9 +10979,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 drop_fn,
                 ..
             } => {
-                self.builder
-                    .build_call(*drop_fn, &[(*binding_ptr).into()], "")
-                    .unwrap();
+                // B-2026-08-28-51 — guarded when the binding is conditionally
+                // moved; an ordinary unguarded call otherwise.
+                self.emit_user_drop_call_guarded(binding_name, *drop_fn, *binding_ptr, "");
                 // B-2026-08-18-4 — THE SEAM BETWEEN THE TWO READERS.
                 //
                 // When a field was moved out of a boxed payload whose user

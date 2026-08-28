@@ -556,6 +556,37 @@ pub struct Interpreter<'a> {
     /// at `try_compile_enum_variant`'s arg loop. Re-armed on a fresh
     /// `let`/assign of the name like the other moved-out sets.
     pub(crate) moved_out_user_drop_bindings: HashSet<String>,
+    /// B-2026-08-28-51 — spans (`(offset, length)`, the shape every other span
+    /// table here uses) of expressions known to sit in an ESCAPING position:
+    /// one whose value is handed to an owner rather than discarded. Seeded at
+    /// the three escaping sites — a function body's tail, a `return` operand,
+    /// a `let` initializer — and extended lazily through branch structure, so
+    /// each arm tail of an escaping `if` / `match` / block is itself escaping.
+    ///
+    /// Escaping-ness is a STATIC property of a syntactic site, so growing the
+    /// set on demand is equivalent to precomputing it and needs no full AST
+    /// walker. It is never cleared: a site that escapes always escapes, and
+    /// spans are unique per source location.
+    ///
+    /// Not cleared PER FUNCTION either, and codegen's twin
+    /// (`DropRc::cond_move_escaping_sites`) does the same, deliberately. Both
+    /// therefore inherit this tree's existing span-key caveat — offsets are per
+    /// FILE, so a multi-file program can in principle collide two sites (the
+    /// same caveat `enum_inst_type_exprs` carries). Clearing per function would
+    /// shrink that window, but only on ONE backend: the interpreter cannot
+    /// clear safely, because a call made from inside a branch arm would wipe
+    /// the enclosing seeds before the arm's tail is reached. An asymmetric
+    /// window is worse than a shared one — the whole value of this set is that
+    /// both backends classify the SAME sites — so both keep accumulating. A
+    /// collision degrades to today's behaviour, never past it.
+    ///
+    /// Consumed by the block-tail hook to recognise a CONDITIONALLY-MOVED
+    /// binding — a bare identifier at a branch-arm tail, which escapes on the
+    /// path through its own arm and dies in place on every other path. That
+    /// needs runtime knowledge the static move-suppression family cannot
+    /// express, and the interpreter supplies it for free: only the taken arm
+    /// is ever evaluated, so marking at the arm tail IS the runtime bit.
+    pub(crate) cond_move_escaping_sites: HashSet<(usize, usize)>,
     /// B-2026-07-30-11 (match-arm leg) — payload bindings of the TAKEN match
     /// arm whose moved-out value carries a user `impl Drop`, stashed by
     /// `eval_match` just before the arm body evaluates and drained by
@@ -910,6 +941,7 @@ impl<'a> Interpreter<'a> {
             owned_param_names_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
+            cond_move_escaping_sites: HashSet::new(),
             pending_arm_drop_bindings: Vec::new(),
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),

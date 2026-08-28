@@ -106,6 +106,14 @@ impl<'a> super::Interpreter<'a> {
                 if let Some(name) = &watch {
                     self.env.push_watch(name);
                 }
+                // B-2026-08-28-51 — a bare-identifier arm body never reaches
+                // `eval_block_inner`, so the block-tail conditional-move hook
+                // does not see it. Mark here instead, immediately before the
+                // TAKEN arm evaluates — which is what makes it the runtime bit.
+                // No cleanup frame of its own exists for a non-block arm, so
+                // nothing can be owned locally; a block-bodied arm falls out on
+                // the Identifier test and takes the block path as before.
+                self.record_conditional_move_tail(&arm.body, &[]);
                 let result = self.eval_expr_inner(&arm.body);
                 let reassigned = watch.is_some() && self.env.pop_watch();
                 // B-2026-07-23-12: write-through for a mutable-place scrutinee.

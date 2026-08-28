@@ -178,6 +178,23 @@ impl<'a> super::Interpreter<'a> {
             // evaluates so when run_cleanup fires (after the
             // ControlFlow::Return signal propagates back to this
             // block), the source's user-body doesn't run.
+            // B-2026-08-28-51 — seed the conditional-move escaping-site set for
+            // the two escaping STATEMENT positions before the statement runs,
+            // so a branch arm reached during it already knows its tail escapes.
+            self.note_escaping_stmt_sites(stmt);
+            // B-2026-08-28-51 — the `return` sibling of the block-tail hook. A
+            // `return r;` nested inside a branch is the same conditional move:
+            // the static retraction below targets THIS block's cleanup vector,
+            // which does not hold a binding declared in an enclosing block, so
+            // it silently does nothing and the enclosing drain fires the body a
+            // second time. Reaching this statement is the runtime proof that
+            // this path returned the value. A top-level `return r;` still owns
+            // its binding here and takes the static path unchanged.
+            if let StmtKind::Expr(e) = &stmt.kind {
+                if let ExprKind::Return(Some(inner)) = &e.kind {
+                    self.record_conditional_move_tail(inner, &cleanup);
+                }
+            }
             self.suppress_return_stmt_user_drop(stmt, &mut cleanup);
             // Container twin of the line above: `return a;` moves a's
             // container value to the caller — record it so the payload/
@@ -255,6 +272,13 @@ impl<'a> super::Interpreter<'a> {
             // where NLL says the value dies at its declaration.
             self.fire_due_drops(&mut cleanup, &last_use, stmt_idx);
         }
+        if is_fn_body {
+            // B-2026-08-28-51 — the third escaping site: a function (or
+            // closure / method) body's tail value goes to the caller.
+            if let Some(ref expr) = block.final_expr {
+                self.note_escaping_site(expr);
+            }
+        }
         let result = if let Some(ref expr) = block.final_expr {
             if self.observed_cancellation() {
                 let cf = ControlFlow::Cancelled;
@@ -283,6 +307,10 @@ impl<'a> super::Interpreter<'a> {
             // own binding for the returned value goes out of scope.
             // Mirrors the codegen `suppress_cleanup_for_tail_return`
             // wiring.
+            // B-2026-08-28-51 — must run BEFORE the static retraction below,
+            // which removes from `cleanup` the very entry this consults to tell
+            // a binding THIS block owns from one declared in an enclosing block.
+            self.record_conditional_move_tail(expr, &cleanup);
             self.suppress_tail_expr_user_drop(expr, &mut cleanup);
             // Container twin: a bare-identifier tail moves the container out
             // as the block's result.
@@ -2083,6 +2111,126 @@ impl<'a> super::Interpreter<'a> {
             let _ = self.eval_body_growing(&body);
             self.env.pop_scope();
         }
+    }
+
+    /// B-2026-08-28-51 — record that `expr` sits in an ESCAPING position (its
+    /// value is handed to an owner rather than discarded) and push that
+    /// property down through branch structure, so every arm tail of an
+    /// escaping `if` / `if let` / `match` / block is escaping too.
+    ///
+    /// Seeded at the three escaping sites: a function body's tail, a `return`
+    /// operand, and a `let` initializer. Escaping-ness is a STATIC property of
+    /// a syntactic site, so growing the set on demand is equivalent to
+    /// precomputing it with a full AST walker, and idempotent — the early
+    /// return on an already-known site is what bounds the recursion.
+    ///
+    /// A DISCARDED `if` statement is deliberately not a seed: its arm tails go
+    /// nowhere, and marking them would take a program that runs one body today
+    /// to zero.
+    pub(crate) fn note_escaping_site(&mut self, expr: &Expr) {
+        if !self
+            .cond_move_escaping_sites
+            .insert((expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(t) = &then_block.final_expr {
+                    self.note_escaping_site(t);
+                }
+                if let Some(e) = else_branch {
+                    self.note_escaping_site(e);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.note_escaping_site(&arm.body);
+                }
+            }
+            ExprKind::Block(b) => {
+                if let Some(t) = &b.final_expr {
+                    self.note_escaping_site(t);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// B-2026-08-28-51 — seed [`Self::note_escaping_site`] for the two
+    /// ESCAPING STATEMENT positions, `let x = <expr>;` and `return <expr>;`.
+    /// Runs as a pre-statement hook, before the statement evaluates, so the
+    /// arm tails are already known by the time one of them is reached.
+    pub(crate) fn note_escaping_stmt_sites(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => self.note_escaping_site(value),
+            StmtKind::Expr(e) => {
+                if let ExprKind::Return(Some(inner)) = &e.kind {
+                    self.note_escaping_site(inner);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// B-2026-08-28-51 — the CONDITIONAL-MOVE half of
+    /// [`Self::suppress_tail_expr_user_drop`], and the one case that family
+    /// structurally cannot handle.
+    ///
+    /// A bare identifier at the tail of a branch ARM in escaping position is
+    /// moved out on the path through its own arm and dies in place on every
+    /// other path. The static retraction cannot express that: the arm's
+    /// `cleanup` vector does not hold the binding — it was declared in an
+    /// enclosing block — and retracting there on ALL paths would lose the body
+    /// whenever a sibling arm runs. Nothing is suppressed today, so the
+    /// enclosing drain fires the body a SECOND time on a value the caller
+    /// already owns, and the caller then reads it: a double body plus a
+    /// use-after-drop.
+    ///
+    /// Marking here IS the runtime bit that resolves it, for free: the
+    /// interpreter evaluates only the TAKEN arm, so reaching this point is
+    /// itself the proof that this path moved the value.
+    ///
+    /// Deliberately skips a binding THIS block owns. That one is already
+    /// handled by the static retraction, whose scoping is what keeps it
+    /// correct; marking it again would silence container walks the retraction
+    /// leaves armed. Codegen's twin resolves the same bit with a per-binding
+    /// `i1` drop flag, cleared in the arm's own basic block.
+    pub(crate) fn record_conditional_move_tail(&mut self, expr: &Expr, cleanup: &[CleanupAction]) {
+        if !self
+            .cond_move_escaping_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return;
+        }
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return;
+        };
+        if cleanup
+            .iter()
+            .any(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
+        {
+            return;
+        }
+        let type_name = match self.env.get(name) {
+            Some(Value::Struct { name, .. }) => name.clone(),
+            // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
+            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+            _ => return,
+        };
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
+        self.moved_out_user_drop_bindings.insert(name.clone());
     }
 
     /// Sub-slice (3) of move-suppression — interpreter helper that

@@ -881,6 +881,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // function-level Vec returns). Identifier match-arm
                 // tail-return is the canonical Option-unwrap shape
                 // `match opt { Some(v) => v, None => default() }`.
+                // B-2026-08-28-51 — the conditional-move flag for a bare
+                // identifier arm tail, the `match` sibling of the hook in
+                // `compile_block_with_frame`. `match n { 0 => a, 1 => b, _ =>
+                // R { id: 9 } }` in escaping position moves whichever local the
+                // TAKEN arm names and leaves the others to die in place, which
+                // is the same missing runtime bit shape A needs. Emitted here,
+                // in the arm's own basic block, so the clear is path-local.
+                self.arm_conditional_move_tail_flag(&arm.body);
                 self.suppress_source_vec_cleanup_for_arg(&arm.body);
                 // B-2026-08-26-12 — the `Option[shared T]` arm-tail retain, the
                 // match sibling of the value-position-block hook in

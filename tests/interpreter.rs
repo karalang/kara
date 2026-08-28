@@ -32242,6 +32242,211 @@ fn test_returned_tuple_param_element_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-51, interpreter leg — a CONDITIONALLY-MOVED local runs its
+/// user `Drop` body exactly once, on every path.
+///
+/// `fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }`
+/// with `k = true` printed `drop 41` / `41` / `drop 41`: the callee ran the
+/// body on a value it had already handed to the caller, the caller then READ
+/// that value, and its own drop ran the body a second time. The middle `41` is
+/// a read of an already-dropped value, which is what made this the
+/// high-severity half of the row.
+///
+/// WHY NEITHER EXISTING CHANNEL COULD FIX IT. A value moved on SOME paths and
+/// dead on others needs runtime knowledge at the drop point, and the two
+/// static channels guess in opposite directions. `merge_outer_states` re-marks
+/// a conditionally-moved place `Owned` and leans on codegen's cap/null guard —
+/// which protects MEMORY and has nothing to test for a user `Drop` BODY, so an
+/// over-scheduled body simply runs twice. The move-suppression family
+/// (`suppress_tail_expr_user_drop` and siblings) removes the action outright,
+/// which disarms on ALL paths and can only under-fire. Teaching the suppressor
+/// to descend into branch arms just moves a shape from the first failure to the
+/// second.
+///
+/// The interpreter gets the missing bit for free: it evaluates only the TAKEN
+/// arm, so reaching an arm's tail IS the proof that this path moved the value.
+/// `record_conditional_move_tail` marks there. Codegen cannot do that — it
+/// emits both arms — so its twin clears an `i1` flag in the arm's own basic
+/// block and the drain tests it. Same classification, two idioms; the shared
+/// `note_escaping_site` rule is what keeps them agreeing.
+///
+/// `discarded-if-statement` and `discarded-match-statement` are the rows that
+/// CONSTRAIN the fix rather than reproduce the bug, and they are why the
+/// marking is keyed to an escaping position instead of to "a block tail that is
+/// an identifier". Their arm tails are the same bare `r`, but the value is
+/// discarded rather than moved; marking it would take a program that runs one
+/// body today to ZERO. Any version that keys on shape alone fails these two.
+///
+/// `two-locals-merge` pins the other direction: `s` must still fire where it
+/// always did, so the fix cannot disarm a whole branch — only the arm that ran.
+/// `heap-field-no-husk` pins the read: pre-fix the compiled backends printed
+/// `drop ` (empty) because the spurious body read the moved-from slot, so this
+/// row fails if the body ever runs on a husk again.
+///
+/// NOT COVERED, deliberately: `fn take(k) -> R { let r = ...; if k { return r; } R { id: 99 } }`
+/// with `k = false` still loses `r`'s body on the COMPILED backends. That is
+/// the row's UNDER-fire horn — `suppress_cleanup_for_tail_return` statically
+/// removes the action — and fixing it means RETAINING flagged actions, which
+/// changes what `has_armed_user_drop` / `has_armed_own_user_drop` /
+/// `has_armed_container_elem_bodies` answer. This slice stays off that
+/// question; `return-in-branch` below covers only the `k = true` direction,
+/// which is the over-fire horn and is now correct on all four surfaces.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `e2e_conditionally_moved_local_user_drop_body_runs_once`, whose expectations
+/// are these verbatim.
+#[test]
+fn test_conditionally_moved_local_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        // The row's own repro: the arm that MOVES. Pre-fix `drop 41`/`41`/`drop 41`.
+        (
+            "branch-tail-moved",
+            "fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(true); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The same program on the arm that does NOT move: `r` dies in the
+        // callee and must still run its body there. A static disarm would
+        // silence this row, which is why the marking has to be per-path.
+        (
+            "branch-tail-not-moved",
+            "fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(false); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // BOUNDARY — a DISCARDED `if` statement. Same bare `r` at the arm
+        // tail, but the value goes nowhere, so it must keep running exactly
+        // one body. Marking on shape alone takes this to zero.
+        (
+            "discarded-if-statement",
+            "fn main() { let r = R { id: 41 }; let k = true; \
+             if k { r } else { R { id: 99 } }; println(\"end\") }\n",
+            "drop 41\nend\n",
+        ),
+        // BOUNDARY — the `match` twin of the row above.
+        (
+            "discarded-match-statement",
+            "fn main() { let r = R { id: 41 }; let n = 0; \
+             match n { 0 => r, _ => R { id: 9 } }; println(\"end\") }\n",
+            "drop 41\nend\n",
+        ),
+        // Two locals, one `if`: the taken arm moves `r`, and `s` must still
+        // die where it always did. Pre-fix this printed THREE bodies for two
+        // objects.
+        (
+            "two-locals-merge",
+            "fn main() { let r = R { id: 41 }; let s = R { id: 99 }; let k = true; \
+             let y = if k { r } else { s }; println(f\"{y.id}\") }\n",
+            "drop 99\n41\ndrop 41\n",
+        ),
+        // `else if` — the else branch is another `if`, so the escaping
+        // property has to recurse through it to reach `b`.
+        (
+            "else-if-chain",
+            "fn take(n: i64) -> R { let a = R { id: 1 }; let b = R { id: 2 }; \
+             if n == 0 { a } else if n == 1 { b } else { R { id: 9 } } }\n\
+             fn main() { let x = take(1); println(f\"{x.id}\") }\n",
+            "drop 1\n2\ndrop 2\n",
+        ),
+        // An `if` nested INSIDE an arm: the outer arm's tail is itself a
+        // branch, so its own arms are escaping too.
+        (
+            "nested-if-arm",
+            "fn take(p: bool, q: bool) -> R { let a = R { id: 1 }; let b = R { id: 2 }; \
+             if p { if q { a } else { b } } else { R { id: 9 } } }\n\
+             fn main() { let x = take(true, false); println(f\"{x.id}\") }\n",
+            "drop 1\n2\ndrop 2\n",
+        ),
+        // A bare-expression `match` arm never reaches the block-tail hook —
+        // it is not a block — so it needs its own marking site.
+        (
+            "match-arm",
+            "fn take(n: i64) -> R { let a = R { id: 1 }; let b = R { id: 2 }; \
+             match n { 0 => a, 1 => b, _ => R { id: 9 } } }\n\
+             fn main() { let x = take(0); println(f\"{x.id}\") }\n",
+            "drop 2\n1\ndrop 1\n",
+        ),
+        // `return r;` nested in a branch is the same conditional move: the
+        // static retraction targets the IF-block's cleanup, which does not
+        // hold a binding declared in the enclosing function block.
+        (
+            "return-in-branch",
+            "fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r; } R { id: 99 } }\n\
+             fn main() { let x = take(true); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The heap-field shape. Pre-fix the spurious body read the moved-from
+        // slot, so the compiled backends printed an EMPTY name; this row fails
+        // if a body ever runs on a husk again.
+        (
+            "heap-field-no-husk",
+            "fn take2(k: bool) -> H { let h = H { id: 41, name: \"forty-one\" }; \
+             if k { h } else { H { id: 99, name: \"ninety-nine\" } } }\n\
+             fn main() { let x = take2(true); println(f\"{x.id} {x.name}\") }\n",
+            "41 forty-one\ndrop forty-one\n",
+        ),
+        // A CLOSURE body's tail is returned too, so it is the same escaping
+        // site as a function's. The interpreter reaches it through
+        // `next_block_is_fn_body`, which covers closures; codegen needed the
+        // seed planted separately, and without it this shape was the one place
+        // the fix TURNED an aligned-wrong program into a run-vs-build
+        // divergence.
+        (
+            "closure-branch-tail-moved",
+            "fn main() { let f = || { let r = R { id: 41 }; let k = true; \
+             if k { r } else { R { id: 99 } } }; let x = f(); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "closure-branch-tail-not-moved",
+            "fn main() { let f = || { let r = R { id: 41 }; let k = false; \
+             if k { r } else { R { id: 99 } } }; let x = f(); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // A METHOD body, which codegen compiles through `compile_function`
+        // like any other — recorded so the closure row above is not mistaken
+        // for covering every non-free-function body.
+        (
+            "method-branch-tail",
+            "struct Box2 { n: i64 }\n\
+             impl Box2 { fn pick(ref self, k: bool) -> R { let r = R { id: 41 }; \
+             if k { r } else { R { id: 99 } } } }\n\
+             fn main() { let b = Box2 { n: 1 }; let x = b.pick(true); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // CONTROL — a straight-line local tail return, correct before and
+        // after. It owns its binding in THIS block, so it keeps taking the
+        // static retraction and must not acquire a runtime mark.
+        (
+            "straight-line-control",
+            "fn take() -> R { let r = R { id: 41 }; r }\n\
+             fn main() { let x = take(); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // CONTROL — a PARAM at a branch tail was already correct on both
+        // directions (the whole-param passthrough guard covers it) and must
+        // stay so.
+        (
+            "param-branch-tail-moved",
+            "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, true); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "param-branch-tail-not-moved",
+            "fn take(r: R, k: bool) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\") }\n",
+            "99\ndrop 99\n",
+        ),
+    ] {
+        let heap = "struct H { id: i64, name: String }\n\
+             impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\") } }\n";
+        assert_eq!(run(&format!("{DROPPER}{heap}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-17, interpreter leg — one user `Drop` body per object when the
 /// callee returns a FIELD pulled out of an owned struct param. The struct twin
 /// of `test_returned_tuple_param_element_user_drop_body_runs_once`.

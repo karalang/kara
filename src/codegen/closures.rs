@@ -1217,6 +1217,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // heap box (each `make(n)` instance owns a distinct env — no aliasing).
         // Saved/restored around the body so sibling closures don't inherit it.
         let saved_heap_spans = self.fn_ctx.current_fn_heap_closure_spans.clone();
+        // B-2026-08-28-51 — a closure body is its OWN LLVM function, so the
+        // conditional-move drop flags (entry-block `i1` allocas) must not cross
+        // the boundary in either direction: an outer function's alloca is not
+        // addressable from inside the closure, and a flag created here must not
+        // survive to guard an outer binding of the same name. Saved, cleared,
+        // and restored around the body exactly as the heap-span set above is.
+        let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
+        // A closure body's tail is RETURNED, so it is an escaping site — the
+        // same seed `compile_function` plants for a named function. Without it
+        // the interpreter (whose `next_block_is_fn_body` covers closures) fixed
+        // `|| { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }` while
+        // codegen did not, turning an aligned-wrong shape into a run-vs-build
+        // divergence.
+        if let ExprKind::Block(b) | ExprKind::Seq(b) = &body.kind {
+            if let Some(tail) = b.final_expr.as_deref() {
+                self.note_escaping_site(tail);
+            }
+        }
         if let Some(inner_span) = self.closure_tail_heap_closure_span(params, body) {
             self.fn_ctx.current_fn_heap_closure_spans.insert(inner_span);
         }
@@ -1326,6 +1344,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Restore the heap-span set (7b½): the inner-closure marking is scoped
         // to this closure's body compile only.
         self.fn_ctx.current_fn_heap_closure_spans = saved_heap_spans;
+        self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
 
         // 8. Restore outer state.
         self.mono_state.type_subst = saved_subst;
