@@ -113914,6 +113914,127 @@ fn main() {
             "before\n74\nD5\nsink\nafter\n"
         );
     }
+
+    /// B-2026-08-28-13 — a heap field moved OUT of a BORROWED binding inside a
+    /// GENERIC fn/impl aliased the caller's buffer, so both freed it: SIGABRT
+    /// (`free(): double free detected in tcache 2`) under LLJIT and AOT alike,
+    /// on a program `karac check` passes and the interpreter runs correctly.
+    ///
+    /// The interpreter is the oracle and it never moved: the local is a COPY,
+    /// so mutating it leaves the caller's field untouched (the `mutate` row) —
+    /// which is what settles the ownership question the row raised. The move is
+    /// legal; codegen owed the local a deep copy and the generic path lost it.
+    /// `clone_ref_chain_field_move_rhs` read the field type from the struct
+    /// DECLARATION table (`Vec[T]` inside `impl[T] Bag[T]`) and
+    /// `borrow_payload_clone_supported` then declined the unsubstituted param,
+    /// skipping the clone silently. Same type-param erasure family as
+    /// B-2026-08-25-10/-11, at the borrowed-receiver site rather than the owned
+    /// one, and fixed the way those were: substitute the active monomorph.
+    ///
+    /// `readback` is the row's sharpest case: it reads the CALLER's field after
+    /// the call, so a shallow alias shows up as a use-after-free rather than as
+    /// two frees racing at exit. `nested-concrete` covers `T = Vec[i64]` —
+    /// pre-fix that one HUNG under LLJIT instead of aborting, the same defect
+    /// wearing a different symptom.
+    ///
+    /// The last two rows are controls that were already correct pre-fix, and
+    /// they are what isolate the trigger to erasure: `control-nongeneric` never
+    /// erases the field type, and `control-string-field` is a bare `String`
+    /// field with no parameter to substitute.
+    #[test]
+    fn e2e_generic_borrowed_field_move_out_is_a_copy_not_an_alias() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "generic-impl",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 impl[T] Bag[T] { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+                 fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); }",
+                "2\n",
+            ),
+            (
+                "generic-free-fn",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 fn n[T](b: ref Bag[T]) -> i64 { let v = b.xs; return v.len(); }\n\
+                 fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(1); a.xs.push(2); println(f\"{n(a)}\"); }",
+                "2\n",
+            ),
+            (
+                "readback",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 impl[T] Bag[T] { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+                 fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); println(f\"{a.xs[0]}\"); }",
+                "2\n1\n",
+            ),
+            (
+                "string-elem",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 impl[T] Bag[T] { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+                 fn main() { let mut a: Bag[String] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(\"hi\"); a.xs.push(\"yo\"); println(f\"{a.n()}\"); }",
+                "2\n",
+            ),
+            (
+                "mut-ref-param",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 fn n[T](b: mut ref Bag[T]) -> i64 { let v = b.xs; return v.len(); }\n\
+                 fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(1); a.xs.push(2); println(f\"{n(mut a)}\"); }",
+                "2\n",
+            ),
+            (
+                "second-type-param",
+                "struct Pair[=K, =V] { ks: Vec[K], vs: Vec[V] }\n\
+                 impl[K, V] Pair[K, V] { fn nv(ref self) -> i64 { let v = self.vs; return v.len(); } }\n\
+                 fn main() { let mut a: Pair[i64, String] = Pair { ks: Vec.new(), vs: Vec.new() };\n\
+                 a.vs.push(\"x\"); a.vs.push(\"y\"); println(f\"{a.nv()}\"); }",
+                "2\n",
+            ),
+            (
+                "nested-concrete",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 impl[T] Bag[T] { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+                 fn main() { let mut a: Bag[Vec[i64]] = Bag { xs: Vec.new() };\n\
+                 let mut inner: Vec[i64] = Vec.new(); inner.push(7); a.xs.push(inner);\n\
+                 println(f\"{a.n()}\"); }",
+                "1\n",
+            ),
+            (
+                // The local is a COPY: pushing to it must NOT reach the caller.
+                "mutate",
+                "struct Bag[=T] { xs: Vec[T] }\n\
+                 impl[T] Bag[T] { fn n(ref self) -> i64 { let mut v = self.xs; v.push(99); return v.len(); } }\n\
+                 fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); println(f\"{a.xs.len()}\"); }",
+                "3\n2\n",
+            ),
+            (
+                "control-nongeneric",
+                "struct Bag { xs: Vec[i64] }\n\
+                 impl Bag { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+                 fn main() { let mut a: Bag = Bag { xs: Vec.new() };\n\
+                 a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); println(f\"{a.xs[0]}\"); }",
+                "2\n1\n",
+            ),
+            (
+                "control-string-field",
+                "struct Bag[=T] { name: String, xs: Vec[T] }\n\
+                 impl[T] Bag[T] { fn nm(ref self) -> i64 { let s = self.name; return s.len(); } }\n\
+                 fn main() { let a: Bag[i64] = Bag { name: \"hello\", xs: Vec.new() };\n\
+                 println(f\"{a.nm()}\"); println(f\"{a.name}\"); }",
+                "5\nhello\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            assert_eq!(
+                run_program(src).as_deref(),
+                Some(*want),
+                "[{label}] compiled output diverged from the interpreter oracle"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

@@ -3113,6 +3113,16 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 return val;
             };
+            // B-2026-08-28-13: the field te is read from the GENERIC
+            // declaration table, so inside a monomorph it still reads
+            // `Vec[T]` — and `borrow_payload_clone_supported` then correctly
+            // declines the unsubstituted param, skipping the clone SILENTLY
+            // and leaving the binding aliasing the caller's buffer (the
+            // binding's cleanup and the caller's struct-drop free it twice).
+            // Substitute the active monomorph's type arguments first. A no-op
+            // outside a monomorph (`type_subst_*` empty), so the non-generic
+            // path — which already reached the clone — is bit-identical.
+            let fte = self.subst_monomorph_type_params(&fte);
             // Option leaf: inline String/Vec payloads only — shared payloads
             // are rc-managed, boxed/Map payloads belong to other cleanup
             // families (mirrors the -9 scrutinee-clone gate).

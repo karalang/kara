@@ -56803,4 +56803,86 @@ fn main() {
             "shared-block-receiver-scalar-field",
         );
     }
+
+    /// B-2026-08-28-13 — moving a heap field OUT of a BORROWED binding inside a
+    /// GENERIC fn or impl double-freed the buffer under both compiled backends.
+    ///
+    /// `clone_ref_chain_field_move_rhs` (B-2026-07-21-11) exists precisely to
+    /// stop this: `let v = self.xs` through a `ref` receiver bit-copy-aliases
+    /// the caller's field header while the `let` registers an owned cleanup, so
+    /// the binding deep-clones and the two frees hit independent buffers. It
+    /// reads the field's type from the struct DECLARATION table, which inside
+    /// `impl[T] Bag[T]` still says `Vec[T]`; `borrow_payload_clone_supported`
+    /// then correctly declines the unsubstituted param and the clone was
+    /// skipped SILENTLY. Same erasure family as B-2026-08-25-10/-11, at the
+    /// borrowed-receiver site instead of the owned one, and fixed the same way
+    /// those were: substitute the active monomorph first.
+    ///
+    /// The elements are built through `env.args().len()` and READ BACK by byte,
+    /// not by `.len()` alone — a constant-seeded, length-only fixture folds away
+    /// at `-O2` and asserts nothing (the hazard `assert_clean_asan_run`
+    /// documents). Each case also reads the CALLER's field after the call: that
+    /// is what distinguishes a genuine independent copy from two frees that
+    /// merely happen not to collide.
+    ///
+    /// (e) and (f) are the controls that pin the diagnosis, and both were
+    /// already clean pre-fix: (e) is the non-generic twin, which never erases
+    /// the field type, and (f) is a bare `String` field of a generic struct —
+    /// a type with no parameter to substitute, so it reached the clone all
+    /// along. Verified RED pre-fix: (a) aborted under ASAN with
+    /// `attempting double-free`.
+    #[test]
+    fn asan_generic_borrowed_field_move_out_does_not_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct Bag[=T] { xs: Vec[T] }
+impl[T] Bag[T] {
+    fn n(ref self) -> i64 { let v = self.xs; return v.len(); }
+}
+struct Plain { xs: Vec[i64] }
+impl Plain {
+    fn n(ref self) -> i64 { let v = self.xs; return v.len(); }
+}
+struct Named[=T] { name: String, xs: Vec[T] }
+impl[T] Named[T] {
+    fn nm(ref self) -> i64 { let s = self.name; return s.len(); }
+}
+fn free_n[T](b: ref Bag[T]) -> i64 { let v = b.xs; return v.len(); }
+fn main() {
+    let base: i64 = env.args().len();
+    // (a) the filed shape: scalar element, generic `ref self` receiver.
+    let mut a: Bag[i64] = Bag { xs: Vec.new() };
+    a.xs.push(base);
+    a.xs.push(base + 1);
+    println(f"a={a.n()} {a.xs[0]} {a.xs[1]}");
+    // (b) HEAP-allocated String elements (literals are rodata with cap 0 and
+    // would make the second free a silent no-op).
+    let mut ss: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 3 { ss.push(f"item{i + base}"); i = i + 1; }
+    let b: Bag[String] = Bag { xs: ss };
+    println(f"b={b.n()} {b.xs[0]}");
+    // (c) generic FREE fn with a `ref` param — not about the `self` receiver.
+    println(f"c={free_n(a)} {a.xs[1]}");
+    // (d) nested-generic concrete: `T = Vec[i64]`, the param bound to a type
+    // that itself carries generic args.
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(base + 6);
+    let mut d: Bag[Vec[i64]] = Bag { xs: Vec.new() };
+    d.xs.push(inner);
+    println(f"d={d.n()} {d.xs[0][0]}");
+    // (e) NON-generic control: clean pre-fix.
+    let mut e: Plain = Plain { xs: Vec.new() };
+    e.xs.push(base + 8);
+    println(f"e={e.n()} {e.xs[0]}");
+    // (f) bare `String` field of a generic struct: no param to substitute, so
+    // this reached the clone pre-fix too.
+    let f: Named[i64] = Named { name: f"nm{base}", xs: Vec.new() };
+    println(f"f={f.nm()} {f.name}");
+}
+"#,
+            &["a=2 1 2", "b=3 item1", "c=2 2", "d=1 7", "e=1 9", "f=3 nm1"],
+            "generic-borrowed-field-move-out",
+        );
+    }
 }

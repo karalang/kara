@@ -42046,3 +42046,63 @@ fn container_bodies_walks_fire_at_the_nll_point() {
          [set 1]\nK6\n|set\n"
     );
 }
+
+/// B-2026-08-28-13 oracle. Moving a heap field OUT of a BORROWED binding is
+/// legal and yields a COPY — that is what the `mutate` case pins, and it is
+/// what settled the ownership question the ledger row left open (reject the
+/// move, or copy for the callee?). The row's "likely shape of the fix"
+/// suggested the front end arguably should not accept the move at all; the
+/// tree walk and the NON-GENERIC compiled path had both already agreed for as
+/// long as they existed that it is a copy, so the answer was to make the
+/// generic compiled path match, not to add a diagnostic.
+///
+/// Every case here was ALREADY CORRECT under the interpreter — that is the
+/// point of the file. These are the reference values the codegen twin
+/// (`e2e_generic_borrowed_field_move_out_is_a_copy_not_an_alias`) is asserted
+/// against, so a future change that "fixes" a divergence by moving the
+/// interpreter fails here first.
+#[test]
+fn generic_borrowed_field_move_out_yields_a_copy() {
+    // The local is a copy: pushing to it must not reach the caller's field.
+    assert_eq!(
+        run("struct Bag[=T] { xs: Vec[T] }\n\
+             impl[T] Bag[T] { fn n(ref self) -> i64 { let mut v = self.xs; v.push(99); return v.len(); } }\n\
+             fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+             a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); println(f\"{a.xs.len()}\"); }"),
+        "3\n2\n"
+    );
+    // The caller's field survives the call intact.
+    assert_eq!(
+        run("struct Bag[=T] { xs: Vec[T] }\n\
+             impl[T] Bag[T] { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+             fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+             a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); println(f\"{a.xs[0]}\"); }"),
+        "2\n1\n"
+    );
+    // A generic FREE fn with a `ref` param — not about the `self` receiver.
+    assert_eq!(
+        run("struct Bag[=T] { xs: Vec[T] }\n\
+             fn n[T](b: ref Bag[T]) -> i64 { let v = b.xs; return v.len(); }\n\
+             fn main() { let mut a: Bag[i64] = Bag { xs: Vec.new() };\n\
+             a.xs.push(1); a.xs.push(2); println(f\"{n(a)}\"); }"),
+        "2\n"
+    );
+    // `T` bound to a type that itself carries generic args.
+    assert_eq!(
+        run("struct Bag[=T] { xs: Vec[T] }\n\
+             impl[T] Bag[T] { fn n(ref self) -> i64 { let v = self.xs; return v.len(); } }\n\
+             fn main() { let mut a: Bag[Vec[i64]] = Bag { xs: Vec.new() };\n\
+             let mut inner: Vec[i64] = Vec.new(); inner.push(7); a.xs.push(inner);\n\
+             println(f\"{a.n()}\"); println(f\"{a.xs[0][0]}\"); }"),
+        "1\n7\n"
+    );
+    // Non-generic twin: the same answer, which is why it was the control that
+    // isolated the defect to type-param erasure.
+    assert_eq!(
+        run("struct Bag { xs: Vec[i64] }\n\
+             impl Bag { fn n(ref self) -> i64 { let mut v = self.xs; v.push(99); return v.len(); } }\n\
+             fn main() { let mut a: Bag = Bag { xs: Vec.new() };\n\
+             a.xs.push(1); a.xs.push(2); println(f\"{a.n()}\"); println(f\"{a.xs.len()}\"); }"),
+        "3\n2\n"
+    );
+}
