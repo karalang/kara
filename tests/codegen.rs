@@ -108395,11 +108395,15 @@ fn main() {
     /// reached the generic tail with a POINTER where the `StructValue` guard
     /// wanted an aggregate, and died on the loud gap.
     ///
-    /// Deliberately SCALAR fields only. A `String`/`Vec` field on a shared
-    /// TEMPORARY receiver is a separate, pre-existing defect — the CALL
-    /// spelling `make().tag` leaks the buffer under LSan on a compiler without
-    /// any of this — so that shape keeps failing loudly rather than being made
-    /// to build on top of a broken clone/release protocol.
+    /// SCALAR fields only, which was a DELIBERATE restriction when this landed:
+    /// a `String`/`Vec` field on a shared TEMPORARY receiver was a separate,
+    /// pre-existing defect, so that shape was left failing loudly rather than
+    /// built on top of a broken release protocol. B-2026-08-28-14 fixed the
+    /// protocol and lifted the restriction — see
+    /// `test_e2e_heap_field_read_on_a_shared_temporary_receiver` for the heap
+    /// half. This test stays scalar-only on purpose: it is the gate for the
+    /// receiver-TYPING half, and keeping it free of the clone machinery means a
+    /// failure here still points at typing rather than at ownership.
     #[test]
     fn test_e2e_scalar_field_read_on_a_shared_block_receiver() {
         let src = r#"
@@ -108439,6 +108443,84 @@ fn main() {
         assert_eq!(
             aot, expected,
             "a compiled scalar field read on a shared block receiver must match the interpreter",
+        );
+    }
+
+    /// A `String` / `Vec` field read on a shared-struct TEMPORARY receiver
+    /// (B-2026-08-28-14).
+    ///
+    /// Two defects met here, and each hid the other. The temporary's release
+    /// fell back to a SHALLOW `free(box)` — the recursive drop fn is
+    /// synthesized lazily by `track_rc_var`, i.e. by a BINDING, and a temporary
+    /// has none — so the receiver's heap payload was never freed. Making the
+    /// release deep then exposed the second: the loaded `{ptr,len,cap}` is an
+    /// ALIAS of a buffer the box owns, and the deep copy that makes the read
+    /// independent runs one step later, so the release had to move after it.
+    ///
+    /// The behaviour depended on an unrelated statement elsewhere in the
+    /// program, which is what made it worth a test rather than a one-line fix:
+    /// with no `Node` binding anywhere the read leaked, and adding a `let w =
+    /// make(9);` on any line made the same read a use-after-free instead.
+    ///
+    /// All three temporary shapes are covered because they share one release
+    /// helper: a CALL result, a value BLOCK, and an `if`. The ownership half is
+    /// gated separately by
+    /// `memory_sanitizer::test_shared_temp_receiver_heap_field_read_owns_its_copy`;
+    /// this test is the CORRECTNESS half, against the interpreter oracle.
+    #[test]
+    fn test_e2e_heap_field_read_on_a_shared_temporary_receiver() {
+        let src = r#"
+shared struct Node { v: i64, tag: String, xs: Vec[i64] }
+
+fn make(k: i64) -> Node {
+    return Node { v: k, tag: f"t{k}", xs: [k, k + 1] };
+}
+
+shared struct Outer { id: i64, inner: Node }
+
+fn make_outer(k: i64) -> Outer {
+    return Outer { id: k, inner: make(k) };
+}
+
+fn main() {
+    println(make(1).tag);
+    println({ let n = make(2); n }.tag);
+    let c = true;
+    println(if c { make(3) } else { make(4) }.tag);
+    println(if not c { make(5) } else { make(6) }.tag);
+    println(make(7).xs.len());
+    println(make(8).v);
+    let kept = make(9).tag;
+    println(kept);
+    let b = make(10);
+    println(b.tag);
+    println(make(11).tag.len());
+    println(make_outer(12).inner.tag);
+    println(make(13).tag + "!");
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity. Every line carries its own seed, so a receiver resolved
+        // from the wrong temporary prints a different number rather than
+        // coinciding; rows 3 and 4 take OPPOSITE `if` branches; row 5 reads the
+        // `Vec` field and rows 6 and 9 the scalar and the bound receiver, so the
+        // heap path cannot pass by claiming every field. Row 11 is the NESTED
+        // bare-`shared` hop, which is what forced the inner-refcount
+        // compensation — without it this row printed garbage on both compiled
+        // backends while the interpreter was right.
+        assert_eq!(
+            expected, "t1\nt2\nt3\nt6\n2\n8\nt9\nt10\n3\nt12\nt13!\n",
+            "interpreter oracle is wrong for a shared temporary receiver",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a compiled heap field read on a shared temporary receiver must match the interpreter",
         );
     }
 

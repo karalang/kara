@@ -503,15 +503,95 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(&field_te) {
                 self.emit_option_inner_rc_inc_for_loaded(loaded, inner_info.heap_type);
+            } else if let Some(inner_heap) = self.shared_heap_type_for_type_expr(&field_te) {
+                // B-2026-08-28-14 — a BARE `shared T` field is the same alias
+                // one level down, and needs the same +1 for the same reason.
+                // It never needed one before because the release above was a
+                // shallow `free` that walked no fields; once it became the
+                // recursive drop it always claimed to be, that drop dec's this
+                // inner box and the loaded pointer would dangle —
+                // `make_outer(12).inner.tag` printed `t12` before and garbage
+                // after, on both compiled backends, until this compensated it.
+                //
+                // Kept as the `else` of the Option arm rather than folded in:
+                // `shared_heap_type_for_type_expr` keys on the head segment, so
+                // `Option[Node]` resolves to `Option` and never reaches here,
+                // but stating the exclusivity beats relying on it.
+                if let BasicValueEnum::PointerValue(inner_ptr) = loaded {
+                    self.emit_refcount_inc_by_type(inner_heap, inner_ptr);
+                }
             }
         }
+        // B-2026-08-28-14 — SYNTHESIZE THE RECURSIVE DROP FN BEFORE RELEASING.
+        //
+        // `emit_rc_dec` dispatches to `__karac_rc_drop_<Name>` only when one has
+        // already been synthesized for this heap type, and falls back to a plain
+        // `free(ptr)` otherwise — which releases the BOX and none of the
+        // `String` / `Vec` / `Map` / inner-shared buffers it owns. Synthesis is
+        // lazy and driven by `track_rc_var`, i.e. by a BINDING. A temporary has
+        // no binding, so nothing had ever established the precondition here and
+        // every field read on a shared temporary leaked the receiver's whole
+        // heap payload.
+        //
+        // The tell was that the SAME expression's memory behaviour depended on
+        // an unrelated statement elsewhere in the program: with no `Node`
+        // binding anywhere, `make(1).tag` leaked (shallow free); add a `let w =
+        // make(9);` on any line and the drop fn existed, the release became
+        // deep, and the same read turned into a use-after-free instead. Both
+        // measured. Establishing the precondition here is what every other dec
+        // site already does through `track_rc_var`; the call is memoized and
+        // idempotent, and returns `None` for a struct whose fields are all
+        // primitive (where the plain `free` was right all along).
+        //
+        // Note this is also what makes the `Option[shared]` compensation above
+        // correct: that inc is emitted to be cancelled by the recursive drop's
+        // dec, which is a claim the comment already made and the emitted code
+        // did not keep whenever the drop fn was missing.
+        let _ = self.emit_shared_struct_rc_drop_fn(type_name);
         // The call-result temp owns one ref (RC=1 from the
         // callee's move-out inc + scope-exit dec under bug
         // #7). Release it now — the field value has been
         // read into a register and no longer depends on
         // the heap object.
-        self.emit_refcount_dec_by_type(info.heap_type, ptr);
+        //
+        // ... unless the field is a `String` / `Vec`, where "no longer depends
+        // on the heap object" is false: the register holds a `{ptr,len,cap}`
+        // ALIAS of a buffer the box owns, and the release — now that it is deep
+        // — frees it. The deep copy that makes the read independent runs one
+        // step later, in `exprs.rs`'s FieldAccess arm, so the release waits for
+        // it. See `deferred_shared_temp_release` for why the release moves
+        // rather than the clone.
+        let heap_field = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(type_name)
+            .and_then(|tes| tes.get(idx))
+            .cloned()
+            .is_some_and(|fte| {
+                self.is_string_type_expr(&fte) || self.extract_vec_elem_type(&fte).is_some()
+            });
+        if heap_field {
+            debug_assert!(
+                self.deferred_shared_temp_release.is_none(),
+                "a shared-temp receiver release was still pending when another was deferred — \
+                 a caller of `compile_field_access` is not draining it"
+            );
+            self.deferred_shared_temp_release = Some((info.heap_type, ptr));
+        } else {
+            self.emit_refcount_dec_by_type(info.heap_type, ptr);
+        }
         loaded
+    }
+
+    /// Emit the release `load_owned_shared_temp_field` held back so the
+    /// heap-field deep copy could be taken from a live buffer
+    /// (B-2026-08-28-14). A no-op unless one is pending, which is the common
+    /// case — only a `String` / `Vec` field read on a shared TEMPORARY receiver
+    /// defers. Every caller of [`Self::compile_field_access`] must call this.
+    pub(super) fn release_deferred_shared_temp_receiver(&mut self) {
+        if let Some((heap_type, ptr)) = self.deferred_shared_temp_release.take() {
+            self.emit_refcount_dec_by_type(heap_type, ptr);
+        }
     }
     pub(super) fn compile_field_access(
         &mut self,
@@ -1057,42 +1137,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get(&type_name)
                             .and_then(|names| names.iter().position(|n| n == field))
                         {
-                            // DECLINE a field that the shared-field-read cloner
-                            // will want to deep-copy (`String` / `Vec`). That
-                            // clone runs in `exprs.rs`'s FieldAccess arm AFTER
-                            // this returns — which is after
-                            // `load_owned_shared_temp_field` has released the
-                            // temporary's last ref and its recursive drop has
-                            // freed the buffer. Taking this branch there is a
-                            // heap-use-after-free, measured under ASAN, and a
-                            // memory error is not an improvement on a loud
-                            // "cannot resolve field" gap.
-                            //
-                            // The clone/release protocol for a shared TEMPORARY
-                            // receiver is broken independently of this branch:
-                            // the CALL spelling of the same read,
-                            // `make().tag`, LEAKS the buffer on the unfixed
-                            // compiler (5 bytes, LSan). That is its own bug —
-                            // fixing it means ordering the clone before the
-                            // release without turning it into the double-clone
-                            // the cloner's borrowed-receiver gate warns about —
-                            // so the scalar case is fixed here and the heap
-                            // case is left failing honestly.
-                            let heap_field = self
-                                .type_decls
-                                .struct_field_type_exprs
-                                .get(type_name.as_str())
-                                .and_then(|tes| tes.get(idx))
-                                .cloned()
-                                .is_some_and(|fte| {
-                                    self.is_string_type_expr(&fte)
-                                        || self.extract_vec_elem_type(&fte).is_some()
-                                });
-                            if !heap_field {
-                                return Ok(self.load_owned_shared_temp_field(
-                                    ptr, &type_name, &info, idx, field,
-                                ));
-                            }
+                            // A `String` / `Vec` field is served here too,
+                            // since B-2026-08-28-14. It used to be DECLINED —
+                            // left to the loud "cannot resolve field" gap —
+                            // because the temporary's release ran before the
+                            // deep copy that makes the read independent, so
+                            // compiling this shape produced a
+                            // heap-use-after-free in `karac_string_clone`
+                            // instead of a working program. That ordering is
+                            // fixed at the release, not here: the release now
+                            // waits for the clone (`release_deferred_shared_temp_receiver`),
+                            // so there is no longer a field shape to decline.
+                            return Ok(self
+                                .load_owned_shared_temp_field(ptr, &type_name, &info, idx, field));
                         }
                     }
                 }

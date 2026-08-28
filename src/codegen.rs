@@ -1496,6 +1496,34 @@ pub(super) struct Codegen<'ctx> {
     /// there too, because the return path clones again and this one is left with
     /// no owner. One flag beats threading a bool through ~25 argument call sites
     /// to reach the one caller that needs to say no.
+    /// B-2026-08-28-14 — a shared-struct TEMPORARY receiver's pending RELEASE,
+    /// held back until the heap-field deep copy has been taken.
+    ///
+    /// `load_owned_shared_temp_field` releases the temporary's last ref as soon
+    /// as the field is in a register — sound for a SCALAR field, and wrong for a
+    /// `String` / `Vec` one, whose `{ptr,len,cap}` is an ALIAS of a buffer the
+    /// box still owns. The deep copy that makes the read independent runs one
+    /// step later, in `exprs.rs`'s FieldAccess arm
+    /// (`clone_shared_struct_heap_field_read`), so an eager release hands that
+    /// copy a freed source: measured as `heap-use-after-free` in
+    /// `karac_string_clone`, via `memcpy`.
+    ///
+    /// Deferring the release — rather than moving the clone earlier — keeps ONE
+    /// clone site. Cloning inside the release path instead would make it the
+    /// first of two, the "leaving this buffer with no owner" hazard
+    /// `clone_shared_struct_heap_field_read`'s borrowed-receiver gate already
+    /// documents for B-2026-07-29-21's family.
+    ///
+    /// Set immediately before `compile_field_access` returns and drained
+    /// immediately after the cloners run, so it never spans an unrelated
+    /// compile. A NESTED read (`make().inner.tag`) drains the inner access
+    /// through the same FieldAccess arm before the outer one sets its own, and
+    /// the cloners between set and drain compile no sub-expression of their own.
+    /// Both callers of `compile_field_access` drain, so a forgotten drain would
+    /// have to be a NEW caller; the debug assertion at the set site catches that
+    /// as an overwrite rather than letting it silently drop a release.
+    pub(crate) deferred_shared_temp_release:
+        Option<(inkwell::types::StructType<'ctx>, PointerValue<'ctx>)>,
     pub(crate) in_return_defensive_copy: bool,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
@@ -5680,6 +5708,7 @@ impl<'ctx> Codegen<'ctx> {
                 drop_fn_cache: HashMap::new(),
             },
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
+            deferred_shared_temp_release: None,
             vec_elem_field_clone_log: Vec::new(),
             in_return_defensive_copy: false,
             tracing: Tracing {

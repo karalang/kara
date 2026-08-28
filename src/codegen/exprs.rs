@@ -1564,7 +1564,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // BOX. Tried after the container arm; each is a no-op for the
                 // other's shape.
                 let v = self.clone_vec_elem_heap_field_read(expr, v)?;
-                self.clone_shared_struct_heap_field_read(expr, v)
+                let v = self.clone_shared_struct_heap_field_read(expr, v)?;
+                // B-2026-08-28-14 — a shared-struct TEMPORARY receiver holds its
+                // release back to here, so the clone above copies from a buffer
+                // the box still owns. No-op for every other receiver shape.
+                self.release_deferred_shared_temp_receiver();
+                Ok(v)
             }
             ExprKind::StructLiteral { path, fields, .. } => {
                 let name = path.last().map(|s| s.as_str()).unwrap_or("");

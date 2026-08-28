@@ -56885,4 +56885,51 @@ fn main() {
             "generic-borrowed-field-move-out",
         );
     }
+
+    /// A `String` / `Vec` field read off a shared-struct TEMPORARY receiver
+    /// owns its copy (B-2026-08-28-14).
+    ///
+    /// The read is served by `load_owned_shared_temp_field`, which releases the
+    /// temporary's last ref as soon as the field is in a register — true for a
+    /// SCALAR field and false for a heap one, whose `{ptr,len,cap}` still points
+    /// into the box that release is about to drop. The deep copy that gives the
+    /// read an independent buffer runs one step later, in `exprs.rs`'s
+    /// FieldAccess arm, so before this fix the temp spelling below printed the
+    /// right bytes and leaked them.
+    ///
+    /// All three temporary shapes are here because they release through the same
+    /// helper and differ only in how the ref arrives: a CALL result, a value
+    /// BLOCK that neutralized its tail's cleanup, and an `if` whose taken branch
+    /// did. The bound receiver rides along as the control that was always clean
+    /// — a fix that over-corrects by cloning for every receiver double-frees it.
+    #[test]
+    fn test_shared_temp_receiver_heap_field_read_owns_its_copy() {
+        let src = r#"
+shared struct Node { v: i64, tag: String, xs: Vec[i64] }
+
+fn make(k: i64) -> Node {
+    return Node { v: k, tag: "hello".to_string(), xs: [k, k + 1] };
+}
+
+fn main() {
+    println(make(1).tag);
+    println({ let n = make(2); n }.tag);
+    let c = true;
+    println(if c { make(3) } else { make(4) }.tag);
+    println(make(5).xs.len());
+    // The copy has to OUTLIVE the temporary it was read from, which is the
+    // half a clone emitted after the release cannot deliver.
+    let kept = make(6).tag;
+    println(kept);
+    // The bound receiver was never broken and must not become a double free.
+    let b = make(7);
+    println(b.tag);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &["hello", "hello", "hello", "2", "hello", "hello"],
+            "shared-temp-receiver-heap-field-read",
+        );
+    }
 }

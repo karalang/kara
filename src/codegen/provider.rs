@@ -712,6 +712,11 @@ impl<'ctx> super::Codegen<'ctx> {
         //    compiling a field access on the span expression — handles
         //    identifier / literal / builder-chain receivers uniformly.
         let span_id = self.compile_field_access(span_expr, "span_id")?;
+        // Every caller of `compile_field_access` drains the shared-temp receiver
+        // release it may have deferred (B-2026-08-28-14). Inert here — `span_id`
+        // is a scalar field, and only a `String` / `Vec` one defers — but the
+        // rule is "every caller", not "every caller that currently can".
+        self.release_deferred_shared_temp_receiver();
 
         // 3. Install the body's active span.
         self.builder
