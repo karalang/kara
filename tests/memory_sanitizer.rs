@@ -1671,6 +1671,74 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-59 — adding the enum's own `Drop` body to a named tuple
+    /// leaf leaves its payload heap owned exactly once.
+    ///
+    /// The body half was a run-vs-build divergence: the compiled backends ran
+    /// the payload body and lost `<E>.drop`. This is the half that decides
+    /// whether adding it is safe, and the risk is specific — the enum arm
+    /// already registers TWO actions on this slot (`track_enum_var` for the
+    /// memory and the payload walk), so a third has to be complementary rather
+    /// than a second claim on the same heap.
+    ///
+    /// It is: the `karac_drop_<E>` wrapper's field-cleanup half is a no-op for
+    /// an enum name, so it contributes the body alone — the same dual the
+    /// argument-position registrar performs. `consumed-leaf` is where a wrong
+    /// answer would surface as a use-after-free rather than as a count.
+    #[test]
+    fn asan_named_enum_tuple_leaf_owns_its_payload_once() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id} {self.name}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let (gv, gn) = (E.A(R {{ id: 5, name: f\"n{{5}}\" }}), 6);\n\
+             \x20            println(f\"{{gn}}\") }}\n"
+            ),
+            &["dE", "dR5 n5", "6"],
+            "fresh-source",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let g = (E.A(R {{ id: 5, name: f\"n{{5}}\" }}), 6);\n\
+             \x20            let (gv, gn) = g; println(f\"{{gn}}\") }}\n"
+            ),
+            &["dE", "dR5 n5", "6"],
+            "place-source",
+        );
+        // The leaf handed to a callee — the payload buffer outlives the
+        // destructure, so a wrong owner shows up as a use-after-free.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(e: E) -> i64 {{ 7 }}\n\
+             \x20            fn main() {{ let (gv, gn) = (E.A(R {{ id: 5, name: f\"n{{5}}\" }}), 6);\n\
+             \x20            println(f\"{{take(gv) + gn}}\") }}\n"
+            ),
+            &["13", "dE", "dR5 n5"],
+            "consumed-leaf",
+        );
+        // CONTROL — a by-value tuple PARAM source, whose elements' bodies are
+        // owned caller-side. One body, one free.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn take(p: (E, i64)) -> i64 {{ let (gv, gn) = p; gn }}\n\
+             \x20            fn main() {{ let arg = (E.A(R {{ id: 5, name: f\"n{{5}}\" }}), 6);\n\
+             \x20            println(f\"{{take(arg)}}\") }}\n"
+            ),
+            &["6", "dE", "dR5 n5"],
+            "param-source-control",
+        );
+        // CONTROL — the same enum BOUND directly, no destructure.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let gv = E.A(R {{ id: 5, name: f\"n{{5}}\" }}); println(\"mid\") }}\n"
+            ),
+            &["dE", "dR5 n5", "mid"],
+            "bound-control",
+        );
+    }
+
     /// B-2026-08-28-60 — a tuple binding whose element is a STRUCT carrying a
     /// `Vec[<heap>]` frees that `Vec`'s elements, not just its buffer.
     ///

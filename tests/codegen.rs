@@ -13820,6 +13820,110 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-59 — a NAMED tuple-destructure leaf of ENUM type runs the
+    /// enum's OWN `Drop` body, not just its payload's.
+    ///
+    /// `track_destructure_leaf_cleanup`'s enum arm registered the memory
+    /// (`track_enum_var`) and the live variant's PAYLOAD walk, then returned —
+    /// before reaching the struct arm below it, which has carried the own-body
+    /// cascade since B-2026-08-28-1. So the leaf WAS reached and walked, and
+    /// only `<E>.drop` was missing.
+    ///
+    /// THE PAYLOAD/UNIT SPLIT IS THE DIAGNOSTIC, and both spellings are rows
+    /// here because they show the same loss at different contrast: with a
+    /// payload the compiled side still printed `dR5` and lost `dE` alone, which
+    /// is what proves the registration existed; the unit variant has no payload
+    /// to hide behind and showed the loss bare.
+    ///
+    /// The own body is registered LAST so the LIFO drain fires it FIRST — own
+    /// body, then payload, then memory. That is the interpreter's order and
+    /// what the parity gate compares; registering it earlier would print `dR5`
+    /// before `dE`.
+    ///
+    /// `param-source-control` is the row that holds the `register_user_bodies`
+    /// gate: a by-value tuple PARAM already owns its elements' bodies
+    /// caller-side, so the leaf must not register a second one.
+    #[test]
+    fn e2e_named_enum_tuple_leaf_runs_the_enums_own_drop_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro, fresh tuple-literal source.
+            (
+                "fresh-payload-variant",
+                "fn main() { let (gv, gn) = (E.A(R { id: 5 }), 6); println(f\"{gn}\") }\n",
+                "dE\ndR5\n6\n",
+            ),
+            // The unit variant, where the loss showed bare.
+            (
+                "fresh-unit-variant",
+                "fn main() { let (gv, gn) = (E.B, 6); println(f\"{gn}\") }\n",
+                "dE\n6\n",
+            ),
+            // PLACE source, both variants.
+            (
+                "place-payload-variant",
+                "fn main() { let g = (E.A(R { id: 5 }), 6); let (gv, gn) = g;\n\
+                 \x20            println(f\"{gn}\") }\n",
+                "dE\ndR5\n6\n",
+            ),
+            (
+                "place-unit-variant",
+                "fn main() { let g = (E.B, 6); let (gv, gn) = g; println(f\"{gn}\") }\n",
+                "dE\n6\n",
+            ),
+            // The leaf CONSUMED by a call rather than left to die.
+            (
+                "consumed-leaf",
+                "fn take(e: E) -> i64 { 7 }\n\
+                 fn main() { let (gv, gn) = (E.A(R { id: 5 }), 6);\n\
+                 \x20            println(f\"{take(gv) + gn}\") }\n",
+                "13\ndE\ndR5\n",
+            ),
+            // CONTROL — the same enum BOUND directly, no destructure. Correct
+            // before this and the yardstick for the order.
+            (
+                "bound-control",
+                "fn main() { let gv = E.A(R { id: 5 }); println(\"mid\") }\n",
+                "dE\ndR5\nmid\n",
+            ),
+            // CONTROL — the tuple never destructured.
+            (
+                "no-destructure-control",
+                "fn main() { let g = (E.A(R { id: 5 }), 6); println(f\"{g.1}\") }\n",
+                "6\ndE\ndR5\n",
+            ),
+            // CONTROL — a by-value tuple PARAM source. Its elements' bodies are
+            // owned caller-side, so the leaf must register nothing; this is the
+            // row that fails if the `register_user_bodies` gate is dropped.
+            (
+                "param-source-control",
+                "fn take(p: (E, i64)) -> i64 { let (gv, gn) = p; gn }\n\
+                 fn main() { let arg = (E.A(R { id: 5 }), 6); println(f\"{take(arg)}\") }\n",
+                "6\ndE\ndR5\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // BOUNDARY — an enum with NO `Drop` of its own. Its payload body was
+        // already correct and must stay at ONE: the new registration is gated
+        // on the enum declaring `Drop`, not on it being an enum.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                 enum E { A(R), B }\n\
+                 fn main() { let (gv, gn) = (E.A(R { id: 5 }), 6); println(f\"{gn}\") }\n"
+            )
+            .as_deref(),
+            Some("dR5\n6\n"),
+            "payload-only-enum-control"
+        );
+    }
+
     /// B-2026-08-28-26 — a TUPLE-TYPED leaf BOUND out of a tuple destructure
     /// runs its inner element's user `Drop` body, at the interpreter's
     /// placement.

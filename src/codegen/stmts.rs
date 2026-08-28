@@ -12864,6 +12864,35 @@ impl<'ctx> super::Codegen<'ctx> {
                             UserDropKind::ContainerElemBodies,
                         );
                     }
+                    // B-2026-08-28-59 — the enum's OWN `impl Drop` body, which
+                    // this arm never registered. It registered the memory and
+                    // the PAYLOAD walk, so a named enum-typed leaf ran
+                    // `<payload>.drop` and lost `<E>.drop`: `let (gv, gn) =
+                    // (E.A(R { .. }), 6)` printed the payload body on both
+                    // compiled backends and not the enum's own, where the
+                    // interpreter printed both. The struct arm just below has
+                    // carried this cascade since B-2026-08-28-1; the enum arm
+                    // returns before reaching it.
+                    //
+                    // COMPLEMENTARY to the two registrations above, not a
+                    // replacement — the same dual the argument-position
+                    // registrar performs (`track_inline_owned_aggregate_arg`'s
+                    // enum arm: memory, then the payload walker, then the
+                    // `karac_drop_<E>` wrapper). The wrapper's field-cleanup
+                    // half is a no-op for an enum name, so it adds the body and
+                    // nothing else.
+                    //
+                    // LAST, so the LIFO drain fires it FIRST: own body, then
+                    // payload, then memory — which is the interpreter's order
+                    // (`dE` before `dR5`) and what the parity gate compares.
+                    if register_user_bodies
+                        && self
+                            .program_snapshot
+                            .as_deref()
+                            .is_some_and(|p| p.drop_method_keys.contains_key(&tn))
+                    {
+                        self.track_user_drop_var(&tn, name, alloca);
+                    }
                     return;
                 }
             }
