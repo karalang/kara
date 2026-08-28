@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 219 | 1 |
+| leak | 220 | 2 |
 | run-vs-build | 212 | 5 |
 | missing-feature | 187 | 0 |
-| double-free | 151 | 0 |
+| double-free | 152 | 1 |
 | codegen-gap | 148 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1182 | 7 |
+| codegen | 1184 | 9 |
 | typecheck | 278 | 0 |
 | interp | 228 | 4 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1745 surfaced · 7 open · 1712 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1747 surfaced · 9 open · 1712 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1745 surfaced
 | B-2026-08-28-70 | 2026-08-28 | interp+codegen | medium | A CONDITIONALLY-RETURNED owned param of a METHOD loses its `Drop` body IN THE INTERPRETER while all three compiled backends run it -- and the callee-side flip that fixed the free-function twin (B-2026-08-28-22) DOUBLE-FIRES here, because `method_call.rs`'s argument handling does not stand down the way `call_dispatch.rs`'s does | — |
 | B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
 | B-2026-08-28-72 | 2026-08-28 | codegen | medium | A `match` THAT IS A FUNCTION'S RETURNED VALUE RUNS THE YIELDED PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `fn take(o: Option[R]) -> R { match o { Some(r) => { r } .. } }` is interp `dR1` vs compiled `dR1 dR1`; memory stays balanced and NO pattern-binding registration fires, so it is not the arm registration B-2026-08-28-66 turned out to be | — |
+| B-2026-08-28-73 | 2026-08-28 | codegen | high | REGRESSION from f862656: A CONSUMING ARM THAT HANDS ITS BOUND ENUM PAYLOAD OUT AS THE MATCH'S VALUE DOUBLE-FREES THE PAYLOAD ON BOTH COMPILED BACKENDS -- `let k = match o { Some(g) => { g } .. }` for an own-`Drop` `enum G { A(String), B }` aborts with `free(): double free detected in tcache 2` under plain `karac run`, no sanitizer; a `while let` leak of 456 B lands in the same commit, and both fail CI's asan-o0 job on main | — |
+| B-2026-08-28-74 | 2026-08-28 | codegen | medium | THREE REAL LEAKS THE DEFAULT LSan CONFIGURATION HIDES: a `shared` ENUM broken out of a `loop` (32 B x 3 fixtures, `pick`) and a tensor ref-return (72 B), reported only under `LSAN_OPTIONS=use_stacks=0` -- the fixtures assert cleanliness by name and pass today; the rest of the suite is clean, with -O2 showing ZERO real leaks across 1289 fixtures | — |
 
 ### Relocated (2)
 
