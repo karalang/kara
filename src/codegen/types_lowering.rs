@@ -1952,6 +1952,92 @@ impl<'ctx> super::Codegen<'ctx> {
         cur
     }
 
+    /// B-2026-08-28-11 — record `var_name`'s generic INSTANTIATION when `te`
+    /// supplies one.
+    ///
+    /// A simple `let` records this at its own site, but a DESTRUCTURE leaf
+    /// reaches its side-tables by other routes and recorded nothing, so
+    /// everything downstream that asks what `T` is for the binding read an empty
+    /// substitution and judged `Box2 { v: T }` Drop-free through a bare `T` — a
+    /// generic leaf's Drop-bearing field ran no body on either compiled backend,
+    /// on every source, while the interpreter ran it.
+    ///
+    /// `concrete_generic_struct_inst` RESOLVES type parameters through the
+    /// active monomorph substitution and answers `None` when there was nothing
+    /// to resolve, which is the case for an already-concrete `Box2[R]` outside
+    /// any generic fn. So fall back to the `TypeExpr` itself, exactly as the
+    /// `let` site does; the guard is what keeps that fallback from recording a
+    /// bare `Box2`.
+    pub(super) fn record_generic_struct_inst(&mut self, var_name: &str, te: &TypeExpr) {
+        if !self.te_is_instantiated_generic_struct(te) {
+            return;
+        }
+        let inst = self
+            .concrete_generic_struct_inst(te)
+            .unwrap_or_else(|| te.clone());
+        self.type_decls
+            .enum_inst_var_types
+            .insert(var_name.to_string(), inst);
+    }
+
+    /// B-2026-08-28-11 — does `te` name a generic struct WITH its arguments
+    /// supplied (`Box2[R]`, not a bare `Box2`)? The negative case is the whole
+    /// point: a record whose parameters are still parameters — or absent —
+    /// satisfies the instantiation lookup and stops it before the arm that would
+    /// have substituted properly, so it is worse than no record at all.
+    fn te_is_instantiated_generic_struct(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(args) = p.generic_args.as_ref().filter(|a| !a.is_empty()) else {
+            return false;
+        };
+        if !p.segments.last().is_some_and(|n| {
+            self.type_decls
+                .struct_generic_params
+                .get(n.as_str())
+                .is_some_and(|ps| !ps.is_empty())
+        }) {
+            return false;
+        }
+        // EVERY argument must be a real type, not a type PARAMETER. `Bag[T]` —
+        // the shape a generic callee's declared return type produces, read from
+        // a caller with no active substitution — passes every other test here
+        // and is precisely the record the `let` site's B-2026-08-27-36 comment
+        // forbids: it satisfies the instantiation lookup and stops it before the
+        // arm that would have resolved `T`. Recording it made a generic tuple
+        // param destructured at the call site free the caller's buffer while it
+        // was still in use (`e2e_heap_tuple_arg_escaping_the_frame_is_freed_once`
+        // printed a dangling pointer where `x` belonged).
+        args.iter().all(|a| match a {
+            crate::ast::GenericArg::Type(t) => match &t.kind {
+                TypeKind::Path(ap) => ap.segments.last().is_some_and(|n| {
+                    self.is_known_layout_type_name(n)
+                        || Self::is_scalar_type_name(n)
+                        || matches!(
+                            n.as_str(),
+                            "String"
+                                | "str"
+                                | "Vec"
+                                | "VecDeque"
+                                | "Slice"
+                                | "Array"
+                                | "Map"
+                                | "Set"
+                                | "SortedMap"
+                                | "SortedSet"
+                                | "Option"
+                                | "Result"
+                        )
+                }),
+                // A tuple / fn / slice argument names no parameter.
+                _ => true,
+            },
+            // A const argument is concrete by construction.
+            _ => true,
+        })
+    }
+
     pub(super) fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
         // Slice-alias shadow guard (alias-metadata slice 4): any (re-)binding of
         // this name drops it from the scoped-alias map, so a local slice that
@@ -1969,6 +2055,21 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_var_from_type_expr(var_name, &base);
             return;
         }
+        // B-2026-08-28-11 — record the binding's generic INSTANTIATION.
+        //
+        // A simple `let` records it at its own site (`pattern_binding.rs`), but
+        // a DESTRUCTURE leaf reaches its side-tables only through here, and here
+        // never recorded one. Everything downstream that asks "what is `T` for
+        // this binding" then reads an empty substitution and judges
+        // `Box2 { v: T }` Drop-free through a bare `T` — so a generic leaf's
+        // Drop-bearing field ran no body on either compiled backend, on every
+        // source, while the interpreter ran it.
+        //
+        // Same CONCRETE-only rule the `let` site states (B-2026-08-27-36): a
+        // record whose params are still type PARAMETERS satisfies the resolution
+        // chain and stops it before the arm that would have substituted
+        // properly, which is worse than no record at all.
+        self.record_generic_struct_inst(var_name, te);
         // `Fn(..) -> R` / `OnceFn(..)` — a first-class FN VALUE binding
         // (B-2026-07-23-28). Register the env-first closure `FunctionType` in
         // `closure_fn_types` so a later `name(args)` dispatches as an INDIRECT

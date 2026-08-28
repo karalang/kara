@@ -4802,7 +4802,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The scalar type names a lowered operator callee may legitimately carry.
     /// Gated so a genuine 2-segment call (`Module.func`, an enum-variant
     /// constructor) is never mistaken for a lowered operator.
-    fn is_scalar_type_name(n: &str) -> bool {
+    pub(super) fn is_scalar_type_name(n: &str) -> bool {
         matches!(
             n,
             "i8" | "i16"
@@ -4837,6 +4837,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: TypeKind::Tuple(inner.iter().map(|x| self.infer_arg_elem_te(x)).collect()),
                 span: e.span,
             };
+        }
+        // B-2026-08-28-11 — a struct literal SPELLS its instantiation
+        // (`Box2[R] { v: … }`), and rebuilding the element's type from the NAME
+        // alone throws it away: every path below produces a bare `Path` with
+        // `generic_args: None`. That erasure is where a generic tuple element
+        // loses `T`, and it is invisible downstream — the name is present and
+        // reads as informative, so nothing later can tell the difference between
+        // `Box2` meaning `Box2[R]` and `Box2` meaning nothing in particular.
+        if let ExprKind::StructLiteral {
+            path,
+            generic_args: Some(args),
+            ..
+        } = &e.kind
+        {
+            if !args.is_empty() {
+                return TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: path.clone(),
+                        generic_args: Some(args.clone()),
+                        span: e.span,
+                    }),
+                    span: e.span,
+                };
+            }
         }
         let name = self
             .enum_name_of_expr(e)
@@ -8536,7 +8560,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         }),
                         span: crate::token::Span::default(),
                     };
+                    // B-2026-08-28-11 — a NAME is informative but LOSSY for a
+                    // generic struct: it spells `Box2`, never `Box2[R]`, so
+                    // everything downstream that asks what `T` is reads an empty
+                    // substitution and judges `Box2 { v: T }` Drop-free through a
+                    // bare `T`. The recorded TE carries the instantiation once
+                    // `infer_arg_elem_te` keeps it.
+                    //
+                    // Narrow on purpose, in the spirit of the degenerate rule
+                    // below rather than the wholesale preference its comment
+                    // warns against: the record wins ONLY where the name spelling
+                    // is provably missing information the record has — the type
+                    // declares generic params, the synth has no args, the record
+                    // does, and both name the same type.
                     if Self::tuple_elem_te_is_informative(&synth) {
+                        if self.name_spelling_loses_generic_args(&synth) {
+                            if let Some(rec) = recorded
+                                .and_then(|tes| tes.get(idx))
+                                .filter(|te| self.te_has_generic_args_for(te, &synth))
+                            {
+                                return rec.clone();
+                            }
+                        }
                         return synth;
                     }
                     recorded
@@ -8547,6 +8592,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
                 .collect(),
         )
+    }
+
+    /// B-2026-08-28-11 — does `te` name a GENERIC struct while carrying no
+    /// generic arguments? That is the shape the names-derived synthesis always
+    /// produces for one, and it is exactly as uninformative about `T` as an
+    /// absent name is about the type.
+    fn name_spelling_loses_generic_args(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if p.generic_args.is_some() {
+            return false;
+        }
+        p.segments.last().is_some_and(|n| {
+            self.type_decls
+                .struct_generic_params
+                .get(n.as_str())
+                .is_some_and(|ps| !ps.is_empty())
+        })
+    }
+
+    /// Does the RECORDED `te` supply the generic arguments `synth` is missing,
+    /// for the same type? Both halves matter: a record for a DIFFERENT type
+    /// would be worse than the lossy name, and one without args adds nothing.
+    fn te_has_generic_args_for(&self, te: &TypeExpr, synth: &TypeExpr) -> bool {
+        let (TypeKind::Path(rec), TypeKind::Path(syn)) = (&te.kind, &synth.kind) else {
+            return false;
+        };
+        rec.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+            && rec.segments.last() == syn.segments.last()
     }
 
     /// Does this tuple-element `TypeExpr` actually name something?

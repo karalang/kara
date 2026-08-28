@@ -12351,6 +12351,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // has no named source holding a competing claim, which is
                     // the same reason the comment below gives for passing
                     // `true`.
+                    // B-2026-08-28-11 — the FRESH-source twin of the
+                    // place-source path's recording, which gets it through
+                    // `register_var_from_type_expr`. Without it a generic leaf
+                    // off a CALL RESULT or a tuple LITERAL had no instantiation
+                    // either, and its Drop-bearing field was judged absent
+                    // through a bare `T` — the two sources the row measured
+                    // beside the local one, failing for the same reason at a
+                    // different site.
+                    if let Some(te) = elem_tes.and_then(|tes| tes.get(idx)).cloned() {
+                        self.record_generic_struct_inst(name, &te);
+                    }
                     let tuple_leaf_tes =
                         elem_tes
                             .and_then(|tes| tes.get(idx))

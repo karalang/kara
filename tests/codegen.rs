@@ -11940,6 +11940,98 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("2 x\n2 10\n"));
     }
 
+    /// A GENERIC struct leaf destructured out of a tuple runs its Drop-bearing
+    /// field's body (B-2026-08-28-11).
+    ///
+    /// `let (b, n) = (Box2[R] { v: R { id: 41 } }, 1);` ran the body under the
+    /// interpreter and on NEITHER compiled backend, uniformly across all three
+    /// sources — local, call result and tuple literal — which is what pointed at
+    /// the SUBSTITUTION rather than at reachability. The non-generic control in
+    /// the same position was always correct.
+    ///
+    /// THE GENERIC ARGUMENTS WERE ERASED THREE TIMES OVER, each fix necessary
+    /// and none sufficient:
+    ///  * `infer_arg_elem_te` rebuilt every element's type from its NAME, so the
+    ///    literal's own `Box2[R]` became a bare `Box2` before anything recorded
+    ///    it;
+    ///  * `tuple_var_elem_tes` then preferred that name spelling over the
+    ///    recorded `TypeExpr`, because a name is "informative" and the erasure
+    ///    is invisible — `Box2` meaning `Box2[R]` and `Box2` meaning nothing in
+    ///    particular are the same string;
+    ///  * and the destructure leaf recorded no instantiation at all, so even a
+    ///    correct element type never reached the leaf's own lookup.
+    ///
+    /// `two-params` and `used-leaf` guard the substitution's shape rather than
+    /// its presence. `non-drop-param` is the control that must stay SILENT: a
+    /// fix that recorded any instantiation at all, rather than the right one,
+    /// would run a body here where the interpreter runs none.
+    ///
+    /// The GENERIC-CALLEE spelling — `fn src[T](x: T) -> (Box2[T], i64)` — is
+    /// deliberately absent and filed separately: the element type there is a
+    /// bare `Box2[T]` read from the callee's declaration, and binding `T` needs
+    /// the call site's substitution, which is the B-2026-08-28-28 machinery
+    /// rather than this one. Recording `Box2[T]` instead is not a partial
+    /// answer but a harmful one — see the commit for the over-free it caused.
+    #[test]
+    fn e2e_generic_tuple_destructure_leaf_runs_its_field_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+             struct Box2[T] { v: T }\n";
+        for (label, body, want) in [
+            // The row's three sources, which failed identically.
+            (
+                "local-source",
+                "fn main() { let p = (Box2[R] { v: R { id: 41 } }, 1); let (b, n) = p;\n\
+                 \x20            println(f\"{n}\"); }\n",
+                "drop 41\n1\n",
+            ),
+            (
+                "call-source",
+                "fn make() -> (Box2[R], i64) { return (Box2[R] { v: R { id: 42 } }, 1); }\n\
+                 fn main() { let (b, n) = make(); println(f\"{n}\"); }\n",
+                "drop 42\n1\n",
+            ),
+            (
+                "literal-source",
+                "fn main() { let (b, n) = (Box2[R] { v: R { id: 43 } }, 1); println(f\"{n}\"); }\n",
+                "drop 43\n1\n",
+            ),
+            // The leaf is READ, so the body lands after the read.
+            (
+                "used-leaf",
+                "fn main() { let (b, n) = (Box2[R] { v: R { id: 44 } }, 1);\n\
+                 \x20            println(f\"{b.v.id}\"); println(f\"{n}\"); }\n",
+                "44\ndrop 44\n1\n",
+            ),
+            // TWO parameters, only one of them Drop-bearing.
+            (
+                "two-params",
+                "struct Pair2[A, B] { a: A, b: B }\n\
+                 fn main() { let (b, n) = (Pair2[R, i64] { a: R { id: 45 }, b: 7 }, 1);\n\
+                 \x20            println(f\"{n}\"); }\n",
+                "drop 45\n1\n",
+            ),
+            // CONTROL — the parameter carries no `Drop`, so nothing may run. A
+            // fix that records ANY instantiation rather than the right one
+            // fails here.
+            (
+                "non-drop-param",
+                "fn main() { let (b, n) = (Box2[i64] { v: 9 }, 1); println(f\"{n}\"); }\n",
+                "1\n",
+            ),
+            // CONTROL — the non-generic sibling, correct throughout.
+            (
+                "non-generic-control",
+                "struct W { r: R }\n\
+                 fn main() { let (w, n) = (W { r: R { id: 48 } }, 1); println(f\"{n}\"); }\n",
+                "drop 48\n1\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-27-44 — a heap-bearing TUPLE argument whose value ESCAPES the
     /// caller's frame. The callee entry-copies the tuple param and the COPY is
     /// what flows onward, so the caller's ORIGINAL is orphaned; unfixed, each
