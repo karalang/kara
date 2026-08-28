@@ -2526,7 +2526,7 @@ impl<'a> super::Interpreter<'a> {
     /// drop. Shared types are excluded (their teardown is refcount-driven).
     /// B-2026-08-28-2 — which top-level PARTS of by-value argument slot
     /// `arg_index` the named callee hands back through its return value. Thin
-    /// lookup over [`crate::ast::fn_returns_param_parts`]; empty for an unknown
+    /// lookup over [`crate::ast::fn_returns_param_part_paths`]; empty for an unknown
     /// name, a method, or any shape that analysis declines to classify (it
     /// under-approximates on purpose — see its doc). Codegen twin:
     /// `callee_returned_param_parts` in `call_dispatch.rs`.
@@ -2534,52 +2534,80 @@ impl<'a> super::Interpreter<'a> {
         &self,
         callee_name: &str,
         arg_index: usize,
-    ) -> Vec<crate::ast::ParamPart> {
+    ) -> Vec<crate::ast::ParamPath> {
         self.program
             .items
             .iter()
             .find_map(|item| match item {
                 crate::ast::Item::Function(f) if f.name == callee_name => {
-                    Some(crate::ast::fn_returns_param_parts(f, arg_index))
+                    Some(crate::ast::fn_returns_param_part_paths(f, arg_index))
                 }
                 _ => None,
             })
             .unwrap_or_default()
     }
 
-    /// The FIELD names of parameter `i` that `callee_name` hands back to its
-    /// caller (B-2026-08-28-17 / -21). Tuple parts are the caller's own
-    /// business — they are filtered by `ParamPart::TupleIndex` at the tuple arm.
-    fn escaping_field_names(&self, callee_name: &str, i: usize) -> Vec<String> {
+    /// The FIELD paths of parameter `i` that `callee_name` hands back to its
+    /// caller (B-2026-08-28-17 / -21 / -23). A path whose head is a tuple index
+    /// is the tuple arm's business, not this one's.
+    fn escaping_field_paths(&self, callee_name: &str, i: usize) -> Vec<Vec<String>> {
         self.callee_returned_param_parts(callee_name, i)
             .into_iter()
-            .filter_map(|p| match p {
-                crate::ast::ParamPart::Field(n) => Some(n),
-                crate::ast::ParamPart::TupleIndex(_) => None,
+            .filter_map(|path| {
+                path.into_iter()
+                    .map(|p| match p {
+                        crate::ast::ParamPart::Field(n) => Some(n),
+                        crate::ast::ParamPart::TupleIndex(_) => None,
+                    })
+                    .collect::<Option<Vec<String>>>()
             })
+            .filter(|path| !path.is_empty())
             .collect()
     }
 
-    /// `value` with `escaping`'s fields removed, for handing to
+    /// `value` with each escaping PATH removed, for handing to
     /// [`Self::drop_user_drop_fields_of_value`].
     ///
     /// Masking the VALUE rather than threading a gate through the walker is the
     /// B-2026-08-03-8 pattern, and works for the same reason: the walk resolves
     /// each declared field through `fields.get(..)` and skips a missing one, so
     /// its two dozen other callers are untouched.
-    fn mask_struct_fields(value: &super::value::Value, escaping: &[String]) -> super::value::Value {
-        match value {
-            super::value::Value::Struct { name, fields } if !escaping.is_empty() => {
-                let mut fields = fields.clone();
-                for f in escaping {
-                    fields.remove(f);
-                }
-                super::value::Value::Struct {
-                    name: name.clone(),
-                    fields,
-                }
+    ///
+    /// B-2026-08-28-23 — a path longer than one level does not remove the field
+    /// it starts at; it REPLACES that field with a masked copy of itself, so the
+    /// walk still reaches the field's Drop-bearing siblings one level down. That
+    /// is the whole difference between masking `w.inner.r` and masking
+    /// `w.inner`, and the codegen twin's `FieldSkipTree` has the same two arms
+    /// for the same reason.
+    fn mask_struct_fields(
+        value: &super::value::Value,
+        escaping: &[Vec<String>],
+    ) -> super::value::Value {
+        if escaping.is_empty() {
+            return value.clone();
+        }
+        let super::value::Value::Struct { name, fields } = value else {
+            return value.clone();
+        };
+        let mut fields = fields.clone();
+        for path in escaping {
+            let Some((head, rest)) = path.split_first() else {
+                continue;
+            };
+            if rest.is_empty() {
+                fields.remove(head);
+                continue;
             }
-            other => other.clone(),
+            // Deeper: rebuild the intermediate field with its own mask. A field
+            // already removed outright by a shorter path stays removed.
+            if let Some(inner) = fields.get(head).cloned() {
+                let masked = Self::mask_struct_fields(&inner, &[rest.to_vec()]);
+                fields.insert(head.clone(), masked);
+            }
+        }
+        super::value::Value::Struct {
+            name: name.clone(),
+            fields,
         }
     }
 
@@ -2651,7 +2679,14 @@ impl<'a> super::Interpreter<'a> {
                         // which is exactly this loop without the filter.
                         let escaping = self.callee_returned_param_parts(callee_name, i);
                         for (idx, item) in items.iter().enumerate() {
-                            if escaping.contains(&crate::ast::ParamPart::TupleIndex(idx)) {
+                            // TOP-LEVEL elements only: a deeper path names
+                            // something inside an element, which this walk's
+                            // per-element skip cannot express, so it is left at
+                            // its pre-existing behaviour (B-2026-08-28-23).
+                            if escaping
+                                .iter()
+                                .any(|p| p.as_slice() == [crate::ast::ParamPart::TupleIndex(idx)])
+                            {
                                 continue;
                             }
                             self.run_discarded_value_user_drops(item.clone());
@@ -2723,7 +2758,7 @@ impl<'a> super::Interpreter<'a> {
                 // read the field it is about to hand back, so it sees the whole
                 // value. Split into the two halves the helper is already made of
                 // rather than masking its input.
-                let escaping = self.escaping_field_names(callee_name, i);
+                let escaping = self.escaping_field_paths(callee_name, i);
                 self.run_user_drop_body_only(&tn, v.clone());
                 self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
@@ -2760,7 +2795,7 @@ impl<'a> super::Interpreter<'a> {
                 // other callers are untouched. Codegen twin: the struct arm of
                 // `track_inline_owned_aggregate_arg_inst` re-emits the walker
                 // with the same field indices masked.
-                let escaping = self.escaping_field_names(callee_name, i);
+                let escaping = self.escaping_field_paths(callee_name, i);
                 self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
         }

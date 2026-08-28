@@ -7631,7 +7631,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .entry(var_name.to_string())
             .or_default();
         skip.insert(field_idx);
-        let skip = skip.clone();
+        // B-2026-08-28-23 — this site masks whole TOP-LEVEL fields (a field
+        // moved out of the binding), so its tree carries `here` and no nested
+        // level; the tree shape exists for the caller-side argument sites,
+        // which resolve a path.
+        let skip = super::synth_drop::FieldSkipTree {
+            here: skip.iter().copied().collect(),
+            nested: Default::default(),
+        };
         self.suppress_struct_field_bodies_for_var(var_name);
         if let Some(bodies) =
             self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip)

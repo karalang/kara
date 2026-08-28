@@ -23,6 +23,48 @@ use crate::ast::{GenericArg, Item, TypeExpr, TypeKind, VariantKind};
 
 use super::state::EnumDropKind;
 
+/// B-2026-08-28-23 — a NESTED mask for the field-bodies walk: which fields to
+/// skip at THIS level, plus a sub-mask for the walker each surviving field
+/// recurses into.
+///
+/// B-2026-08-28-17's mask was a flat index set, which can say "skip `w.r`" and
+/// cannot say "skip `w.inner.r`". Saying the latter as "skip `w.inner`" would be
+/// a FALSE escape — a sibling field of `inner` still dies in the call and needs
+/// its body — so the mask has to have the same shape as the path the analysis
+/// reports.
+///
+/// `BTree*` rather than hash containers because the mangled symbol name is built
+/// by walking this, and two equal masks must produce the same string.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct FieldSkipTree {
+    /// Fields whose bodies are skipped outright at this level.
+    pub(crate) here: std::collections::BTreeSet<usize>,
+    /// Sub-masks applied to a surviving field's own walker.
+    pub(crate) nested: std::collections::BTreeMap<usize, FieldSkipTree>,
+}
+
+impl FieldSkipTree {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.here.is_empty() && self.nested.is_empty()
+    }
+
+    /// A stable, collision-free suffix for the walker's symbol name. Empty for
+    /// an empty mask, so an unmasked walker keeps exactly the name it had.
+    pub(crate) fn mangle(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+        let mut out = String::new();
+        for i in &self.here {
+            out.push_str(&format!("$s{i}"));
+        }
+        for (i, sub) in &self.nested {
+            out.push_str(&format!("$n{i}{}$e", sub.mangle()));
+        }
+        out
+    }
+}
+
 /// B-2026-07-30-11 (enum leg) — one `(discriminant, variant name, payload
 /// slots)` row for `emit_enum_payload_user_drop_bodies_fn`, where each payload
 /// slot is `(LLVM field index within the enum's unified type, payload struct
@@ -3519,11 +3561,7 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
-        self.emit_user_drop_field_bodies_fn_skipping(
-            struct_name,
-            subst,
-            &std::collections::HashSet::new(),
-        )
+        self.emit_user_drop_field_bodies_fn_skipping(struct_name, subst, &FieldSkipTree::default())
     }
 
     /// [`Self::emit_user_drop_field_bodies_fn`] with a set of field indices
@@ -3538,7 +3576,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_name: &str,
         subst: &std::collections::HashMap<String, TypeExpr>,
-        skip: &std::collections::HashSet<usize>,
+        skip: &FieldSkipTree,
     ) -> Option<FunctionValue<'ctx>> {
         // A `shared` parent is dropped through the RC machinery
         // (`__karac_rc_drop_<T>`) against a heap box with a refcount header, so
@@ -3555,22 +3593,26 @@ impl<'ctx> super::Codegen<'ctx> {
         let field_idxs: Vec<usize> = self
             .user_drop_field_indices_mono(struct_name, subst)
             .into_iter()
-            .filter(|i| !skip.contains(i))
+            .filter(|i| !skip.here.contains(i))
             .collect();
         if field_idxs.is_empty() {
             return None;
         }
+        // B-2026-08-28-23 — the suffix folds in the WHOLE mask, not just this
+        // level's survivors: two masks that keep the same top-level fields but
+        // differ one level down must not share a symbol.
         let skip_suffix: String = if skip.is_empty() {
             String::new()
         } else {
             let mut idxs = field_idxs.clone();
             idxs.sort_unstable();
             format!(
-                "$keep{}",
+                "$keep{}{}",
                 idxs.iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<_>>()
-                    .join("_")
+                    .join("_"),
+                skip.mangle()
             )
         };
         let mono_suffix: String = self
@@ -3872,7 +3914,13 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             // The recursive call saves and restores the builder's insert block,
             // so emission resumes in THIS fn's entry block.
-            if let Some(nested) = self.emit_user_drop_field_bodies_fn(&field_type, &nsub) {
+            // B-2026-08-28-23 — the sub-mask for THIS field, if the callee
+            // hands back something nested inside it. Empty for every other
+            // field, which reproduces the unmasked recursion exactly.
+            let sub = skip.nested.get(&field_idx).cloned().unwrap_or_default();
+            if let Some(nested) =
+                self.emit_user_drop_field_bodies_fn_skipping(&field_type, &nsub, &sub)
+            {
                 self.builder
                     .build_call(nested, &[field_ptr.into()], "")
                     .unwrap();
@@ -6803,7 +6851,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_user_drop_wrapper_skipping(
         &mut self,
         type_name: &str,
-        skip: &std::collections::HashSet<usize>,
+        skip: &FieldSkipTree,
     ) -> Option<FunctionValue<'ctx>> {
         if skip.is_empty() {
             return self.emit_user_drop_wrapper(type_name);

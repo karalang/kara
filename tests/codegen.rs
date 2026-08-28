@@ -12423,8 +12423,8 @@ fn main() {
     /// backend-consistent for the same reason, so no parity harness saw it.
     ///
     /// The fix is the same shape as the tuple one and reuses its analysis:
-    /// `fn_returns_param_parts` already emitted `ParamPart::Field`, and what
-    /// was missing was a per-field caller-side site to apply it at. Codegen
+    /// `fn_returns_param_part_paths` already emitted `ParamPart::Field`, and
+    /// what was missing was a per-field caller-side site to apply it at. Codegen
     /// masks the escaping indices out of `__karac_dropbodies_<T>` (the
     /// pre-existing `_skipping` emitter, whose symbol name folds in the
     /// surviving index list); the interpreter removes the fields from the
@@ -12694,6 +12694,105 @@ fn main() {
                 "fn use_n(w: W) -> i64 { return w.n; }\n\
                  fn main() { let k = use_n(W { r: R { id: 46 }, n: 4 }); println(f\"{k}\"); }\n",
                 "drop W4\ndrop 46\n4\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
+    /// B-2026-08-28-23 — a NESTED projection out of an owned struct param runs
+    /// the escaping field's body once.
+    ///
+    /// The two fixtures above mask a TOP-LEVEL field. `fn take(w: W) -> R {
+    /// w.inner.r }` names something one level further in, and the analysis
+    /// behind both — `fn_returns_param_part_paths` — classified a projection only
+    /// off the WHOLE param and declined a projection-of-a-projection by
+    /// construction, so nothing was masked and the pre-existing double body
+    /// survived. Closing it widened the ANALYSIS to report a PATH, and both
+    /// caller-side masks to take a tree instead of a flat index set.
+    ///
+    /// `sibling` is the row that forbids the cheap fix. Reporting the one-level
+    /// PREFIX (`inner`) instead of the path would mask the whole subtree, and
+    /// `s` — which really does die inside the call — would lose its only body.
+    /// That is a false escape, the direction the analysis is explicitly built to
+    /// avoid, so the prefix is not an approximation of the path but a different
+    /// and wrong answer.
+    ///
+    /// `nested-destructure` came along for free and is pinned because it did:
+    /// the same whole-param gate made `let W { inner, n } = w; let I { r } =
+    /// inner; r` unclassifiable, and carrying paths through the alias table
+    /// fixes both shapes with one change.
+    ///
+    /// `own-drop-mid` checks the intermediate's OWN body still fires — the mask
+    /// removes a leaf from the walk, not the level it hangs off — and
+    /// `whole-inner` is the one-level control that was already correct and must
+    /// stay so: it is the answer the widening had to leave untouched while
+    /// adding the deeper one.
+    #[test]
+    fn e2e_nested_projection_runs_the_returned_fields_body_once() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct I { r: R }\n\
+             struct W { inner: I, n: i64 }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "nested-projection",
+                "fn take(w: W) -> R { w.inner.r }\n\
+                 fn main() { let x = take(W { inner: I { r: R { id: 41 } }, n: 1 });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // A SIBLING of the escaping field dies in the call and keeps its
+            // body — what makes the mask a path rather than its prefix.
+            (
+                "sibling",
+                "struct I2 { r: R, s: R }\n\
+                 struct W2 { inner: I2, n: i64 }\n\
+                 fn take(w: W2) -> R { w.inner.r }\n\
+                 fn main() { let x = take(W2 { inner: I2 { r: R { id: 42 }, s: R { id: 52 } },\n\
+                 \x20                          n: 2 });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "drop 52\n42\ndrop 42\n",
+            ),
+            // The destructure spelling of the same path, fixed by the same
+            // change.
+            (
+                "nested-destructure",
+                "fn take(w: W) -> R { let W { inner, n } = w; let I { r } = inner; r }\n\
+                 fn main() { let x = take(W { inner: I { r: R { id: 43 } }, n: 3 });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "43\ndrop 43\n",
+            ),
+            // The INTERMEDIATE declares its own `Drop` — masking a leaf under it
+            // must not silence the level itself.
+            (
+                "own-drop-mid",
+                "struct Id { r: R }\n\
+                 impl Drop for Id { fn drop(mut ref self) { println(\"drop Id\"); } }\n\
+                 struct Wd { inner: Id, n: i64 }\n\
+                 fn take(w: Wd) -> R { w.inner.r }\n\
+                 fn main() { let x = take(Wd { inner: Id { r: R { id: 44 } }, n: 4 });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "drop Id\n44\ndrop 44\n",
+            ),
+            // CONTROL — a ONE-level projection, already correct before this and
+            // the answer the length-1 filter preserves.
+            (
+                "whole-inner",
+                "fn take(w: W) -> I { w.inner }\n\
+                 fn main() { let x = take(W { inner: I { r: R { id: 45 } }, n: 5 });\n\
+                 \x20            println(f\"{x.r.id}\"); }\n",
+                "45\ndrop 45\n",
+            ),
+            // CONTROL — nothing escapes, so the body belongs in the call.
+            (
+                "nothing-escapes-control",
+                "fn take(w: W) -> i64 { w.n }\n\
+                 fn main() { let g = take(W { inner: I { r: R { id: 46 } }, n: 6 });\n\
+                 \x20            println(f\"{g}\"); }\n",
+                "drop 46\n6\n",
             ),
         ] {
             let prog = format!("{DROPPER}{body}");

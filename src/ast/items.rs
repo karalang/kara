@@ -1442,8 +1442,13 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     walk_block(&f.body, param_name)
 }
 
+/// A PATH from an owned aggregate parameter to one of its parts — empty for
+/// the whole param, one element per level in. See
+/// [`fn_returns_param_part_paths`].
+pub type ParamPath = Vec<ParamPart>;
+
 /// One top-level PART of an owned aggregate parameter — a tuple element or a
-/// struct field. See [`fn_returns_param_parts`].
+/// struct field. See [`fn_returns_param_part_paths`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParamPart {
     /// Tuple element `p.<n>`, or leaf `<n>` of a one-level tuple destructure.
@@ -1453,9 +1458,9 @@ pub enum ParamPart {
     Field(String),
 }
 
-/// B-2026-08-28-2 — the ELEMENT-PRECISE sibling of [`fn_returns_param`]: WHICH
-/// top-level parts of owned aggregate parameter `arg_index` can reach a return
-/// site.
+/// B-2026-08-28-2 — the PART-PRECISE sibling of [`fn_returns_param`]: WHICH
+/// parts of owned aggregate parameter `arg_index` can reach a return site, each
+/// as a PATH from the parameter inwards.
 ///
 /// [`fn_returns_param`] answers a WHOLE-param question — it recognizes the
 /// param used bare at a return site, or moved bare into a returned aggregate
@@ -1481,16 +1486,18 @@ pub enum ParamPart {
 /// soundness hole for another. Hence per-part.
 ///
 /// Routes recognized from the param to a return site:
-///   * a direct projection — `p.0`, `p.field`;
-///   * a ONE-LEVEL destructure — `let (a, b) = p;`, `let S { x, y } = p;` —
-///     whose leaf binding is returned, including through a `let` alias chain;
+///   * a direct projection — `p.0`, `p.field`, `p.field.inner`;
+///   * a destructure — `let (a, b) = p;`, `let S { x, y } = p;`, and the
+///     nested chain of them — whose leaf binding is returned, including through
+///     a `let` alias chain;
 ///   * either of those moved into a returned aggregate literal (`(r, 9)`,
 ///     `Holder { r, .. }`), matching `fn_returns_param`'s own aggregate rule.
 ///
-/// DELIBERATELY UNDER-APPROXIMATE ON SHAPE. Any shape it cannot classify — a
-/// NESTED destructure, a projection of a projection, an element leaving
-/// through a container or a call — yields no part, leaving that shape exactly
-/// as it behaves today. A MISSED escape keeps the pre-existing double body, no
+/// DELIBERATELY UNDER-APPROXIMATE ON SHAPE. Any shape it cannot classify — an
+/// element leaving through a container or a call — yields no part, leaving that
+/// shape exactly as it behaves today. (A nested destructure and a
+/// projection-of-a-projection were in that list until B-2026-08-28-23; they are
+/// now classified, as paths.) A MISSED escape keeps the pre-existing double body, no
 /// worse than before, whereas a FALSE escape would suppress the only body that
 /// runs. When the shape is in doubt, report nothing.
 ///
@@ -1521,7 +1528,24 @@ pub enum ParamPart {
 /// Shadowing is tracked rather than ignored for the same reason: a `let` that
 /// re-binds an alias name to something unrelated REMOVES it from the alias
 /// set, so `let (a, b) = p; let a = other(); a` does not report element 0.
-pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> {
+/// B-2026-08-28-23 — this reports the full PATH to each escaping part rather
+/// than a single top-level one, so `fn take(w: W) -> R { w.inner.r }` yields
+/// `[Field("inner"), Field("r")]` where the earlier top-level-only version
+/// declined it and left the pre-existing double body in place.
+///
+/// A path is NOT interchangeable with its one-level prefix, which is why the
+/// widening had to reach the callers rather than stopping here: masking `inner`
+/// wholesale would take the body of any SIBLING field of `inner` that really
+/// does die in the call — a false escape, the direction this analysis exists to
+/// avoid. Each caller decides what it can express: the struct-field masks
+/// resolve the whole path into a nested skip tree, and the tuple-element skip
+/// list, being a flat index list, keeps only length-1 tuple paths and leaves a
+/// deeper one at its pre-existing behaviour.
+///
+/// Carrying paths through the alias table also picks up a NESTED DESTRUCTURE
+/// (`let W { inner, n } = w; let I { r } = inner; r`) for free: the second `let`
+/// extends the first's path instead of failing a whole-param gate.
+pub fn fn_returns_param_part_paths(f: &Function, arg_index: usize) -> Vec<ParamPath> {
     let Some(param) = f.params.get(arg_index) else {
         return Vec::new();
     };
@@ -1529,27 +1553,30 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
         return Vec::new();
     };
 
-    /// What `e` denotes relative to the param: `Some(None)` = the whole param,
-    /// `Some(Some(part))` = one top-level part of it, `None` = unrelated.
-    fn denote(e: &Expr, aliases: &[(String, Option<ParamPart>)]) -> Option<Option<ParamPart>> {
+    /// What `e` denotes relative to the param: `Some(path)` where an EMPTY
+    /// path is the whole param and each element steps one level in, `None` =
+    /// unrelated. A projection of an already-projected part extends the path
+    /// rather than declining (B-2026-08-28-23); the length-1 filter in
+    /// `fn_returns_param_parts` is what preserves the older answer for callers
+    /// that cannot act on a nested one.
+    fn denote(e: &Expr, aliases: &[(String, ParamPath)]) -> Option<ParamPath> {
         match &e.kind {
             ExprKind::Identifier(n) => aliases.iter().find(|(a, _)| a == n).map(|(_, p)| p.clone()),
-            // A projection is classified only off the WHOLE param; a
-            // projection of an already-projected part (`p.0.1`) is a nested
-            // shape this deliberately declines to model.
-            ExprKind::TupleIndex { object, index } => match denote(object, aliases)? {
-                None => Some(Some(ParamPart::TupleIndex(*index as usize))),
-                Some(_) => None,
-            },
-            ExprKind::FieldAccess { object, field } => match denote(object, aliases)? {
-                None => Some(Some(ParamPart::Field(field.clone()))),
-                Some(_) => None,
-            },
+            ExprKind::TupleIndex { object, index } => {
+                let mut path = denote(object, aliases)?;
+                path.push(ParamPart::TupleIndex(*index as usize));
+                Some(path)
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let mut path = denote(object, aliases)?;
+                path.push(ParamPart::Field(field.clone()));
+                Some(path)
+            }
             _ => None,
         }
     }
 
-    fn set_alias(aliases: &mut Vec<(String, Option<ParamPart>)>, name: &str, p: Option<ParamPart>) {
+    fn set_alias(aliases: &mut Vec<(String, ParamPath)>, name: &str, p: ParamPath) {
         if let Some(slot) = aliases.iter_mut().find(|(a, _)| a == name) {
             slot.1 = p;
         } else {
@@ -1557,13 +1584,13 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
         }
     }
 
-    fn clear_alias(aliases: &mut Vec<(String, Option<ParamPart>)>, name: &str) {
+    fn clear_alias(aliases: &mut Vec<(String, ParamPath)>, name: &str) {
         aliases.retain(|(a, _)| a != name);
     }
 
     /// Record every name a `let` in this block makes denote the param or one
     /// of its parts, and un-record any alias the same `let` shadows.
-    fn grow_block(b: &Block, aliases: &mut Vec<(String, Option<ParamPart>)>) {
+    fn grow_block(b: &Block, aliases: &mut Vec<(String, ParamPath)>) {
         for st in &b.stmts {
             match &st.kind {
                 StmtKind::Let { pattern, value, .. } => {
@@ -1571,33 +1598,32 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
                     match (&pattern.kind, &d) {
                         (PatternKind::Binding(n), Some(p)) => set_alias(aliases, n, p.clone()),
                         (PatternKind::Binding(n), None) => clear_alias(aliases, n),
-                        // One-level destructure OF THE WHOLE PARAM: each leaf
-                        // binding denotes its own element / field.
-                        (PatternKind::Tuple(pats), Some(None)) => {
+                        // A destructure of the param OR of one of its parts:
+                        // each leaf binding denotes the source's path extended
+                        // by its own element / field (B-2026-08-28-23 — the
+                        // whole-param gate here is what used to make a NESTED
+                        // destructure unclassifiable).
+                        (PatternKind::Tuple(pats), Some(base)) => {
                             for (i, p) in pats.iter().enumerate() {
                                 if let PatternKind::Binding(n) = &p.kind {
-                                    set_alias(aliases, n, Some(ParamPart::TupleIndex(i)));
+                                    let mut path = base.clone();
+                                    path.push(ParamPart::TupleIndex(i));
+                                    set_alias(aliases, n, path);
                                 }
                             }
                         }
-                        (PatternKind::Struct { fields, .. }, Some(None)) => {
+                        (PatternKind::Struct { fields, .. }, Some(base)) => {
                             for fp in fields {
+                                let mut path = base.clone();
+                                path.push(ParamPart::Field(fp.name.clone()));
                                 match &fp.pattern {
                                     // `W { r, n }` — shorthand binds the field
                                     // name itself.
-                                    None => set_alias(
-                                        aliases,
-                                        &fp.name,
-                                        Some(ParamPart::Field(fp.name.clone())),
-                                    ),
+                                    None => set_alias(aliases, &fp.name, path),
                                     // `W { r: inner, .. }` — renamed leaf.
                                     Some(p) => {
                                         if let PatternKind::Binding(n) = &p.kind {
-                                            set_alias(
-                                                aliases,
-                                                n,
-                                                Some(ParamPart::Field(fp.name.clone())),
-                                            );
+                                            set_alias(aliases, n, path);
                                         }
                                     }
                                 }
@@ -1616,7 +1642,7 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
         }
     }
 
-    fn grow_expr(e: &Expr, aliases: &mut Vec<(String, Option<ParamPart>)>) {
+    fn grow_expr(e: &Expr, aliases: &mut Vec<(String, ParamPath)>) {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
@@ -1662,7 +1688,7 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
     /// directly, or moved into a returned aggregate literal. A whole-param
     /// return contributes nothing: that is `fn_returns_param`'s answer, and
     /// its callers already act on it before this is consulted.
-    fn yielded(e: &Expr, aliases: &[(String, Option<ParamPart>)], out: &mut Vec<ParamPart>) {
+    fn yielded(e: &Expr, aliases: &[(String, ParamPath)], out: &mut Vec<ParamPath>) {
         match &e.kind {
             ExprKind::StructLiteral { fields, .. } => {
                 for f in fields {
@@ -1675,16 +1701,18 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
                 }
             }
             _ => {
-                if let Some(Some(part)) = denote(e, aliases) {
-                    if !out.contains(&part) {
-                        out.push(part);
+                // An EMPTY path is the whole param, which is
+                // `fn_returns_param`'s answer and not this one's.
+                if let Some(path) = denote(e, aliases) {
+                    if !path.is_empty() && !out.contains(&path) {
+                        out.push(path);
                     }
                 }
             }
         }
     }
 
-    fn scan_expr(e: &Expr, aliases: &[(String, Option<ParamPart>)], out: &mut Vec<ParamPart>) {
+    fn scan_expr(e: &Expr, aliases: &[(String, ParamPath)], out: &mut Vec<ParamPath>) {
         match &e.kind {
             ExprKind::Return(Some(inner)) => {
                 yielded(inner, aliases, out);
@@ -1730,7 +1758,7 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
         }
     }
 
-    fn scan_block(b: &Block, aliases: &[(String, Option<ParamPart>)], out: &mut Vec<ParamPart>) {
+    fn scan_block(b: &Block, aliases: &[(String, ParamPath)], out: &mut Vec<ParamPath>) {
         for st in &b.stmts {
             match &st.kind {
                 StmtKind::Expr(e) => scan_expr(e, aliases, out),
@@ -1744,7 +1772,7 @@ pub fn fn_returns_param_parts(f: &Function, arg_index: usize) -> Vec<ParamPart> 
         }
     }
 
-    let mut aliases: Vec<(String, Option<ParamPart>)> = vec![(param_name.clone(), None)];
+    let mut aliases: Vec<(String, ParamPath)> = vec![(param_name.clone(), Vec::new())];
     grow_block(&f.body, &mut aliases);
     let mut out = Vec::new();
     scan_block(&f.body, &aliases, &mut out);

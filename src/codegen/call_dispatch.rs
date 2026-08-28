@@ -3293,7 +3293,10 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         type_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
-        self.field_bodies_fn_for_owned_temp_skipping(type_name, &std::collections::HashSet::new())
+        self.field_bodies_fn_for_owned_temp_skipping(
+            type_name,
+            &super::synth_drop::FieldSkipTree::default(),
+        )
     }
 
     /// [`Self::field_bodies_fn_for_owned_temp`] with a set of field indices
@@ -3307,7 +3310,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn field_bodies_fn_for_owned_temp_skipping(
         &mut self,
         type_name: &str,
-        skip: &std::collections::HashSet<usize>,
+        skip: &super::synth_drop::FieldSkipTree,
     ) -> Option<FunctionValue<'ctx>> {
         if !self.type_decls.struct_types.contains_key(type_name)
             || !self.type_runs_user_drop(type_name, &mut Vec::new())
@@ -3426,7 +3429,7 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
         arg_escapes_frame: bool,
-        escaping_parts: &[crate::ast::ParamPart],
+        escaping_paths: &[crate::ast::ParamPath],
     ) {
         self.track_inline_owned_aggregate_arg_inst(
             val,
@@ -3434,13 +3437,13 @@ impl<'ctx> super::Codegen<'ctx> {
             arg_escapes_frame,
             None,
             false,
-            escaping_parts,
+            escaping_paths,
         )
     }
 
     /// B-2026-08-28-2 — which top-level PARTS of by-value argument slot
     /// `arg_index` the named callee hands back through its return value. Thin
-    /// lookup over [`crate::ast::fn_returns_param_parts`]; empty for an unknown
+    /// lookup over [`crate::ast::fn_returns_param_part_paths`]; empty for an unknown
     /// name, a method, or any shape that analysis declines to classify (it
     /// under-approximates on purpose — see its doc). Interp twin:
     /// `callee_returned_param_parts` in `interpreter/eval_call.rs`.
@@ -3448,7 +3451,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         callee_name: &str,
         arg_index: usize,
-    ) -> Vec<crate::ast::ParamPart> {
+    ) -> Vec<crate::ast::ParamPath> {
         let Some(program) = self.program_snapshot.as_deref() else {
             return Vec::new();
         };
@@ -3457,7 +3460,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .find_map(|item| match item {
                 crate::ast::Item::Function(f) if f.name == callee_name => {
-                    Some(crate::ast::fn_returns_param_parts(f, arg_index))
+                    Some(crate::ast::fn_returns_param_part_paths(f, arg_index))
                 }
                 _ => None,
             })
@@ -3468,42 +3471,90 @@ impl<'ctx> super::Codegen<'ctx> {
     /// in the shape `track_discarded_tuple_elem_bodies` takes its skip list.
     /// Struct-field parts are not tuple elements; they are resolved by
     /// [`Self::escaping_field_indices`] instead.
-    pub(super) fn tuple_indices_of(parts: &[crate::ast::ParamPart]) -> Vec<usize> {
-        parts
+    pub(super) fn tuple_indices_of(paths: &[crate::ast::ParamPath]) -> Vec<usize> {
+        paths
             .iter()
-            .filter_map(|p| match p {
-                crate::ast::ParamPart::TupleIndex(i) => Some(*i),
-                crate::ast::ParamPart::Field(_) => None,
+            .filter_map(|path| match path.as_slice() {
+                // TOP-LEVEL tuple elements only. A deeper path (`p.0.1`) names
+                // something inside an element, which this channel's skip list —
+                // a flat element index — cannot express; dropping it leaves that
+                // shape at its pre-existing behaviour, the safe direction.
+                [crate::ast::ParamPart::TupleIndex(i)] => Some(*i),
+                _ => None,
             })
             .collect()
     }
 
-    /// The struct-FIELD half of a [`Self::callee_returned_param_parts`] answer,
-    /// resolved against `struct_name`'s DECLARED field order into the index set
-    /// `field_bodies_fn_for_owned_temp_skipping` masks with (B-2026-08-28-17).
+    /// The struct-FIELD half of a [`Self::callee_returned_param_parts`] answer:
+    /// resolve each escaping PATH against the declared field order at every
+    /// level, into the tree the bodies walker masks with (B-2026-08-28-17, made
+    /// nested by B-2026-08-28-23). Tuple-index parts are not struct fields; the
+    /// tuple channel resolves those through [`Self::tuple_indices_of`].
     ///
-    /// A name the struct does not declare is dropped rather than erroring: the
-    /// analysis reports a field name lifted off the callee's source, and this
-    /// resolves it against the layout the argument actually has. Dropping an
-    /// unresolvable one keeps the walk at its pre-fix (over-firing) behaviour,
-    /// which is the safe direction — a WRONGLY masked field would suppress the
-    /// only body that runs, the same asymmetry `fn_returns_param_parts`
-    /// under-approximates for.
-    pub(super) fn escaping_field_indices(
+    /// A path is resolved level by level through the field's own declared type,
+    /// and the WHOLE path is dropped the moment one level does not resolve —
+    /// never its resolved prefix, which would mask a subtree the callee did not
+    /// hand back. Dropping it leaves the walk at its over-firing behaviour,
+    /// which is the safe direction; a wrongly masked field suppresses the only
+    /// body that runs. The analysis reports names lifted off the callee's
+    /// source, and this resolves them against the layout the argument actually
+    /// has, so an unresolvable name is expected rather than exceptional.
+    pub(super) fn escaping_field_skip_tree(
         &self,
         struct_name: &str,
-        parts: &[crate::ast::ParamPart],
-    ) -> std::collections::HashSet<usize> {
-        let Some(names) = self.type_decls.struct_field_names.get(struct_name) else {
-            return std::collections::HashSet::new();
+        paths: &[crate::ast::ParamPath],
+    ) -> super::synth_drop::FieldSkipTree {
+        let mut tree = super::synth_drop::FieldSkipTree::default();
+        for path in paths {
+            self.insert_skip_path(&mut tree, struct_name, path);
+        }
+        tree
+    }
+
+    fn insert_skip_path(
+        &self,
+        tree: &mut super::synth_drop::FieldSkipTree,
+        struct_name: &str,
+        path: &[crate::ast::ParamPart],
+    ) {
+        let Some((head, rest)) = path.split_first() else {
+            return;
         };
-        parts
-            .iter()
-            .filter_map(|p| match p {
-                crate::ast::ParamPart::Field(n) => names.iter().position(|f| f == n),
-                crate::ast::ParamPart::TupleIndex(_) => None,
-            })
-            .collect()
+        let crate::ast::ParamPart::Field(name) = head else {
+            return;
+        };
+        let Some(idx) = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name)
+            .and_then(|names| names.iter().position(|f| f == name))
+        else {
+            return;
+        };
+        if rest.is_empty() {
+            tree.here.insert(idx);
+            // A field masked outright has no walker left to sub-mask.
+            tree.nested.remove(&idx);
+            return;
+        }
+        // Already skipped whole — a deeper mask under it would be dead weight.
+        if tree.here.contains(&idx) {
+            return;
+        }
+        let Some(Some(field_type)) = self
+            .type_decls
+            .struct_field_type_names
+            .get(struct_name)
+            .and_then(|kinds| kinds.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        let sub = tree.nested.entry(idx).or_default();
+        self.insert_skip_path(sub, &field_type, rest);
+        if sub.is_empty() {
+            tree.nested.remove(&idx);
+        }
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] with the struct-literal arg's
@@ -3538,7 +3589,7 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_escapes_frame: bool,
         mono_inst: Option<TypeExpr>,
         callee_entry_copies_mono: bool,
-        escaping_parts: &[crate::ast::ParamPart],
+        escaping_paths: &[crate::ast::ParamPath],
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
@@ -3603,7 +3654,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             // different walk.
                             let masked = if is_struct {
                                 let skip =
-                                    self.escaping_field_indices(&ret_ty_name, escaping_parts);
+                                    self.escaping_field_skip_tree(&ret_ty_name, escaping_paths);
                                 self.emit_user_drop_wrapper_skipping(&ret_ty_name, &skip)
                                     .filter(|_| !skip.is_empty())
                             } else {
@@ -3891,7 +3942,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // instead loses the bodies of the elements that really do
                     // die in the call, so the escaping ones are skipped
                     // individually. Interp twin: `run_fresh_temp_arg_drops`.
-                    let skip = Self::tuple_indices_of(escaping_parts);
+                    let skip = Self::tuple_indices_of(escaping_paths);
                     self.track_discarded_tuple_elem_bodies(tuple_elems, val, &skip);
                 }
             }
@@ -3995,7 +4046,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // field's MEMORY is still this buffer's to release, so a
                         // mask reaching the frees would trade the double body for
                         // a leak.
-                        let skip = self.escaping_field_indices(&name, escaping_parts);
+                        let skip = self.escaping_field_skip_tree(&name, escaping_paths);
                         match self.emit_user_drop_wrapper_skipping(&name, &skip) {
                             Some(f) => self.track_user_drop_var_with_fn(
                                 &name,
@@ -4043,7 +4094,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // measured on `struct W { a: R, b: R }` returning `a`, which
                     // needs `b`'s body and not `a`'s. Interp twin:
                     // `run_fresh_temp_arg_drops`' masked-value call.
-                    let skip = self.escaping_field_indices(&name, escaping_parts);
+                    let skip = self.escaping_field_skip_tree(&name, escaping_paths);
                     self.field_bodies_fn_for_owned_temp_skipping(&name, &skip)
                 };
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);

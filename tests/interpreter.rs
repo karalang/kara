@@ -32421,6 +32421,78 @@ fn test_own_drop_parent_runs_a_returned_fields_body_once() {
     }
 }
 
+/// B-2026-08-28-23 — a NESTED projection out of an owned struct param runs the
+/// escaping field's body once. Interpreter twin of `tests/codegen.rs`'s
+/// `e2e_nested_projection_runs_the_returned_fields_body_once`, whose doc carries
+/// the reasoning.
+///
+/// `sibling` is the row that forbids masking the one-level PREFIX instead of the
+/// path: `s` really does die inside the call, and a prefix mask would take its
+/// only body away — a false escape, the direction this analysis is built to
+/// avoid.
+#[test]
+fn test_nested_projection_runs_the_returned_fields_body_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct I { r: R }\n\
+         struct W { inner: I, n: i64 }\n";
+    for (label, body, want) in [
+        (
+            "nested-projection",
+            "fn take(w: W) -> R { w.inner.r }\n\
+             fn main() { let x = take(W { inner: I { r: R { id: 41 } }, n: 1 });\n\
+             \x20           println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "sibling",
+            "struct I2 { r: R, s: R }\n\
+             struct W2 { inner: I2, n: i64 }\n\
+             fn take(w: W2) -> R { w.inner.r }\n\
+             fn main() { let x = take(W2 { inner: I2 { r: R { id: 42 }, s: R { id: 52 } },\n\
+             \x20                         n: 2 });\n\
+             \x20           println(f\"{x.id}\") }\n",
+            "drop 52\n42\ndrop 42\n",
+        ),
+        (
+            "nested-destructure",
+            "fn take(w: W) -> R { let W { inner, n } = w; let I { r } = inner; r }\n\
+             fn main() { let x = take(W { inner: I { r: R { id: 43 } }, n: 3 });\n\
+             \x20           println(f\"{x.id}\") }\n",
+            "43\ndrop 43\n",
+        ),
+        (
+            "own-drop-mid",
+            "struct Id { r: R }\n\
+             impl Drop for Id { fn drop(mut ref self) { println(\"drop Id\") } }\n\
+             struct Wd { inner: Id, n: i64 }\n\
+             fn take(w: Wd) -> R { w.inner.r }\n\
+             fn main() { let x = take(Wd { inner: Id { r: R { id: 44 } }, n: 4 });\n\
+             \x20           println(f\"{x.id}\") }\n",
+            "drop Id\n44\ndrop 44\n",
+        ),
+        // CONTROL — a ONE-level projection, the answer the widening had to
+        // leave untouched while adding the deeper one.
+        (
+            "whole-inner",
+            "fn take(w: W) -> I { w.inner }\n\
+             fn main() { let x = take(W { inner: I { r: R { id: 45 } }, n: 5 });\n\
+             \x20           println(f\"{x.r.id}\") }\n",
+            "45\ndrop 45\n",
+        ),
+        // CONTROL — nothing escapes.
+        (
+            "nothing-escapes-control",
+            "fn take(w: W) -> i64 { w.n }\n\
+             fn main() { let g = take(W { inner: I { r: R { id: 46 } }, n: 6 });\n\
+             \x20           println(f\"{g}\") }\n",
+            "drop 46\n6\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-12, interpreter leg — a WILDCARD leaf of a `let` destructure
 /// runs the discarded value's user `Drop` body exactly once.
 ///
