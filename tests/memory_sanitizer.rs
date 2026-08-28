@@ -57882,6 +57882,53 @@ fn main() {
         );
     }
 
+    /// A container-element heap read consumed by an unbound STRUCT LITERAL —
+    /// `println(Box2 { w: p[0].word }.w)` (B-2026-08-28-32, struct-literal
+    /// shape).
+    ///
+    /// The read deep-clones (the container keeps its own buffer), and the
+    /// literal MOVES that clone in — which neutralizes the clone's own cleanup
+    /// through `vec_elem_field_clone_slots`, exactly as any consuming
+    /// destination does. Nothing then owned the literal, so the moved buffer
+    /// had no owner at all and leaked.
+    ///
+    /// `value_block_hands_out_its_tail` is the gate that arms the fresh-temp
+    /// struct drop for a receiver, and it admitted a block, an `if` and an
+    /// `if let` but not a struct literal — the same widening B-2026-08-27-35
+    /// made for an array literal, on the same reasoning: a literal that moved
+    /// its initializers in owns them.
+    ///
+    /// The BOUND spelling is the control and was always clean, because the
+    /// binding owns the literal. Keeping both is what distinguishes "the
+    /// literal has no owner" from "the read did not clone".
+    #[test]
+    fn test_struct_literal_temp_consuming_a_container_read_is_owned() {
+        let src = r#"
+struct P { word: String, n: i64 }
+struct Box2 { w: String, k: i64 }
+
+fn mkp() -> Vec[P] { return [P { word: f"a{1}", n: 1 }, P { word: f"b{2}", n: 2 }]; }
+
+fn main() {
+    let p = mkp();
+    // the unbound literal: it owns what it moved in
+    println(Box2 { w: p[0].word, k: 1 }.w);
+    println(Box2 { w: p[1].word, k: 2 }.k);
+    // the bound control
+    let b = Box2 { w: p[0].word, k: 3 };
+    println(b.w);
+    // the container is untouched
+    println(p[0].word);
+    println(p[1].word);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &["a1", "2", "a1", "a1", "b2"],
+            "struct-literal-temp-container-read",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

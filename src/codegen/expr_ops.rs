@@ -1392,6 +1392,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 else_branch,
                 ..
             } => then_block.final_expr.is_some() && else_branch.is_some(),
+            // B-2026-08-28-32 — a STRUCT LITERAL in receiver position
+            // (`Box2 { w: p[0].word }.w`) is a fresh owned temp in exactly the
+            // sense this gate cares about: the literal MOVED its initializers
+            // in — a container-element read hands its clone over here, and the
+            // clone's own cleanup is neutralized when it does — so after the
+            // literal is built nothing else will ever free those buffers. That
+            // is the same ownership a `mk()` temporary has, reached through a
+            // different expression kind, and it is the reasoning
+            // B-2026-08-27-35 already applied to an array literal.
+            //
+            // Measured: `println(Box2 { w: p[0].word }.w)` lost the moved
+            // buffer, while the BOUND spelling was clean because the binding
+            // owns it.
+            ExprKind::StructLiteral { .. } => true,
             _ => false,
         }
     }
