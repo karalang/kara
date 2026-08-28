@@ -1756,7 +1756,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced
 | B-2026-08-26-27 | codegen | medium | `Vec.try_from_iter` CANNOT BE REGISTERED UNTIL `collect` HAS A FALLIBLE LOWERING: its base `Vec.from_iter` lowers to `iter.collect()`, whose codegen… | c5da7e8 |
 | B-2026-08-26-28 | codegen | medium | A NESTED `Result` AS `main`'s ERROR TYPE LOSES BOTH ITS TAG AND ITS PAYLOAD on every compiled backend: `main() -> Result[(), Result[A, B]]` returning… | c9db880 |
 | B-2026-08-26-29 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e… | 59d6568 |
-| B-2026-08-26-30 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES | b9b2a9d |
+| B-2026-08-26-30 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES | 225e233c |
 | B-2026-08-26-31 | codegen | medium | A local MOVED into a container's struct element slot (`b.xs[j] = t`) kept its own `UserDrop` registration, so its `impl Drop` body ran a SECOND time… | 0af8b28 |
 | B-2026-08-26-32 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup | b46cb47 |
 | B-2026-08-26-33 | codegen | medium | A `#[derive(Display)]` STRUCT WITH A PAYLOAD-BEARING ENUM FIELD IS REFUSED BY `karac build` -- and the refusal is INVERTED with respect to difficulty… | 7b5f733 |
@@ -1786,13 +1786,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced
 | B-2026-08-27-16 | codegen | high | `==` ON A GENERIC ENUM WHOSE ARGUMENT OVERFLOWS ITS ERASED PAYLOAD ALLOTMENT PANICS THE COMPILER, so `Box1[String] == Box1[String]` for `enum Box1[T]… | 752e0b9 |
 | B-2026-08-27-17 | codegen | high | `assert_eq` / `assert_ne` COMPARE AN ENUM'S PAYLOAD WORDS INSTEAD OF ITS CONTENTS, so a Kara test asserting two structurally-equal enums with heap pa… | 752e0b9 |
 | B-2026-08-27-18 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { . | 9b8d435 |
-| B-2026-08-27-19 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder {… | 8d2eb56 |
-| B-2026-08-27-20 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`)… | c5bb992 |
+| B-2026-08-27-19 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder {… | d6cb5222 |
+| B-2026-08-27-20 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`)… | cd032829 |
 | B-2026-08-27-21 | codegen | high | A `ref` element binding did not dispatch methods like the value it borrows, in two independent ways: `.clone()` on an element read THROUGH one (`let… | 367edc1 |
-| B-2026-08-27-22 | codegen | high | `.clone()` on an element of an SoA-laid-out container returns the wrong data under codegen — element 5 reads back the cold group at indices 1 and 2 (… | d01aea8 |
+| B-2026-08-27-22 | codegen | high | `.clone()` on an element of an SoA-laid-out container returns the wrong data under codegen — element 5 reads back the cold group at indices 1 and 2 (… | 56985ec7 |
 | B-2026-08-27-23 | typecheck | high | A tuple (`(i64, String)`) and `Option[T]` have NO `.clone()`, so the index-move rejection outlaws reading such an element by value with no replacemen… | 94711002536753 |
-| B-2026-08-27-24 | typecheck+interp+codegen | medium | `Slice[T] == Slice[T]` IS ACCEPTED BY `karac check`, DIES IN THE INTERPRETER WITH A DIAGNOSTIC THAT BLAMES THE TYPECHECKER, AND IS REFUSED BY CODEGEN… | f056dbf |
-| B-2026-08-27-25 | typecheck+codegen | medium | `Array[T, N] == Array[T, N]` IS ACCEPTED BY `karac check`, ANSWERS CORRECTLY UNDER THE INTERPRETER, AND FAILS TO COMPILE: codegen reports "left opera… | f056dbf |
+| B-2026-08-27-24 | typecheck+interp+codegen | medium | `Slice[T] == Slice[T]` IS ACCEPTED BY `karac check`, DIES IN THE INTERPRETER WITH A DIAGNOSTIC THAT BLAMES THE TYPECHECKER, AND IS REFUSED BY CODEGEN… | 30420faf |
+| B-2026-08-27-25 | typecheck+codegen | medium | `Array[T, N] == Array[T, N]` IS ACCEPTED BY `karac check`, ANSWERS CORRECTLY UNDER THE INTERPRETER, AND FAILS TO COMPILE: codegen reports "left opera… | 30420faf |
 | B-2026-08-27-26 | codegen | medium | `free_fresh_owned_str_arg` FREES A FRESH TEMPORARY OPERAND'S BUFFER BUT NOT ITS ELEMENTS, so a `Vec[String]` temporary compared with `==` leaks every… | e57bc89 |
 | B-2026-08-27-27 | effect+cli | high | `karac check` ON A PROJECT DOES NOT RUN THE MULTI-FILE EFFECT CHECK THAT `karac build` RUNS, so a project prints "All checks passed." and then fails… | dc939a8 |
 | B-2026-08-27-28 | codegen | medium | `Vec.contains(<fresh Vec temporary>)` LEAKS THE NEEDLE ENTIRELY -- buffer and elements -- because `free_fresh_owned_str_arg` does not fire at that ca… | 4af0901 |
@@ -1809,10 +1809,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1740 surfaced
 | B-2026-08-27-39 | codegen | medium | A THREE-element tuple `==` PANICS THE COMPILER: `(1, 2, 3) == (1, 2, 4)` lowers to `{i64, i64, i64}`, structurally the same LLVM object as the `{ptr,… | 01d6784 |
 | B-2026-08-27-40 | codegen | high | A TUPLE TYPE ARGUMENT does not survive the monomorphization substitution channel, which is keyed by type NAME | 3cfbd1e |
 | B-2026-08-27-41 | typecheck+interp+codegen | medium | `.cmp()` on a tuple has no dispatch on ANY surface -- the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both backends fall through their met… | 31cf904 |
-| B-2026-08-27-42 | interp+codegen | low | `Array[T, N]` ORDERING operators never lower, while `karac check` accepts them: `a < b` on two `Array[i64, 2]` passes the typechecker and then fails… | 2955b94 |
+| B-2026-08-27-42 | interp+codegen | low | `Array[T, N]` ORDERING operators never lower, while `karac check` accepts them: `a < b` on two `Array[i64, 2]` passes the typechecker and then fails… | b356e808 |
 | B-2026-08-27-43 | codegen | high | AN ARM-LOCAL BINDING HANDED OUT OF A BRANCH LEAF LOSES ITS OWNER, so the FIRST consumption of the selected `Option[shared]` reads through a freed box | 9f62ac6 |
 | B-2026-08-27-44 | codegen | medium | A heap-bearing TUPLE argument whose value ESCAPES the caller's frame LEAKS the caller's original buffer, because the callee entry-copies but the call… | 4efd5ab |
-| B-2026-08-27-45 | interp+codegen | low | `Slice[T]` ORDERING operators never lower, while `karac check` accepts them -- the last member of the tuple/array family: `a < b` on two `Slice[i64]`… | 5c715cb |
+| B-2026-08-27-45 | interp+codegen | low | `Slice[T]` ORDERING operators never lower, while `karac check` accepts them -- the last member of the tuple/array family: `a < b` on two `Slice[i64]`… | 8cfae471 |
 | B-2026-08-27-46 | interp | high | `.cmp()` WITH AN ENUM-VARIANT LITERAL AS THE RECEIVER answers a CONSTANT under the interpreter, independent of both operands -- `E.A.cmp(E.B)`, `E.B.… | 87210fe |
 | B-2026-08-27-47 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { . | fa6d35a |
 | B-2026-08-27-48 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p:… | b0dac13 |

@@ -567,10 +567,9 @@ impl<'a> super::TypeChecker<'a> {
         }
         let (generic_params, derived) = if let Some(info) = self.env.structs.get(name) {
             (&info.generic_params, &info.derived_traits)
-        } else if let Some(info) = self.env.enums.get(name) {
-            (&info.generic_params, &info.derived_traits)
         } else {
-            return None;
+            let info = self.env.enums.get(name)?;
+            (&info.generic_params, &info.derived_traits)
         };
         if generic_params.is_empty() || !(derived.contains("Ord") || derived.contains("PartialOrd"))
         {

@@ -42,7 +42,7 @@ fn name_of(id: i64) -> String {
     "original"
 }
 
-pub fn run() with panics {
+pub fn run() with panics writes(Stdout) {
     let w = img_width();
     let h = img_height();
     println(f"iris oracle: {w}x{h} RGBA, {filter_count()} filters");
