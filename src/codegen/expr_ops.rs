@@ -1425,6 +1425,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let slot = self.create_entry_alloca(fn_val, "__freshtemp_fldobj", sv.get_type().into());
         let _ = self.builder.build_store(slot, sv);
         self.track_struct_var(&name, slot);
+        // B-2026-08-28-27 — when the receiver is a projection out of a FRESH
+        // TUPLE TEMP (`structpair(1).0.name`), that temp now carries a drop
+        // over the whole tuple. Registering the projected element here makes
+        // this its owner, so the tuple's drop must skip it — this registration
+        // IS a consuming destination in the takeover's sense, and without the
+        // handover the two free the same buffers (measured: `attempting
+        // double-free` on exactly the three shapes where both fire).
+        self.take_over_freshtemp_tuple_elem(object);
         self.freshtemp_field_access_slot = Some((
             slot,
             name,
@@ -3786,17 +3794,118 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn compile_tuple_index(
         &mut self,
+        expr_span: (usize, usize),
         object: &Expr,
         index: usize,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let obj_val = self.compile_expr(object)?;
         if let BasicValueEnum::StructValue(sv) = obj_val {
-            return Ok(self
+            // Extract from the SSA value, not from the slot the tracker below
+            // materializes — the extracted element must keep its real `cap`
+            // while the slot's copy of it is neutralized.
+            let extracted = self
                 .builder
                 .build_extract_value(sv, index as u32, "tidx")
-                .unwrap());
+                .unwrap();
+            self.track_freshtemp_tuple_object(expr_span, object, index, sv);
+            return Ok(extracted);
         }
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// B-2026-08-28-27 — give a FRESH TUPLE TEMPORARY an owner, so the elements
+    /// a projection does not hand out are freed.
+    ///
+    /// `println(twoheap(1).1)` over `fn twoheap(k) -> (Person, String)` emitted
+    /// no drop at all for the tuple — measured on the IR against the BOUND
+    /// spelling, which stores into a slot and calls `__karac_drop_tuple_0` —
+    /// so every heap element leaked, 12 bytes in 3 allocations per call at
+    /// -O0. The B-2026-07-22-2 family, reached through the one aggregate kind
+    /// that had no such registration.
+    ///
+    /// THE PROJECTED ELEMENT IS EXCLUDED, and the measurement is what says so
+    /// rather than symmetry. Before this, the consumed element was ALREADY
+    /// owned correctly at every position — `let w = twoheap(1).1` leaked
+    /// `ada`+`unread` and NOT `sib`, `push` and argument positions the same —
+    /// so a drop covering the whole tuple would have turned a leak into a
+    /// double free of exactly the element the consumer took. Zeroing that one
+    /// element's cap in the slot keeps the consumer's ownership exactly as it
+    /// already was and adds an owner only for the remainder.
+    ///
+    /// COMPOSES WITH B-2026-08-28-3 rather than overlapping it. That fix
+    /// registers the PROJECTED element when the projection is a struct whose
+    /// FIELD is then read (`structpair(1).0.name`); this registers everything
+    /// it does not. The two never cover the same element, because the element
+    /// that one owns is precisely the one this zeroes — which is also what
+    /// closes the sibling leak that fix left behind: reading `.0.name` out of a
+    /// `(Person, String)` freed the `Person` and leaked the `String`.
+    ///
+    /// Needs the callee's declared element `TypeExpr`s to name the projected
+    /// element; without them the exclusion cannot be emitted, so the whole
+    /// registration is skipped rather than risking that double free.
+    fn track_freshtemp_tuple_object(
+        &mut self,
+        expr_span: (usize, usize),
+        object: &Expr,
+        index: usize,
+        sv: inkwell::values::StructValue<'ctx>,
+    ) {
+        if !self.expr_yields_fresh_owned_temp(object)
+            && !self.value_block_hands_out_its_tail(object)
+        {
+            return;
+        }
+        if self.scrutinee_is_borrow_call(object) {
+            return;
+        }
+        let Some(elem_tes) = self.call_return_tuple_tes(object) else {
+            return;
+        };
+        let Some(proj_te) = elem_tes.get(index).cloned() else {
+            return;
+        };
+        // Nothing to own unless some element carries heap.
+        if !elem_tes.iter().any(|te| self.type_expr_has_drop_heap(te)) {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let agg_ty = sv.get_type();
+        let slot = self.create_entry_alloca(fn_val, "__freshtemp_tupobj", agg_ty.into());
+        if self.builder.build_store(slot, sv).is_err() {
+            return;
+        }
+        self.track_tuple_var(slot, agg_ty);
+        // NOT zeroed here. The drop covers the whole tuple, including the
+        // element handed out, so a NON-consuming read does not leak it; a
+        // CONSUMING destination neutralizes that one element instead, through
+        // `take_over_freshtemp_tuple_elem`. Excluding it up front was measured
+        // first and leaves `println(twoheap(1).1)` and `twostr(1).0.len()`
+        // leaking the projected element — the same split the
+        // `vec_elem_field_clone_slots` sibling documents.
+        self.freshtemp_tuple_elem_slots
+            .insert(expr_span, (slot, agg_ty, index as u32, proj_te));
+    }
+
+    /// B-2026-08-28-27 — hand a fresh tuple temp's projected ELEMENT over to a
+    /// destination that now owns it, by zeroing that element's cap in the
+    /// temp's slot so the tuple's own drop skips it.
+    ///
+    /// The return / call-argument / struct-literal / `push` / block-tail
+    /// positions reach this through `suppress_source_vec_cleanup_for_arg_ex`;
+    /// a `let` does not route through that and calls it directly, exactly as
+    /// its `container_elem_struct_clone_slots` sibling does. A no-op unless
+    /// `value`'s span actually produced such a temp, which is what makes it
+    /// safe to call unconditionally.
+    pub(super) fn take_over_freshtemp_tuple_elem(&mut self, value: &Expr) {
+        if let Some((slot, agg_ty, idx, te)) = self
+            .freshtemp_tuple_elem_slots
+            .get(&(value.span.offset, value.span.length))
+            .cloned()
+        {
+            self.zero_tuple_elem_cap_at(slot, agg_ty, idx, &te);
+        }
     }
 
     /// If `object.field` reads a borrowed (`ref T` / `mut ref T`) struct

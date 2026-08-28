@@ -1720,7 +1720,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Tuple(elems) => self.compile_tuple(elems),
             ExprKind::TupleIndex { object, index } => {
-                let v = self.compile_tuple_index(object, *index as usize)?;
+                let v = self.compile_tuple_index(
+                    (expr.span.offset, expr.span.length),
+                    object,
+                    *index as usize,
+                )?;
                 // B-2026-08-28-24 — a tuple element read out of a CONTAINER
                 // element (`v[0].0`) aliases the container's heap exactly as
                 // the all-FieldAccess spelling does. No-op for every other

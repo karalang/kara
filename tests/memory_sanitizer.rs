@@ -57542,6 +57542,94 @@ fn main() {
         );
     }
 
+    /// A FRESH TUPLE TEMPORARY has an owner, so the elements a projection does
+    /// not hand out are freed — `println(twoheap(1).1)` over
+    /// `fn twoheap(k) -> (Person, String)` (B-2026-08-28-27).
+    ///
+    /// The temp had no owner at all: measured on the IR, the unbound spelling
+    /// emitted no drop against the BOUND one's slot store plus
+    /// `__karac_drop_tuple_0`, and under LSan it lost 12 bytes in 3
+    /// allocations per call — the whole tuple, `ada` + `unread` + `sib`. The
+    /// B-2026-07-22-2 family, reached through the one aggregate kind that had
+    /// no such registration.
+    ///
+    /// BOTH SIDES OF THE TAKEOVER ARE PINNED HERE, because each was measured
+    /// failing on its own. Excluding the projected element at materialization
+    /// (the first attempt) fixes every consuming row and leaves the
+    /// NON-consuming ones — `println(…​.1)`, `.len()` — leaking the element they
+    /// hand out. Covering the whole tuple with no takeover fixes those and
+    /// double-frees at `let` / `push` / an argument. So the consuming and
+    /// non-consuming rows are not variations on one case; they fail against
+    /// opposite halves of the fix.
+    ///
+    /// THE LAST THREE ROWS ARE THE COMPOSITION WITH B-2026-08-28-3, which
+    /// registers the PROJECTED element when the projection is a struct whose
+    /// field is then read. That registration is itself a consuming
+    /// destination: without the handover both it and the tuple's drop free the
+    /// same buffers, which is an `attempting double-free` — measured, on
+    /// exactly these three and nothing else. They also cover the leak that fix
+    /// left behind, a heap SIBLING element going unfreed while the projected
+    /// struct was reclaimed.
+    ///
+    /// `plainpair` carries a scalar second element so the Copy member is
+    /// exercised, and the bound and discarded rows are the must-not-change
+    /// controls — they were always clean, via `track_tuple_var`.
+    #[test]
+    fn test_fresh_tuple_temp_elements_are_owned() {
+        let src = r#"
+struct Person { name: String, note: String, age: i64 }
+
+fn twoheap(k: i64) -> (Person, String) {
+    return (
+        Person { name: "ada".to_string(), note: "unread".to_string(), age: k },
+        "sib".to_string(),
+    );
+}
+fn twostr(k: i64) -> (String, String) { return (f"a{k}", f"b{k}"); }
+fn plainpair(k: i64) -> (String, i64) { return (f"s{k}", k + 1); }
+fn structpair(k: i64) -> (Person, i64) {
+    return (Person { name: "ada".to_string(), note: "unread".to_string(), age: k }, k);
+}
+
+fn main() {
+    // non-consuming reads: the temp's drop must free the element it hands out
+    println(twoheap(1).1);
+    println(twostr(1).0);
+    println(plainpair(1).0);
+    println(twostr(2).0.len());
+    println(plainpair(2).1);
+    // consuming positions: the destination takes that element over
+    let w = twoheap(3).1;
+    println(w);
+    let x = twostr(3).0;
+    println(x);
+    let mut o: Vec[String] = Vec.new();
+    o.push(twostr(4).0);
+    println(o[0]);
+    // both elements read out of separate temps
+    println(twostr(5).0);
+    println(twostr(5).1);
+    // controls that were always clean
+    let a = twoheap(6);
+    println(a.1);
+    let _b = twoheap(7);
+    // composition with B-2026-08-28-3: a field read through the projection
+    println(structpair(8).0.name);
+    println(twoheap(9).0.name);
+    let y = twoheap(10).0.name;
+    println(y);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "sib", "a1", "s1", "2", "3", "sib", "a3", "a4", "a5", "b5", "sib", "ada", "ada",
+                "ada",
+            ],
+            "fresh-tuple-temp-elements-owned",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

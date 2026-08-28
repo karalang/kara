@@ -1473,6 +1473,29 @@ pub(super) struct Codegen<'ctx> {
     /// name. A consuming destination takes the clone over by zeroing the caps
     /// of its heap FIELDS (`zero_struct_heap_field_caps`) — the struct-shaped
     /// analogue of zeroing a `{ptr,len,cap}`'s cap.
+    /// B-2026-08-28-27 — span of a tuple-index read off a FRESH TUPLE
+    /// TEMPORARY → everything needed to neutralize that element in the temp's
+    /// slot: the slot, the tuple's LLVM type, the projected element's index and
+    /// its `TypeExpr`.
+    ///
+    /// The temp is registered with a drop over the WHOLE tuple, so a
+    /// non-consuming read (`println(twoheap(1).1)`, `twostr(1).0.len()`) does
+    /// not leak the element it hands out. This map is how a CONSUMING
+    /// destination takes that element over instead — the same two-sided shape
+    /// `vec_elem_field_clone_slots` and `container_elem_struct_clone_slots`
+    /// use, and for the same reason: excluding the element up front instead
+    /// (measured) leaves every non-consuming read leaking it.
+    #[allow(clippy::type_complexity)]
+    // slot + agg ty + index + elem te travel together to the zero
+    pub(crate) freshtemp_tuple_elem_slots: std::collections::HashMap<
+        (usize, usize),
+        (
+            PointerValue<'ctx>,
+            inkwell::types::StructType<'ctx>,
+            u32,
+            TypeExpr,
+        ),
+    >,
     pub(crate) container_elem_struct_clone_slots:
         std::collections::HashMap<(usize, usize), (PointerValue<'ctx>, String)>,
     /// B-2026-08-12-33 — the same clones as `vec_elem_field_clone_slots`, in
@@ -5718,6 +5741,7 @@ impl<'ctx> Codegen<'ctx> {
             },
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
             container_elem_struct_clone_slots: std::collections::HashMap::new(),
+            freshtemp_tuple_elem_slots: std::collections::HashMap::new(),
             deferred_shared_temp_release: None,
             vec_elem_field_clone_log: Vec::new(),
             in_return_defensive_copy: false,

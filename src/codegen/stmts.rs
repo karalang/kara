@@ -8238,6 +8238,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // call-arg / block-tail positions get the same takeover
                         // through `suppress_source_vec_cleanup_for_arg_ex`.
                         self.take_over_container_elem_struct_clone(value);
+                        // B-2026-08-28-27 — `let w = twoheap(1).1`: the fresh
+                        // tuple temp's drop covers every element, so this
+                        // binding takes its element over rather than letting
+                        // both free it. The return / call-arg / block-tail
+                        // positions get the same takeover through
+                        // `suppress_source_vec_cleanup_for_arg_ex`.
+                        self.take_over_freshtemp_tuple_elem(value);
                         // B-2026-07-15-22 — a heap-bearing STRUCT moved OUT of an
                         // owned struct's FIELD (`let bound = o.inner` where
                         // `inner: Inner` and `Inner` owns heap, e.g. a `Vec`).

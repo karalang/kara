@@ -7782,6 +7782,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.zero_struct_heap_field_caps(slot, &sname);
             return;
         }
+        // B-2026-08-28-27 — a tuple-index read off a FRESH TUPLE TEMPORARY.
+        // The temp carries a drop over the whole tuple so a non-consuming read
+        // does not leak the element it hands out; this is a CONSUMING position,
+        // so the destination takes that one element over and the temp's drop
+        // frees only the remainder.
+        self.take_over_freshtemp_tuple_elem(arg_expr);
         if let Some(slot) = self
             .vec_elem_field_clone_slots
             .get(&(arg_expr.span.offset, arg_expr.span.length))
