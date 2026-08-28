@@ -2547,6 +2547,42 @@ impl<'a> super::Interpreter<'a> {
             .unwrap_or_default()
     }
 
+    /// The FIELD names of parameter `i` that `callee_name` hands back to its
+    /// caller (B-2026-08-28-17 / -21). Tuple parts are the caller's own
+    /// business — they are filtered by `ParamPart::TupleIndex` at the tuple arm.
+    fn escaping_field_names(&self, callee_name: &str, i: usize) -> Vec<String> {
+        self.callee_returned_param_parts(callee_name, i)
+            .into_iter()
+            .filter_map(|p| match p {
+                crate::ast::ParamPart::Field(n) => Some(n),
+                crate::ast::ParamPart::TupleIndex(_) => None,
+            })
+            .collect()
+    }
+
+    /// `value` with `escaping`'s fields removed, for handing to
+    /// [`Self::drop_user_drop_fields_of_value`].
+    ///
+    /// Masking the VALUE rather than threading a gate through the walker is the
+    /// B-2026-08-03-8 pattern, and works for the same reason: the walk resolves
+    /// each declared field through `fields.get(..)` and skips a missing one, so
+    /// its two dozen other callers are untouched.
+    fn mask_struct_fields(value: &super::value::Value, escaping: &[String]) -> super::value::Value {
+        match value {
+            super::value::Value::Struct { name, fields } if !escaping.is_empty() => {
+                let mut fields = fields.clone();
+                for f in escaping {
+                    fields.remove(f);
+                }
+                super::value::Value::Struct {
+                    name: name.clone(),
+                    fields,
+                }
+            }
+            other => other.clone(),
+        }
+    }
+
     fn run_fresh_temp_arg_drops(
         &mut self,
         callee_name: &str,
@@ -2679,7 +2715,17 @@ impl<'a> super::Interpreter<'a> {
                 && tn != "Result"
                 && matches!(v, super::value::Value::EnumVariant { .. });
             if self.program.drop_method_keys.contains_key(&tn) {
-                self.run_user_drop_body_on_value(&tn, v.clone());
+                // B-2026-08-28-21 — a parent that declares its OWN `Drop` takes
+                // this branch and never reaches the masked field walk below, so
+                // the escaping field's body ran here and again at the result's
+                // owner. `run_user_drop_body_on_value` is body-then-fields, and
+                // only the FIELDS half may be masked: the parent's own body may
+                // read the field it is about to hand back, so it sees the whole
+                // value. Split into the two halves the helper is already made of
+                // rather than masking its input.
+                let escaping = self.escaping_field_names(callee_name, i);
+                self.run_user_drop_body_only(&tn, v.clone());
+                self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
             if is_user_enum_value {
                 let v = v.clone();
@@ -2714,28 +2760,8 @@ impl<'a> super::Interpreter<'a> {
                 // other callers are untouched. Codegen twin: the struct arm of
                 // `track_inline_owned_aggregate_arg_inst` re-emits the walker
                 // with the same field indices masked.
-                let escaping: Vec<String> = self
-                    .callee_returned_param_parts(callee_name, i)
-                    .into_iter()
-                    .filter_map(|p| match p {
-                        crate::ast::ParamPart::Field(n) => Some(n),
-                        crate::ast::ParamPart::TupleIndex(_) => None,
-                    })
-                    .collect();
-                match v {
-                    super::value::Value::Struct { name, fields } if !escaping.is_empty() => {
-                        let mut fields = fields.clone();
-                        for f in &escaping {
-                            fields.remove(f);
-                        }
-                        let masked = super::value::Value::Struct {
-                            name: name.clone(),
-                            fields,
-                        };
-                        self.drop_user_drop_fields_of_value(&masked);
-                    }
-                    _ => self.drop_user_drop_fields_of_value(v),
-                }
+                let escaping = self.escaping_field_names(callee_name, i);
+                self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
         }
     }

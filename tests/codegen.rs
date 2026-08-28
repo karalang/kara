@@ -12456,11 +12456,13 @@ fn main() {
     /// struct nothing escapes from. Twin: `tests/interpreter.rs`'s
     /// `test_returned_struct_param_field_user_drop_body_runs_once`.
     ///
-    /// Three neighbouring shapes are deliberately NOT here, each filed rather
+    /// Three neighbouring shapes were deliberately NOT here, each filed rather
     /// than pinned so this fixture asserts only counts that are actually
     /// right: a parent struct that declares its OWN `Drop` (B-2026-08-28-21 —
-    /// a different registration channel, the full `karac_drop_<T>` wrapper,
-    /// which does not decompose into a maskable bodies half); a callee that
+    /// a different registration channel, the full `karac_drop_<T>` wrapper;
+    /// now fixed and pinned by the sibling fixture below, which found that the
+    /// wrapper DOES decompose — it is body, then a bodies walk, then the field
+    /// frees, so masking the middle step alone was enough); a callee that
     /// yields a different field on each BRANCH (B-2026-08-28-22 — the analysis
     /// unions over return sites, so both get masked and whichever one died in
     /// the call loses its body, the same conservative-true trade
@@ -12583,6 +12585,115 @@ fn main() {
                  fn main() { let x = take(W { a: R { id: 41 }, b: R { id: 42 } });\n\
                  \x20            println(f\"{x}\"); }\n",
                 "drop 42\ndrop 41\n7\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
+    /// B-2026-08-28-21 — the same escaping-field mask, for a parent that
+    /// declares its OWN `Drop`.
+    ///
+    /// The sibling fixture above masks `__karac_dropbodies_<T>`, the walker
+    /// registered for a parent that carries a Drop-bearing field but declares
+    /// no `Drop` itself. A parent WITH one takes a different branch on both
+    /// backends and never reaches that mask: codegen registers the full
+    /// `karac_drop_<T>` wrapper, the interpreter calls
+    /// `run_user_drop_body_on_value`. So the escaping field's body ran here and
+    /// again at the result's owner, on all three backends.
+    ///
+    /// THE ROW EXPECTED THIS TO BE EXPENSIVE and it was not, which is the part
+    /// worth recording: it reads the wrapper as an indivisible "body + fields +
+    /// frees" unit and concluded a mask would need a whole variant emitter with
+    /// a body/free split to get wrong. The wrapper is already three separate
+    /// calls in that order, and only the MIDDLE one — the same maskable walker
+    /// the fixture above uses — had to change. The interpreter's helper is
+    /// literally `run_user_drop_body_only` followed by the field walk, so it
+    /// decomposes the same way.
+    ///
+    /// ONLY THE BODY STEP IS MASKED. The escaping field's MEMORY is still the
+    /// caller temp's to release — the callee got a copy of the aggregate, not
+    /// its allocation — so a mask reaching the frees would trade the double
+    /// body for a leak. `tests/memory_sanitizer.rs`'s
+    /// `asan_own_drop_parent_masking_a_returned_field_frees_it` is that half.
+    ///
+    /// `two-droppers` is what makes the mask per-FIELD rather than a wholesale
+    /// "skip the field bodies": `karac_dropnf_<T>`, which already existed for
+    /// the moved-out-field shape, would take `b`'s body from one to zero.
+    ///
+    /// `from-call` is not decoration either. The fn-call arm of the same helper
+    /// registers the identical wrapper for `take(mk())`, and fixing only the
+    /// struct-literal arm left it as the WORSE half of the pair — the
+    /// interpreter got it right and both compiled backends doubled, a
+    /// run-vs-build divergence in place of a uniform wrong answer.
+    ///
+    /// The last row is a CONTROL that was already correct: a callee returning a
+    /// NON-field, where both bodies must still run here. The parent's own body
+    /// fires in every row and would be the first casualty of a mask applied one
+    /// step too early.
+    ///
+    /// THE DISCARDED-RESULT SHAPE IS NOT HERE, and its absence is a finding
+    /// rather than an omission. `take(W { .. });` with the result thrown away
+    /// now runs each body exactly ONCE on all three backends — this fix — but
+    /// the two compiled backends emit the FIELD's body before the parent's,
+    /// while the interpreter emits the parent's first, which is the order
+    /// design.md § Drop ordering specifies. That divergence predates this fix
+    /// (verified by stashing `src/`: pre-fix compiled output was `drop 47`,
+    /// `drop W5`, `drop 47` against the interpreter's `drop W5`, `drop 47`,
+    /// `drop 47`), so it is a separate defect on a separate mechanism and is
+    /// filed as B-2026-08-28-53 rather than pinned here in whichever direction
+    /// happens to be wrong. The interpreter twin covers the shape's COUNTS,
+    /// which this fix does settle.
+    #[test]
+    fn e2e_own_drop_parent_runs_a_returned_fields_body_once() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct W { r: R, n: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.n}\"); } }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "destructure-return",
+                "fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\"); }\n",
+                "drop W1\n41\ndrop 41\n",
+            ),
+            // The `w.r` spelling — same defect with no `let` anywhere, exactly
+            // as on the no-own-Drop leg.
+            (
+                "projection-return",
+                "fn take(w: W) -> R { return w.r; }\n\
+                 fn main() { let x = take(W { r: R { id: 42 }, n: 2 }); println(f\"{x.id}\"); }\n",
+                "drop W2\n42\ndrop 42\n",
+            ),
+            // The temp comes from a CALL rather than a literal — the other arm
+            // of the same helper, and the one whose omission would show up as a
+            // run-vs-build divergence rather than a uniform wrong count.
+            (
+                "from-call",
+                "fn mk() -> W { return W { r: R { id: 43 }, n: 3 }; }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { let x = take(mk()); println(f\"{x.id}\"); }\n",
+                "drop W3\n43\ndrop 43\n",
+            ),
+            // TWO droppers, one escaping: the survivor's body must still run
+            // here, which is what forbids the wholesale `karac_dropnf_<T>`.
+            (
+                "two-droppers",
+                "struct Two { a: R, b: R }\n\
+                 impl Drop for Two { fn drop(mut ref self) { println(\"drop Two\"); } }\n\
+                 fn take(t: Two) -> R { let Two { a, b } = t; a }\n\
+                 fn main() { let x = take(Two { a: R { id: 44 }, b: R { id: 45 } });\n\
+                 \x20            println(f\"{x.id}\"); }\n",
+                "drop Two\ndrop 45\n44\ndrop 44\n",
+            ),
+            // CONTROL — nothing escapes, so both bodies belong here.
+            (
+                "nothing-escapes-control",
+                "fn use_n(w: W) -> i64 { return w.n; }\n\
+                 fn main() { let k = use_n(W { r: R { id: 46 }, n: 4 }); println(f\"{k}\"); }\n",
+                "drop W4\ndrop 46\n4\n",
             ),
         ] {
             let prog = format!("{DROPPER}{body}");

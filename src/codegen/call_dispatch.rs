@@ -3591,7 +3591,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.track_struct_var(&ret_ty_name, slot);
                                 return;
                             }
-                            self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot);
+                            // B-2026-08-28-21, fn-call arm — same mask as the
+                            // struct-LITERAL sibling below, for the identical
+                            // value produced one way over (`take(mk())` rather
+                            // than `take(W { .. })`). Without it this arm was the
+                            // worse half of the pair: the interpreter got the
+                            // shape right and both compiled backends doubled the
+                            // escaping field's body, a run-vs-build divergence
+                            // rather than a uniform wrong answer. Structs only —
+                            // the mask is field-indexed, and an enum payload is a
+                            // different walk.
+                            let masked = if is_struct {
+                                let skip =
+                                    self.escaping_field_indices(&ret_ty_name, escaping_parts);
+                                self.emit_user_drop_wrapper_skipping(&ret_ty_name, &skip)
+                                    .filter(|_| !skip.is_empty())
+                            } else {
+                                None
+                            };
+                            match masked {
+                                Some(f) => self.track_user_drop_var_with_fn(
+                                    &ret_ty_name,
+                                    "__owned_agg_tmp",
+                                    slot,
+                                    f,
+                                    UserDropKind::OwnWrapper,
+                                ),
+                                None => {
+                                    self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot)
+                                }
+                            }
                             if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
                                 self.track_enum_var(&ret_ty_name, slot);
                             }
@@ -3951,7 +3980,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         // memory half alone.
                         self.track_struct_var(&name, slot);
                     } else {
-                        self.track_user_drop_var(&name, "__owned_agg_tmp", slot);
+                        // B-2026-08-28-21 — the own-`Drop` parent's twin of the
+                        // per-field mask below. `arg_escapes_frame` is the
+                        // WHOLE-param question; a callee that extracts one field
+                        // and returns THAT slips past it, and this arm registered
+                        // the FULL `karac_drop_<T>` wrapper — body, field bodies,
+                        // field frees — so the escaping field's body ran here and
+                        // again at the result's owner. The mask B-2026-08-28-17
+                        // added is structurally unreachable from here: it lives
+                        // past this `return`, on the arm for a parent that
+                        // declares no `Drop` of its own.
+                        //
+                        // Only the wrapper's BODY step is masked. The escaping
+                        // field's MEMORY is still this buffer's to release, so a
+                        // mask reaching the frees would trade the double body for
+                        // a leak.
+                        let skip = self.escaping_field_indices(&name, escaping_parts);
+                        match self.emit_user_drop_wrapper_skipping(&name, &skip) {
+                            Some(f) => self.track_user_drop_var_with_fn(
+                                &name,
+                                "__owned_agg_tmp",
+                                slot,
+                                f,
+                                UserDropKind::OwnWrapper,
+                            ),
+                            None => self.track_user_drop_var(&name, "__owned_agg_tmp", slot),
+                        }
                     }
                     return;
                 }

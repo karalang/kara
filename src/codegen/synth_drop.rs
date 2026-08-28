@@ -6779,6 +6779,80 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(wrapper)
     }
 
+    /// B-2026-08-28-21 — the PARTIAL-mask sibling of
+    /// [`Self::emit_user_drop_wrapper_without_field_bodies`]: an own-`Drop`
+    /// parent whose caller-side temp must skip the bodies of the fields the
+    /// callee HANDS BACK, and run every other field's.
+    ///
+    /// `karac_dropnf_<T>` drops the field-body step wholesale, which is right
+    /// when the one Drop-bearing field is the escaping one and wrong the moment
+    /// there are two: `struct W { a: R, b: R }` returning `a` still needs `b`'s
+    /// body. So the middle step is re-emitted through the masking walker
+    /// B-2026-08-28-17 already built, and the other two steps are unchanged.
+    ///
+    /// ONLY THE BODY STEP MAY BE MASKED. The escaping field's MEMORY is still
+    /// this buffer's to release — the callee got a copy of the aggregate, not
+    /// its allocation — so a mask that reached `emit_struct_drop_synthesis`
+    /// would leak. That asymmetry is why this cannot be a flag on the existing
+    /// wrapper: the wrapper is one cached symbol shared by the let-path,
+    /// container elements and every other owner in the module, and only THIS
+    /// caller knows a field escapes.
+    ///
+    /// The symbol folds in the surviving indices (through the walker's own
+    /// `$keep…` suffix), so a masked wrapper never aliases the full one.
+    pub(super) fn emit_user_drop_wrapper_skipping(
+        &mut self,
+        type_name: &str,
+        skip: &std::collections::HashSet<usize>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if skip.is_empty() {
+            return self.emit_user_drop_wrapper(type_name);
+        }
+        let bodies_fn =
+            self.emit_user_drop_field_bodies_fn_skipping(type_name, &Default::default(), skip);
+        // Nothing survives the mask — that IS `karac_dropnf_<T>`, already built
+        // and cached for the moved-out-field shape.
+        let Some(bodies_fn) = bodies_fn else {
+            return self.emit_user_drop_wrapper_without_field_bodies(type_name);
+        };
+        let fn_name = format!(
+            "karac_dropsk_{type_name}_{}",
+            bodies_fn.get_name().to_string_lossy()
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let user_drop_fn = self.module.get_function(&format!("{type_name}.drop"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let wrapper_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let wrapper = self
+            .module
+            .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
+        let entry_bb = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+        // Same three steps, same order, as the full wrapper: the parent's own
+        // body first (it may read the field it is about to hand back), then the
+        // surviving field bodies, then every field's memory.
+        self.builder
+            .build_call(user_drop_fn, &[self_ptr.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(bodies_fn, &[self_ptr.into()], "")
+            .unwrap();
+        if let Some(field_drop_fn) = self.emit_struct_drop_synthesis(type_name) {
+            self.builder
+                .build_call(field_drop_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
+    }
+
     /// B-2026-07-29-39 — a Drop-bearing FIELD was moved out of the aggregate
     /// held at `base_ptr`, so the destination binding now owns that field's
     /// `Drop`. Stop the aggregate from running it too.

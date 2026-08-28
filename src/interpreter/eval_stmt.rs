@@ -1931,7 +1931,7 @@ impl<'a> super::Interpreter<'a> {
     /// [`Self::run_user_drop_body_on_value`] so the recursive field walk can run
     /// a field's body without re-entering the walk for that field (which would
     /// visit every grandchild twice).
-    fn run_user_drop_body_only(&mut self, type_name: &str, value: Value) {
+    pub(crate) fn run_user_drop_body_only(&mut self, type_name: &str, value: Value) {
         let method_key = format!("{}.drop", type_name);
         let func = match self.env.get(&method_key) {
             Some(f) => f,

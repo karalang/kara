@@ -32346,6 +32346,81 @@ fn test_returned_struct_param_field_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-21 — the same escaping-field mask for a parent that declares
+/// its OWN `Drop`. Interpreter twin of `tests/codegen.rs`'s
+/// `e2e_own_drop_parent_runs_a_returned_fields_body_once`, whose doc carries
+/// the full reasoning.
+///
+/// The fixture above masks the field walk for a parent that carries a
+/// Drop-bearing field but declares no `Drop` itself. A parent WITH one takes
+/// the earlier `run_user_drop_body_on_value` branch and never reaches that
+/// mask, so the escaping field's body ran here and again at the result's owner.
+/// The helper is `run_user_drop_body_only` followed by the field walk, so only
+/// the second half needed masking — the parent's own body still sees the WHOLE
+/// value, because it may read the field it is about to hand back.
+///
+/// `result-discarded` is here and NOT in the codegen twin, deliberately. This
+/// fix settles the shape's COUNTS on every backend, but the two compiled
+/// backends emit the field's body before the parent's while this one emits the
+/// parent's first — the order design.md § Drop ordering specifies. That
+/// divergence predates this fix and is filed as B-2026-08-28-53; pinning the
+/// right order here and leaving the compiled twin silent is what keeps this
+/// fixture honest about which half is correct.
+#[test]
+fn test_own_drop_parent_runs_a_returned_fields_body_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct W { r: R, n: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.n}\") } }\n";
+    for (label, body, want) in [
+        (
+            "destructure-return",
+            "fn take(w: W) -> R { let W { r, n } = w; r }\n\
+             fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\") }\n",
+            "drop W1\n41\ndrop 41\n",
+        ),
+        (
+            "projection-return",
+            "fn take(w: W) -> R { return w.r; }\n\
+             fn main() { let x = take(W { r: R { id: 42 }, n: 2 }); println(f\"{x.id}\") }\n",
+            "drop W2\n42\ndrop 42\n",
+        ),
+        (
+            "from-call",
+            "fn mk() -> W { return W { r: R { id: 43 }, n: 3 }; }\n\
+             fn take(w: W) -> R { let W { r, n } = w; r }\n\
+             fn main() { let x = take(mk()); println(f\"{x.id}\") }\n",
+            "drop W3\n43\ndrop 43\n",
+        ),
+        // TWO droppers, one escaping: the survivor's body must still run here.
+        (
+            "two-droppers",
+            "struct Two { a: R, b: R }\n\
+             impl Drop for Two { fn drop(mut ref self) { println(\"drop Two\") } }\n\
+             fn take(t: Two) -> R { let Two { a, b } = t; a }\n\
+             fn main() { let x = take(Two { a: R { id: 44 }, b: R { id: 45 } });\n\
+             \x20           println(f\"{x.id}\") }\n",
+            "drop Two\ndrop 45\n44\ndrop 44\n",
+        ),
+        // CONTROL — nothing escapes, so both bodies belong here.
+        (
+            "nothing-escapes-control",
+            "fn use_n(w: W) -> i64 { return w.n; }\n\
+             fn main() { let k = use_n(W { r: R { id: 46 }, n: 4 }); println(f\"{k}\") }\n",
+            "drop W4\ndrop 46\n4\n",
+        ),
+        // The result is DISCARDED — one body each, parent first.
+        (
+            "result-discarded",
+            "fn take(w: W) -> R { let W { r, n } = w; r }\n\
+             fn main() { take(W { r: R { id: 47 }, n: 5 }); println(\"end\") }\n",
+            "drop W5\ndrop 47\nend\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-12, interpreter leg — a WILDCARD leaf of a `let` destructure
 /// runs the discarded value's user `Drop` body exactly once.
 ///

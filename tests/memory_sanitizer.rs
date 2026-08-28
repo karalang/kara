@@ -222,6 +222,73 @@ fn main() {
         );
     }
 
+    /// Masking a returned field's `Drop` BODY out of an own-`Drop` parent's
+    /// wrapper does not mask its MEMORY (B-2026-08-28-21).
+    ///
+    /// The wrapper is three steps — the parent's own body, the Drop-bearing
+    /// fields' bodies, then every field's frees — and the fix masks the MIDDLE
+    /// one for the fields the callee hands back, because their bodies now belong
+    /// to the result's owner. Their memory does not: the callee received a copy
+    /// of the aggregate, not its allocation, so the caller temp is still the one
+    /// that has to release the escaping field's buffer. A mask that reached
+    /// `emit_struct_drop_synthesis` would trade the row's double body for a
+    /// silent leak, which is the failure this fixture exists to catch — and it
+    /// is invisible to the E2E twin, whose fixtures carry no heap at all.
+    ///
+    /// Every row therefore gives `R` a `String` field, and the escaping value is
+    /// READ afterwards so a mask that went the other way — freeing what escaped
+    /// — surfaces as a use-after-free rather than staying latent.
+    ///
+    /// `two-droppers` is the row that separates a per-FIELD mask from the
+    /// wholesale `karac_dropnf_<T>`: `b` dies in the call and its buffer must be
+    /// freed there, while `a`'s travels out with the result.
+    ///
+    /// Each escaping value's body lands right after its `println` rather than at
+    /// scope exit, because a `UserDrop` action fires at its binding's NLL live
+    /// range end — the placement that makes this backend agree with the
+    /// interpreter. The expectation is spelled that way rather than grouped at
+    /// the end, so a regression that moved the drop back to scope exit fails
+    /// here instead of passing on a coincidence of counts.
+    #[test]
+    fn asan_own_drop_parent_masking_a_returned_field_frees_it() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}") } }
+
+struct W { r: R, n: i64 }
+impl Drop for W { fn drop(mut ref self) { println(f"drop W{self.n}") } }
+
+struct Two { a: R, b: R }
+impl Drop for Two { fn drop(mut ref self) { println("drop Two") } }
+
+fn take(w: W) -> R { let W { r, n } = w; r }
+fn take_field(w: W) -> R { return w.r; }
+fn take_a(t: Two) -> R { let Two { a, b } = t; a }
+fn use_n(w: W) -> i64 { return w.n; }
+fn mk() -> W { return W { r: R { id: 7, name: f"m{7}" }, n: 9 }; }
+
+fn main() {
+    let x = take(W { r: R { id: 41, name: f"a{1}" }, n: 1 });
+    println(x.name);
+    let y = take_field(W { r: R { id: 42, name: f"b{2}" }, n: 2 });
+    println(y.name);
+    let z = take_a(Two { a: R { id: 43, name: f"c{3}" }, b: R { id: 44, name: f"d{4}" } });
+    println(z.name);
+    let k = use_n(W { r: R { id: 45, name: f"e{5}" }, n: 3 });
+    println(f"{k}");
+    let q = take(mk());
+    println(q.name);
+}
+"#,
+            &[
+                "drop W1", "a1", "drop a1", "drop W2", "b2", "drop b2", "drop Two", "drop d4",
+                "c3", "drop c3", "drop W3", "drop e5", "3", "drop W9", "m7", "drop m7",
+            ],
+            "asan_own_drop_parent_masking_a_returned_field_frees_it",
+        );
+    }
+
     /// A fresh `Array[T, N]` temporary compared with `==` drops its elements
     /// (B-2026-08-27-30).
     ///
