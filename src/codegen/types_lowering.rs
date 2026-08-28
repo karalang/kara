@@ -3428,6 +3428,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => return None,
             },
+            // B-2026-08-28-20 — a bare-`shared` FIELD READ off a shared temp is
+            // itself a shared temp: `make_outer(12).inner` hands back a handle
+            // carrying a `+1` that `load_owned_shared_temp_field` emitted
+            // precisely so the receiver's recursive drop would not free it out
+            // from under the reader. That `+1` is documented as being taken
+            // over by "the caller … or the next FieldAccess hop in a chain",
+            // and the next hop could not take it, because this resolver had no
+            // FieldAccess arm — the comment above says so, deferring it as
+            // needing "recursive receiver-type recovery". So `.inner.tag` and
+            // `.inner.v` both leaked the whole inner box (43 bytes in 2
+            // allocations, measured at -O0), regardless of what was read from
+            // it.
+            //
+            // The recovery is now available: recurse for the receiver, then
+            // resolve the field's DECLARED type. Recursing is what keeps this
+            // exact rather than merely wider — it fires only when the chain
+            // roots at a call-like shared temp, which is the only case where a
+            // `+1` was emitted. `let o = make_outer(12); o.inner.tag` roots at
+            // an IDENTIFIER, takes `shared_type_for_expr`'s path, never gets a
+            // `+1`, and must not be released here; it declines because the
+            // recursion does.
+            ExprKind::FieldAccess { object, field } => {
+                let (recv_type, _) = self.shared_type_for_call_like(object)?;
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(recv_type.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let fte = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(recv_type.as_str())?
+                    .get(idx)?;
+                // A BARE `shared T` field only: an `Option[shared T]` field
+                // carries its own compensation and its own consumer
+                // (`RcDecOption`), and routing it here would release a ref that
+                // path still owns.
+                let TypeKind::Path(p) = &fte.kind else {
+                    return None;
+                };
+                let name = p.segments.last()?;
+                let info = self.type_decls.shared_types.get(name.as_str())?.clone();
+                return Some((name.clone(), info));
+            }
             _ => return None,
         };
         let type_name = self.fn_sig.fn_return_type_names.get(&fn_name)?.clone();

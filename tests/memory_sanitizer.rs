@@ -58018,6 +58018,70 @@ fn main() {
         );
     }
 
+    /// A BARE-`shared` field read off a shared TEMPORARY receiver releases the
+    /// ref it took — `make_outer(12).inner.tag` (B-2026-08-28-20).
+    ///
+    /// `load_owned_shared_temp_field` bumps the loaded inner handle's refcount
+    /// so the receiver's recursive drop cannot free it out from under the
+    /// reader, and documents that `+1` as being taken over by "the caller … or
+    /// the next FieldAccess hop in a chain". The next hop could not take it:
+    /// `shared_type_for_call_like` had no FieldAccess arm — its own comment
+    /// defers one as needing "recursive receiver-type recovery" — so the outer
+    /// read never reached the release path and the whole inner box leaked, 43
+    /// bytes in 2 allocations at -O0.
+    ///
+    /// BOTH a heap and a SCALAR leaf are here because what leaked is the box,
+    /// not the value read out of it: `.inner.v` lost exactly as much as
+    /// `.inner.tag`, which rules out the loaded `String` as the cause.
+    ///
+    /// THE IDENTIFIER-ROOTED ROWS ARE THE CONTROL, and the reason the fix
+    /// recurses rather than merely admitting a FieldAccess. `let o =
+    /// make_outer(12); o.inner.tag` roots at a binding, never receives a `+1`,
+    /// and releasing there would be one dec too many — a use-after-free rather
+    /// than a leak. It stays clean only because the recursion declines it.
+    ///
+    /// EACH SHAPE IS ITS OWN PROGRAM, deliberately, and two shapes are absent
+    /// for the same reason: a program with more than one shared-temp field read
+    /// still leaks one box, and the BOUND spelling (`let h = ….inner`) still
+    /// leaks its payload at -O2 while being clean at -O0. Both are
+    /// pre-existing, both are unchanged by this fix (identical byte counts
+    /// before and after), and both are B-2026-08-28-49. Combining these rows
+    /// into one `main` would hide every one of them behind that residual.
+    #[test]
+    fn test_bare_shared_field_read_off_a_shared_temp_releases_its_ref() {
+        let hdr = "\
+shared struct Node { v: i64, tag: String }\n\
+shared struct Outer { id: i64, inner: Node }\n\
+shared struct Deep { o: Outer, z: i64 }\n\
+fn make(k: i64) -> Node { return Node { v: k, tag: f\"t{k}\" }; }\n\
+fn make_outer(k: i64) -> Outer { return Outer { id: k, inner: make(k) }; }\n\
+fn make_deep(k: i64) -> Deep { return Deep { o: make_outer(k), z: k }; }\n";
+        for (label, body, want) in [
+            // the temporary chain: a heap leaf and a scalar leaf leaked alike
+            ("heap-leaf", "println(make_outer(12).inner.tag);", "t12"),
+            ("scalar-leaf", "println(make_outer(13).inner.v);", "13"),
+            // two hops down, so the recursion is exercised past one level
+            ("two-hop", "println(make_deep(16).o.inner.tag);", "t16"),
+            // identifier-rooted: never gets a +1, must not be released
+            (
+                "ident-root-heap",
+                "let o = make_outer(15); println(o.inner.tag);",
+                "t15",
+            ),
+            (
+                "ident-root-scalar",
+                "let o = make_outer(15); println(o.inner.v);",
+                "15",
+            ),
+            // a scalar off the temp itself, and a non-nested shared temp
+            ("temp-own-scalar", "println(make_outer(17).id);", "17"),
+            ("plain-shared-temp", "println(make(18).tag);", "t18"),
+        ] {
+            let src = format!("{hdr}\nfn main() {{\n    {body}\n}}\n");
+            assert_clean_asan_run(&src, &[want], label);
+        }
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///
