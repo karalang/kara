@@ -4261,6 +4261,143 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap())
     }
 
+    /// B-2026-08-28-24 — the TUPLE-INDEX sibling of
+    /// [`Self::clone_vec_elem_heap_field_read`]. `v[0].0` over
+    /// `Vec[(R, i64)]` handed back a SHALLOW alias of the container element's
+    /// heap, so every owning destination shared one pointer with the element
+    /// and both freed it: `free(): double free detected in tcache 2`, rc 134,
+    /// on BOTH compiled backends, from a `karac check`-clean program the
+    /// interpreter answered correctly.
+    ///
+    /// THE ALL-FIELDACCESS SPELLING OF THE SAME READ IS CLEAN, which is what
+    /// isolates the hop: `v[0].name` over `Vec[R]` goes through the sibling
+    /// above and works at all eight measured destinations. Only the tuple-index
+    /// hop had no cloner, so this brings it under the rule its sibling already
+    /// follows rather than inventing a second policy for it.
+    ///
+    /// READ-SIDE, NOT CONSUMER-SIDE, and that distinction was measured rather
+    /// than assumed. Cloning at the consuming sites instead — the
+    /// `clone_owned_vec_index_element` route the WHOLE-element read uses — fixes
+    /// `let`, `return`, an argument, an assignment and a branch tail, and
+    /// leaves STRUCT-LITERAL FIELD, `Vec.push` and TUPLE CONSTRUCTION still
+    /// double-freeing, because those three consume without going through it.
+    /// Cloning at the read reaches all eight through the one takeover
+    /// `suppress_source_vec_cleanup_for_arg_ex` already funnels ~87 call sites
+    /// into, which is exactly why the sibling is written this way.
+    ///
+    /// NOT by extending the move-out suppressors: B-2026-08-12-27 taught them
+    /// to DECLINE index-rooted chains on purpose, because cap-zeroing a
+    /// container element trades the double free for a use-after-free
+    /// (`let mut w = ps[0].word; w = w + "X";` then reading `ps[0].word`
+    /// printed garbage). A copy is also what the language says the read is —
+    /// the interpreter still has the value afterwards.
+    ///
+    /// TWO ELEMENT SHAPES, TWO OWNERSHIP CONTRACTS, and conflating them would
+    /// corrupt memory:
+    ///
+    ///   - A `{ptr,len,cap}` element (`Vec[(String, i64)]`) takes the sibling's
+    ///     full mechanism — its own scope cleanup so a NON-consuming read
+    ///     (`println(v[0].0)`, `v[0].0.len()`) does not leak, registered in
+    ///     `vec_elem_field_clone_slots` so a consuming destination takes it over
+    ///     by zeroing the clone's `cap`.
+    ///   - Any other heap element (a user struct) must NOT go in that table:
+    ///     the takeover zeroes field 2 of a `{ptr,len,cap}` at the recorded
+    ///     slot, and doing that to a struct slot would scribble on an unrelated
+    ///     field. It follows `clone_owned_vec_index_element`'s contract instead
+    ///     — hand back a fresh value and let the consumer own it — which is the
+    ///     same contract the whole-element read it is projecting out of has
+    ///     always had.
+    ///
+    /// Gated to a plain element index (not a range) into a registered Vec /
+    /// Slice / Map whose element type really is a tuple, and to a
+    /// non-trivially-copyable member: `v[0].1` over `(R, i64)` still skips the
+    /// clone rather than paying for one.
+    pub(super) fn clone_vec_elem_tuple_index_read(
+        &mut self,
+        expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::TupleIndex { object, index } = &expr.kind else {
+            return Ok(val);
+        };
+        let ExprKind::Index {
+            object: container,
+            index: cidx,
+        } = &object.kind
+        else {
+            return Ok(val);
+        };
+        if matches!(&cidx.kind, ExprKind::Range { .. }) {
+            return Ok(val);
+        }
+        // The container must be a registered owning Vec, Slice or Map — the
+        // same three the sibling accepts, and for the reason recorded there:
+        // not cloning is not the safe side for a slice or a map either, and the
+        // clone carries its own cleanup so it is not a leak.
+        let ExprKind::Identifier(cname) = &container.kind else {
+            return Ok(val);
+        };
+        if !self.var_types.slice_elem_types.contains_key(cname.as_str())
+            && !self.mapset.map_key_types.contains_key(cname.as_str())
+            && !self.var_types.vec_elem_types.contains_key(cname.as_str())
+        {
+            return Ok(val);
+        }
+        let Some(TypeKind::Tuple(elems)) =
+            self.vec_index_elem_type_expr(container).map(|te| te.kind)
+        else {
+            return Ok(val);
+        };
+        let Some(mte) = elems.get(*index as usize).cloned() else {
+            return Ok(val);
+        };
+        if super::vec_method::is_trivially_copyable_te(&mte) {
+            return Ok(val);
+        }
+        let Some(cur_fn) = self.current_fn else {
+            return Ok(val);
+        };
+        let member_is_vecstruct =
+            self.is_string_type_expr(&mte) || self.extract_vec_elem_type(&mte).is_some();
+        let vec_ty = self.vec_struct_type();
+        // Defensive width check, the same one both siblings make and for the
+        // same mis-resolved-monomorph reason: handing an 8-byte scalar to the
+        // String/Vec clone fn reads 24 bytes off an 8-byte slot.
+        if member_is_vecstruct && val.get_type() != vec_ty.into() {
+            return Ok(val);
+        }
+        let elem_ll = val.get_type();
+        let src = self.create_entry_alloca(cur_fn, "tidx.read.src", elem_ll);
+        if self.builder.build_store(src, val).is_err() {
+            return Ok(val);
+        }
+        let dst = self.create_entry_alloca(cur_fn, "tidx.read.clone", elem_ll);
+        let clone_fn = self.emit_clone_fn_for_type_expr(&mte);
+        if self
+            .builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .is_err()
+        {
+            return Ok(val);
+        }
+        if member_is_vecstruct {
+            let member_elem_ty = if self.is_string_type_expr(&mte) {
+                Some(self.context.i8_type().into())
+            } else {
+                self.extract_vec_elem_type(&mte)
+            };
+            self.track_vec_var(dst, member_elem_ty);
+            self.vec_elem_field_clone_slots
+                .insert((expr.span.offset, expr.span.length), dst);
+            self.vec_elem_field_clone_log
+                .push((expr.span.offset, expr.span.length));
+        }
+        Ok(self
+            .builder
+            .build_load(elem_ll, dst, "tidx.read.cloned")
+            .unwrap())
+    }
+
     /// #38 — deep-clone a `match <self.field[i]>.enumfield { … }` scrutinee
     /// value. The indexed object is itself a place (FieldAccess/`self`), e.g. the
     /// parser's `self.tokens[self.pos].token`. The #15/#18 source-suppression

@@ -108820,6 +108820,82 @@ fn main() {
         );
     }
 
+    /// A TUPLE ELEMENT projected out of a CONTAINER ELEMENT stays a COPY —
+    /// `v[0].0` over `Vec[(String, i64)]` (B-2026-08-28-24).
+    ///
+    /// The abort this fixes is a memory error, gated under LSan by
+    /// `test_tuple_element_of_a_container_element_is_cloned_not_aliased`. What
+    /// THIS test pins is the semantics the fix had to pick, which no sanitizer
+    /// can see: the read is a COPY, so the container's element is unchanged
+    /// afterwards and still readable.
+    ///
+    /// That is the whole difference between the two available fixes. Cloning
+    /// the read gives the destination its own buffer and leaves the element
+    /// alone. Cap-zeroing the SOURCE — spreading the move model the `let` site
+    /// used — also silences the abort, and B-2026-08-12-27 measured what it
+    /// costs: `let mut w = ps[0].word; w = w + "X";` then reading `ps[0].word`
+    /// printed garbage where the interpreter printed the value. So every row
+    /// here re-reads the container after consuming out of it, and the mutation
+    /// row asks the question directly.
+    ///
+    /// The interpreter is the oracle rather than a hand-written expectation
+    /// because it is the definition of the copy semantics being pinned.
+    #[test]
+    fn test_e2e_tuple_element_of_a_container_element_is_a_copy() {
+        let src = r#"
+struct R { id: i64, name: String }
+
+fn mks() -> Vec[(String, i64)] { return [(f"a{1}", 1), (f"b{2}", 2)]; }
+fn mkr() -> Vec[(R, i64)] {
+    return [(R { id: 1, name: f"a{1}" }, 1), (R { id: 2, name: f"b{2}" }, 2)];
+}
+fn ret_r(v: Vec[(R, i64)]) -> R { return v[0].0; }
+
+fn main() {
+    let v = mks();
+    let mut w = v[0].0;
+    w = w + "X";
+    // the binding owns a copy; the container's element is untouched
+    println(w);
+    println(v[0].0);
+
+    let mut o: Vec[String] = Vec.new();
+    o.push(v[1].0);
+    println(o[0]);
+    println(v[1].0);
+
+    let c = true;
+    let d = if c { v[0].0 } else { v[1].0 };
+    println(d);
+    println(v[0].0);
+
+    // a struct member, and the row's own escaping shape
+    let r = ret_r(mkr());
+    println(r.name);
+    let s = mkr();
+    let t = s[1].0;
+    println(t.name);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // `a1X` then `a1` is the copy: a move model prints `a1X` then empty or
+        // garbage for the element.
+        assert_eq!(
+            expected, "a1X\na1\nb2\nb2\na1\na1\na1\nb2\n",
+            "interpreter oracle is wrong for a tuple-element container read",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a tuple element read out of a container element must be a copy",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///

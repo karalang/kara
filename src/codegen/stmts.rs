@@ -941,6 +941,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 self.suppress_source_vec_cleanup_for_arg(tail);
             }
+            // B-2026-08-28-24 — a TUPLE-INDEX tail (`{ …; t.0 }`, and the
+            // `if`/`match`-arm spelling of it). Exactly the hole B-2026-08-06-8
+            // closed for a FIELD tail, one node kind over: the function-body
+            // sibling `suppress_cleanup_for_tail_return` hands its tail to
+            // `suppress_source_vec_cleanup_for_arg` whatever the shape, so
+            // `fn f() -> String { t.0 }` neutralized the source, while here a
+            // tuple-index tail fell through to `_ => {}` and the block frame
+            // dropped the owner — freeing the very value the block was handing
+            // to its consumer.
+            //
+            // BOTH SOURCES it can name were measured double-freeing, which is
+            // why this is one arm and not a special case: a tuple LOCAL
+            // (`let x = { let t = (f"a{1}", 2); t.0 };` — no container in
+            // sight) and a CONTAINER ELEMENT (`if c { v[0].0 } else { … }`,
+            // this row's shape) both abort with `free(): double free detected
+            // in tcache 2` on both compiled backends.
+            //
+            // Routed to the same suppressor as the Identifier and FieldAccess
+            // arms, which is what makes the two sources need no distinction
+            // here: it already holds the right neutralizer for each — the tuple
+            // local takes the tuple-field move-out cap-zero, and the container
+            // element takes the `vec_elem_field_clone_slots` takeover of the
+            // clone the read emitted (the container's own element is never
+            // touched, which is the whole point of cloning there rather than
+            // zeroing its source).
+            ExprKind::TupleIndex { .. } => {
+                self.suppress_source_vec_cleanup_for_arg(tail);
+            }
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
                 if let Some(inner) = b.final_expr.as_deref() {
                     self.suppress_block_tail_cleanup(inner);

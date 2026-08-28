@@ -57062,6 +57062,118 @@ fn main() {
         );
     }
 
+    /// A TUPLE ELEMENT projected out of a CONTAINER ELEMENT — `v[0].0` over
+    /// `Vec[(String, i64)]` and `Vec[(R, i64)]` (B-2026-08-28-24).
+    ///
+    /// The read handed back a SHALLOW alias of the container element's heap, so
+    /// every owning destination shared one pointer with the element and both
+    /// freed it: `free(): double free detected in tcache 2`, rc 134, on both
+    /// compiled backends, from a `karac check`-clean program the interpreter
+    /// answered correctly.
+    ///
+    /// EVERY CONSUMING POSITION IS HERE ON PURPOSE, because they do not share a
+    /// mechanism and the measurement proved it. Cloning at the CONSUMERS — the
+    /// route the whole-element read takes — fixes `let`, `return`, an argument,
+    /// an assignment and a branch tail, and leaves STRUCT-LITERAL FIELD,
+    /// `Vec.push` and TUPLE CONSTRUCTION still aborting, because those three
+    /// consume without going through it. A fixture that stopped at `let` would
+    /// have passed against that wrong fix. Cloning at the READ reaches all of
+    /// them through the one takeover ~87 call sites already funnel into.
+    ///
+    /// The NON-consuming rows (`+ "!"`, `.len()`) are the other direction, and
+    /// the one this test is shaped to catch: a read nothing takes over must
+    /// free its own clone. Under LSan those fail as a LEAK where the consuming
+    /// ones fail as a double free, so both halves of the takeover are pinned.
+    ///
+    /// Re-reading the container after each consumer is what keeps a "fix" that
+    /// cap-zeroes the SOURCE from passing: that silences the abort and hands
+    /// back a container whose element has been emptied — the use-after-free
+    /// B-2026-08-12-27 measured and rejected.
+    ///
+    /// The `{ptr,len,cap}` and STRUCT members are both here because they take
+    /// DIFFERENT ownership contracts in the fix — only the former may be
+    /// registered in `vec_elem_field_clone_slots`, since the takeover zeroes
+    /// field 2 of a `{ptr,len,cap}` at the recorded slot and would scribble on
+    /// a struct. `v[0].1` is the Copy control that must not be cloned at all.
+    ///
+    /// Positions deliberately EXCLUDED, all measured leaking identically in the
+    /// already-working FIELD spelling and so not this row's to fix: a consumer
+    /// that is itself an unbound TEMPORARY (`println(Box2 { w: v[0].0 }.w)`,
+    /// `println((v[1].0, 9).0)`, and printing an `if`/`match`/block value
+    /// without binding it). Same byte counts on both spellings — see
+    /// B-2026-08-28-29.
+    #[test]
+    fn test_tuple_element_of_a_container_element_is_cloned_not_aliased() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct Holder { r: R }
+struct Box2 { w: String }
+
+fn takes(s: String) -> i64 { return s.len(); }
+fn ret_s(v: Vec[(String, i64)]) -> String { return v[0].0; }
+fn ret_r(v: Vec[(R, i64)]) -> R { return v[0].0; }
+
+fn mks() -> Vec[(String, i64)] { return [(f"a{1}", 1), (f"b{2}", 2)]; }
+fn mkr() -> Vec[(R, i64)] {
+    return [(R { id: 1, name: f"a{1}" }, 1), (R { id: 2, name: f"b{2}" }, 2)];
+}
+
+fn main() {
+    let v = mks();
+    // consuming positions
+    let a = v[0].0;
+    println(a);
+    let b = Box2 { w: v[0].0 };
+    println(b.w);
+    let mut o: Vec[String] = Vec.new();
+    o.push(v[0].0);
+    println(o[0]);
+    println(takes(v[1].0));
+    let mut b2 = Box2 { w: f"z{0}" };
+    b2.w = v[1].0;
+    println(b2.w);
+    let mut o2: Vec[String] = [f"q{0}"];
+    o2[0] = v[0].0;
+    println(o2[0]);
+    let c = true;
+    let d = if c { v[0].0 } else { v[1].0 };
+    println(d);
+    let e = match c { true => v[1].0, false => v[0].0 };
+    println(e);
+    let g = { let t = (f"t{1}", 2); t.0 };
+    println(g);
+    // non-consuming reads: the clone must free itself
+    println(v[0].0 + "!");
+    println(v[0].0.len());
+    // a Copy member must not be cloned at all
+    println(v[0].1);
+    // the container is still intact
+    println(v[0].0);
+    println(v[1].0);
+    println(ret_s(mks()));
+
+    // the same matrix over a STRUCT member
+    let w = mkr();
+    let r = w[0].0;
+    println(r.name);
+    let h = Holder { r: w[0].0 };
+    println(h.r.name);
+    let mut po: Vec[R] = Vec.new();
+    po.push(w[0].0);
+    println(po[0].name);
+    println(ret_r(mkr()).name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "a1", "a1", "a1", "2", "b2", "a1", "a1", "b2", "t1", "a1!", "2", "1", "a1", "b2",
+                "a1", "a1", "a1", "a1", "a1",
+            ],
+            "tuple-element-of-container-element",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///
