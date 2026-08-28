@@ -1504,6 +1504,120 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-58 — the memory half of running an own-`Drop` enum's body
+    /// when it is an `Option`/`Result` PAYLOAD.
+    ///
+    /// This fixture carries more weight than its siblings, because the fix
+    /// touched the MEMORY channel and not just a bodies walker.
+    /// `emit_drop_fn_for_type_expr` used to hand a Drop-bearing enum's
+    /// user-drop WRAPPER to every memory-side caller; it now routes to
+    /// `emit_enum_drop_switch` (memory-only) instead, with an
+    /// `emit_primitive_drop_fn("<E>$mem")` fallback when there is nothing to
+    /// free. If that reroute lost the free, the `String` rows below leak under
+    /// LSan; if the bodies walker also freed, they double-free. Passing both
+    /// ways is the balance claim, and the enum arm of `karac_drop_<E>` is
+    /// where the heap actually lives.
+    ///
+    /// `mem-fallback-no-heap` is the second half of that reroute — a
+    /// Drop-bearing enum with NO heap at all, where `emit_enum_drop_switch`
+    /// returns `None`. The fallback must not resolve back to the wrapper (the
+    /// B-2026-08-03-10 trap, whose struct twin needed the same suffix), which
+    /// would run the body a second time at scope exit and show up here as a
+    /// doubled line.
+    ///
+    /// DELIBERATELY ABSENT: `Option[K]` where `K`'s variant payload is a
+    /// heap-carrying nested STRUCT. That shape leaks the struct's buffer, for
+    /// a reason that predates this fix and is independent of it — the plain
+    /// `let` site registers `track_inline_result_payload_var` but has no
+    /// `Option` sibling for a struct/enum payload, so `Result[K, i64]` frees
+    /// it and `Option[K]` does not. It went unseen because nothing observed
+    /// the buffer, and an unread `malloc` is removed outright; making the
+    /// body run is what turns it into a reportable leak. Filed on its own row
+    /// with the scoping table (only that one cell of seven leaks). Every row
+    /// below is a shape measured balanced.
+    #[test]
+    fn asan_own_drop_enum_as_optres_payload_is_memory_balanced() {
+        const H: &str = "enum E { A(String), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n";
+        // OPTION, payload variant — the enum owns a heap `String` its own body
+        // reads. The agree-on-zero shape before the fix.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[E] = Some(E.A(f\"n{{7}}\"));\n\
+             \x20            println(\"mid\"); }}\n"
+            ),
+            &["drop E", "mid"],
+            "option-payload-heap",
+        );
+        // RESULT — the leg that ran the body from the MEMORY channel at scope
+        // exit before the fix. If the reroute is wrong, this is where a double
+        // free or a leak lands.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let r: Result[E, i64] = Ok(E.A(f\"n{{7}}\"));\n\
+             \x20            println(\"mid\"); }}\n"
+            ),
+            &["drop E", "mid"],
+            "result-payload-heap",
+        );
+        // ERR position — the second arm of the same switch.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let r: Result[i64, E] = Err(E.A(f\"n{{7}}\"));\n\
+             \x20            println(\"mid\"); }}\n"
+            ),
+            &["drop E", "mid"],
+            "result-err-heap",
+        );
+        // $mem FALLBACK — a Drop-bearing enum with no heap. `emit_enum_drop_
+        // switch` gives `None` here, so the fallback name is what stops the
+        // module lookup from handing back the wrapper.
+        assert_clean_asan_run(
+            "enum E3 { A(i64), B }\n\
+             impl Drop for E3 { fn drop(mut ref self) { println(\"drop E3\") } }\n\
+             fn main() { let r: Result[E3, i64] = Ok(E3.A(3)); println(\"mid\"); }\n",
+            &["drop E3", "mid"],
+            "mem-fallback-no-heap",
+        );
+        // NESTED-STRUCT payload with NO heap — the -54 predicate reaching this
+        // position through a struct rather than a direct `String`. Balanced
+        // because there is nothing to free; the heap-carrying sibling is the
+        // shape excluded above.
+        assert_clean_asan_run(
+            "enum H2 { A(R2), B }\n\
+             struct R2 { id: i64 }\n\
+             impl Drop for R2 { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn main() { let o: Option[H2] = Some(H2.A(R2 { id: 5 })); println(\"mid\"); }\n",
+            &["drop R5", "mid"],
+            "payload-only-enum-no-heap",
+        );
+        // RESULT with the heap-carrying nested struct — the `Option` sibling
+        // of this row is the excluded leak, so pinning the `Result` half is
+        // what proves the fix itself is memory-neutral: same body, same heap,
+        // same walker, and the registrar that exists here frees it.
+        assert_clean_asan_run(
+            "enum K2 { A(R3), B }\n\
+             struct R3 { id: i64, name: String }\n\
+             impl Drop for R3 { fn drop(mut ref self) { println(f\"drop R{self.name}\") } }\n\
+             fn main() { let r: Result[K2, i64] = Ok(K2.A(R3 { id: 5, name: f\"n{5}\" }));\n\
+             \x20            println(\"mid\"); }\n",
+            &["drop Rn5", "mid"],
+            "result-nested-struct-heap",
+        );
+        // MOVED OUT by a consuming arm — the destination owns the payload, so
+        // the source's walk must stay retracted. A per-owner rather than
+        // per-value widening double-frees here.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[E] = Some(E.A(f\"n{{7}}\"));\n\
+             \x20            match o {{ Some(e) => {{ println(\"got\") }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+            ),
+            &["got"],
+            "consuming-match-moved-out",
+        );
+    }
+
     #[test]
     fn asan_own_drop_enum_discarded_by_wildcard_leaf_is_balanced() {
         const H: &str = "enum E { A(R), B }\n\

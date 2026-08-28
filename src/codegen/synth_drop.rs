@@ -7995,8 +7995,17 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         };
-        // Keep only payload arms whose type is a non-shared user struct that
-        // runs a user drop (own body or a Drop-bearing field).
+        // Keep only payload arms whose type is a non-shared user struct OR
+        // user enum that runs a user drop (own body or Drop-bearing content).
+        //
+        // B-2026-08-28-58 leg B — the enum half. `Option[E]`/`Result[E, _]`
+        // for a user enum `E` ran NO body on any backend: this filter demanded
+        // `struct_types`, so the walker was never emitted and the binding got
+        // no `UserDrop` registration at all. That is the payload-level twin of
+        // the container gaps B-2026-08-28-46/-47 (struct field, tuple element)
+        // and -55 (`Vec` element) closed one level up, and it is the last
+        // position in that family. `Option`/`Result` are excluded because a
+        // nested built-in payload rides its own walker, not this arm.
         let targets: Vec<(u64, String, TypeExpr, usize)> = arms
             .into_iter()
             .filter_map(|(tag, pte, thresh)| {
@@ -8004,8 +8013,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     return None;
                 };
                 let sname = pp.segments.first()?.clone();
+                let user_enum = sname != "Option"
+                    && sname != "Result"
+                    && self
+                        .type_decls
+                        .enum_layouts
+                        .get(sname.as_str())
+                        .is_some_and(|l| !l.is_shared);
                 if self.type_decls.shared_types.contains_key(&sname)
-                    || !self.type_decls.struct_types.contains_key(&sname)
+                    || !(self.type_decls.struct_types.contains_key(&sname) || user_enum)
                     || !self.type_runs_user_drop(&sname, &mut Vec::new())
                 {
                     return None;
@@ -8106,9 +8122,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap();
                 }
             }
-            if let Some(f) =
+            // Own body first, then the payload's — the order every sibling
+            // walk in this family uses (`emit_slot_drop_bodies_at`, the tuple
+            // and `Vec` element walkers), and the order a direct `let x =
+            // E.A(R { .. });` already prints in on all three backends.
+            let is_enum = self
+                .type_decls
+                .enum_layouts
+                .get(sname.as_str())
+                .is_some_and(|l| !l.is_shared)
+                && sname != "Option"
+                && sname != "Result";
+            let inner = if is_enum {
+                self.emit_enum_payload_user_drop_bodies_fn(&sname)
+            } else {
                 self.emit_user_drop_field_bodies_fn(&sname, &std::collections::HashMap::new())
-            {
+            };
+            if let Some(f) = inner {
                 self.builder
                     .build_call(f, &[target_ptr.into()], "")
                     .unwrap();

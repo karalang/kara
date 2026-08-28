@@ -13615,6 +13615,112 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-58 — an own-`Drop` enum held as an `Option`/`Result`
+    /// PAYLOAD runs its body when the binding dies. The last position in the
+    /// -46/-47/-54/-55 family, and the one that failed worst: silent on all
+    /// three backends for `Option`, so no A/B gate could report it.
+    ///
+    /// TWO defects had to be fixed together, and this fixture pins both.
+    ///
+    /// The payload-bodies walker demanded `struct_types`, so a user-enum
+    /// payload got no walker and no `UserDrop` registration at all — the
+    /// missing-body half, `Option` and `Result` alike.
+    ///
+    /// `emit_drop_fn_for_type_expr`'s B-2026-07-30-11 guard covered structs
+    /// only, so for a Drop-bearing ENUM the MEMORY channel's
+    /// `module.get_function("karac_drop_<E>")` lookup returned the user-drop
+    /// WRAPPER (`emit_user_drop_wrappers` mints one for every type in
+    /// `drop_method_keys`, enums included) and ran the body at scope exit.
+    /// That is why `Result` printed `drop E` AFTER the last statement on both
+    /// compiled backends while the interpreter printed nothing — a live
+    /// run-vs-build divergence hiding inside the missing-body row. Fixing only
+    /// the walker would have made `Result` print the body TWICE, which is the
+    /// reason the two legs are one commit and one test.
+    ///
+    /// `result-*` therefore carries the ordering, not just the count: the body
+    /// belongs at the binding's live-range end (before `mid`), never at scope
+    /// exit.
+    ///
+    /// `payload-only-*` is the -54 predicate reaching this position: an enum
+    /// with no own `Drop` but a Drop-bearing payload. `no-drop-*` is the
+    /// boundary that keeps the widening honest — an enum with neither runs
+    /// nothing.
+    #[test]
+    fn e2e_own_drop_enum_as_optres_payload_runs_its_body() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             enum H { A(R), B }\n\
+             enum J { A(i64), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        for (label, body, want) in [
+            // The agree-on-zero half: `Option`, silent on all three backends.
+            (
+                "option-unit",
+                "fn main() { let o: Option[E] = Some(E.B); println(\"mid\"); }\n",
+                "drop E\nmid\n",
+            ),
+            (
+                "option-payload",
+                "fn main() { let o: Option[E] = Some(E.A(R { id: 4 }));\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop E\ndrop R4\nmid\n",
+            ),
+            // The run-vs-build half: `Result` ran the body at SCOPE EXIT on
+            // the compiled backends (after `mid`) and not at all in the
+            // interpreter. Both the count and the position are pinned.
+            (
+                "result-unit",
+                "fn main() { let r: Result[E, i64] = Ok(E.B); println(\"mid\"); }\n",
+                "drop E\nmid\n",
+            ),
+            (
+                "result-payload",
+                "fn main() { let r: Result[E, i64] = Ok(E.A(R { id: 5 }));\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop E\ndrop R5\nmid\n",
+            ),
+            (
+                "result-err-position",
+                "fn main() { let r: Result[i64, E] = Err(E.B); println(\"mid\"); }\n",
+                "drop E\nmid\n",
+            ),
+            // -54's predicate at this position: no own `Drop`, Drop-bearing
+            // payload. Only the payload's body runs.
+            (
+                "payload-only-option",
+                "fn main() { let o: Option[H] = Some(H.A(R { id: 6 }));\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop R6\nmid\n",
+            ),
+            (
+                "payload-only-result",
+                "fn main() { let r: Result[H, i64] = Ok(H.A(R { id: 7 }));\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop R7\nmid\n",
+            ),
+            // BOUNDARY — an enum with neither an own body nor a Drop-bearing
+            // payload runs nothing, so this is not "any enum payload fires".
+            (
+                "no-drop-option",
+                "fn main() { let o: Option[J] = Some(J.A(3)); println(\"mid\"); }\n",
+                "mid\n",
+            ),
+            // BOUNDARY — `None` has no live payload; the tag guard must hold.
+            (
+                "none-runs-nothing",
+                "fn main() { let o: Option[E] = None; println(\"mid\"); }\n",
+                "mid\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-28-40 — an own-`impl Drop` enum discarded by a wildcard
     /// destructure leaf runs its LIVE PAYLOAD's body too, not just its own.
     ///

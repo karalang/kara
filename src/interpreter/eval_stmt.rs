@@ -3171,6 +3171,34 @@ impl<'a> super::Interpreter<'a> {
         let Some(payload) = items.first() else {
             return;
         };
+        // B-2026-08-28-58 — a payload that is a user ENUM, not just a struct.
+        // The `Value::Struct` bind below rejected it outright, which is why
+        // `let o: Option[E] = Some(E.B);` ran no body on ANY backend. Same
+        // declared-head-vs-runtime-name gate as the struct arm, then the
+        // enum's own body followed by its live variant's payload walk — the
+        // order the compiled twin emits and the order a direct
+        // `let x = E.A(R { .. });` already prints in.
+        if let Value::EnumVariant {
+            enum_name: pn,
+            variant: pv,
+            ..
+        } = payload
+        {
+            if pn == "Option" || pn == "Result" {
+                return;
+            }
+            if declared_head.as_deref() != Some(pn.as_str()) {
+                return;
+            }
+            let pn = pn.clone();
+            let _ = pv;
+            let payload = payload.clone();
+            if self.program.drop_method_keys.contains_key(&pn) {
+                self.run_user_drop_body_only(&pn, payload.clone());
+            }
+            self.run_enum_payload_user_drops_value(&payload);
+            return;
+        }
         let Value::Struct { name: tn, .. } = payload else {
             return;
         };

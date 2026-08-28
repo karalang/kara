@@ -528,7 +528,8 @@ impl<'a> super::Interpreter<'a> {
             return false;
         }
         seen.push(name.to_string());
-        self.program
+        if self
+            .program
             .items
             .iter()
             .find_map(|item| match item {
@@ -541,6 +542,41 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .any(|fty| self.field_te_runs_user_drop(fty, seen))
             })
+        {
+            return true;
+        }
+        // B-2026-08-28-58 — the ENUM leg, the interpreter twin of the one
+        // B-2026-08-28-54 added to codegen's `type_runs_user_drop`. Without
+        // it an enum with NO `Drop` of its own but a Drop-bearing variant
+        // payload (`enum H { A(R), B }`) classified drop-free, so the
+        // `Option[H]` / `Result[H, _]` payload-bodies registration never
+        // armed and `dR` never ran. Both backends' type-level gates have to
+        // classify identically or the two print different things.
+        if name != "Option" && name != "Result" {
+            return self
+                .program
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::EnumDef(e) if e.name == name => Some(e),
+                    _ => None,
+                })
+                .is_some_and(|e| {
+                    let tys: Vec<TypeExpr> = e
+                        .variants
+                        .iter()
+                        .flat_map(|v| match &v.kind {
+                            crate::ast::VariantKind::Unit => Vec::new(),
+                            crate::ast::VariantKind::Tuple(tys) => tys.clone(),
+                            crate::ast::VariantKind::Struct(fs) => {
+                                fs.iter().map(|f| f.ty.clone()).collect()
+                            }
+                        })
+                        .collect();
+                    tys.iter().any(|ty| self.field_te_runs_user_drop(ty, seen))
+                });
+        }
+        false
     }
 
     /// B-2026-08-02-24 — does a struct FIELD's declared type reach user-Drop

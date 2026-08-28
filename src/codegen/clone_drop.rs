@@ -1986,6 +1986,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     // collide with any user type name.
                     return self.emit_primitive_drop_fn(&format!("{single}$mem"));
                 }
+                // B-2026-08-28-58 leg A — the ENUM twin of the guard above,
+                // and it is the same trap verbatim: `emit_user_drop_wrappers`
+                // mints `karac_drop_<T>` for EVERY type in
+                // `drop_method_keys`, enums included, so the module lookup
+                // below returned the user-drop WRAPPER for a Drop-bearing
+                // enum and the memory channel ran its body at scope exit.
+                // Measured: `let x: Result[E, i64] = Ok(E.B);` printed `dE`
+                // AFTER the last statement on both compiled backends while
+                // the interpreter printed nothing at all — the enum reaches
+                // this family through `inline_struct_payload_drop`, which the
+                // struct guard's own note says the `Result` sibling escaped
+                // only because its admit is narrower for structs.
+                //
+                // The memory-only synthesis for an enum is
+                // `emit_enum_drop_switch` (`__karac_drop_<E>`), which by
+                // construction runs no user body — it walks `field_drop_kinds`
+                // and frees. Same `$mem` fallback for a Drop-bearing enum with
+                // nothing to free (`enum E { A(R), B }`, `R { id: i64 }`),
+                // for the B-2026-08-03-10 reason: `emit_primitive_drop_fn`
+                // reopens the very lookup this guard exists to bypass.
+                if p.generic_args.is_none()
+                    && !self.type_decls.shared_types.contains_key(single.as_str())
+                    && self
+                        .type_decls
+                        .enum_layouts
+                        .get(single.as_str())
+                        .is_some_and(|l| !l.is_shared)
+                    && single != "Option"
+                    && single != "Result"
+                    && self
+                        .program_snapshot
+                        .as_deref()
+                        .is_some_and(|prog| prog.drop_method_keys.contains_key(single.as_str()))
+                {
+                    let single = single.clone();
+                    if let Some(f) = self.emit_enum_drop_switch(&single) {
+                        return f;
+                    }
+                    return self.emit_primitive_drop_fn(&format!("{single}$mem"));
+                }
             }
         }
         if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {

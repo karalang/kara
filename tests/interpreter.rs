@@ -33142,6 +33142,103 @@ fn test_own_drop_enum_member_runs_its_body_when_never_destructured() {
     );
 }
 
+/// B-2026-08-28-58, interpreter leg — the twin of
+/// `codegen::e2e_own_drop_enum_as_optres_payload_runs_its_body`.
+///
+/// The last position in the -46/-47/-54/-55 family: an own-`Drop` enum held as
+/// an `Option`/`Result` PAYLOAD. The interpreter ran nothing for any of these
+/// shapes, because `run_optres_payload_user_drops` bound the payload as
+/// `Value::Struct` and returned on anything else, and `type_name_runs_user_drop`
+/// — the gate that arms the registration at all — recursed only through
+/// `StructDef`, so a payload-only enum never qualified either.
+///
+/// Both halves are pinned here. The compiled twin additionally carries the
+/// ORDERING, which is where its own second defect lived (the memory channel ran
+/// the body at scope exit); the interpreter never had that channel, so its rows
+/// are about the missing body alone.
+#[test]
+fn own_drop_enum_as_optres_payload_runs_its_body() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         enum H { A(R), B }\n\
+         enum J { A(i64), B }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "option-unit",
+            "fn main() { let o: Option[E] = Some(E.B); println(\"mid\"); }\n",
+            "drop E\nmid\n",
+        ),
+        (
+            "option-payload",
+            "fn main() { let o: Option[E] = Some(E.A(R { id: 4 }));\n\
+             \x20            println(\"mid\"); }\n",
+            "drop E\ndrop R4\nmid\n",
+        ),
+        (
+            "result-unit",
+            "fn main() { let r: Result[E, i64] = Ok(E.B); println(\"mid\"); }\n",
+            "drop E\nmid\n",
+        ),
+        (
+            "result-payload",
+            "fn main() { let r: Result[E, i64] = Ok(E.A(R { id: 5 }));\n\
+             \x20            println(\"mid\"); }\n",
+            "drop E\ndrop R5\nmid\n",
+        ),
+        (
+            "result-err-position",
+            "fn main() { let r: Result[i64, E] = Err(E.B); println(\"mid\"); }\n",
+            "drop E\nmid\n",
+        ),
+        // -54's predicate reaching this position: no own `Drop`, Drop-bearing
+        // payload. This is the half that needed the enum leg on
+        // `type_name_runs_user_drop`, not just the runner.
+        (
+            "payload-only-option",
+            "fn main() { let o: Option[H] = Some(H.A(R { id: 6 }));\n\
+             \x20            println(\"mid\"); }\n",
+            "drop R6\nmid\n",
+        ),
+        (
+            "payload-only-result",
+            "fn main() { let r: Result[H, i64] = Ok(H.A(R { id: 7 }));\n\
+             \x20            println(\"mid\"); }\n",
+            "drop R7\nmid\n",
+        ),
+        // BOUNDARY — neither an own body nor a Drop-bearing payload.
+        (
+            "no-drop-option",
+            "fn main() { let o: Option[J] = Some(J.A(3)); println(\"mid\"); }\n",
+            "mid\n",
+        ),
+        // BOUNDARY — `None` has no live payload.
+        (
+            "none-runs-nothing",
+            "fn main() { let o: Option[E] = None; println(\"mid\"); }\n",
+            "mid\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+    // The MOVE-OUT peer, and the reason this fix cannot double-fire: a
+    // consuming `match` arm binds the payload out, so the source's walk must
+    // stay retracted. Both backends print `got` and no body here — the
+    // consuming arm losing the bound enum's own body is a SEPARATE
+    // pre-existing gap (measured identical before this fix, and filed on its
+    // own row); what this row pins is that the source does not fire twice.
+    assert_eq!(
+        run(&format!(
+            "{H}fn main() {{ let o: Option[E] = Some(E.A(R {{ id: 8 }}));\n\
+             \x20            match o {{ Some(e) => {{ println(\"got\") }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+        )),
+        "got\n",
+        "consuming-match-does-not-double-fire"
+    );
+}
+
 /// B-2026-08-28-40, interpreter leg — an own-`impl Drop` enum discarded by a
 /// wildcard destructure leaf runs its LIVE PAYLOAD's body too.
 ///
