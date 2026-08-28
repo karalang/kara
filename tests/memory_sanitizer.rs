@@ -1020,6 +1020,76 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-12 — the MEMORY half of the wildcard-leaf fix.
+    ///
+    /// The behavioural twins prove the discarded value's user `Drop` body now
+    /// runs exactly once at a scalar `R`. This asks the question they cannot:
+    /// at a heap-carrying `R`, does adding that body change what gets FREED?
+    ///
+    /// It must not, and the reason is the fix's central design choice. A
+    /// wildcard leaf's memory was never the missing part — codegen's tuple
+    /// `Wildcard` arm already freed a `{ptr,len,cap}` element, and a struct
+    /// element's buffers are freed by whichever drop covers the source
+    /// aggregate. Only the BODY was absent. So the fix emits
+    /// `emit_struct_user_drop_bodies_only_fn` — body plus field-body walk, no
+    /// frees — rather than the full `karac_drop_<T>` wrapper. Reaching for the
+    /// wrapper would have looked more natural and would have freed every one of
+    /// those buffers a second time; this fixture is what makes that difference
+    /// observable, since both choices produce identical stdout.
+    ///
+    /// `both-wildcards` is the sharpest row: two heap objects, both discarded,
+    /// so a wrapper-instead-of-bodies mistake double-frees twice over.
+    ///
+    /// The param control pins the other edge — there the fix deliberately fires
+    /// nothing, so the row proves the caller-side owner still releases the
+    /// buffer exactly once and that the gate did not suppress a free along with
+    /// the body it was suppressing.
+    #[test]
+    fn asan_wildcard_destructure_leaf_drop_body_is_memory_balanced() {
+        const DROPPER: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        for (label, body, want) in [
+            (
+                "tuple-place",
+                "fn main() { let p = (R { id: 41, name: f\"n{41}\" }, 1);\n\
+                 \x20            let (_, n) = p; println(f\"{n}\"); }\n",
+                vec!["drop 41 n41", "1"],
+            ),
+            (
+                "tuple-fresh-literal",
+                "fn main() { let (_, n) = (R { id: 41, name: f\"n{41}\" }, 1);\n\
+                 \x20            println(f\"{n}\"); }\n",
+                vec!["drop 41 n41", "1"],
+            ),
+            (
+                "struct-fresh-call",
+                "struct W { r: R, n: i64 }\n\
+                 fn mk() -> W { W { r: R { id: 41, name: f\"n{41}\" }, n: 1 } }\n\
+                 fn main() { let W { r: _, n } = mk(); println(f\"{n}\"); }\n",
+                vec!["drop 41 n41", "1"],
+            ),
+            // Two discarded heap objects — the row a full-wrapper registration
+            // would double-free twice.
+            (
+                "both-wildcards",
+                "fn main() { let p = (R { id: 41, name: f\"n{41}\" },\n\
+                 \x20                    R { id: 42, name: f\"n{42}\" });\n\
+                 \x20            let (_, _) = p; println(\"x\"); }\n",
+                vec!["drop 41 n41", "drop 42 n42", "x"],
+            ),
+            // CONTROL — a by-value param source, where the fix fires nothing.
+            (
+                "param-tuple-control",
+                "fn take(p: (R, i64)) -> i64 { let (_, n) = p; n }\n\
+                 fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1));\n\
+                 \x20            println(f\"{x}\"); }\n",
+                vec!["1", "drop 41 n41"],
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);
+        }
+    }
+
     #[test]
     fn asan_generic_struct_destructured_from_a_tuple_param_frees_once() {
         for (label, decl, arg) in [

@@ -1307,6 +1307,78 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|params| params.contains(n.as_str()))
     }
 
+    /// B-2026-08-28-12 — run the user `Drop` bodies of every element/field a
+    /// `let` destructure DISCARDS through a wildcard leaf.
+    ///
+    /// `let (_, n) = p;` and `let W { r: _, n } = w;` bind nothing for the
+    /// wildcard position, so no Drop slot is ever registered for it and the
+    /// discarded value's body ran zero times on every backend. One level up
+    /// (`let _ = R { .. }`) has been correct since B-2026-07-30-11, and a
+    /// `match` arm's wildcard is correct too, which is what shows this is a
+    /// `let`-destructure hole rather than a rule about wildcards.
+    ///
+    /// GATED ON THE SOURCE, and that gate is the whole subtlety. A by-value
+    /// PARAM source (`fn take(p: (R, i64)) { let (_, n) = p; }`) is already
+    /// correct at ONE body: the caller owns the entry copy under
+    /// caller-retains and fires it through `run_fresh_temp_arg_drops`, so
+    /// firing here too would double it. That is exactly the distinction
+    /// [`Self::let_destructures_owned_param`] already draws for BINDING
+    /// leaves; this mirrors its two conditions rather than inventing a
+    /// second gate, and deliberately does NOT mirror its view-PROPAGATION
+    /// side effect — that runs once per statement in `eval_block_inner`,
+    /// after this, and doing it twice would mark bindings this never saw.
+    ///
+    /// A method frame is excluded from the exclusion, for B-2026-08-27-48's
+    /// reason: a method's arguments reach no caller-side fire, so there the
+    /// leaf IS the only owner and must fire.
+    fn run_wildcard_destructure_leaf_user_drops(
+        &mut self,
+        pattern: &crate::ast::Pattern,
+        value: &Expr,
+        val: &Value,
+    ) {
+        use crate::ast::PatternKind;
+        // Mirror of `let_destructures_owned_param`'s two conditions, minus its
+        // mutation. `false` for a method frame means "the leaf owns it", which
+        // is why the early return is ordered this way.
+        let caller_owns = self.owned_param_frame_is_method.last().copied() != Some(true)
+            && matches!(&value.kind, ExprKind::Identifier(n)
+                if self.owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(n.as_str())));
+        if caller_owns {
+            return;
+        }
+        let mut discarded: Vec<Value> = Vec::new();
+        match (&pattern.kind, val) {
+            (PatternKind::Tuple(pats), Value::Tuple(items)) => {
+                for (i, p) in pats.iter().enumerate() {
+                    if matches!(p.kind, PatternKind::Wildcard) {
+                        if let Some(v) = items.get(i) {
+                            discarded.push(v.clone());
+                        }
+                    }
+                }
+            }
+            (PatternKind::Struct { fields, .. }, Value::Struct { fields: vals, .. }) => {
+                for fp in fields {
+                    // `W { r: _, n }` — only the RENAMED form can carry a
+                    // wildcard; the shorthand `W { r, n }` is a binding.
+                    let Some(inner) = &fp.pattern else { continue };
+                    if matches!(inner.kind, PatternKind::Wildcard) {
+                        if let Some(v) = vals.get(&fp.name) {
+                            discarded.push(v.clone());
+                        }
+                    }
+                }
+            }
+            _ => return,
+        }
+        for v in discarded {
+            self.run_discarded_value_user_drops(v);
+        }
+    }
+
     /// B-2026-08-01-30 leg B — an index expression the displaced-bodies
     /// branch may safely evaluate ahead of the store's own evaluation:
     /// pure scalar arithmetic over literals / identifiers / casts only.
@@ -3122,6 +3194,20 @@ impl<'a> super::Interpreter<'a> {
                 {
                     self.run_discarded_value_user_drops(val.clone());
                 }
+                // B-2026-08-28-12 — the same discard, one level IN. A wildcard
+                // LEAF of a tuple or struct pattern (`let (_, n) = p;`,
+                // `let W { r: _, n } = w;`) binds nothing, so
+                // `push_drops_for_stmt` registers no slot for it and the
+                // element's user `Drop` body ran ZERO times — against
+                // design.md § Drop's "dropped exactly once at the live-range
+                // end of its final owner". The whole-pattern arm above has
+                // covered `let _ = <owned>;` since B-2026-07-30-11 and a
+                // `match` arm's wildcard is correct too, so a wildcard leaf
+                // inside a `let` pattern was the one position with no owner
+                // anywhere. Fire at the destructure point, which is where the
+                // discarded element dies and where both compiled backends
+                // already fire the struct spelling.
+                self.run_wildcard_destructure_leaf_user_drops(pattern, value, &val);
                 self.bind_pattern(pattern, val);
                 for bound in pattern.binding_names() {
                     self.rearm_container_bodies_for_name(&bound);

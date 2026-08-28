@@ -32346,6 +32346,117 @@ fn test_returned_struct_param_field_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-12, interpreter leg — a WILDCARD leaf of a `let` destructure
+/// runs the discarded value's user `Drop` body exactly once.
+///
+/// Pre-fix it ran ZERO times: a wildcard binds no name, so `push_drops_for_stmt`
+/// registered no Drop slot for it and nothing else owned the value. The level
+/// above (`let _ = R { .. }`) has been correct since B-2026-07-30-11 and a
+/// `match` arm's wildcard was correct too, which is what shows this was a
+/// `let`-destructure hole rather than a rule about wildcards.
+///
+/// `param-tuple-control` and `param-struct-control` carry the INTERPRETER's
+/// order: it fires the caller-side argument walk AT the call, codegen defers it
+/// to the caller's scope exit, so the same one body prints before the result
+/// instead of after. That split is B-2026-08-28-19, predates this fix, and is
+/// untouched by it — those two rows are exactly the ones the fix's gate
+/// EXCLUDES, since a by-value param's body is the caller's to run. Every other
+/// row here matches the compiled twin verbatim.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `e2e_wildcard_destructure_leaf_user_drop_body_runs_once`, whose doc records
+/// the one family member still absent (a wildcard field over a struct LITERAL
+/// source, blocked behind a separate struct-literal destructure defect).
+#[test]
+fn test_wildcard_destructure_leaf_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "tuple-place",
+            "fn main() { let p = (R { id: 41 }, 1); let (_, n) = p; println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "tuple-fresh-literal",
+            "fn main() { let (_, n) = (R { id: 41 }, 1); println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "tuple-fresh-call",
+            "fn mk() -> (R, i64) { (R { id: 41 }, 1) }\n\
+             fn main() { let (_, n) = mk(); println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "struct-fresh-call",
+            "struct W { r: R, n: i64 }\n\
+             fn mk() -> W { W { r: R { id: 41 }, n: 1 } }\n\
+             fn main() { let W { r: _, n } = mk(); println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
+        // The one row of this family that was a run-vs-build split, and the
+        // interpreter was the WRONG side of it — compiled already ran one.
+        (
+            "struct-place",
+            "struct W { r: R, n: i64 }\n\
+             fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+             \x20           let W { r: _, n } = w; println(f\"{n}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "two-droppers-one-wildcard",
+            "fn main() { let p = (R { id: 41 }, R { id: 42 });\n\
+             \x20           let (_, b) = p; println(f\"{b.id}\") }\n",
+            "drop 41\n42\ndrop 42\n",
+        ),
+        (
+            "both-wildcards",
+            "fn main() { let p = (R { id: 41 }, R { id: 42 });\n\
+             \x20           let (_, _) = p; println(\"x\") }\n",
+            "drop 41\ndrop 42\nx\n",
+        ),
+        // CONTROL — by-value param sources, already correct at one body. The
+        // ORDER is this backend's own (B-2026-08-28-19).
+        (
+            "param-tuple-control",
+            "fn take(p: (R, i64)) -> i64 { let (_, n) = p; n }\n\
+             fn main() { println(f\"{take((R { id: 41 }, 1))}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "param-struct-control",
+            "struct W { r: R, n: i64 }\n\
+             fn take(w: W) -> i64 { let W { r: _, n } = w; n }\n\
+             fn main() { println(f\"{take(W { r: R { id: 41 }, n: 1 })}\") }\n",
+            "drop 41\n1\n",
+        ),
+        (
+            "match-arm-control",
+            "fn main() { let p = (R { id: 41 }, 1);\n\
+             \x20           match p { (_, n) => { println(f\"{n}\") } } }\n",
+            "1\ndrop 41\n",
+        ),
+        (
+            "wildcard-on-non-dropper-control",
+            "fn main() { let p = (R { id: 41 }, 1); let (r, _) = p; println(f\"{r.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "whole-pattern-wildcard-control",
+            "fn main() { let _ = R { id: 41 }; println(\"x\") }\n",
+            "drop 41\nx\n",
+        ),
+        (
+            "no-destructure-control",
+            "fn main() { let p = (R { id: 41 }, 1); println(f\"{p.1}\") }\n",
+            "1\ndrop 41\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-27-48, method leg — the same destructure inside an IMPL METHOD
 /// fires ONCE. This is the guard on the gate's other edge: a method frame's
 /// arguments get no caller-side fire (`run_fresh_temp_arg_drops` is wired

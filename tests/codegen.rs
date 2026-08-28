@@ -12590,6 +12590,154 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-12 — a WILDCARD leaf of a `let` destructure runs the
+    /// discarded value's user `Drop` body exactly once.
+    ///
+    /// Pre-fix it ran ZERO times, against design.md § Drop's "a value is
+    /// dropped exactly once, at the live-range end of its final owner". A
+    /// wildcard binds no name, so `push_drops_for_stmt` (interp) registered no
+    /// slot and codegen's leaf walkers — which key off a binding name — fell
+    /// through every arm. Codegen's tuple `Wildcard` arm did exist but only
+    /// freed a `{ptr,len,cap}` buffer; it never ran a body.
+    ///
+    /// Backend-consistent on most rows, so no A/B gate could see it — except
+    /// `struct-place`, which was interp 0 / compiled 1. That single split is
+    /// why the family was reachable at all, and it is also why the fix is not
+    /// symmetric: the compiled side of that one spelling was ALREADY right, so
+    /// the struct arm fires for a fresh source only. Firing it for a place
+    /// source too would take the compiled backends to two and re-open the
+    /// split from the other side.
+    ///
+    /// The three PARAM/MATCH rows are what constrain the fix rather than
+    /// merely passing. A by-value param source was already correct at one
+    /// body — the caller owns the entry copy under caller-retains and fires it
+    /// — so a leaf fire there would double it; both backends reuse the gate
+    /// they already apply to BINDING leaves (`let_destructures_owned_param` /
+    /// `owner_runs_bodies`) rather than introducing a second one. And
+    /// `match-arm-control` shows the defect was specific to `let`: the match
+    /// path ran a wildcard's body correctly all along.
+    ///
+    /// `param-tuple-control` / `param-struct-control` carry COMPILED
+    /// expectations; the interpreter twin pins the same counts in the other
+    /// order. That order split is B-2026-08-28-19 (the caller-side walk fires
+    /// at the call in the interpreter and at scope exit compiled), predates
+    /// this fix, and is untouched by it — the gate above means neither row's
+    /// body is one this fix places. Twin: `tests/interpreter.rs`'s
+    /// `test_wildcard_destructure_leaf_user_drop_body_runs_once`.
+    ///
+    /// One member of the family is deliberately absent: a wildcard field over
+    /// a struct LITERAL source (`let W { r: _, n } = W { .. }`) still runs
+    /// zero bodies compiled. It is blocked behind a larger, separate defect —
+    /// a struct-literal destructure registers no leaf cleanup at all, losing
+    /// even a BOUND field's body — filed as its own row rather than pinned
+    /// wrong here.
+    #[test]
+    fn e2e_wildcard_destructure_leaf_user_drop_body_runs_once() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro — a tuple LOCAL (place) source.
+            (
+                "tuple-place",
+                "fn main() { let p = (R { id: 41 }, 1); let (_, n) = p; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // Fresh tuple LITERAL source.
+            (
+                "tuple-fresh-literal",
+                "fn main() { let (_, n) = (R { id: 41 }, 1); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // Fresh CALL source.
+            (
+                "tuple-fresh-call",
+                "fn mk() -> (R, i64) { (R { id: 41 }, 1) }\n\
+                 fn main() { let (_, n) = mk(); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // The STRUCT spelling over a fresh call source.
+            (
+                "struct-fresh-call",
+                "struct W { r: R, n: i64 }\n\
+                 fn mk() -> W { W { r: R { id: 41 }, n: 1 } }\n\
+                 fn main() { let W { r: _, n } = mk(); println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // The STRUCT spelling over a place source — the one row that was a
+            // run-vs-build split, and where compiled was the correct side.
+            (
+                "struct-place",
+                "struct W { r: R, n: i64 }\n\
+                 fn main() { let w = W { r: R { id: 41 }, n: 1 };\n\
+                 \x20            let W { r: _, n } = w; println(f\"{n}\") }\n",
+                "drop 41\n1\n",
+            ),
+            // Two droppers, one wildcarded: the discarded one dies at the
+            // destructure, the bound one at its last use. One body each.
+            (
+                "two-droppers-one-wildcard",
+                "fn main() { let p = (R { id: 41 }, R { id: 42 });\n\
+                 \x20            let (_, b) = p; println(f\"{b.id}\") }\n",
+                "drop 41\n42\ndrop 42\n",
+            ),
+            // BOTH elements wildcarded — pre-fix this ran zero bodies for two
+            // objects, so it pins that the fix is per-leaf and not "the first
+            // wildcard wins".
+            (
+                "both-wildcards",
+                "fn main() { let p = (R { id: 41 }, R { id: 42 });\n\
+                 \x20            let (_, _) = p; println(\"x\") }\n",
+                "drop 41\ndrop 42\nx\n",
+            ),
+            // CONTROL — a by-value TUPLE param source. Already correct at one
+            // body (the caller owns the entry copy); a leaf fire would double it.
+            (
+                "param-tuple-control",
+                "fn take(p: (R, i64)) -> i64 { let (_, n) = p; n }\n\
+                 fn main() { println(f\"{take((R { id: 41 }, 1))}\") }\n",
+                "1\ndrop 41\n",
+            ),
+            // CONTROL — the same for a by-value STRUCT param.
+            (
+                "param-struct-control",
+                "struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> i64 { let W { r: _, n } = w; n }\n\
+                 fn main() { println(f\"{take(W { r: R { id: 41 }, n: 1 })}\") }\n",
+                "1\ndrop 41\n",
+            ),
+            // CONTROL — a `match` arm's wildcard, correct before and after.
+            // This is what shows the defect was specific to `let`.
+            (
+                "match-arm-control",
+                "fn main() { let p = (R { id: 41 }, 1);\n\
+                 \x20            match p { (_, n) => { println(f\"{n}\") } } }\n",
+                "1\ndrop 41\n",
+            ),
+            // CONTROL — the wildcard lands on the NON-dropping element.
+            (
+                "wildcard-on-non-dropper-control",
+                "fn main() { let p = (R { id: 41 }, 1); let (r, _) = p; println(f\"{r.id}\") }\n",
+                "41\ndrop 41\n",
+            ),
+            // CONTROL — the WHOLE-pattern wildcard, correct since
+            // B-2026-07-30-11. The level this fix reaches one step down from.
+            (
+                "whole-pattern-wildcard-control",
+                "fn main() { let _ = R { id: 41 }; println(\"x\") }\n",
+                "drop 41\nx\n",
+            ),
+            // CONTROL — no destructure at all; the local's own drop runs it.
+            (
+                "no-destructure-control",
+                "fn main() { let p = (R { id: 41 }, 1); println(f\"{p.1}\") }\n",
+                "1\ndrop 41\n",
+            ),
+        ] {
+            let prog = format!("{DROPPER}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

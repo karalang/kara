@@ -11293,6 +11293,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => None,
             };
 
+            // B-2026-08-28-12 — a WILDCARD field (`let W { r: _, n } = W { .. }`)
+            // over a FRESH source. `bound_name` is None for it, so it reached no
+            // arm below and the discarded field's user `Drop` body ran zero times
+            // on both compiled backends while the interpreter ran one.
+            //
+            // FRESH ONLY, and the asymmetry is measured rather than cautious: over
+            // a PLACE source (`let w = W { .. }; let W { r: _, n } = w;`) both
+            // compiled backends ALREADY run exactly one body — that spelling was
+            // the single member of this family with a run-vs-build split, and the
+            // interpreter was the wrong side of it. Firing here for a place source
+            // too would take the compiled backends to two and re-open the split
+            // from the other direction.
+            if fresh
+                && matches!(
+                    fields
+                        .iter()
+                        .find(|f| &f.name == fname)
+                        .and_then(|f| f.pattern.as_ref())
+                        .map(|p| &p.kind),
+                    Some(PatternKind::Wildcard)
+                )
+            {
+                if let Ok(elem) = self
+                    .builder
+                    .build_extract_value(sv, idx as u32, "sfield.discard")
+                {
+                    // FRESH source only (see the `fresh` guard above), and
+                    // BODIES only: unlike the tuple path, a fresh STRUCT source
+                    // already carries its own drop for the whole aggregate, so
+                    // freeing the discarded field here is a second free —
+                    // measured as an ASAN `double-free` on
+                    // `let W { r: _, n } = mk()` at a heap-carrying field.
+                    self.run_discarded_leaf_user_drop_bodies(&field_te, elem, false);
+                }
+            }
+
             if let Some(name) = bound_name {
                 // Dispatch always (so `field.method()` compiles for any RHS).
                 self.register_var_from_type_expr(&name, &field_te);
@@ -11706,7 +11742,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.finish_place_source_tuple_destructure(pats, value);
             return Ok(());
         }
-        self.track_tuple_destructure_leaf_cleanups(pats, sv);
+        // B-2026-08-28-12 — the element TypeExprs, so a WILDCARD leaf can find
+        // the discarded value's user `Drop`. `tuple_arg_elem_type_exprs` answers
+        // for both fresh spellings this path admits: a tuple LITERAL and a CALL
+        // returning a tuple. `None` (any other fresh temp) leaves the wildcard
+        // exactly as it behaved before — memory only.
+        let elem_tes = self.tuple_arg_elem_type_exprs(value);
+        self.track_tuple_destructure_leaf_cleanups(pats, sv, elem_tes.as_deref());
         Ok(())
     }
 
@@ -11774,6 +11816,33 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(te) = elems.get(idx).cloned() else {
                 continue;
             };
+            // B-2026-08-28-12 — a WILDCARD leaf over a PLACE source
+            // (`let p = (R { .. }, 1); let (_, n) = p;`), the row's own repro.
+            // The loop below binds names; a wildcard binds none, so it fell
+            // through every arm and the discarded element's user `Drop` body ran
+            // zero times on both compiled backends. Bodies only, and only when
+            // the source's own owner is not already running them — the same
+            // `owner_runs_bodies` question the binding arm below asks, which is
+            // what keeps a by-value tuple PARAM (already correct at one body,
+            // fired caller-side) from going to two.
+            if matches!(pat.kind, PatternKind::Wildcard) {
+                if !owner_runs_bodies {
+                    if let Ok(ptr) = self.builder.build_struct_gep(
+                        tuple_ty,
+                        base_ptr,
+                        idx as u32,
+                        "ptup.discard.p",
+                    ) {
+                        if let Some(lty) = tuple_ty.get_field_type_at_index(idx as u32) {
+                            if let Ok(elem) = self.builder.build_load(lty, ptr, "ptup.discard") {
+                                // PLACE source — the aggregate's own drop frees it.
+                                self.run_discarded_leaf_user_drop_bodies(&te, elem, false);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             // A nested tuple pattern (`let ((r, m), n) = p`). Before this arm
             // the loop `continue`d past it outright, so the inner leaf was
             // never reached and its user `Drop` body was silent on every
@@ -11839,6 +11908,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         pats: &[Pattern],
         sv: inkwell::values::StructValue<'ctx>,
+        elem_tes: Option<&[TypeExpr]>,
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             match &pat.kind {
@@ -11870,6 +11940,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         let i8t = self.context.i8_type().into();
                         self.track_vec_var(alloca, Some(i8t));
                     }
+                    // B-2026-08-28-12 — the BODY half, which this arm never had.
+                    // The free above is the memory half and predates it; a
+                    // discarded element whose type carries a user `Drop` ran no
+                    // body at all, so `let (_, n) = (R { .. }, 1)` printed
+                    // nothing where design.md § Drop requires exactly one.
+                    if let Some(te) = elem_tes.and_then(|tes| tes.get(idx)) {
+                        // FRESH source — nothing else owns this element.
+                        self.run_discarded_leaf_user_drop_bodies(te, elem, true);
+                    }
                 }
                 // Nested tuple: recurse (the whole aggregate was already proven
                 // fresh by the caller, so each nested element is fresh too).
@@ -11879,7 +11958,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_extract_value(sv, idx as u32, "tuple.nested")
                         .unwrap();
                     if let BasicValueEnum::StructValue(inner_sv) = elem {
-                        self.track_tuple_destructure_leaf_cleanups(inner, inner_sv);
+                        // No element TypeExprs one level down (the outer vector
+                        // describes THIS level), so a nested wildcard keeps its
+                        // memory-only behaviour — a recorded residual, matching
+                        // the nested-struct arm below.
+                        self.track_tuple_destructure_leaf_cleanups(inner, inner_sv, None);
                     }
                 }
                 // Nested struct pattern inside a tuple (`let (a, Foo { x }) = …`):
@@ -11887,6 +11970,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 // there is not wired (a narrow residual; the reported tuple-of-
                 // String/Vec leak is fully covered).
                 _ => {}
+            }
+        }
+    }
+
+    /// B-2026-08-28-12 — run the user `Drop` BODIES of a value a destructure
+    /// throws away through a wildcard leaf (`let (_, n) = …`).
+    ///
+    /// Emitted as a DIRECT CALL at the destructure point rather than a
+    /// scope-exit cleanup registration, for two reasons. The discarded value is
+    /// dead the instant the pattern binds nothing to it, so there is no live
+    /// range for a cleanup to bracket; and the interpreter's twin
+    /// (`run_wildcard_destructure_leaf_user_drops`) fires at exactly this point,
+    /// so a deferred registration here would agree on the COUNT while
+    /// disagreeing on the order — the run-vs-build divergence this row's struct
+    /// spelling already had, reintroduced from the other side.
+    ///
+    /// BODIES first, then the memory drop when `free_memory` — and never the
+    /// combined `karac_drop_<T>` wrapper, so the two halves stay independently
+    /// controllable. The body reads the fields, so it must precede any free.
+    ///
+    /// `free_memory` is the question "does anything else own this buffer", and
+    /// each of the three call sites answers it differently — by MEASUREMENT,
+    /// since the answer is not derivable from the source being fresh:
+    ///
+    ///   * fresh TUPLE source (literal or call): TRUE. The wildcard binds
+    ///     nothing so no leaf takes the element, and the tuple temp has no
+    ///     aggregate drop of its own — nothing else frees it.
+    ///   * PLACE source: FALSE. The source aggregate's own drop already frees
+    ///     the element.
+    ///   * fresh STRUCT source: FALSE, and this is the one that looks like it
+    ///     should be true. A fresh struct temp DOES carry its own whole-
+    ///     aggregate drop, unlike a tuple temp, so freeing the discarded field
+    ///     here is a second free — it showed up as an ASAN `double-free` on
+    ///     `let W { r: _, n } = mk()` with a heap-carrying field.
+    ///
+    /// That asymmetry was found by measurement, not by reasoning. Adding the
+    /// body alone made `let (_, n) = (R { id, name: String }, 1)` LEAK 3 bytes
+    /// under LSan where it had been clean: pre-fix nothing read the discarded
+    /// `R`, so LLVM deleted its `String` allocation as dead, and a body that
+    /// reads `self.name` makes the allocation live and exposes the missing free
+    /// underneath. The hole was latent in the shape all along — the wildcard
+    /// arm's `track_vec_var` covers only a DIRECT `{ptr,len,cap}` element,
+    /// never a struct element with a heap field — so this is the commit that
+    /// makes it observable and therefore the one that owes the free.
+    fn run_discarded_leaf_user_drop_bodies(
+        &mut self,
+        te: &TypeExpr,
+        elem: BasicValueEnum<'ctx>,
+        free_memory: bool,
+    ) {
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let Some(name) = p.segments.last().cloned() else {
+            return;
+        };
+        // A `shared` leaf drops through the RC machinery against a box with a
+        // refcount header, so the plain-struct GEPs in the walker would be off
+        // by it; the emitter declines such a type anyway, but bailing here keeps
+        // the intent local.
+        if self.type_decls.shared_types.contains_key(&name)
+            || !self.type_decls.struct_types.contains_key(&name)
+        {
+            return;
+        }
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let Some(walker) = self.emit_struct_user_drop_bodies_only_fn(&name) else {
+            return;
+        };
+        let synth = format!("__wildcard_discard_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let slot = self.create_entry_alloca(cur_fn, &synth, elem.get_type());
+        self.builder.build_store(slot, elem).unwrap();
+        self.builder.build_call(walker, &[slot.into()], "").unwrap();
+        if free_memory {
+            if let Some(mem) = self.emit_struct_drop_synthesis(&name) {
+                self.builder.build_call(mem, &[slot.into()], "").unwrap();
             }
         }
     }
