@@ -107398,6 +107398,114 @@ fn main() {
         );
     }
 
+    /// The `sort` element gate and codegen's comparator family agree about
+    /// which element types are orderable (B-2026-08-27-51).
+    ///
+    /// This is the anti-drift device, and it is the point of the fix as much
+    /// as the gate is. `Vec[T].sort()` is checked by
+    /// `require_ord_element` in the typechecker and lowered by
+    /// `emit_cmp_fn_for_type_expr` in `codegen/vec_method.rs`; the two encode
+    /// the same question in different places, and B-2026-08-11-7's first
+    /// attempt at this gate ALREADY drifted once — it gated on
+    /// `type_supports_ord`, which answers `false` for `Vec[Vec[String]]`, and
+    /// broke a sort that works. A comment cannot hold two definitions in step.
+    /// A table that fails when either side moves can.
+    ///
+    /// The assertion is the run-vs-build property itself: every element type
+    /// the CHECKER admits must BUILD. Widen codegen without widening the gate
+    /// and the rejected-table sibling in `tests/typechecker.rs` fails; narrow
+    /// codegen and this one does.
+    ///
+    /// Each row also compares against the interpreter, because "it built" is
+    /// not the bar — a comparator that lowers but orders wrongly would pass a
+    /// build-only assertion.
+    #[test]
+    fn test_e2e_sort_element_gate_matches_codegen_support() {
+        // (label, element type, literal, per-element print expression)
+        let rows: &[(&str, &str, &str, &str)] = &[
+            ("i64", "i64", "[3, 1, 2]", "f\"{e}\""),
+            ("u8", "u8", "[3, 1, 2]", "f\"{e}\""),
+            ("char", "char", "['c', 'a', 'b']", "f\"{e}\""),
+            // `bool` is DELIBERATELY absent, and its absence is a finding, not
+            // a gap in the table: this differential caught `Vec[bool].sort()`
+            // sorting DESCENDING on all three compiled surfaces while the
+            // interpreter sorts ascending, and `false < true` answering `false`
+            // when compiled. Both trace to bool lowering as a SIGNED `i1`, so
+            // `true` is -1 and every bool comparison inverts. Filed as
+            // B-2026-08-28-5 and fixed separately; this row goes back in with
+            // that fix, and until it does an entry here would assert the bug.
+            ("String", "String", "[\"c\", \"a\"]", "f\"{e}\""),
+            (
+                "F64",
+                "F64",
+                "[F64.from(2.0), F64.from(1.0)]",
+                "f\"{e.value}\"",
+            ),
+            (
+                "tuple",
+                "(i64, String)",
+                "[(2, \"b\"), (1, \"a\")]",
+                "f\"{e.0}{e.1}\"",
+            ),
+            (
+                "nested Vec",
+                "Vec[String]",
+                "[[\"b\"], [\"a\"]]",
+                "f\"{e[0]}\"",
+            ),
+            (
+                "derived struct",
+                "P",
+                "[P { a: 3 }, P { a: 1 }]",
+                "f\"{e.a}\"",
+            ),
+            (
+                "derived enum",
+                "Suit",
+                "[Suit.Spades, Suit.Clubs]",
+                "f\"{tag_suit(e)}\"",
+            ),
+        ];
+        for (label, elem, lit, print) in rows {
+            let src = format!(
+                "#[derive(Ord, Eq)]\n\
+                 struct P {{ a: i64 }}\n\
+                 #[derive(Ord, Eq)]\n\
+                 enum Suit {{ Clubs, Spades }}\n\
+                 fn tag_suit(s: Suit) -> i64 {{\n\
+                     match s {{ Clubs => return 0, Spades => return 1, }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                     let mut v: Vec[{elem}] = {lit};\n\
+                     v.sort();\n\
+                     for e in v {{ println({print}); }}\n\
+                 }}"
+            );
+            // The checker admits this element type...
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "[{label}] the sort gate rejected an element type codegen supports — \
+                 the gate over-rejected, or this row is genuinely unsupported and \
+                 belongs in the typechecker sibling instead: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            // Anti-vacuity: a comparator that lowers but never orders would
+            // leave the input sequence untouched, and every row above starts
+            // DESCENDING so that shows up.
+            assert!(
+                !expected.is_empty(),
+                "[{label}] interpreter oracle produced no output"
+            );
+            // ...so it must also BUILD. This is the run-vs-build property.
+            let Some(aot) = run_program(&src) else { return };
+            assert_eq!(
+                aot, expected,
+                "[{label}] compiled `Vec[{elem}].sort()` must match the interpreter"
+            );
+        }
+    }
+
     /// `.cmp()` on a receiver with NO NAME TO LOOK UP — a struct literal, a
     /// call result, an index, a tuple element (B-2026-08-27-47).
     ///

@@ -10255,6 +10255,136 @@ fn test_cmp_rejected_on_non_ord_struct() {
 }
 
 #[test]
+fn test_sort_element_gate_rejects_what_codegen_cannot_lower() {
+    // B-2026-08-27-51 — `Vec[T].sort()` admitted ANY element type at check
+    // while codegen lowers only what its comparator family covers, so each of
+    // these was check-green, sorted correctly under `--interp`, and refused by
+    // `karac build`. All four measured on the unfixed compiler.
+    //
+    // `require_ord_element` is the gate, and its name had been writing a cheque
+    // it did not cash: since B-2026-08-11-7 it checked only for a reachable
+    // IEEE float, never for Ord.
+    for (label, decls, elem, lit) in [
+        ("generic enum", "", "Option[i64]", "[Some(2), None]"),
+        ("generic enum 2", "", "Result[i64, i64]", "[Ok(2), Err(1)]"),
+        (
+            "struct without a derive",
+            "struct Plain { a: i64 }\n",
+            "Plain",
+            "[Plain { a: 2 }]",
+        ),
+        (
+            "shared struct WITH a derive",
+            "#[derive(Ord, Eq)]\nshared struct Sh { a: i64 }\n",
+            "Sh",
+            "[Sh { a: 2 }]",
+        ),
+    ] {
+        let src =
+            format!("{decls}fn main() {{\n    let mut v: Vec[{elem}] = {lit};\n    v.sort();\n}}");
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("has no default ordering")),
+            "[{label}] expected the sort gate to reject '{elem}', got: {errors:?}"
+        );
+    }
+
+    // The message must name the obstacle that actually applies, because the
+    // remedies differ and pointing at the wrong one is the failure
+    // B-2026-08-27-47 had to correct on the `<` operator: a derive fixes the
+    // underived struct and CANNOT fix the generic or the shared one.
+    let generic = typecheck_errors(
+        "fn main() {\n    let mut v: Vec[Option[i64]] = [Some(1)];\n    v.sort();\n}",
+    );
+    assert!(
+        generic.iter().any(
+            |e| e.message.contains("is generic") && !e.message.contains("add `#[derive(Ord)]`")
+        ),
+        "expected the generic-specific remedy, got: {generic:?}"
+    );
+    let shared = typecheck_errors(
+        "#[derive(Ord, Eq)]\nshared struct Sh { a: i64 }\n\
+         fn main() {\n    let mut v: Vec[Sh] = [Sh { a: 1 }];\n    v.sort();\n}",
+    );
+    assert!(
+        shared.iter().any(|e| e.message.contains("shared type")),
+        "expected the shared-specific remedy, got: {shared:?}"
+    );
+
+    // `sorted` and `is_sorted` share the gate and were equally split.
+    for method in ["sorted()", "is_sorted()"] {
+        let src = format!(
+            "fn main() {{\n    let v: Vec[Option[i64]] = [Some(1)];\n    let _r = v.{method};\n}}"
+        );
+        let errors = typecheck_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("has no default ordering")),
+            "expected `{method}` to share the gate, got: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn test_sort_element_gate_spares_what_codegen_lowers() {
+    // The other half of the gate, and the one with teeth: B-2026-08-11-7's
+    // FIRST attempt at this check gated on `type_supports_ord` and broke
+    // `Vec[Vec[String]].sort()`, whose recursive lexicographic comparator has
+    // worked since B-2026-06-30-15. `type_supports_ord` answers false for
+    // `Vec[String]` because the container is a baked stdlib struct carrying no
+    // `#[derive(Ord)]` — re-measured while writing this gate, so the hazard is
+    // live rather than historical.
+    //
+    // Every row here builds AND runs; the compiled twin is
+    // `test_e2e_sort_element_gate_matches_codegen_support`.
+    for (label, decls, elem, lit) in [
+        ("nested Vec", "", "Vec[String]", "[[\"b\"], [\"a\"]]"),
+        ("tuple", "", "(i64, String)", "[(2, \"b\"), (1, \"a\")]"),
+        ("String", "", "String", "[\"b\", \"a\"]"),
+        ("char", "", "char", "['b', 'a']"),
+        ("unsigned int", "", "u8", "[2, 1]"),
+        ("float wrapper", "", "F64", "[F64.from(2.0)]"),
+        (
+            "derived struct",
+            "#[derive(Ord, Eq)]\nstruct P { a: i64 }\n",
+            "P",
+            "[P { a: 2 }]",
+        ),
+        (
+            "derived enum",
+            "#[derive(Ord, Eq)]\nenum Suit { Clubs, Spades }\n",
+            "Suit",
+            "[Suit.Spades, Suit.Clubs]",
+        ),
+    ] {
+        let src =
+            format!("{decls}fn main() {{\n    let mut v: Vec[{elem}] = {lit};\n    v.sort();\n}}");
+        // `typecheck_ok` panics with the diagnostics if any survive, which is
+        // exactly the over-rejection this table exists to catch.
+        let _ = typecheck_ok(&src);
+        let _ = label;
+    }
+
+    // A bare `f64` stays rejected, and by the FLOAT gate — it names the NaN
+    // harm and the `F64` remedy, which the generic ordering message does not.
+    // Two errors for one cause would be a regression in its own right.
+    let errors =
+        typecheck_errors("fn main() {\n    let mut v: Vec[f64] = [2.0, 1.0];\n    v.sort();\n}");
+    assert_eq!(
+        errors.len(),
+        1,
+        "a float element must produce exactly one diagnostic, got: {errors:?}"
+    );
+    assert!(
+        errors[0].message.contains("no total order") && errors[0].message.contains("F64"),
+        "the float gate must stay the only voice on floats, got: {errors:?}"
+    );
+}
+
+#[test]
 fn test_generic_aggregate_ordering_rejected_on_both_spellings() {
     // B-2026-08-27-47 — a GENERIC aggregate's derived ordering is lowered by
     // NEITHER backend, so admitting it here produced a run-vs-build split on

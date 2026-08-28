@@ -319,6 +319,123 @@ impl<'a> super::TypeChecker<'a> {
     /// is correctly `false`, and `-0.0` finds `0.0`. Rejecting it would break
     /// correct code for no soundness gain. `reverse` involves no comparison
     /// at all.
+    /// Whether `ty` has a DEFAULT total order that BOTH backends can lower —
+    /// the predicate behind the `sort` / `sorted` / `is_sorted` element gate
+    /// (B-2026-08-27-51).
+    ///
+    /// This is [`Self::type_supports_ord`] with exactly three corrections, and
+    /// keeping it that way is deliberate: the sort gate wants "is this
+    /// orderable", the derive gate wants the same thing, and any place the two
+    /// answers diverge is a place one of them is wrong. Stating the gate as a
+    /// short diff against the general predicate makes each divergence
+    /// individually arguable, instead of restating the whole comparator family
+    /// here and letting the copy drift — which is how this gap opened.
+    ///
+    /// 1. A `Vec` / `VecDeque` / `Slice` ELEMENT recurses. `type_supports_ord`
+    ///    answers `false` for `Vec[String]`, and that is not a useful
+    ///    strictness — it is the container being a baked stdlib struct that
+    ///    carries no `#[derive(Ord)]`, so it falls to the `Named` arm and is
+    ///    judged as a user type. (The `Type::Vector` arm that looks like it
+    ///    would catch this is the SIMD `Vector[T, N]`, an unrelated type.)
+    ///    B-2026-08-11-7 hit this: its first version gated on
+    ///    `type_supports_ord` and broke `Vec[Vec[String]].sort()`, whose
+    ///    recursive lexicographic comparator has worked since B-2026-06-30-15,
+    ///    and it left a warning to check what the comparators support rather
+    ///    than what the predicate says. Measured again here before writing this
+    ///    arm: `#[derive(Ord)] struct Z { x: Vec[String] }` is still rejected
+    ///    today, so the warning is live, not stale.
+    ///
+    /// 2. A `Shared` type is NOT ordered by its derive. `type_supports_ord`
+    ///    says a `#[derive(Ord)] shared struct S` is `Ord`; codegen's
+    ///    `emit_cmp_fn_for_type_expr` excludes shared types outright, and the
+    ///    `<` operator already rejects one at check with a purpose-written
+    ///    message ("`#[derive(PartialOrd)]` does not order a shared type"). So
+    ///    the language had already decided this and only the sort gate had not
+    ///    heard; `Vec[S].sort()` on that same type was check-green,
+    ///    interp-sorted and build-refused.
+    ///
+    /// 3. A `Float` returns `true` HERE so that the IEEE gate above stays the
+    ///    only voice on floats. `type_supports_ord` correctly says `false`,
+    ///    but that answer is already delivered by `reachable_ieee_float` with a
+    ///    diagnostic that names the NaN harm and the `F64` wrapper remedy;
+    ///    letting this predicate speak too would print a second, vaguer error
+    ///    for the same cause.
+    ///
+    /// Where it is UNCERTAIN it answers `true`, and the asymmetry is the whole
+    /// reason: a wrong `false` rejects a program that compiles and runs today,
+    /// while a wrong `true` merely leaves the pre-existing loud `karac build`
+    /// error in place. So unknown names, type parameters and exotic shapes are
+    /// admitted and left to the backend.
+    pub(super) fn element_default_order_is_lowerable(&self, ty: &Type) -> bool {
+        match ty {
+            // Correction 3 — floats are the float gate's business, not ours.
+            Type::Float(_) => true,
+            // Correction 2 — a derive does not order a shared type.
+            Type::Shared(_) => false,
+            Type::Refinement { base, .. } => self.element_default_order_is_lowerable(base),
+            Type::Ref(inner) | Type::MutRef(inner) | Type::Rc(inner) | Type::Arc(inner) => {
+                self.element_default_order_is_lowerable(inner)
+            }
+            Type::Tuple(elems) => elems
+                .iter()
+                .all(|e| self.element_default_order_is_lowerable(e)),
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.element_default_order_is_lowerable(element)
+            }
+            Type::Named { name, args } => match name.as_str() {
+                // Correction 1 — the baked sequence containers recurse.
+                "Vec" | "VecDeque" | "Slice" => args
+                    .first()
+                    .is_none_or(|e| self.element_default_order_is_lowerable(e)),
+                _ => self.type_supports_ord(ty),
+            },
+            _ => self.type_supports_ord(ty),
+        }
+    }
+
+    /// The reason clause for a [`Self::element_default_order_is_lowerable`]
+    /// rejection, chosen so the message names the actual obstacle and the
+    /// remedy that fits it (B-2026-08-27-51).
+    ///
+    /// A single "not orderable" sentence would be true for all four shapes and
+    /// useful for none: the fix for an underived struct is a derive, the fix
+    /// for a generic or shared one is a hand-written comparator, and telling
+    /// someone to add a derive that cannot help is the failure mode
+    /// B-2026-08-27-47 had to correct on the `<` operator's message.
+    fn unordered_element_reason(&self, ty: &Type) -> String {
+        let (name, shared) = match ty {
+            Type::Named { name, .. } => (name.clone(), false),
+            Type::Shared(name) => (name.clone(), true),
+            _ => return "it has no default ordering".to_string(),
+        };
+        if shared {
+            return format!(
+                "'{name}' is a shared type and `#[derive(Ord)]` does not order one — \
+                 add `impl Ord for {name}`"
+            );
+        }
+        let generic = self
+            .env
+            .structs
+            .get(&name)
+            .map(|i| !i.generic_params.is_empty())
+            .or_else(|| {
+                self.env
+                    .enums
+                    .get(&name)
+                    .map(|i| !i.generic_params.is_empty())
+            })
+            .unwrap_or(false);
+        if generic {
+            format!(
+                "'{name}' is generic, and a derived comparator cannot order a \
+                 type-parameter payload — add `impl Ord for {name}`"
+            )
+        } else {
+            format!("'{name}' does not implement Ord — add `#[derive(Ord)]` to it")
+        }
+    }
+
     pub(super) fn require_ord_element(
         &mut self,
         element: &Type,
@@ -327,6 +444,24 @@ impl<'a> super::TypeChecker<'a> {
         span: &Span,
     ) {
         let Some(float) = Self::reachable_ieee_float(element) else {
+            // Not a float — but the element still needs a default order both
+            // backends can lower, or `karac build` refuses a program `karac
+            // check` accepted (B-2026-08-27-51). The float arm below returns
+            // early precisely so it stays the only voice on floats.
+            if !self.element_default_order_is_lowerable(element) {
+                let disp = type_display(element);
+                let reason = self.unordered_element_reason(element);
+                self.type_error(
+                    format!(
+                        "{receiver}.{method}(): element type '{disp}' has no default \
+                         ordering, so the result would not be well-defined; note: \
+                         {reason}, or pass an explicit comparator with \
+                         `sort_by(|a, b| ...)`"
+                    ),
+                    *span,
+                    TypeErrorKind::TraitBoundNotSatisfied,
+                );
+            }
             return;
         };
         let wrapper = match float.as_str() {
