@@ -57630,6 +57630,73 @@ fn main() {
         );
     }
 
+    /// A heap field read through a TUPLE ELEMENT OF A CONTAINER ELEMENT is
+    /// cloned — `v[0].0.name` over `Vec[(R, i64)]` (B-2026-08-28-34).
+    ///
+    /// The second defect that fix exposed, and the fourth time this family has
+    /// produced it: teaching the resolver to name the receiver made the read
+    /// COMPILE for the first time, which made its ownership reachable for the
+    /// first time — and it double-freed, because
+    /// `clone_vec_elem_heap_field_read` walks the hops down to the `Index` root
+    /// and only knew FIELD hops. A tuple hop in the middle ended the walk, so
+    /// the read handed out a shallow alias of the container element's buffer.
+    ///
+    /// Every consuming position is here for the reason B-2026-08-28-24
+    /// established: they do not share a mechanism, and a fixture that stopped
+    /// at `let` would pass against a fix that misses `Vec.push` and the
+    /// struct-literal field. The non-consuming rows are the other direction —
+    /// the clone carries its own cleanup, so a read nothing takes over must
+    /// free it rather than leak.
+    ///
+    /// Re-reading the container at the end keeps a source-cap-zeroing "fix"
+    /// from passing: that silences the abort and empties the element the
+    /// container still owns.
+    ///
+    /// A FIELD-ROOTED container (`self.xs[0].0.name`) is deliberately absent:
+    /// this cloner requires an IDENTIFIER container, so `h.xs[0].name` — the
+    /// plain field spelling, with no tuple hop at all — double-frees on
+    /// unmodified main too. That is B-2026-08-28-41, pre-existing and a
+    /// different gate from the hop walk this row widened.
+    #[test]
+    fn test_container_element_tuple_field_read_is_cloned() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct Box2 { w: String }
+
+fn sink(s: String) -> i64 { return s.len(); }
+fn take(v: Vec[(R, i64)]) -> String { return v[0].0.name; }
+
+fn main() {
+    let v: Vec[(R, i64)] = [(R { id: 41, name: f"n{41}" }, 1)];
+    // consuming positions
+    let s = v[0].0.name;
+    println(s);
+    let b = Box2 { w: v[0].0.name };
+    println(b.w);
+    let mut o: Vec[String] = Vec.new();
+    o.push(v[0].0.name);
+    println(o[0]);
+    println(sink(v[0].0.name));
+    println(take(v));
+    // non-consuming reads: the clone must free itself
+    println(v[0].0.name + "!");
+    println(v[0].0.name.len());
+    // scalar members must not be cloned at all
+    println(v[0].0.id);
+    println(v[0].1);
+    // the container is still intact
+    println(v[0].0.name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "n41", "n41", "n41", "3", "n41", "n41!", "3", "41", "1", "n41",
+            ],
+            "container-element-tuple-field-read",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

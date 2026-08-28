@@ -3985,13 +3985,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // it double-freed in every consuming position (`let w = …`,
         // `out.push(…)`) while a non-consuming read (`println(ds[0].inner.word)`)
         // was fine, which is the same split the one-level row measured.
-        let mut hops: Vec<&str> = Vec::new();
+        // B-2026-08-28-34 — a hop may be a TUPLE INDEX as well as a field
+        // (`v[0].0.name` over `Vec[(R, i64)]`). Until that read could be
+        // RESOLVED it never reached this cloner, so the walk only knew field
+        // hops; making it buildable made its ownership reachable for the first
+        // time and it double-freed, the same way every other shape in this
+        // family did. `None` marks a tuple hop at that position.
+        let mut hops: Vec<(Option<&str>, usize)> = Vec::new();
         let mut cur = object.as_ref();
         let (container, index) = loop {
             match &cur.kind {
                 ExprKind::Index { object, index } => break (object, index),
                 ExprKind::FieldAccess { object, field } => {
-                    hops.push(field.as_str());
+                    hops.push((Some(field.as_str()), 0));
+                    cur = object.as_ref();
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    hops.push((None, *index as usize));
                     cur = object.as_ref();
                 }
                 _ => return Ok(val),
@@ -4041,16 +4051,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(elem_te) = self.vec_index_elem_type_expr(container) else {
             return Ok(val);
         };
-        let TypeKind::Path(ep) = &elem_te.kind else {
-            return Ok(val);
+        // The walk carries a `TypeExpr` rather than a struct NAME, because a
+        // tuple hop has no name to carry (B-2026-08-28-34). `sname` is the
+        // current type when it IS a nameable struct, which every hop but a
+        // tuple requires.
+        let mut cur_te = elem_te.clone();
+        let mut sname = match &elem_te.kind {
+            TypeKind::Path(ep) => ep.segments.last().cloned(),
+            TypeKind::Tuple(_) => None,
+            _ => return Ok(val),
         };
-        let Some(mut sname) = ep.segments.last().cloned() else {
-            return Ok(val);
-        };
-        if !self.type_decls.struct_types.contains_key(sname.as_str())
-            || self.type_decls.shared_types.contains_key(sname.as_str())
-        {
-            return Ok(val);
+        if let Some(n) = sname.as_deref() {
+            if !self.type_decls.struct_types.contains_key(n)
+                || self.type_decls.shared_types.contains_key(n)
+            {
+                return Ok(val);
+            }
         }
         // Each intermediate hop must itself be a non-shared user struct held by
         // VALUE in its parent, so the final field's buffer really is owned by
@@ -4058,32 +4074,64 @@ impl<'ctx> super::Codegen<'ctx> {
         // through a `shared` handle, an `Option`, an enum or a `Vec` is a
         // different owner with its own machinery — decline and leave those
         // exactly as they are.
-        for hop in hops {
-            let Some(next) = self
-                .type_decls
-                .struct_field_names
-                .get(sname.as_str())
-                .and_then(|names| names.iter().position(|n| n == hop))
-                .and_then(|i| {
-                    self.type_decls
-                        .struct_field_type_exprs
-                        .get(sname.as_str())
-                        .and_then(|tes| tes.get(i))
-                })
-                .and_then(|te| match &te.kind {
-                    TypeKind::Path(p) => p.segments.last().cloned(),
-                    _ => None,
-                })
-            else {
-                return Ok(val);
+        // A TUPLE hop is admitted on the same terms as a struct hop and for
+        // the same reason: a tuple is held BY VALUE in its parent, so the
+        // leaf's buffer really is owned by the container's element and freeing
+        // it twice is the hazard this cloner exists to prevent. What stays
+        // excluded is unchanged — a hop through a `shared` handle, an
+        // `Option`, an enum or a `Vec` is a different owner with its own
+        // machinery.
+        for (hop_field, hop_idx) in hops {
+            let next_te = match hop_field {
+                Some(hop) => {
+                    let Some(n) = sname.as_deref() else {
+                        return Ok(val);
+                    };
+                    let Some(te) = self
+                        .type_decls
+                        .struct_field_names
+                        .get(n)
+                        .and_then(|names| names.iter().position(|f| f == hop))
+                        .and_then(|i| {
+                            self.type_decls
+                                .struct_field_type_exprs
+                                .get(n)
+                                .and_then(|tes| tes.get(i))
+                        })
+                        .cloned()
+                    else {
+                        return Ok(val);
+                    };
+                    te
+                }
+                None => match &cur_te.kind {
+                    TypeKind::Tuple(elems) => match elems.get(hop_idx) {
+                        Some(te) => te.clone(),
+                        None => return Ok(val),
+                    },
+                    _ => return Ok(val),
+                },
             };
-            if !self.type_decls.struct_types.contains_key(next.as_str())
-                || self.type_decls.shared_types.contains_key(next.as_str())
-            {
-                return Ok(val);
-            }
-            sname = next;
+            sname = match &next_te.kind {
+                TypeKind::Path(p) => {
+                    let Some(n) = p.segments.last().cloned() else {
+                        return Ok(val);
+                    };
+                    if !self.type_decls.struct_types.contains_key(n.as_str())
+                        || self.type_decls.shared_types.contains_key(n.as_str())
+                    {
+                        return Ok(val);
+                    }
+                    Some(n)
+                }
+                TypeKind::Tuple(_) => None,
+                _ => return Ok(val),
+            };
+            cur_te = next_te;
         }
+        let Some(sname) = sname else {
+            return Ok(val);
+        };
         let Some(idx) = self
             .type_decls
             .struct_field_names

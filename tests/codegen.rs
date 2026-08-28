@@ -109160,6 +109160,71 @@ fn main() {
         );
     }
 
+    /// A field read through a TUPLE ELEMENT OF A CONTAINER ELEMENT —
+    /// `v[0].0.id` over `Vec[(R, i64)]` (B-2026-08-28-34).
+    ///
+    /// `place_chain_tuple_tes` has arms for an identifier, a field and a tuple
+    /// index but none for an `Index`, so a tuple reached through a container
+    /// had no source and the read failed `karac build` on the loud "cannot
+    /// resolve field" guard while `karac check` accepted it and the interpreter
+    /// answered it. Binding the element first always worked, which is what
+    /// isolates it to the resolution rather than the read.
+    ///
+    /// `Other` and `Tag` both declare an `n`, at DIFFERENT indices, so a
+    /// mis-resolution is a wrong ANSWER here rather than a refusal — the trade
+    /// B-2026-08-27-49 measured and rejected, and the reason the new source is
+    /// gated on naming a type codegen has a layout for.
+    ///
+    /// The `self`-rooted row matters separately: it resolves the container
+    /// through a FIELD (`self.xs[0]`), a different arm of
+    /// `vec_index_elem_type_expr` than a bare local.
+    #[test]
+    fn test_e2e_field_read_through_a_tuple_element_of_a_container_element() {
+        let src = r#"
+struct Other { a: i64, n: i64 }
+struct Tag { n: i64, a: i64 }
+struct R { id: i64, name: String }
+struct H { xs: Vec[(R, i64)] }
+
+impl H { fn peek(ref self) -> i64 { return self.xs[0].0.id; } }
+
+fn take(v: Vec[(R, i64)]) -> i64 { return v[0].0.id; }
+
+fn main() {
+    let v: Vec[(Tag, i64)] = [(Tag { n: 7, a: 99 }, 1)];
+    let w: Vec[(Other, i64)] = [(Other { a: 5, n: 42 }, 2)];
+    println(v[0].0.n);
+    println(v[0].0.a);
+    println(w[0].0.n);
+    println(w[0].0.a);
+
+    let r: Vec[(R, i64)] = [(R { id: 41, name: f"n{41}" }, 1)];
+    println(r[0].0.id);
+    println(r[0].0.name);
+    println(take(r));
+    let h = H { xs: [(R { id: 8, name: f"m{8}" }, 1)] };
+    println(h.peek());
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // 7/99 then 42/5: reading `Tag` at `Other`'s index for `n` would print
+        // 99, and the reverse would print 5.
+        assert_eq!(
+            expected, "7\n99\n42\n5\n41\nn41\n41\n8\n",
+            "interpreter oracle is wrong for a container-element tuple field read",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a tuple element of a container element must resolve its field layout",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///

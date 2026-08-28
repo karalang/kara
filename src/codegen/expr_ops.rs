@@ -4164,6 +4164,54 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-08-28-34 — a tuple held in a CONTAINER ELEMENT
+                // (`v[0].0.id`, `self.xs[0].0.name`). `place_chain_tuple_tes`
+                // above has arms for an identifier, a field and a tuple index
+                // but none for an `Index`, so a tuple reached through a
+                // container had no source and the read failed `karac build` on
+                // the loud "cannot resolve field" guard while `karac check`
+                // accepted it and the interpreter answered it. Binding the
+                // element first (`let e = v[0].0; e.id`) always worked.
+                //
+                // ADDED HERE RATHER THAN TO `place_chain_tuple_tes`, and that
+                // placement is the load-bearing decision. Two of that helper's
+                // consumers are cap-zeroing move-out SUPPRESSORS, and
+                // B-2026-08-12-27 established that suppressing an index-rooted
+                // chain trades a double free for a use-after-free — cap-zeroing
+                // a container element empties storage the container still owns
+                // and will still read. Widening the shared helper would hand
+                // both of them exactly the shape they are required to decline.
+                // This arm is pure resolution: it names a type, it neutralizes
+                // nothing.
+                if let ExprKind::Index {
+                    object: container,
+                    index: cidx,
+                } = &object.kind
+                {
+                    if !matches!(&cidx.kind, ExprKind::Range { .. }) {
+                        if let Some(TypeKind::Tuple(elems)) =
+                            self.vec_index_elem_type_expr(container).map(|te| te.kind)
+                        {
+                            if let Some(TypeKind::Path(p)) =
+                                elems.get(*index as usize).map(|t| &t.kind)
+                            {
+                                if let Some(n) = p.segments.last() {
+                                    // Same fail-closed gate as the call source
+                                    // above: an element that names no type
+                                    // codegen has a layout for keeps refusing
+                                    // loudly rather than resolving to whatever
+                                    // unrelated struct shares the field name.
+                                    if self.type_decls.struct_field_names.contains_key(n.as_str())
+                                        || self.type_decls.enum_layouts.contains_key(n.as_str())
+                                        || self.type_decls.shared_types.contains_key(n.as_str())
+                                    {
+                                        return Some(n.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 None
             }
             // #32 — element struct type of an indexed collection. For an
