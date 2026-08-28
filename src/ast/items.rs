@@ -1470,8 +1470,10 @@ pub enum ParamPart {
 /// one element and returns it, that element's owner is the caller's consumer
 /// of the RESULT, and firing here runs its body a second time:
 ///
-///     fn take(p: (R, i64)) -> R { let (r, n) = p; r }
-///     let x = take((R { id: 41 }, 1));   // `drop 41` twice, all backends
+/// ```text
+/// fn take(p: (R, i64)) -> R { let (r, n) = p; r }
+/// let x = take((R { id: 41 }, 1));   // `drop 41` twice, all backends
+/// ```
 ///
 /// Suppressing the whole walk is NOT the fix. Measured on the two-dropper
 /// shape `fn take(p: (R, R)) -> R { let (a, b) = p; a }`, blanket suppression
