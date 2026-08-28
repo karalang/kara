@@ -1881,7 +1881,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1741 surfaced
 | B-2026-08-28-61 | codegen | medium | A GENERIC CALLEE'S tuple element still loses its Drop-bearing field's body when destructured at the call site: `fn src[T](x: T) -> (Box2[T], i64)` wi… | dc01eb1 |
 | B-2026-08-28-62 | interp+codegen | medium | A BY-VALUE PARAM THAT ESCAPES THROUGH A CALL in return position runs its `Drop` body TWICE on all three backends: `fn outer(y: R) -> (BoxR, i64) { re… | 5ce2a57 |
 | B-2026-08-28-63 | interp+codegen | medium | A CONSUMING `match` / `if let` ARM THAT BINDS AN ENUM PAYLOAD OUT RUNS NO `Drop` BODY FOR IT ON ANY BACKEND, while the same arm binding a STRUCT payl… | f862656 |
-| B-2026-08-28-64 | codegen | medium | `Option[K]` NEVER FREES A HEAP-CARRYING NESTED-STRUCT PAYLOAD while `Result[K, i64]` DOES: the plain `let` site calls `track_inline_result_payload_va… | d4f565d |
+| B-2026-08-28-64 | codegen | medium | `Option[K]` NEVER FREES A HEAP-CARRYING NESTED-STRUCT PAYLOAD while `Result[K, i64]` DOES: the plain `let` site calls `track_inline_result_payload_va… | 77729f2f |
 
 </details>
 
