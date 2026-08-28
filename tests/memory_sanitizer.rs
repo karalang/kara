@@ -57101,7 +57101,7 @@ fn main() {
     /// that is itself an unbound TEMPORARY (`println(Box2 { w: v[0].0 }.w)`,
     /// `println((v[1].0, 9).0)`, and printing an `if`/`match`/block value
     /// without binding it). Same byte counts on both spellings — see
-    /// B-2026-08-28-29.
+    /// B-2026-08-28-32.
     #[test]
     fn test_tuple_element_of_a_container_element_is_cloned_not_aliased() {
         let src = r#"
