@@ -32872,16 +32872,44 @@ fn test_own_drop_enum_member_runs_its_body_when_never_destructured() {
     ] {
         assert_eq!(run(&format!("{H}{body}")), want, "{label}");
     }
-    // GUARD — a `Vec` element is NOT widened by this fix. The one element loop
-    // serves both tuple and Vec bindings, but only the tuple walker gained an
-    // enum leg in codegen, so firing here would manufacture a divergence.
-    // Measured, and the reason the arm is gated on the binding's shape.
+    // B-2026-08-28-55 — the `Vec` element, which this file's own guard pinned
+    // as SILENCE when -46/-47 landed: the one element loop serves both tuple
+    // and Vec bindings, and only the tuple walker had an enum leg in codegen,
+    // so firing for a Vec would have manufactured a divergence. Widening the
+    // Vec walker's SELECTOR closed that, and the interpreter's shape gate came
+    // off in the same commit. Three spellings, because the element type is
+    // derived differently in each and only the inferred one had a working
+    // struct precedent to copy.
+    for (label, prog) in [
+        (
+            "vec-inferred",
+            format!(
+                "{H}fn main() {{ let mut v = Vec.new(); v.push(E.B); println(f\"{{v.len()}}\"); }}\n"
+            ),
+        ),
+        (
+            "vec-annotated",
+            format!(
+                "{H}fn main() {{ let mut v: Vec[E] = Vec.new(); v.push(E.B);\n\
+                 \x20            println(f\"{{v.len()}}\"); }}\n"
+            ),
+        ),
+        (
+            "vec-literal",
+            format!("{H}fn main() {{ let v = [E.B]; println(f\"{{v.len()}}\"); }}\n"),
+        ),
+    ] {
+        assert_eq!(run(&prog), "1\ndrop E\n", "{label}");
+    }
+    // A payload variant in a Vec runs BOTH bodies, like every other position.
+    // `owns_body` alone would stop at `drop E`.
     assert_eq!(
         run(&format!(
-            "{H}fn main() {{ let mut v = Vec.new(); v.push(E.B); println(f\"{{v.len()}}\"); }}\n"
+            "{H}fn main() {{ let mut v = Vec.new(); v.push(E.A(R {{ id: 7 }}));\n\
+             \x20            println(f\"{{v.len()}}\"); }}\n"
         )),
-        "1\n",
-        "vec-elem-guard"
+        "1\ndrop E\ndrop R7\n",
+        "vec-payload"
     );
     // The DELIBERATE exclusion, same as the codegen twin.
     assert_eq!(

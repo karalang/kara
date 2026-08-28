@@ -7025,15 +7025,32 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // here, memory there; the split is what keeps
                                 // `karac run` and `karac build` printing the
                                 // same thing.
+                                // B-2026-08-28-55 — a user ENUM element is
+                                // admitted alongside a struct one. The walker
+                                // itself was never enum-blind (it reads
+                                // `drop_method_keys` for `owns_body`, which
+                                // answers for an enum); this SELECTOR was, so
+                                // `Vec[E]` registered nothing and the walker
+                                // was never reached. Same widening the tuple
+                                // element selector took in B-2026-08-28-47.
+                                // Option/Result are excluded: their payloads
+                                // are freed by the let-binding machinery and
+                                // have their own walker.
                                 let elem_struct_name =
                                     elem_te.as_ref().and_then(|te| match &te.kind {
                                         TypeKind::Path(p) => p
                                             .segments
                                             .first()
                                             .filter(|n| {
-                                                self.type_decls
-                                                    .struct_types
-                                                    .contains_key(n.as_str())
+                                                let n = n.as_str();
+                                                self.type_decls.struct_types.contains_key(n)
+                                                    || (n != "Option"
+                                                        && n != "Result"
+                                                        && self
+                                                            .type_decls
+                                                            .enum_layouts
+                                                            .get(n)
+                                                            .is_some_and(|l| !l.is_shared))
                                             })
                                             .cloned(),
                                         _ => None,

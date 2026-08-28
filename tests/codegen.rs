@@ -13167,6 +13167,46 @@ fn main() {
             let prog = format!("{H}{body}");
             assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
         }
+        // B-2026-08-28-55 — the `Vec` element, deliberately left out when
+        // -46/-47 landed and closed one commit later. The walker was never
+        // enum-blind (it reads `drop_method_keys` for `owns_body`); its
+        // SELECTOR in `stmts.rs` was, so `Vec[E]` registered nothing and the
+        // walker was never reached. All three spellings, since the element
+        // type is derived differently in each.
+        for (label, body) in [
+            (
+                "vec-inferred",
+                "fn main() { let mut v = Vec.new(); v.push(E.B); println(f\"{v.len()}\"); }\n",
+            ),
+            (
+                "vec-annotated",
+                "fn main() { let mut v: Vec[E] = Vec.new(); v.push(E.B);\n\
+                 \x20            println(f\"{v.len()}\"); }\n",
+            ),
+            (
+                "vec-literal",
+                "fn main() { let v = [E.B]; println(f\"{v.len()}\"); }\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")).as_deref(),
+                Some("1\ndrop E\n"),
+                "{label}"
+            );
+        }
+        // A payload variant in a Vec runs BOTH bodies. This row pins the
+        // walker's new payload leg specifically: `owns_body` alone prints
+        // `drop E` and stops, the one-body-for-two-objects asymmetry
+        // B-2026-08-28-40 fixed for a struct field.
+        assert_eq!(
+            run_program(&format!(
+                "{H}fn main() {{ let mut v = Vec.new(); v.push(E.A(R {{ id: 7 }}));\n\
+                 \x20            println(f\"{{v.len()}}\"); }}\n"
+            ))
+            .as_deref(),
+            Some("1\ndrop E\ndrop R7\n"),
+            "vec-payload"
+        );
         // The DELIBERATE exclusion, asserted as silence. `E2` declares no
         // `Drop`, so neither backend reaches its payload in these positions.
         // Pinning it stops a later widening from landing on one backend only.

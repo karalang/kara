@@ -7032,12 +7032,30 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(elem_name));
         let field_bodies = self.emit_user_drop_field_bodies_fn(elem_name, subst);
+        // B-2026-08-28-55 — an ENUM element's live-variant PAYLOAD bodies.
+        // `emit_user_drop_field_bodies_fn` is struct-shaped and answers `None`
+        // for an enum name, so an own-`Drop` enum element ran its own body and
+        // stopped -- one body for the TWO objects a payload variant holds. The
+        // exact asymmetry B-2026-08-28-40 fixed for a struct FIELD and
+        // B-2026-08-28-47 for a tuple ELEMENT; this is the Vec peer.
+        let enum_payload = if elem_name != "Option"
+            && elem_name != "Result"
+            && self
+                .type_decls
+                .enum_layouts
+                .get(elem_name)
+                .is_some_and(|l| !l.is_shared)
+        {
+            self.emit_enum_payload_user_drop_bodies_fn(elem_name)
+        } else {
+            None
+        };
         let body_fn = if owns_body {
             self.module.get_function(&format!("{elem_name}.drop"))
         } else {
             None
         };
-        if body_fn.is_none() && field_bodies.is_none() {
+        if body_fn.is_none() && field_bodies.is_none() && enum_payload.is_none() {
             return None;
         }
 
@@ -7121,6 +7139,10 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_call(f, &[ep.into()], "").unwrap();
         }
         if let Some(f) = field_bodies {
+            self.builder.build_call(f, &[ep.into()], "").unwrap();
+        }
+        // After the element's own body, matching the field and tuple peers.
+        if let Some(f) = enum_payload {
             self.builder.build_call(f, &[ep.into()], "").unwrap();
         }
         let next = self

@@ -789,15 +789,6 @@ impl<'a> super::Interpreter<'a> {
     /// The element list is cloned out before the walk so a body that touches
     /// the same container cannot deadlock against a held read guard.
     fn run_array_element_user_drops(&mut self, name: &str) -> bool {
-        // `is_tuple` splits the two shapes this one loop serves. It gates the
-        // enum-element arm below, because the two containers' codegen walkers
-        // have different coverage: `emit_tuple_elem_user_drop_bodies_fn` gained
-        // an enum leg with B-2026-08-28-47, `emit_vec_elem_user_drop_bodies_fn`
-        // has none. Firing for a Vec element here would therefore convert a
-        // both-backends-silent shape into a run-vs-build divergence (measured:
-        // `let mut v = Vec.new(); v.push(E.B)` prints nothing on either backend
-        // today). That Vec shape is real and filed separately.
-        let mut is_tuple = false;
         let elems: Vec<Value> = match self.env.get(name) {
             Some(Value::Array(cell)) => match cell.read() {
                 Ok(g) => g.clone(),
@@ -808,10 +799,7 @@ impl<'a> super::Interpreter<'a> {
             // bindings, because `push_drops_for_stmt` registers a `Drop` action
             // only for those — which is exactly the position codegen's tuple
             // registration covers, so the two stay in step.
-            Some(Value::Tuple(items)) => {
-                is_tuple = true;
-                items
-            }
+            Some(Value::Tuple(items)) => items,
             _ => return false,
         };
         // Whole-value move-out (`let v2 = v;`, `return v;`): the destination
@@ -872,10 +860,13 @@ impl<'a> super::Interpreter<'a> {
             // the live variant's payload bodies, matching the Vec-FIELD arm
             // in `drop_user_drop_fields_of_value` and codegen's
             // `emit_slot_drop_bodies_at` enum leg.
+            // B-2026-08-28-55 — this loop serves BOTH tuple and Vec bindings,
+            // and the arm was gated to tuples alone while
+            // `emit_vec_elem_user_drop_bodies_fn`'s SELECTOR was enum-blind.
+            // That selector was widened in the same commit as this line, so
+            // both containers now run the body and the gate would only
+            // reintroduce the divergence it was added to prevent.
             if let Value::EnumVariant { enum_name, .. } = &e {
-                if !is_tuple {
-                    continue;
-                }
                 // Own-`Drop` enums ONLY, matching codegen's selection rule
                 // exactly: its walkers reach an enum member through
                 // `type_runs_user_drop`, which answers true for an enum only

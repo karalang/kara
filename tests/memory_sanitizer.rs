@@ -1435,6 +1435,20 @@ fn main() {
             &["1", "drop E", "drop Rn7"],
             "moved-on",
         );
+        // B-2026-08-28-55 — the `Vec` element peer. Its walker runs the body
+        // per element INSIDE the loop while the elements' memory is freed by
+        // the Vec's own drop, so a bodies-leg that also freed would double-free
+        // once per element -- which is why this row exists rather than resting
+        // on the tuple ones above.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let mut v = Vec.new();\n\
+             \x20            v.push(E.A(R {{ id: 7, name: f\"n{{7}}\" }}));\n\
+             \x20            println(f\"{{v.len()}}\"); }}\n"
+            ),
+            &["1", "drop E", "drop Rn7"],
+            "vec-elem-payload",
+        );
         // DESTRUCTURED — the pre-existing path, re-asserted alongside so a
         // regression that double-runs the body shows up as a double free here
         // rather than only as a count in the interpreter suite.
