@@ -12977,6 +12977,113 @@ fn main() {
         assert_eq!(run_program(prog).as_deref(), Some("drop R41\n1\n"));
     }
 
+    /// B-2026-08-28-46 / -47 — an own-`impl Drop` enum held as a struct FIELD
+    /// or a tuple ELEMENT runs its body when the owner dies, even though it is
+    /// never destructured.
+    ///
+    /// The two rows are one gap seen from two positions, and they failed
+    /// DIFFERENTLY, which is why both spellings are pinned here. The struct
+    /// field (`-46`) already fired on both compiled backends and was silent in
+    /// the interpreter. The tuple element (`-47`) was silent on ALL THREE — the
+    /// agree-on-zero shape no A/B gate can report, and the reason this is a
+    /// soundness fixture rather than a parity one.
+    ///
+    /// `destructured-control` is what proves the machinery existed all along:
+    /// the same value, taken apart one statement later, ran the body on every
+    /// backend before the fix.
+    ///
+    /// `payload-only-enum` is the DELIBERATE exclusion and the row that keeps
+    /// this fix honest. An enum with no own `Drop` but a Drop-bearing payload
+    /// stays silent on every backend, because codegen reaches an enum member
+    /// only through `type_runs_user_drop`, which answers for an enum via
+    /// `drop_method_keys` alone. Running it in the interpreter is a one-line
+    /// change and was measured to produce exactly the run-vs-build divergence
+    /// this row is meant to remove; the shape is real and filed separately.
+    #[test]
+    fn e2e_own_drop_enum_member_runs_its_body_when_never_destructured() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+        for (label, body, want) in [
+            // -47: the agree-on-zero half.
+            (
+                "tuple-elem-unit",
+                "fn main() { let p = (E.B, 1); println(f\"{p.1}\"); }\n",
+                "1\ndrop E\n",
+            ),
+            (
+                "tuple-elem-payload",
+                "fn main() { let p = (E.A(R { id: 7 }), 1); println(f\"{p.1}\"); }\n",
+                "1\ndrop E\ndrop R7\n",
+            ),
+            // -46: the interpreter-silent half. Compiled already passed these
+            // two, so they are the parity anchor rather than the RED rows.
+            (
+                "struct-field-unit",
+                "struct W { e: E, n: i64 }\n\
+                 fn main() { let w = W { e: E.B, n: 1 }; println(f\"{w.n}\"); }\n",
+                "1\ndrop E\n",
+            ),
+            (
+                "struct-field-payload",
+                "struct W { e: E, n: i64 }\n\
+                 fn main() { let w = W { e: E.A(R { id: 7 }), n: 1 }; println(f\"{w.n}\"); }\n",
+                "1\ndrop E\ndrop R7\n",
+            ),
+            // The COMPOSITION of the two: a tuple, holding the enum, held in a
+            // struct field. Reached through a third walker again, and silent on
+            // every backend before the fix.
+            (
+                "tuple-inside-struct-field",
+                "struct W { p: (E, i64) }\n\
+                 fn main() { let w = W { p: (E.B, 1) }; println(\"hi\"); }\n",
+                "drop E\nhi\n",
+            ),
+            // CONTROL — destructuring the same value already worked, on every
+            // backend, before any of this.
+            (
+                "destructured-control",
+                "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\"); }\n",
+                "drop E\n1\n",
+            ),
+            // CONTROL — a plain struct element is the shape that always worked;
+            // it pins that the widening did not disturb it.
+            (
+                "struct-elem-control",
+                "struct S { id: i64 }\n\
+                 impl Drop for S { fn drop(mut ref self) { println(\"drop S\") } }\n\
+                 fn main() { let p = (S { id: 1 }, 1); println(f\"{p.1}\"); }\n",
+                "1\ndrop S\n",
+            ),
+            // BOUNDARY — moving the tuple on must still run the body exactly
+            // once, at the destination. A widening that fired per-owner rather
+            // than per-value shows up here as two.
+            (
+                "moved-on",
+                "fn main() { let p = (E.B, 1); let q = p; println(f\"{q.1}\"); }\n",
+                "1\ndrop E\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+        // The DELIBERATE exclusion, asserted as silence. `E2` declares no
+        // `Drop`, so neither backend reaches its payload in these positions.
+        // Pinning it stops a later widening from landing on one backend only.
+        assert_eq!(
+            run_program(
+                "enum E2 { A(R), B }\n\
+                 struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+                 fn main() { let p = (E2.A(R { id: 5 }), 1); println(f\"{p.1}\"); }\n"
+            )
+            .as_deref(),
+            Some("1\n"),
+            "payload-only-enum"
+        );
+    }
+
     /// B-2026-08-28-40 — an own-`impl Drop` enum discarded by a wildcard
     /// destructure leaf runs its LIVE PAYLOAD's body too, not just its own.
     ///

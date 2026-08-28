@@ -7448,11 +7448,28 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let TypeKind::Path(p) = &te.kind {
             if let Some(head) = p.segments.first() {
-                // Direct element: a non-shared user STRUCT that runs a body.
-                // Enums are excluded here exactly as the pre-widening walk
-                // excluded them — their bodies ride the enum-payload walker.
+                // Direct element: a non-shared user STRUCT that runs a body,
+                // or (B-2026-08-28-47) a non-shared user ENUM that does. The
+                // enum leg was excluded on the stated grounds that their
+                // bodies "ride the enum-payload walker" — true for a BOUND
+                // local, and true for a struct FIELD once B-2026-08-28-40 gave
+                // the field walker its own enum arm, but nothing registers
+                // such a walker for a tuple ELEMENT. So `let p = (E.B, 1)` ran
+                // no body on ANY backend while the destructured sibling one
+                // statement later ran it on all three.
+                //
+                // Option/Result keep the exclusion: their payload level is the
+                // `optres_payload_heads` leg at the end of this fn, and
+                // admitting them here as well would double-fire.
+                let user_enum = head != "Option"
+                    && head != "Result"
+                    && self
+                        .type_decls
+                        .enum_layouts
+                        .get(head.as_str())
+                        .is_some_and(|l| !l.is_shared);
                 if !self.type_decls.shared_types.contains_key(head)
-                    && self.type_decls.struct_types.contains_key(head)
+                    && (self.type_decls.struct_types.contains_key(head) || user_enum)
                     && self.type_runs_user_drop(head, &mut Vec::new())
                 {
                     return true;
@@ -7541,9 +7558,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             _ => {
-                if self.type_decls.shared_types.contains_key(&head)
-                    || !self.type_decls.struct_types.contains_key(&head)
-                {
+                if self.type_decls.shared_types.contains_key(&head) {
+                    return;
+                }
+                if !self.type_decls.struct_types.contains_key(&head) {
+                    // B-2026-08-28-47 — a user ENUM in this slot: its own body
+                    // first, then its live variant's payload bodies. Mirrors
+                    // the enum-FIELD arm of `emit_user_drop_field_bodies_fn`
+                    // (B-2026-08-28-40) instruction for instruction, so the
+                    // same enum runs the same bodies whether it sits in a
+                    // struct field or a tuple element — which is the property
+                    // that keeps `(E, i64)` and `struct W { e: E }` in step.
+                    // Option/Result never reach this arm; they match above.
+                    if self
+                        .type_decls
+                        .enum_layouts
+                        .get(head.as_str())
+                        .is_some_and(|l| !l.is_shared)
+                    {
+                        let owns_body = self
+                            .program_snapshot
+                            .as_deref()
+                            .is_some_and(|p| p.drop_method_keys.contains_key(&head));
+                        if owns_body {
+                            if let Some(f) = self.module.get_function(&format!("{head}.drop")) {
+                                self.builder.build_call(f, &[ep.into()], "").unwrap();
+                            }
+                        }
+                        if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&head) {
+                            self.builder.build_call(w, &[ep.into()], "").unwrap();
+                        }
+                    }
                     return;
                 }
                 let owns_body = self

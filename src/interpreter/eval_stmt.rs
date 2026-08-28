@@ -789,6 +789,15 @@ impl<'a> super::Interpreter<'a> {
     /// The element list is cloned out before the walk so a body that touches
     /// the same container cannot deadlock against a held read guard.
     fn run_array_element_user_drops(&mut self, name: &str) -> bool {
+        // `is_tuple` splits the two shapes this one loop serves. It gates the
+        // enum-element arm below, because the two containers' codegen walkers
+        // have different coverage: `emit_tuple_elem_user_drop_bodies_fn` gained
+        // an enum leg with B-2026-08-28-47, `emit_vec_elem_user_drop_bodies_fn`
+        // has none. Firing for a Vec element here would therefore convert a
+        // both-backends-silent shape into a run-vs-build divergence (measured:
+        // `let mut v = Vec.new(); v.push(E.B)` prints nothing on either backend
+        // today). That Vec shape is real and filed separately.
+        let mut is_tuple = false;
         let elems: Vec<Value> = match self.env.get(name) {
             Some(Value::Array(cell)) => match cell.read() {
                 Ok(g) => g.clone(),
@@ -799,7 +808,10 @@ impl<'a> super::Interpreter<'a> {
             // bindings, because `push_drops_for_stmt` registers a `Drop` action
             // only for those — which is exactly the position codegen's tuple
             // registration covers, so the two stay in step.
-            Some(Value::Tuple(items)) => items,
+            Some(Value::Tuple(items)) => {
+                is_tuple = true;
+                items
+            }
             _ => return false,
         };
         // Whole-value move-out (`let v2 = v;`, `return v;`): the destination
@@ -850,6 +862,35 @@ impl<'a> super::Interpreter<'a> {
                     self.run_discarded_value_user_drops(e);
                     continue;
                 }
+            }
+            // B-2026-08-28-47 — a user ENUM element (`let p = (E.B, 1)`).
+            // None of the arms above match it and the struct arm below does
+            // not either, so it fell to `value_runs_user_drop`, whose
+            // `EnumVariant` arm admits only `Option`/`Result` — the element
+            // ran NO body on any backend, while the same tuple destructured
+            // one statement later ran it on all three. Own body first, then
+            // the live variant's payload bodies, matching the Vec-FIELD arm
+            // in `drop_user_drop_fields_of_value` and codegen's
+            // `emit_slot_drop_bodies_at` enum leg.
+            if let Value::EnumVariant { enum_name, .. } = &e {
+                if !is_tuple {
+                    continue;
+                }
+                // Own-`Drop` enums ONLY, matching codegen's selection rule
+                // exactly: its walkers reach an enum member through
+                // `type_runs_user_drop`, which answers true for an enum only
+                // via `drop_method_keys`. An enum with NO own `Drop` but a
+                // Drop-bearing payload (`enum E2 { A(R), B }`) is therefore
+                // invisible to codegen in these positions, so running the
+                // payload walk here would turn a both-backends-silent shape
+                // into a run-vs-build divergence. Measured: it does exactly
+                // that. That shape is real and filed separately.
+                let tn = enum_name.clone();
+                if self.program.drop_method_keys.contains_key(&tn) {
+                    self.run_user_drop_body_only(&tn, e.clone());
+                    self.run_enum_payload_user_drops_value(&e);
+                }
+                continue;
             }
             if let Value::Struct { name: tn, .. } = &e {
                 if self.program.drop_method_keys.contains_key(tn) {
@@ -1523,6 +1564,22 @@ impl<'a> super::Interpreter<'a> {
                 EnumData::Tuple(vs) => vs.iter().any(|v| self.value_runs_user_drop(v)),
                 EnumData::Struct(m) => m.values().any(|v| self.value_runs_user_drop(v)),
             },
+            // B-2026-08-28-46/-47 — a user enum that declares its OWN `Drop`
+            // is Drop-relevant CONTENT, exactly as a struct with one is. Only
+            // the own-body case is admitted: a payload's bodies do ride their
+            // own declared-type walk, which is what the note above this arm
+            // warns would double-fire, and that reasoning is untouched here.
+            //
+            // This is load-bearing beyond the walks it enables. The answer
+            // also gates the move-out bookkeeping: with it false, a
+            // `struct W { e: E }` was not drop-relevant, so destructuring `w`
+            // never marked it moved and the parent's field walk still ran at
+            // `w`'s death -- firing `E`'s body a second time on top of the
+            // discard path's. Admitting the field here and teaching the walks
+            // to run it have to land together for that reason.
+            Value::EnumVariant { enum_name, .. } => {
+                self.program.drop_method_keys.contains_key(enum_name)
+            }
             _ => false,
         }
     }
@@ -1658,6 +1715,25 @@ impl<'a> super::Interpreter<'a> {
                                 continue;
                             }
                         }
+                        // B-2026-08-28-47 — a user ENUM item inside a tuple
+                        // FIELD (`struct W { p: (E, i64) }`). The struct-shaped
+                        // bind below skipped it, so the field stayed silent here
+                        // while codegen's tuple walker ran the body. Same
+                        // declared-element-head gate as the struct item path.
+                        if let Value::EnumVariant { enum_name, .. } = &e {
+                            let eh = Self::declared_field_type_head(&ete);
+                            let is_own_param = eh
+                                .as_deref()
+                                .is_some_and(|h| generic_param_names.iter().any(|p| p == h));
+                            if eh.as_deref() == Some(enum_name.as_str()) || is_own_param {
+                                let tn = enum_name.clone();
+                                if self.program.drop_method_keys.contains_key(&tn) {
+                                    self.run_user_drop_body_only(&tn, e.clone());
+                                    self.run_enum_payload_user_drops_value(&e);
+                                }
+                            }
+                            continue;
+                        }
                         let Value::Struct { name: tn, .. } = &e else {
                             continue;
                         };
@@ -1689,6 +1765,33 @@ impl<'a> super::Interpreter<'a> {
                 // binding-death order.
                 self.run_field_map_key_user_drops(&field_value, &declared_te, &generic_param_names);
                 self.run_field_map_val_user_drops(&field_value, &declared_te, &generic_param_names);
+                continue;
+            }
+            // B-2026-08-28-46 — an own-`Drop` user ENUM field. The dispatch
+            // below is struct-shaped and answers `continue` for an enum, so
+            // `let w = W { e: E.B, n: 1 }` ran NOTHING here while BOTH compiled
+            // backends ran `E.drop`: codegen's field walker gained exactly this
+            // arm in B-2026-08-28-40 and the interpreter did not follow. Same
+            // order as that arm — the enum's own body, then the live variant's
+            // payload bodies. `Option`/`Result` never reach here; they are
+            // routed through `run_discarded_value_user_drops` at the top of
+            // this loop. Declared-head gated like the struct arm below, with
+            // the same bare-generic-param exception.
+            if let Value::EnumVariant { enum_name, .. } = &field_value {
+                let is_own_param = declared_head
+                    .as_deref()
+                    .is_some_and(|h| generic_param_names.iter().any(|p| p == h));
+                if declared_head.as_deref() == Some(enum_name.as_str()) || is_own_param {
+                    let tn = enum_name.clone();
+                    // Own-`Drop` gate: see the note in the binding-level
+                    // element loop -- codegen reaches an enum member only via
+                    // `drop_method_keys`, so a payload-only enum must stay
+                    // silent here too.
+                    if self.program.drop_method_keys.contains_key(&tn) {
+                        self.run_user_drop_body_only(&tn, field_value.clone());
+                        self.run_enum_payload_user_drops_value(&field_value);
+                    }
+                }
                 continue;
             }
             let Value::Struct {
@@ -1759,6 +1862,17 @@ impl<'a> super::Interpreter<'a> {
                     self.run_discarded_value_user_drops(it);
                     continue;
                 }
+                // B-2026-08-28-47 — a user ENUM item, for the same reason and
+                // with the same dispatch as the binding-level element loop:
+                // this walk is the one behind every position that holds a
+                // tuple as CONTENT, so without it `struct W { p: (E, i64) }`
+                // stayed silent here while codegen ran the body.
+                let tn = enum_name.clone();
+                if self.program.drop_method_keys.contains_key(&tn) {
+                    self.run_user_drop_body_only(&tn, it.clone());
+                    self.run_enum_payload_user_drops_value(&it);
+                }
+                continue;
             }
             if let Value::Tuple(inner) = &it {
                 let inner = inner.clone();

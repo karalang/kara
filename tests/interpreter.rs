@@ -32727,6 +32727,101 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
     );
 }
 
+/// B-2026-08-28-46 / -47, interpreter leg — the twin of
+/// `e2e_own_drop_enum_member_runs_its_body_when_never_destructured`.
+///
+/// `-46` is the row this file is the RED half of: a struct field holding an
+/// own-`Drop` enum ran the body on BOTH compiled backends and nothing here, so
+/// it was a live run-vs-build divergence in the interpreter-silent direction —
+/// the opposite direction from every neighbouring row in the family.
+///
+/// `-47` (the tuple element) was silent on all three backends instead, so its
+/// rows are RED everywhere.
+///
+/// Every row is asserted identically to the codegen twin, because "the same
+/// enum runs the same bodies wherever it is stored" is the whole property.
+#[test]
+fn test_own_drop_enum_member_runs_its_body_when_never_destructured() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "tuple-elem-unit",
+            "fn main() { let p = (E.B, 1); println(f\"{p.1}\"); }\n",
+            "1\ndrop E\n",
+        ),
+        (
+            "tuple-elem-payload",
+            "fn main() { let p = (E.A(R { id: 7 }), 1); println(f\"{p.1}\"); }\n",
+            "1\ndrop E\ndrop R7\n",
+        ),
+        (
+            "struct-field-unit",
+            "struct W { e: E, n: i64 }\n\
+             fn main() { let w = W { e: E.B, n: 1 }; println(f\"{w.n}\"); }\n",
+            "1\ndrop E\n",
+        ),
+        (
+            "struct-field-payload",
+            "struct W { e: E, n: i64 }\n\
+             fn main() { let w = W { e: E.A(R { id: 7 }), n: 1 }; println(f\"{w.n}\"); }\n",
+            "1\ndrop E\ndrop R7\n",
+        ),
+        (
+            "tuple-inside-struct-field",
+            "struct W { p: (E, i64) }\n\
+             fn main() { let w = W { p: (E.B, 1) }; println(\"hi\"); }\n",
+            "drop E\nhi\n",
+        ),
+        // CONTROL — already correct here before the fix. It is also the row
+        // that caught the first cut: making the field walk fire without also
+        // making an enum field count as Drop-relevant CONTENT left `w`
+        // unmarked by the destructure's move-out bookkeeping, and this row
+        // printed `drop E` TWICE.
+        (
+            "destructured-control",
+            "fn main() { let p = (E.B, 1); let (_, n) = p; println(f\"{n}\"); }\n",
+            "drop E\n1\n",
+        ),
+        (
+            "struct-destructured-control",
+            "struct W { e: E, n: i64 }\n\
+             fn main() { let w = W { e: E.B, n: 1 }; let W { e: _, n } = w;\n\
+             \x20            println(f\"{n}\"); }\n",
+            "drop E\n1\n",
+        ),
+        (
+            "moved-on",
+            "fn main() { let p = (E.B, 1); let q = p; println(f\"{q.1}\"); }\n",
+            "1\ndrop E\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+    // GUARD — a `Vec` element is NOT widened by this fix. The one element loop
+    // serves both tuple and Vec bindings, but only the tuple walker gained an
+    // enum leg in codegen, so firing here would manufacture a divergence.
+    // Measured, and the reason the arm is gated on the binding's shape.
+    assert_eq!(
+        run(&format!(
+            "{H}fn main() {{ let mut v = Vec.new(); v.push(E.B); println(f\"{{v.len()}}\"); }}\n"
+        )),
+        "1\n",
+        "vec-elem-guard"
+    );
+    // The DELIBERATE exclusion, same as the codegen twin.
+    assert_eq!(
+        run("enum E2 { A(R), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             fn main() { let p = (E2.A(R { id: 5 }), 1); println(f\"{p.1}\"); }\n"),
+        "1\n",
+        "payload-only-enum"
+    );
+}
+
 /// B-2026-08-28-40, interpreter leg — an own-`impl Drop` enum discarded by a
 /// wildcard destructure leaf runs its LIVE PAYLOAD's body too.
 ///

@@ -1373,6 +1373,81 @@ fn main() {
     /// could otherwise have deleted its allocation, so the balance question is
     /// re-asked rather than inherited — the same way B-2026-08-28-12's
     /// bodies-only first cut turned a dead allocation into a real 3-byte leak.
+    /// B-2026-08-28-46 / -47 — the memory half of running an own-`Drop` enum
+    /// member's body when the owner dies without ever being destructured.
+    ///
+    /// The body fix is bodies-only on both backends: codegen's tuple-element
+    /// leg calls `<E>.drop` and `__karac_dropelems_enum_<E>`, neither of which
+    /// frees, and the interpreter's arms are the same shape. The owner's own
+    /// memory drop is untouched. This fixture is what holds that claim to
+    /// account, because it is exactly the claim B-2026-08-28-12's first cut got
+    /// wrong in the other direction — a bodies-without-free widening there
+    /// turned a dead allocation into a real leak once the body made the payload
+    /// observably live.
+    ///
+    /// So every row carries a heap `String` that the newly-running body READS.
+    /// Under LSan a missed free shows as a leak and a doubled one as a double
+    /// free; passing both ways is the balance claim.
+    #[test]
+    fn asan_own_drop_enum_member_body_is_memory_balanced() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.name}\") } }\n";
+        // TUPLE element, payload variant — the payload's buffer is freed by the
+        // tuple's own drop; the body must read it and not free it.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = (E.A(R {{ id: 7, name: f\"n{{7}}\" }}), 1);\n\
+             \x20            println(f\"{{p.1}}\"); }}\n"
+            ),
+            &["1", "drop E", "drop Rn7"],
+            "tuple-elem-payload",
+        );
+        // STRUCT field, payload variant — same value reached through the field
+        // walker instead, whose enum leg is the `-46` half.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W {{ e: E, n: i64 }}\n\
+             fn main() {{ let w = W {{ e: E.A(R {{ id: 7, name: f\"n{{7}}\" }}), n: 1 }};\n\
+             \x20            println(f\"{{w.n}}\"); }}\n"
+            ),
+            &["1", "drop E", "drop Rn7"],
+            "struct-field-payload",
+        );
+        // COMPOSED — tuple inside a struct field, the third walker.
+        assert_clean_asan_run(
+            &format!(
+                "{H}struct W {{ p: (E, i64) }}\n\
+             fn main() {{ let w = W {{ p: (E.A(R {{ id: 7, name: f\"n{{7}}\" }}), 1) }};\n\
+             \x20            println(\"hi\"); }}\n"
+            ),
+            &["drop E", "drop Rn7", "hi"],
+            "tuple-inside-struct-field",
+        );
+        // MOVED ON — the destination owns it. A per-owner rather than
+        // per-value widening double-frees here.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = (E.A(R {{ id: 7, name: f\"n{{7}}\" }}), 1);\n\
+             \x20            let q = p; println(f\"{{q.1}}\"); }}\n"
+            ),
+            &["1", "drop E", "drop Rn7"],
+            "moved-on",
+        );
+        // DESTRUCTURED — the pre-existing path, re-asserted alongside so a
+        // regression that double-runs the body shows up as a double free here
+        // rather than only as a count in the interpreter suite.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let p = (E.A(R {{ id: 7, name: f\"n{{7}}\" }}), 1);\n\
+             \x20            let (_, n) = p; println(f\"{{n}}\"); }}\n"
+            ),
+            &["drop E", "drop Rn7", "1"],
+            "destructured-control",
+        );
+    }
+
     #[test]
     fn asan_own_drop_enum_discarded_by_wildcard_leaf_is_balanced() {
         const H: &str = "enum E { A(R), B }\n\
