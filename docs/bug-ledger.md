@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 217 | 1 |
+| leak | 218 | 2 |
 | run-vs-build | 207 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 78 | 3 |
+| soundness | 79 | 3 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1172 | 9 |
+| codegen | 1174 | 10 |
 | typecheck | 278 | 0 |
-| interp | 224 | 7 |
+| interp | 225 | 7 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced · 9 open · 1700 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1737 surfaced · 10 open · 1701 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,8 +137,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced
 | B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
 | B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
 | B-2026-08-28-57 | 2026-08-28 | interp+codegen | medium | AN `Array[E, N]` OF AN OWN-`Drop` ENUM DIVERGES TWICE OVER: the interpreter runs both bodies IMMEDIATELY and the compiled backends run them at SCOPE EXIT, and the compiled side additionally LOSES the payload body -- `let a: Array[E, 2] = [E.B, E.A(R{3})]` is interp `dE dE dR3 mid end` vs compiled `mid end dE dE` | — |
-| B-2026-08-28-58 | 2026-08-28 | interp+codegen | medium | AN `Option[E]` HOLDING AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND -- `let o: Option[E] = Some(E.B)` is 0/0/0 and the payload variant loses `dR` too; the `Option` sibling of B-2026-08-28-55's `Vec` element, still open after that fix | — |
 | B-2026-08-28-59 | 2026-08-28 | codegen | medium | A NAMED TUPLE-DESTRUCTURE LEAF OF ENUM TYPE LOSES THE ENUM'S OWN `Drop` BODY ON BOTH COMPILED BACKENDS while the interpreter runs it: `let (gv, gn) = (E.A(R{5}), 6);` is interp 1 / jit 0 / build 0, and the compiled side still runs the PAYLOAD body, so it is the enum's own body alone that is lost | — |
+| B-2026-08-28-63 | 2026-08-28 | interp+codegen | medium | A CONSUMING `match` / `if let` ARM THAT BINDS AN ENUM PAYLOAD OUT RUNS NO `Drop` BODY FOR IT ON ANY BACKEND, while the same arm binding a STRUCT payload runs one -- `match o { Some(e) => ... }` for `Option[E]` prints `got` and nothing else | — |
+| B-2026-08-28-64 | 2026-08-28 | codegen | medium | `Option[K]` NEVER FREES A HEAP-CARRYING NESTED-STRUCT PAYLOAD while `Result[K, i64]` DOES: the plain `let` site calls `track_inline_result_payload_var` with no `Option` sibling for a struct/enum payload -- masked entirely by dead-malloc removal until some body reads the buffer | — |
 
 ### Relocated (2)
 
@@ -170,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced
 
 </details>
 
-### Fixed (1700)
+### Fixed (1701)
 
-<details><summary>1700 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1701 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1873,6 +1874,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1735 surfaced
 | B-2026-08-28-54 | interp+codegen | medium | AN ENUM WITH NO OWN `Drop` BUT A DROP-BEARING PAYLOAD RUNS NO BODY ON ANY BACKEND when held as a struct field or tuple element: `enum E2 { A(R), B }`… | 0e872dd |
 | B-2026-08-28-55 | interp+codegen | medium | A `Vec` ELEMENT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND: `let mut v = Vec.new(); v.push(E.B)` is 0/0/0 while the TUPLE element of the same… | 0ad7a39 |
 | B-2026-08-28-56 | codegen | medium | A TUPLE-TYPED DESTRUCTURE LEAF WHOSE ELEMENT TYPE HAS NO `Drop` GETS NO MEMORY OWNER, on either source: `let (inner, n) = ((R { . | 3e4a63b |
+| B-2026-08-28-58 | interp+codegen | medium | AN `Option[E]` HOLDING AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND -- `let o: Option[E] = Some(E.B)` is 0/0/0 and the payload variant loses `dR` t… | 033eafc |
 | B-2026-08-28-60 | codegen | low | AN UNDESTRUCTURED TUPLE LOSES THE INNER HEAP OF A NESTED STRUCT ELEMENT: `let p = ((R { tags: mkv(3) }, 2), 1); println(p.1)` where `R` declares no `… | 6c0a296 |
 | B-2026-08-28-61 | codegen | medium | A GENERIC CALLEE'S tuple element still loses its Drop-bearing field's body when destructured at the call site: `fn src[T](x: T) -> (Box2[T], i64)` wi… | dc01eb1 |
 | B-2026-08-28-62 | interp+codegen | medium | A BY-VALUE PARAM THAT ESCAPES THROUGH A CALL in return position runs its `Drop` body TWICE on all three backends: `fn outer(y: R) -> (BoxR, i64) { re… | 5ce2a57 |
