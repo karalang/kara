@@ -1113,15 +1113,19 @@ fn main() {
                 "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
                  fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, R { id: 42, name: f\"n{42}\" }));\n\
                  \x20            println(f\"{x.id}\"); }\n",
-                vec!["41", "drop 41 n41", "drop 42 n42"],
+                // B-2026-08-28-19 — `drop 42` used to come LAST, with the
+                // caller-side walk sitting on the scope frame; it now fires at
+                // statement end, matching the interpreter.
+                vec!["drop 42 n42", "41", "drop 41 n41"],
             ),
             // CONTROL — the dropper dies inside the call; its buffer must still
-            // be released exactly once.
+            // be released exactly once. B-2026-08-28-19 moved the BODY ahead of
+            // the `1`; the free is unchanged, which is what this fixture is for.
             (
                 "other-element-control",
                 "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
                  fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1)); println(f\"{x}\"); }\n",
-                vec!["1", "drop 41 n41"],
+                vec!["drop 41 n41", "1"],
             ),
         ] {
             assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);
@@ -1305,12 +1309,13 @@ fn main() {
                 vec!["drop 41 n41", "3"],
             ),
             // CONTROL — a by-value param source, where the fix fires nothing.
+            // B-2026-08-28-19 moved the caller-side body ahead of the `1`.
             (
                 "param-tuple-control",
                 "fn take(p: (R, i64)) -> i64 { let (_, n) = p; n }\n\
                  fn main() { let x = take((R { id: 41, name: f\"n{41}\" }, 1));\n\
                  \x20            println(f\"{x}\"); }\n",
-                vec!["1", "drop 41 n41"],
+                vec!["drop 41 n41", "1"],
             ),
         ] {
             assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);

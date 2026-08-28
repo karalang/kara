@@ -15310,6 +15310,27 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         skip: &[usize],
     ) {
+        self.track_discarded_tuple_elem_bodies_named(elems, val, skip, "__disc_tup_tmp");
+    }
+
+    /// [`Self::track_discarded_tuple_elem_bodies`] with the temporary's name
+    /// supplied (B-2026-08-28-19).
+    ///
+    /// The name decides WHEN the walk runs: `drain_statement_temp_user_drops`
+    /// retires a short list of argument-temporary names at statement end and
+    /// leaves everything else to scope exit. The CALL-ARGUMENT site wants the
+    /// former — its elements provably die inside the callee, which is the
+    /// premise of the walk existing at all, and the interpreter fires them at
+    /// the call. A `let` whose value stays live past the statement wants the
+    /// latter, and running its body early is a premature `Drop` on a readable
+    /// owner rather than an ordering nicety.
+    pub(super) fn track_discarded_tuple_elem_bodies_named(
+        &mut self,
+        elems: &[Expr],
+        val: BasicValueEnum<'ctx>,
+        skip: &[usize],
+        temp_name: &str,
+    ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
         };
@@ -15327,7 +15348,7 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
-        let slot = self.create_entry_alloca(cur_fn, "__disc_tup_tmp", val.get_type());
+        let slot = self.create_entry_alloca(cur_fn, temp_name, val.get_type());
         self.builder.build_store(slot, val).unwrap();
         // `emit_discarded_tuple_elem_bodies_fn` spells its symbol
         // `__karac_dropbodies_tuple_te_*`, i.e. in the STRUCT-field family
@@ -15339,7 +15360,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // never reaches an NLL last-use map nor either retraction helper.
         self.track_user_drop_var_with_fn(
             "",
-            "__disc_tup_tmp",
+            temp_name,
             slot,
             bodies,
             UserDropKind::StructFieldBodies,

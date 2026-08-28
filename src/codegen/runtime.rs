@@ -7761,7 +7761,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         ..
                     } if binding_name == "__owned_agg_tmp"
                         || binding_name == "__refarg_tmp"
-                        || binding_name == "__urecv_drop_tmp" =>
+                        || binding_name == "__urecv_drop_tmp"
+                        // B-2026-08-28-19 — the tuple-literal ARGUMENT walk,
+                        // whose elements provably die inside the callee. It sat
+                        // on the scope frame while the interpreter fired it at
+                        // the call, so a tuple argument's body printed after
+                        // every later statement in the caller.
+                        //
+                        // The name is the ARGUMENT site's alone, not
+                        // `track_discarded_tuple_elem_bodies`' shared
+                        // `__disc_tup_tmp`: that helper also serves a LET whose
+                        // value stays live past the statement, and retiring it
+                        // here ran a body while its owner was still readable
+                        // (caught by `nested-no-destructure-control`). Safe for
+                        // the argument site for the reason `ContainerElemBodies`
+                        // gives for NLL placement at all — the fn is BODIES only
+                        // and frees nothing.
+                        || binding_name == "__disc_tup_arg" =>
                     {
                         fired.push((binding_ptr, drop_fn));
                     }

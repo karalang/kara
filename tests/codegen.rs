@@ -12175,6 +12175,84 @@ fn main() {
         }
     }
 
+    /// The caller-side fresh-temp ARGUMENT `Drop` walk fires at statement end,
+    /// matching the interpreter (B-2026-08-28-19).
+    ///
+    /// The interpreter runs that walk as the call returns; codegen registered it
+    /// as a cleanup ACTION on the caller's scope frame, so it drained at scope
+    /// exit. Counts always agreed — which is why every assertion in this family,
+    /// all of them count-based, was satisfied — and the ORDER did not: a tuple
+    /// argument whose element dies inside the callee printed its body after every
+    /// later statement in the caller.
+    ///
+    /// The mechanism was a missing NAME rather than missing machinery.
+    /// `drain_statement_temp_user_drops` already retires argument temporaries at
+    /// statement end, and `track_discarded_tuple_elem_bodies`' own comment
+    /// claimed to register "under a statement-temporary name that
+    /// `drain_statement_temp_user_drops` retires at statement end" — the name was
+    /// simply absent from that list.
+    ///
+    /// THE NAME IS THE ARGUMENT SITE'S ALONE, and that is the constraint this
+    /// fixture exists to pin. The same helper also serves a `let` whose value
+    /// stays live past the statement; adding the shared name to the drain ran a
+    /// body while its owner was still readable, which
+    /// `nested-no-destructure-control` in the sibling fixture caught. So the
+    /// argument site got its own temporary name and only that one is retired
+    /// early.
+    ///
+    /// `intervening-statement` is what makes this an ORDER test rather than a
+    /// count test: the body must land before the `println` that follows the call,
+    /// not merely somewhere in the program. `loop-body` pins per-iteration
+    /// placement, where scope-exit draining would have collapsed every
+    /// iteration's body to the end. The two escape rows are controls — nothing
+    /// fires early for a value that leaves the callee.
+    #[test]
+    fn e2e_caller_side_argument_bodies_fire_at_statement_end() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own repro, with a statement AFTER the call so the order
+            // is observable.
+            (
+                "intervening-statement",
+                "fn dies(p: (R, i64)) -> i64 { let (r, n) = p; return n; }\n\
+                 fn main() { let x = dies((R { id: 41 }, 1)); println(\"after\");\n\
+                 \x20            println(f\"{x}\"); }\n",
+                "drop 41\nafter\n1\n",
+            ),
+            // One element escapes, one dies: the dying one fires at the call,
+            // the escaping one at its binding's last use.
+            (
+                "one-escapes",
+                "fn take2(p: (R, R)) -> R { let (a, b) = p; return a; }\n\
+                 fn main() { let y = take2((R { id: 42 }, R { id: 52 }));\n\
+                 \x20            println(\"after2\"); println(f\"{y.id}\"); }\n",
+                "drop 52\nafter2\n42\ndrop 42\n",
+            ),
+            // Per-ITERATION placement — scope-exit draining collapsed these to
+            // the end of the function.
+            (
+                "loop-body",
+                "fn dies(p: (R, i64)) -> i64 { let (r, n) = p; return n; }\n\
+                 fn main() { for i in 0..2 { let q = dies((R { id: 60 + i }, 1));\n\
+                 \x20            println(f\"iter {q}\"); } }\n",
+                "drop 60\niter 1\ndrop 61\niter 1\n",
+            ),
+            // CONTROL — the WHOLE param escapes, so the walk declines entirely
+            // and nothing may fire early.
+            (
+                "whole-param-escapes",
+                "fn whole(p: (R, i64)) -> (R, i64) { return p; }\n\
+                 fn main() { let (z, n) = whole((R { id: 43 }, 1)); println(\"after3\");\n\
+                 \x20            println(f\"{z.id}\"); }\n",
+                "after3\n43\ndrop 43\n",
+            ),
+        ] {
+            let prog = format!("{H}{body}");
+            assert_eq!(run_program(&prog).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-27-44 — a heap-bearing TUPLE argument whose value ESCAPES the
     /// caller's frame. The callee entry-copies the tuple param and the COPY is
     /// what flows onward, so the caller's ORIGINAL is orphaned; unfixed, each
@@ -12673,11 +12751,17 @@ fn main() {
             // BOTH elements drop and only element 0 escapes: 41 leaves through
             // the result, 42 dies in the call. One body each, never two and
             // never none.
+            //
+            // B-2026-08-28-19 — `drop 42` used to come LAST here, because the
+            // caller-side walk sat on the scope frame while the interpreter fired
+            // it at the call. It now fires at STATEMENT end on both, so this row
+            // matches its interpreter twin exactly rather than carrying a
+            // per-backend expectation.
             (
                 "two-droppers",
                 "fn take(p: (R, R)) -> R { let (a, b) = p; a }\n\
                  fn main() { let x = take((R { id: 41 }, R { id: 42 })); println(f\"{x.id}\"); }\n",
-                "41\ndrop 41\ndrop 42\n",
+                "drop 42\n41\ndrop 41\n",
             ),
             // B-2026-08-28-16 — the same shapes with a LOCAL as the argument
             // instead of a literal. Everything above passes a fresh tuple TEMP,
@@ -12742,11 +12826,16 @@ fn main() {
             // dies inside the call and the caller's walk is its ONLY body.
             // Suppressing per-argument instead of per-element takes this to
             // zero.
+            //
+            // B-2026-08-28-19 — the body used to come AFTER the `1`, because the
+            // caller-side walk sat on the scope frame while the interpreter fired
+            // it at the call. It now fires at STATEMENT end on both, matching the
+            // `local-source` row two above, which already read this way.
             (
                 "other-element-control",
                 "fn take(p: (R, i64)) -> i64 { let (r, n) = p; n }\n\
                  fn main() { let x = take((R { id: 41 }, 1)); println(f\"{x}\"); }\n",
-                "1\ndrop 41\n",
+                "drop 41\n1\n",
             ),
             // CONTROL — the param returned BARE, already handled by the
             // whole-param passthrough guard this fix deliberately leaves alone.

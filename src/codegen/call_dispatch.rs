@@ -3989,7 +3989,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // die in the call, so the escaping ones are skipped
                     // individually. Interp twin: `run_fresh_temp_arg_drops`.
                     let skip = Self::tuple_indices_of(escaping_paths);
-                    self.track_discarded_tuple_elem_bodies(tuple_elems, val, &skip);
+                    // B-2026-08-28-19 — the ARGUMENT temporary's own name, so
+                    // `drain_statement_temp_user_drops` retires it at statement
+                    // end the way the interpreter fires it at the call. The
+                    // shared `__disc_tup_tmp` name also serves a `let` whose
+                    // value outlives the statement, which must not.
+                    self.track_discarded_tuple_elem_bodies_named(
+                        tuple_elems,
+                        val,
+                        &skip,
+                        "__disc_tup_arg",
+                    );
                 }
             }
         } else if let Some(name) = self.owned_struct_temp_arg_name(arg) {
