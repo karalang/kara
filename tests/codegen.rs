@@ -13519,6 +13519,20 @@ fn main() {
                 "fn main() { let p = ((R { id: 41 }, 2), 1); println(f\"{p.1}\") }\n",
                 "1\ndrop 41\n",
             ),
+            // The leaf read one level DEEPER — through the inner element and
+            // into its field. Pinned separately from `place-source-leaf-used`,
+            // which stops at `inner.1`, because it exercises a different thing:
+            // the leaf's element TYPE has to be recorded well enough for
+            // codegen to name `.id` on it. A second session's independent fix
+            // for this row registered the bodies without that, and this program
+            // did not lower at all there — `cannot resolve field 'id' on this
+            // receiver`. The fix as committed lowers it.
+            (
+                "place-source-leaf-read-through",
+                "fn main() { let p = ((R { id: 42 }, 2), 1); let (inner, n) = p;\n\
+                 \x20            println(f\"{inner.0.id}\"); println(f\"{n}\") }\n",
+                "42\ndrop 42\n1\n",
+            ),
             // A SIBLING top-level dropper beside the tuple leaf — one body each,
             // and the row that constrains HOW the leaf takes its body rather
             // than just showing that it does.
