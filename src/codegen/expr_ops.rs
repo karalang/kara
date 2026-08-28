@@ -1406,6 +1406,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // buffer, while the BOUND spelling was clean because the binding
             // owns it.
             ExprKind::StructLiteral { .. } => true,
+            // B-2026-08-28-44 — a TUPLE LITERAL is the same thing one aggregate
+            // kind over (`(p[1].word, 9).0`): it moved its elements in, and a
+            // container-element read hands its clone over here — the clone's
+            // own cleanup is neutralized when it does — so nothing else will
+            // ever free those buffers.
+            ExprKind::Tuple(elems) => !elems.is_empty(),
             _ => false,
         }
     }
@@ -3872,20 +3878,53 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.scrutinee_is_borrow_call(object) {
             return;
         }
-        let Some(elem_tes) = self.call_return_tuple_tes(object) else {
+        // B-2026-08-28-44 — a tuple LITERAL has no callee whose declared return
+        // type could name its elements, so `call_return_tuple_tes` declines and
+        // the registration never ran. What the element `TypeExpr` is actually
+        // needed for is the exclusion — zeroing the projected element's cap so
+        // the consumer keeps owning it — and for a `{ptr,len,cap}` member the
+        // LLVM shape answers that question exactly as well: `String` and `Vec`
+        // are zeroed identically (cap at index 2), which is the only thing
+        // `zero_tuple_elem_cap_at` does for either.
+        //
+        // So a literal is admitted only when the projected member IS that
+        // shape, and declines otherwise — a struct member in a literal tuple
+        // would need a real `TypeExpr` to zero, and guessing one would zero the
+        // wrong bytes. The drop side needs nothing: `track_tuple_var` works off
+        // the LLVM aggregate type either way.
+        let agg_ty = sv.get_type();
+        let vec_ty = self.vec_struct_type();
+        let is_literal = matches!(&object.kind, ExprKind::Tuple(_));
+        let proj_llvm = agg_ty.get_field_type_at_index(index as u32);
+        let literal_vecstr_member =
+            is_literal && proj_llvm == Some(inkwell::types::BasicTypeEnum::StructType(vec_ty));
+        // A literal whose PROJECTED member carries no heap needs no exclusion at
+        // all — there is nothing for a consumer to take over — so it registers
+        // the drop and records nothing. `(p[1].word, 9).1` is that shape, and
+        // declining it outright left the tuple's OTHER member, the String, with
+        // no owner.
+        let literal_scalar_member = is_literal
+            && matches!(
+                proj_llvm,
+                Some(inkwell::types::BasicTypeEnum::IntType(_))
+                    | Some(inkwell::types::BasicTypeEnum::FloatType(_))
+            );
+        let elem_tes = self.call_return_tuple_tes(object);
+        let proj_te = elem_tes.as_ref().and_then(|tes| tes.get(index).cloned());
+        if proj_te.is_none() && !literal_vecstr_member && !literal_scalar_member {
             return;
-        };
-        let Some(proj_te) = elem_tes.get(index).cloned() else {
-            return;
-        };
-        // Nothing to own unless some element carries heap.
-        if !elem_tes.iter().any(|te| self.type_expr_has_drop_heap(te)) {
-            return;
+        }
+        // Nothing to own unless some element carries heap. A literal reaching
+        // here has one by construction — the projected member is a
+        // `{ptr,len,cap}`.
+        if let Some(tes) = elem_tes.as_ref() {
+            if !tes.iter().any(|te| self.type_expr_has_drop_heap(te)) {
+                return;
+            }
         }
         let Some(fn_val) = self.current_fn else {
             return;
         };
-        let agg_ty = sv.get_type();
         let slot = self.create_entry_alloca(fn_val, "__freshtemp_tupobj", agg_ty.into());
         if self.builder.build_store(slot, sv).is_err() {
             return;
@@ -3898,8 +3937,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // first and leaves `println(twoheap(1).1)` and `twostr(1).0.len()`
         // leaking the projected element — the same split the
         // `vec_elem_field_clone_slots` sibling documents.
-        self.freshtemp_tuple_elem_slots
-            .insert(expr_span, (slot, agg_ty, index as u32, proj_te));
+        // A literal with no element `TypeExpr` records the `String` spelling:
+        // the takeover's only use for it is the `{ptr,len,cap}` cap-zero, which
+        // is identical for `String` and `Vec`, and the guard above admitted the
+        // literal only when the member really is that shape.
+        let proj_te = match proj_te {
+            Some(te) => Some(te),
+            None if literal_vecstr_member => Some(TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec!["String".to_string()],
+                    generic_args: None,
+                    span: crate::token::Span::default(),
+                }),
+                span: crate::token::Span::default(),
+            }),
+            // A scalar projection has nothing to hand over.
+            None => None,
+        };
+        if let Some(proj_te) = proj_te {
+            self.freshtemp_tuple_elem_slots
+                .insert(expr_span, (slot, agg_ty, index as u32, proj_te));
+        }
     }
 
     /// B-2026-08-28-27 — hand a fresh tuple temp's projected ELEMENT over to a

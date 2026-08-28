@@ -58082,6 +58082,60 @@ fn make_deep(k: i64) -> Deep { return Deep { o: make_outer(k), z: k }; }\n";
         }
     }
 
+    /// A container-element heap read consumed by an unbound TUPLE LITERAL —
+    /// `println((p[1].word, 9).0)` (B-2026-08-28-44, tuple-literal half).
+    ///
+    /// The literal moves the read's clone in, which neutralizes the clone's own
+    /// cleanup through `vec_elem_field_clone_slots` exactly as any consuming
+    /// destination does, and then nothing owned the literal.
+    /// `track_freshtemp_tuple_object` (B-2026-08-28-27) is what would have
+    /// owned it, and it declined for a reason specific to literals: it resolves
+    /// the projected element's `TypeExpr` from the CALLEE's declared return
+    /// type, and a literal has no callee.
+    ///
+    /// BOTH PROJECTIONS ARE HERE, and they fail against opposite halves of the
+    /// fix. Projecting the `{ptr,len,cap}` member needs the exclusion — without
+    /// it the temp's drop and the consumer both free the moved buffer.
+    /// Projecting the SCALAR member needs the registration to happen ANYWAY:
+    /// there is nothing to exclude, and declining outright (the first attempt)
+    /// left the tuple's String member with no owner at all. Measured, one row
+    /// each.
+    ///
+    /// The bound spelling and the call-returned tuple are the controls — the
+    /// first owns the literal, the second already had its element types.
+    #[test]
+    fn test_tuple_literal_temp_consuming_a_container_read_is_owned() {
+        let hdr = "\
+struct P { word: String, n: i64 }\n\
+fn mkp() -> Vec[P] { return [P { word: f\"a{1}\", n: 1 }, P { word: f\"b{2}\", n: 2 }]; }\n\
+fn mkt(k: i64) -> (String, i64) { return (f\"s{k}\", k); }\n";
+        for (label, body, want) in [
+            // the unbound literal, projecting the heap member
+            (
+                "heap-member",
+                "let p = mkp(); println((p[1].word, 9).0);",
+                "b2",
+            ),
+            // and projecting the scalar: the String member still needs an owner
+            (
+                "scalar-member",
+                "let p = mkp(); println((p[1].word, 9).1);",
+                "9",
+            ),
+            // controls
+            (
+                "bound-literal",
+                "let p = mkp(); let t = (p[1].word, 9); println(t.0);",
+                "b2",
+            ),
+            ("call-returned", "println(mkt(1).0);", "s1"),
+            ("plain-read", "let p = mkp(); println(p[0].word);", "a1"),
+        ] {
+            let src = format!("{hdr}\nfn main() {{\n    {body}\n}}\n");
+            assert_clean_asan_run(&src, &[want], label);
+        }
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///
