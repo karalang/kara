@@ -89,6 +89,16 @@ pub(crate) struct PayloadVars<'ctx> {
     /// destination still references downstream → UAF (selfhost slice 3c-iv:
     /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
     pub(crate) boxed_enum_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-08-28-66 — the payload STRUCT name recorded alongside each
+    /// `boxed_enum_payload_vars` entry.
+    ///
+    /// A destructuring arm (`Some(Holder { name, id })`) carries the struct's
+    /// name in the pattern, so the field-disarm walk reads it from there. A
+    /// WHOLE-payload binding (`Some(r)`) does not, and that is exactly the arm
+    /// this row is about — so the name has to come from the registration
+    /// instead. `track_boxed_enum_var` already receives it as
+    /// `inner_struct_name`.
+    pub(crate) boxed_enum_payload_struct: std::collections::HashMap<String, String>,
     /// B-2026-08-07-4 — boxed-payload bindings that acquired their box by a
     /// whole-value MOVE from another binding (`let mut vv = value;`) rather
     /// than from a fresh construction.

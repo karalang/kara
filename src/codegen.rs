@@ -5736,6 +5736,7 @@ impl<'ctx> Codegen<'ctx> {
                 inline_option_map_payload_vars: std::collections::HashSet::new(),
                 inline_option_agg_payload_vars: std::collections::HashSet::new(),
                 boxed_enum_payload_vars: std::collections::HashSet::new(),
+                boxed_enum_payload_struct: std::collections::HashMap::new(),
                 boxed_moved_in_vars: std::collections::HashSet::new(),
                 boxed_struct_payload_vars: std::collections::HashSet::new(),
                 nested_boxed_payload_vars: std::collections::HashSet::new(),

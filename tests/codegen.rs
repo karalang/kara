@@ -13084,6 +13084,82 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-66 — a consuming `match` arm that hands a BOXED struct
+    /// payload on must not leave the source box's interior walk armed.
+    ///
+    /// `Option[R]` with `R = { i64, String }` is 4 words, wider than the
+    /// `Option` inline payload area (3), so the payload is heap-BOXED. The
+    /// box's `BoxedEnumDrop` ran `__karac_drop_struct_R` over the interior,
+    /// freeing `name`, while the arm handed the whole payload to the match's
+    /// destination whose own `karac_drop_R` freed `name` too. Measured
+    /// pre-fix: `Invalid free()`, 11 allocs / 12 frees under valgrind at
+    /// `-O0`.
+    ///
+    /// ASSERTED ON THE IR, and that choice is the row rather than a
+    /// convenience. Every runtime gate available in this tree is blind to it:
+    ///
+    ///   * At the DEFAULT `-O2` the optimizer erases the doubled malloc/free
+    ///     pair outright — 9 allocs / 9 frees, clean — so `run_program`
+    ///     comparisons and the ASAN suite both PASS against the broken
+    ///     compiler. Adding a `String` read to keep the buffer live does not
+    ///     change that (checked).
+    ///   * The `-O0` ASAN leg does not flag it either (checked).
+    ///   * Under the JIT it aborts with `free(): double free detected in
+    ///     tcache 2` — but only sometimes: whether glibc's tcache NOTICES the
+    ///     invalid free depends on the surrounding allocation pattern. The
+    ///     same program with one extra interpolated `println` runs to
+    ///     completion on the broken compiler. So an abort-based assertion is
+    ///     allocator-state dependent and would be a flaky gate, not a gate.
+    ///
+    /// The IR is where the defect is unambiguous and deterministic. The
+    /// hand-over does not DELETE the box's interior walk — the walk is still
+    /// called, and the box itself is still freed; what changes is that each
+    /// field's cap is zeroed inside the box first, so the walk frees nothing
+    /// and the destination's own drop is the single owner. So the assertion is
+    /// on the `boxwhole.suppress` blocks that emit those stores, which is the
+    /// hand-over's only signature in the IR.
+    ///
+    /// The control is the one that fixing this got wrong first: an arm that
+    /// BINDS the payload and yields something else must KEEP the walk, since
+    /// the box still owns the fields. Disarming there leaked them (13 allocs /
+    /// 12 frees where 13 / 13 is right), which is why the gate is the positive
+    /// signal "the arm's value IS this binding, and someone downstream takes
+    /// it" rather than any consumption test.
+    #[test]
+    fn e2e_consuming_arm_boxed_payload_handed_on_disarms_source_box_walk() {
+        // The arm's value IS the bound payload and `k` takes it: the
+        // destination owns the fields, so the source box must not walk them.
+        let handed_on = ir_for(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             fn main() {\n\
+               let o: Option[R] = Some(R { id: 1, name: f\"n1\" });\n\
+               let k = match o { Some(r) => { r } None => { R { id: 9, name: f\"n9\" } } };\n\
+               println(f\"kept {k.id}\");\n\
+             }\n",
+        );
+        assert!(
+            handed_on.contains("boxwhole.suppress"),
+            "no hand-over emitted for a boxed payload the arm hands on:\n{handed_on}"
+        );
+        // CONTROL — the arm binds the payload but yields something else, so
+        // nothing downstream took it and the box must still own the fields.
+        let not_handed_on = ir_for(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             fn main() {\n\
+               let q: Option[R] = Some(R { id: 5, name: f\"n5\" });\n\
+               let n = match q { Some(r) => { R { id: 7, name: f\"n7\" } } \
+                                 None => { R { id: 8, name: f\"n8\" } } };\n\
+               println(f\"other {n.id}\");\n\
+             }\n",
+        );
+        assert!(
+            !not_handed_on.contains("boxwhole.suppress"),
+            "hand-over wrongly emitted for a payload the arm does NOT hand on:\n{not_handed_on}"
+        );
+    }
+
     /// B-2026-08-28-22 — a callee that returns an owned param on SOME tail paths
     /// and not others now runs that param's user `Drop` body on the paths where it
     /// dies, instead of nowhere.

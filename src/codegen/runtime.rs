@@ -1706,6 +1706,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .boxed_struct_payload_vars
                 .insert(name.to_string());
         }
+        // B-2026-08-28-66 — remember WHICH struct is in the box, for the
+        // whole-payload-binding disarm that has no pattern path to read.
+        if let Some(inner) = inner_struct_name {
+            self.payload_vars
+                .boxed_enum_payload_struct
+                .insert(name.to_string(), inner.to_string());
+        }
     }
 
     /// Peer of [`track_boxed_enum_var`] that takes the boxed payload's inner

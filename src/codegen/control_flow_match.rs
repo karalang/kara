@@ -682,6 +682,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // owns, but a whole enum scrutinee whose inline struct
                     // payload the ARM's drop takes over.
                     self.suppress_struct_field_boxed_payload_arm_bind(scrutinee, &arm.pattern);
+                    // B-2026-08-28-66 — a WHOLE boxed payload bound out by a
+                    // consuming arm (`Some(r) => { r }`). The line above covers
+                    // a boxed payload reached through a struct FIELD; this one
+                    // covers the plain binding, whose fields were freed by the
+                    // box's inner walk as well as by whoever received the value.
+                    self.suppress_boxed_payload_whole_binding(scrutinee, &arm.pattern, &arm.body);
                     // B-2026-06-10-6 companion: the erased-`Option` drop
                     // switch can't classify an inline `String`/`Vec` payload,
                     // so the suppression above no-ops for it. Zero the source
@@ -9562,6 +9568,171 @@ impl<'ctx> super::Codegen<'ctx> {
     /// UNBOUND fields (`Some(Holder { id, .. })` still frees `name`).
     /// Inline (≤ payload-area) struct payloads have no Option-side cleanup
     /// (no inline-struct free exists), so only the boxed width needs this.
+    /// B-2026-08-28-66 — the WHOLE-PAYLOAD-BINDING sibling of
+    /// [`Self::suppress_boxed_payload_struct_destructure`].
+    ///
+    /// That one handles `match o { Some(Holder { name, id }) => .. }`, zeroing
+    /// the cap of each field the pattern BINDS so the box's inner struct walk
+    /// keeps freeing only the unbound ones. `match o { Some(r) => { r } .. }`
+    /// binds the payload WHOLE, which is the same transfer with every field
+    /// bound at once — but it takes neither that path (the sub-pattern is a
+    /// `Binding`, not a `Struct`) nor any other, so nothing was disarmed: the
+    /// box's `__karac_drop_struct_<T>` freed the payload's heap fields while
+    /// the value handed out of the arm was freed by whoever received it.
+    ///
+    /// Measured on `let o: Option[R] = Some(R { id: 1, name: f"n1" }); let k =
+    /// match o { Some(r) => { r } .. };` with `impl Drop for R` — `Invalid
+    /// free()`, 11 allocs / 12 frees under valgrind at -O0, and an abort under
+    /// the JIT. Visible in the IR as `__karac_drop_struct_R(%o_box_ptr)`
+    /// standing beside `karac_drop_R(%k)`.
+    ///
+    /// WHY IT LOOKED LIKE A "heap vs scalar" SPLIT and is not: `Option[R]` with
+    /// `R = { i64, String }` is 4 words, wider than the `Option` inline payload
+    /// area (3), so it is heap-BOXED; the `i64`-only struct fits inline and
+    /// takes a different path entirely. The axis is inline-vs-boxed, and the
+    /// heap field is only what makes the doubled free observable. At -O2 the
+    /// optimizer erases the doubled malloc/free pair, so the default build
+    /// reports nothing — which is why this survived a body-count matrix.
+    ///
+    /// The box MEMORY is still freed by the queued `BoxedEnumDrop`; only its
+    /// inner field walk is neutralized, exactly as in the destructure sibling.
+    pub(super) fn suppress_boxed_payload_whole_binding(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        arm_body: &Expr,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(name.as_str())
+        {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let variant = path.last().map(|s| s.as_str()).unwrap_or("");
+        let enum_name = match variant {
+            "Some" => "Option",
+            "Ok" | "Err" => "Result",
+            _ => return,
+        };
+        // WHOLE-payload only: exactly one sub-pattern and it is a plain
+        // binding. A destructure is the sibling's job, and a wildcard binds
+        // nothing so the box must keep owning the fields.
+        let [sub] = patterns.as_slice() else {
+            return;
+        };
+        let PatternKind::Binding(bound) = &sub.kind else {
+            return;
+        };
+        // THE POSITIVE SIGNAL: the arm's VALUE must be this binding, and
+        // something downstream must take that value. Both halves are
+        // load-bearing, and each was measured by getting it wrong first:
+        //
+        //   * Gating instead on "the arm does not merely borrow the payload"
+        //     also fires for an arm that BINDS the payload and yields
+        //     something else (`Some(r) => { R { id: 9, .. } }`). There the box
+        //     must keep owning the fields, and disarming leaked them —
+        //     13 allocs / 12 frees where 13 / 13 was right.
+        //   * Without `branch_value_is_owned`, a DISCARDED match disarms the
+        //     box while nothing downstream takes the payload, trading the
+        //     double free for a leak — 11 allocs / 10 frees where 11 / 11 was
+        //     right.
+        //
+        // Together they say exactly "this value has left the arm and someone
+        // else now owns it", which is the only condition under which the
+        // source's box may stop owning its fields.
+        let tail_is_this_binding = matches!(
+            &Self::block_tail_expr(arm_body).kind,
+            ExprKind::Identifier(t) if t == bound
+        );
+        if !tail_is_this_binding || !self.branch_value_is_owned(scrutinee) {
+            return;
+        }
+        let Some(struct_name) = self
+            .payload_vars
+            .boxed_enum_payload_struct
+            .get(name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(fields) = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(&st) = self.type_decls.struct_types.get(struct_name.as_str()) else {
+            return;
+        };
+        // Same boxing predicate as the sibling — an inline payload's w0 is not
+        // a pointer, and zeroing through it would corrupt memory.
+        let area = if enum_name == "Option" { 3 } else { 5 };
+        if Self::llvm_type_word_count(st.into()) <= area {
+            return;
+        }
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(w0_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot, 1, "boxwhole.suppress.w0")
+        else {
+            return;
+        };
+        let w0 = self
+            .builder
+            .build_load(self.context.i64_type(), w0_ptr, "boxwhole.suppress.w0v")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "boxwhole.suppress.box")
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                box_ptr,
+                ptr_ty.const_null(),
+                "boxwhole.suppress.isnull",
+            )
+            .unwrap();
+        let do_bb = self
+            .context
+            .append_basic_block(fn_val, "boxwhole.suppress.do");
+        let join_bb = self
+            .context
+            .append_basic_block(fn_val, "boxwhole.suppress.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        for field in &fields {
+            self.zero_struct_field_move_cap(box_ptr, &struct_name, field);
+        }
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     pub(super) fn suppress_boxed_payload_struct_destructure(
         &mut self,
         scrutinee: &Expr,

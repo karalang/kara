@@ -59710,6 +59710,70 @@ fn main() {
             "shared-temp-receiver-heap-field-read",
         );
     }
+    /// B-2026-08-28-66 — a consuming `match` arm that hands a BOXED struct
+    /// payload out double-freed that payload's heap fields.
+    ///
+    /// `Option[R]` with `R = { i64, String }` is 4 words, wider than the
+    /// `Option` inline payload area (3), so the payload is heap-BOXED. The
+    /// box's `BoxedEnumDrop` runs `__karac_drop_struct_R` over the interior,
+    /// freeing `name`; the arm hands the whole payload to the match's
+    /// destination, whose own drop frees `name` too. Visible in the IR as
+    /// `__karac_drop_struct_R(%o_box_ptr)` standing beside `karac_drop_R(%k)`.
+    ///
+    /// The axis is inline-vs-BOXED, not scalar-vs-heap: an `i64`-only payload
+    /// fits inline and never takes this path. The heap field is only what makes
+    /// the doubled free observable — and at `-O2` the optimizer erases the
+    /// doubled malloc/free pair outright, so the DEFAULT build reports nothing.
+    /// Measured before the fix: `Invalid free()` with 11 allocs / 12 frees
+    /// under valgrind at `-O0` and an abort under the JIT (`free(): double free
+    /// detected in tcache 2`), against 9 allocs / 9 frees clean at `-O2`. That
+    /// masking is why a body-count matrix missed it — the body count is RIGHT
+    /// in this shape; only the memory is wrong. Which is also why this test is
+    /// the row's real gate: `assert_clean_asan_run` is what sees it.
+    ///
+    /// The second case is the control that fixing this got wrong first. An arm
+    /// that BINDS the payload and yields something else must leave the box
+    /// owning the fields; disarming on "the arm does not merely borrow it"
+    /// leaked them (13 allocs / 12 frees where 13 / 13 is right). A DISCARDED
+    /// match is the other one — disarming without `branch_value_is_owned`
+    /// traded the double free for a leak (11 / 10 where 11 / 11 is right); it
+    /// is exercised by the codegen twin rather than here, because its `Drop`
+    /// ordering differs between backends for an unrelated reason
+    /// (B-2026-08-28-69).
+    ///
+    /// Together those are why the gate is the POSITIVE signal "the arm's value
+    /// IS this binding, and someone downstream takes it" rather than any
+    /// consumption test.
+    ///
+    /// STILL OPEN, deliberately excluded: a FRESH-TEMP scrutinee
+    /// (`match Some(R { .. }) { Some(r) => { r } .. }`) takes the same double
+    /// free through a separate staging path — B-2026-08-28-72, the same
+    /// named/fresh-temp split the destructure sibling already has (slice 3t vs
+    /// B-2026-08-04-6).
+    #[test]
+    fn asan_consuming_arm_boxed_payload_handed_on_is_freed_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}"); } }
+fn main() {
+    let base: i64 = env.args().len();
+    // The row's repro: the arm's value IS the bound payload, and `k` takes it.
+    let o: Option[R] = Some(R { id: base, name: f"a{base}" });
+    let k = match o { Some(r) => { r } None => { R { id: 9, name: f"n9" } } };
+    println(f"kept {k.id}");
+    // CONTROL — binds the payload but yields something else, so the box must
+    // keep owning its fields.
+    let q: Option[R] = Some(R { id: 5, name: f"c{base}" });
+    let n = match q { Some(r) => { R { id: 7, name: f"n7" } } None => { R { id: 8, name: f"n8" } } };
+    println(f"other {n.id}");
+}
+"#,
+            &["kept 1", "dR1", "other 7", "dR7"],
+            "consuming-arm-boxed-payload-handed-on",
+        );
+    }
+
     /// B-2026-08-28-22 — the MEMORY half of the conditionally-returned-param
     /// body fix. The codegen and interpreter twins pin the body COUNTS; this
     /// pins that recovering those bodies moved no free.
