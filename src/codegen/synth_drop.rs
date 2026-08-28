@@ -3173,6 +3173,44 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         seen.push(type_name.to_string());
+        // B-2026-08-28-54 — an ENUM whose live variant can carry a Drop-bearing
+        // payload is Drop-relevant, even with no `impl Drop` of its own. Every
+        // leg below reads `struct_field_type_names` / `struct_field_type_exprs`
+        // and so is blind to a variant payload; that blindness is what made
+        // `let p = (E2.A(R), 1)` run nothing on ANY backend while the same
+        // value BOUND directly ran `R`'s body.
+        //
+        // Generic params are excluded for the reason the payload walker states:
+        // a generic enum's payload TE is the parameter itself, which would make
+        // `Option[T]` look like it carries a Drop-bearing payload for every `T`.
+        // `Option`/`Result` are excluded outright — their payloads are handled
+        // by the `optres_*` legs, and admitting them here would double-count.
+        if type_name != "Option"
+            && type_name != "Result"
+            && self
+                .type_decls
+                .enum_layouts
+                .get(type_name)
+                .is_some_and(|l| !l.is_shared)
+        {
+            let generic_params = self.enum_generic_param_names(type_name);
+            for (_, _, tes) in self.enum_variant_field_type_exprs(type_name) {
+                for te in &tes {
+                    let TypeKind::Path(p) = &te.kind else {
+                        continue;
+                    };
+                    let Some(n) = p.segments.first() else {
+                        continue;
+                    };
+                    if generic_params.iter().any(|g| g == n) {
+                        continue;
+                    }
+                    if self.type_runs_user_drop(n, seen) {
+                        return true;
+                    }
+                }
+            }
+        }
         let mut found = self
             .type_decls
             .struct_field_type_names

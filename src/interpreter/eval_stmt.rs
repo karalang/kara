@@ -876,11 +876,18 @@ impl<'a> super::Interpreter<'a> {
                 // payload walk here would turn a both-backends-silent shape
                 // into a run-vs-build divergence. Measured: it does exactly
                 // that. That shape is real and filed separately.
+                // B-2026-08-28-54 — the payload walk is UNCONDITIONAL while the
+                // own body stays gated. An enum with no `impl Drop` of its own
+                // but a Drop-bearing variant payload is Drop-relevant content,
+                // and codegen's `type_runs_user_drop` now sees it through
+                // `enum_variant_field_type_exprs`. Gating both on
+                // `drop_method_keys` (which 9727cdb did, deliberately, while
+                // codegen was still blind) left `E2.A(R)` silent here.
                 let tn = enum_name.clone();
                 if self.program.drop_method_keys.contains_key(&tn) {
                     self.run_user_drop_body_only(&tn, e.clone());
-                    self.run_enum_payload_user_drops_value(&e);
                 }
+                self.run_enum_payload_user_drops_value(&e);
                 continue;
             }
             if let Value::Struct { name: tn, .. } = &e {
@@ -1568,8 +1575,20 @@ impl<'a> super::Interpreter<'a> {
             // `w`'s death -- firing `E`'s body a second time on top of the
             // discard path's. Admitting the field here and teaching the walks
             // to run it have to land together for that reason.
-            Value::EnumVariant { enum_name, .. } => {
+            Value::EnumVariant {
+                enum_name, data, ..
+            } => {
+                // B-2026-08-28-54 — a payload-carrying variant counts too, not
+                // just an own `Drop`. This predicate gates the move-out
+                // bookkeeping as well as the walks (see the note on the
+                // enum-field arm), so it has to answer for exactly the set the
+                // walks now run.
                 self.program.drop_method_keys.contains_key(enum_name)
+                    || match data {
+                        EnumData::Unit => false,
+                        EnumData::Tuple(vs) => vs.iter().any(|v| self.value_runs_user_drop(v)),
+                        EnumData::Struct(m) => m.values().any(|v| self.value_runs_user_drop(v)),
+                    }
             }
             _ => false,
         }
@@ -1718,10 +1737,11 @@ impl<'a> super::Interpreter<'a> {
                                 .is_some_and(|h| generic_param_names.iter().any(|p| p == h));
                             if eh.as_deref() == Some(enum_name.as_str()) || is_own_param {
                                 let tn = enum_name.clone();
+                                // B-2026-08-28-54 — payload walk unconditional.
                                 if self.program.drop_method_keys.contains_key(&tn) {
                                     self.run_user_drop_body_only(&tn, e.clone());
-                                    self.run_enum_payload_user_drops_value(&e);
                                 }
+                                self.run_enum_payload_user_drops_value(&e);
                             }
                             continue;
                         }
@@ -1778,10 +1798,11 @@ impl<'a> super::Interpreter<'a> {
                     // element loop -- codegen reaches an enum member only via
                     // `drop_method_keys`, so a payload-only enum must stay
                     // silent here too.
+                    // B-2026-08-28-54 — payload walk unconditional, own body gated.
                     if self.program.drop_method_keys.contains_key(&tn) {
                         self.run_user_drop_body_only(&tn, field_value.clone());
-                        self.run_enum_payload_user_drops_value(&field_value);
                     }
+                    self.run_enum_payload_user_drops_value(&field_value);
                 }
                 continue;
             }
@@ -1858,11 +1879,12 @@ impl<'a> super::Interpreter<'a> {
                 // this walk is the one behind every position that holds a
                 // tuple as CONTENT, so without it `struct W { p: (E, i64) }`
                 // stayed silent here while codegen ran the body.
+                // B-2026-08-28-54 — payload walk unconditional, own body gated.
                 let tn = enum_name.clone();
                 if self.program.drop_method_keys.contains_key(&tn) {
                     self.run_user_drop_body_only(&tn, it.clone());
-                    self.run_enum_payload_user_drops_value(&it);
                 }
+                self.run_enum_payload_user_drops_value(&it);
                 continue;
             }
             if let Value::Tuple(inner) = &it {

@@ -32958,14 +32958,46 @@ fn test_own_drop_enum_member_runs_its_body_when_never_destructured() {
         "1\ndrop E\ndrop R7\n",
         "vec-payload"
     );
-    // The DELIBERATE exclusion, same as the codegen twin.
+    // B-2026-08-28-54 — the payload-only enum, pinned AS SILENCE by this
+    // assertion when -46/-47 landed and closed once codegen's
+    // `type_runs_user_drop` learned to look inside variant payloads. All three
+    // positions, since the predicate widening covered them together.
+    for (label, body) in [
+        (
+            "payload-only-struct-field",
+            "struct W3 { e: E2, n: i64 }\n\
+             fn main() { let w = W3 { e: E2.A(R { id: 5 }), n: 1 };\n\
+             \x20            println(f\"{w.n}\"); }\n",
+        ),
+        (
+            "payload-only-tuple-elem",
+            "fn main() { let p = (E2.A(R { id: 5 }), 1); println(f\"{p.1}\"); }\n",
+        ),
+        (
+            "payload-only-vec-elem",
+            "fn main() { let mut v = Vec.new(); v.push(E2.A(R { id: 5 }));\n\
+             \x20            println(f\"{v.len()}\"); }\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!(
+                "enum E2 {{ A(R), B }}\n\
+                 struct R {{ id: i64 }}\n\
+                 impl Drop for R {{ fn drop(mut ref self) {{ println(f\"drop R{{self.id}}\") }} }}\n\
+                 {body}"
+            )),
+            "1\ndrop R5\n",
+            "{label}"
+        );
+    }
+    // BOUNDARY — the payloadless variant of the same enum runs nothing.
     assert_eq!(
         run("enum E2 { A(R), B }\n\
              struct R { id: i64 }\n\
              impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
-             fn main() { let p = (E2.A(R { id: 5 }), 1); println(f\"{p.1}\"); }\n"),
+             fn main() { let p = (E2.B, 1); println(f\"{p.1}\"); }\n"),
         "1\n",
-        "payload-only-enum"
+        "payload-only-unit-variant"
     );
 }
 

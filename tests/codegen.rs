@@ -13278,19 +13278,55 @@ fn main() {
             Some("1\ndrop E\ndrop R7\n"),
             "vec-payload"
         );
-        // The DELIBERATE exclusion, asserted as silence. `E2` declares no
-        // `Drop`, so neither backend reaches its payload in these positions.
-        // Pinning it stops a later widening from landing on one backend only.
+        // B-2026-08-28-54 — an enum with NO own `Drop` but a Drop-bearing
+        // variant payload. Pinned AS SILENCE by this very assertion when
+        // -46/-47 landed, because every walker reached an enum through
+        // `type_runs_user_drop`, whose legs all read struct field tables and
+        // were blind to a variant payload. Widening that predicate through
+        // `enum_variant_field_type_exprs` closed it in all three positions at
+        // once, which is why one loop covers them here.
+        for (label, body) in [
+            (
+                "payload-only-struct-field",
+                "struct W3 { e: E2, n: i64 }\n\
+                 fn main() { let w = W3 { e: E2.A(R { id: 5 }), n: 1 };\n\
+                 \x20            println(f\"{w.n}\"); }\n",
+            ),
+            (
+                "payload-only-tuple-elem",
+                "fn main() { let p = (E2.A(R { id: 5 }), 1); println(f\"{p.1}\"); }\n",
+            ),
+            (
+                "payload-only-vec-elem",
+                "fn main() { let mut v = Vec.new(); v.push(E2.A(R { id: 5 }));\n\
+                 \x20            println(f\"{v.len()}\"); }\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!(
+                    "enum E2 {{ A(R), B }}\n\
+                     struct R {{ id: i64 }}\n\
+                     impl Drop for R {{ fn drop(mut ref self) {{ println(f\"drop R{{self.id}}\") }} }}\n\
+                     {body}"
+                ))
+                .as_deref(),
+                Some("1\ndrop R5\n"),
+                "{label}"
+            );
+        }
+        // BOUNDARY — the payloadless variant of the SAME enum runs nothing.
+        // `E2` has no own body, so there is nothing to run; this is what keeps
+        // the widening from being read as "any enum member fires".
         assert_eq!(
             run_program(
                 "enum E2 { A(R), B }\n\
                  struct R { id: i64 }\n\
                  impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
-                 fn main() { let p = (E2.A(R { id: 5 }), 1); println(f\"{p.1}\"); }\n"
+                 fn main() { let p = (E2.B, 1); println(f\"{p.1}\"); }\n"
             )
             .as_deref(),
             Some("1\n"),
-            "payload-only-enum"
+            "payload-only-unit-variant"
         );
     }
 

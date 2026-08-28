@@ -1449,6 +1449,19 @@ fn main() {
             &["1", "drop E", "drop Rn7"],
             "vec-elem-payload",
         );
+        // B-2026-08-28-54 — a payload-only enum (no own `Drop`). The body that
+        // now runs is the PAYLOAD's, reached without any own-body call, so this
+        // exercises a different call shape than every row above: walker only,
+        // no `<E>.drop`. The `String` it reads is freed by the owner's drop.
+        assert_clean_asan_run(
+            "enum E2 { A(R2), B }\n\
+             struct R2 { id: i64, name: String }\n\
+             impl Drop for R2 { fn drop(mut ref self) { println(f\"drop R{self.name}\") } }\n\
+             fn main() { let p = (E2.A(R2 { id: 5, name: f\"n{5}\" }), 1);\n\
+             \x20            println(f\"{p.1}\"); }\n",
+            &["1", "drop Rn5"],
+            "payload-only-enum",
+        );
         // DESTRUCTURED — the pre-existing path, re-asserted alongside so a
         // regression that double-runs the body shows up as a double free here
         // rather than only as a count in the interpreter suite.
