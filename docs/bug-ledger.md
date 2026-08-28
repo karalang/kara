@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 211 | 4 |
+| leak | 212 | 4 |
 | run-vs-build | 197 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 148 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1147 | 20 |
+| codegen | 1148 | 20 |
 | typecheck | 278 | 0 |
 | interp | 208 | 7 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1708 surfaced · 20 open · 1662 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced · 20 open · 1663 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (20)
 
@@ -181,9 +181,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1708 surfaced
 
 </details>
 
-### Fixed (1662)
+### Fixed (1663)
 
-<details><summary>1662 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1663 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1849,6 +1849,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1708 surfaced
 | B-2026-08-28-17 | interp+codegen | medium | THE STRUCT TWIN of B-2026-08-28-2: returning a field extracted from an owned STRUCT param runs its user `Drop` body TWICE on all three backends -- `s… | f697522 |
 | B-2026-08-28-24 | codegen | high | A TUPLE ELEMENT PROJECTED OUT OF A CONTAINER ELEMENT (`v[0].0`) IS NEVER CLONED AND DOUBLE-FREES ON BOTH COMPILED BACKENDS, AT EVERY POSITION INCLUDI… | 0723acf |
 | B-2026-08-28-30 | interp+codegen | medium | THE B-2026-08-28-12 WILDCARD DISCARD DISAGREES BETWEEN BACKENDS IN TWO OPPOSITE-DIRECTION SHAPES that its fix (429977d) did not cover: an ENUM elemen… | 34b1691 |
+| B-2026-08-28-36 | codegen | medium | A CONTAINER-ELEMENT TUPLE-INDEX READ WHOSE LEAF IS A WHOLE HEAP-CARRYING STRUCT LEAKS ITS CLONE when no destination adopts it: after B-2026-08-28-24… | 54ca269 |
 
 </details>
 
