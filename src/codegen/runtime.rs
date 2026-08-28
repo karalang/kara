@@ -4669,6 +4669,52 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-28-44 — give a branch's merged value an OWNER when one of its
+    /// arm tails handed a container-element clone out.
+    ///
+    /// An arm tail that reads `p[1].word` deep-clones (the container keeps its
+    /// buffer) and registers that clone's own cleanup, so a NON-consuming read
+    /// does not leak. Handing the value out of the arm is a consuming position,
+    /// so the arm-tail suppressor neutralizes that cleanup — correct, the value
+    /// escapes the arm and the arm's slot must not free it. Nothing at the
+    /// merge then owned what escaped, and `println(match c { .. => p[1].word })`
+    /// simply lost the clone: 3 bytes in 1 allocation under LSan, on BOTH
+    /// branch forms and for a by-value call argument as well as `println`.
+    ///
+    /// The owner is registered here and recorded under the branch NODE's span,
+    /// so the destinations that DO take ownership take it over through the same
+    /// funnel every other consuming position uses — a `let` init, a `Vec.push`
+    /// argument, a `return`. Without that half this trades the leak for a double
+    /// free, because those destinations own the same buffer. `println` and a
+    /// plain call argument never call the funnel, which is exactly why they were
+    /// the leaking positions and why the owner is what they need.
+    ///
+    /// A no-op unless an arm actually took a clone over, which is what makes it
+    /// safe to call unconditionally at every merge.
+    pub(super) fn own_branch_merged_clone(
+        &mut self,
+        merged: BasicValueEnum<'ctx>,
+        elem_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+    ) {
+        let Some(span) = self.current_branch_expr_span else {
+            return;
+        };
+        // Only a `{ptr,len,cap}` value has a buffer to own; anything else the
+        // arms could hand out is either scalar or owned elsewhere already.
+        if merged.get_type() != self.vec_struct_type().into() {
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(fn_val, "branchown", self.vec_struct_type().into());
+        if self.builder.build_store(slot, merged).is_err() {
+            return;
+        }
+        self.track_vec_var(slot, elem_ty);
+        self.branch_tail_owner_slots.insert(span, slot);
+    }
+
     /// Will anything OWN the value this branch expression produces?
     ///
     /// `head` is the branch's condition (`if`) or scrutinee (`if let` / `match`)

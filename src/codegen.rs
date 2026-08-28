@@ -1466,6 +1466,36 @@ pub(super) struct Codegen<'ctx> {
     /// binding to look up.
     pub(crate) vec_elem_field_clone_slots:
         std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
+    /// B-2026-08-28-44 — the element type each `vec_elem_field_clone_slots`
+    /// clone was tracked with (`i8` for a `String`, the inner LLVM shape for a
+    /// `Vec[U]`), so a BRANCH MERGE can re-register an equivalent cleanup for
+    /// the value its arms hand out. The arm tail neutralizes its own clone —
+    /// correct, the value escapes the arm — and until this existed nothing at
+    /// the merge owned what escaped, so `println(match c { .. => p[1].word })`
+    /// simply lost the clone.
+    pub(crate) vec_elem_field_clone_elem_ty:
+        std::collections::HashMap<(usize, usize), Option<inkwell::types::BasicTypeEnum<'ctx>>>,
+    /// B-2026-08-28-44 — set by `suppress_source_vec_cleanup_for_arg_ex` each
+    /// time it neutralizes such a clone, so the enclosing `if` / `match` can
+    /// tell that one of its arm tails handed a container-element clone out.
+    /// Read-and-cleared by the branch compilers, which is why it is a flag
+    /// rather than a set: the question is only ever asked about the arm that
+    /// was just compiled.
+    pub(crate) branch_arm_clone_taken: Option<Option<inkwell::types::BasicTypeEnum<'ctx>>>,
+    /// B-2026-08-28-44 — merge-point owner slots, keyed by the branch
+    /// EXPRESSION's span (not the condition/scrutinee's), so a consuming
+    /// destination takes the merged value over through the usual funnel and
+    /// leaves exactly one owner. A `let` init, a `Vec.push` argument and a
+    /// `return` all already call it; `println` does not, which is precisely the
+    /// position that was leaking.
+    pub(crate) branch_tail_owner_slots:
+        std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
+    /// The span of the `if` / `match` expression currently being lowered.
+    /// `compile_if` / `compile_match` are handed the condition and the arms,
+    /// never the branch node itself, so `compile_expr` stashes it here on the
+    /// way in — the same reason `discarded_branch_spans` is keyed on the
+    /// condition instead.
+    pub(crate) current_branch_expr_span: Option<(usize, usize)>,
     /// B-2026-08-28-36 — the STRUCT-leaf peer of `vec_elem_field_clone_slots`:
     /// clones made by `clone_vec_elem_tuple_index_read` when the projected leaf
     /// is a whole heap-carrying user struct rather than a `{ptr,len,cap}`,
@@ -5740,6 +5770,10 @@ impl<'ctx> Codegen<'ctx> {
                 drop_fn_cache: HashMap::new(),
             },
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
+            vec_elem_field_clone_elem_ty: std::collections::HashMap::new(),
+            branch_arm_clone_taken: None,
+            branch_tail_owner_slots: std::collections::HashMap::new(),
+            current_branch_expr_span: None,
             container_elem_struct_clone_slots: std::collections::HashMap::new(),
             freshtemp_tuple_elem_slots: std::collections::HashMap::new(),
             deferred_shared_temp_release: None,

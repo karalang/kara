@@ -4262,6 +4262,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_vec_var(dst, elem_ty);
         self.vec_elem_field_clone_slots
             .insert((expr.span.offset, expr.span.length), dst);
+        self.vec_elem_field_clone_elem_ty
+            .insert((expr.span.offset, expr.span.length), elem_ty);
         // B-2026-08-12-33 — record the clone in emission order too, so an
         // index-assign's displaced-element drop can tell a clone emitted
         // *while compiling its own RHS* from one emitted anywhere else.
@@ -4399,6 +4401,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_vec_var(dst, elem_ty);
         self.vec_elem_field_clone_slots
             .insert((expr.span.offset, expr.span.length), dst);
+        self.vec_elem_field_clone_elem_ty
+            .insert((expr.span.offset, expr.span.length), elem_ty);
         self.vec_elem_field_clone_log
             .push((expr.span.offset, expr.span.length));
         Ok(self
@@ -4541,6 +4545,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_vec_var(dst, member_elem_ty);
             self.vec_elem_field_clone_slots
                 .insert((expr.span.offset, expr.span.length), dst);
+            self.vec_elem_field_clone_elem_ty
+                .insert((expr.span.offset, expr.span.length), member_elem_ty);
             self.vec_elem_field_clone_log
                 .push((expr.span.offset, expr.span.length));
         } else if let TypeKind::Path(mp) = &mte.kind {

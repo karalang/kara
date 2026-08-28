@@ -57,6 +57,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(scrutinee);
+        // B-2026-08-28-44 — see the `compile_if` sibling: only what THIS
+        // match's arms hand out may arm the merge-point owner.
+        self.branch_arm_clone_taken = None;
         // Slice 3b: when the scrutinee is a ref-typed identifier
         // (function parameter `f: ref T` / `mut ref T`), obtain the raw
         // scrutinee pointer in addition to the auto-derefed value.
@@ -1066,7 +1069,12 @@ impl<'ctx> super::Codegen<'ctx> {
             for (val, bb) in &arm_results {
                 phi.add_incoming(&[(val, *bb)]);
             }
-            return Ok(phi.as_basic_value());
+            let merged = phi.as_basic_value();
+            // B-2026-08-28-44 — own what an arm tail handed out.
+            if let Some(elem_ty) = self.branch_arm_clone_taken.take() {
+                self.own_branch_merged_clone(merged, elem_ty);
+            }
+            return Ok(merged);
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())

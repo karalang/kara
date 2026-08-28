@@ -1042,7 +1042,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 condition,
                 then_block,
                 else_branch,
-            } => self.compile_if(condition, then_block, else_branch.as_deref()),
+            } => {
+                // B-2026-08-28-44 — stash the branch NODE's span; `compile_if`
+                // is handed the condition and the blocks, never the node, and
+                // the merge-point owner has to be keyed by the span a consuming
+                // destination will look up (the whole `if`, not its condition).
+                let prev = self
+                    .current_branch_expr_span
+                    .replace((expr.span.offset, expr.span.length));
+                let r = self.compile_if(condition, then_block, else_branch.as_deref());
+                self.current_branch_expr_span = prev;
+                r
+            }
             ExprKind::While {
                 label,
                 condition,
@@ -1773,7 +1784,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(casted)
             }
-            ExprKind::Match { scrutinee, arms } => self.compile_match(scrutinee, arms),
+            ExprKind::Match { scrutinee, arms } => {
+                let prev = self
+                    .current_branch_expr_span
+                    .replace((expr.span.offset, expr.span.length));
+                let r = self.compile_match(scrutinee, arms);
+                self.current_branch_expr_span = prev;
+                r
+            }
             ExprKind::For {
                 label,
                 pattern,

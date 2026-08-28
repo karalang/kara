@@ -7818,10 +7818,37 @@ impl<'ctx> super::Codegen<'ctx> {
         // so the destination takes that one element over and the temp's drop
         // frees only the remainder.
         self.take_over_freshtemp_tuple_elem(arg_expr);
+        // B-2026-08-28-44 — the BRANCH-MERGE owner, taken over exactly like the
+        // per-read clone below. `println(match c { .. => p[1].word })` leaks
+        // without the owner; `let d = match …` double-frees without this
+        // takeover, because the binding owns the same buffer.
+        if let Some(slot) = self
+            .branch_tail_owner_slots
+            .get(&(arg_expr.span.offset, arg_expr.span.length))
+        {
+            if let Ok(cap_ptr) =
+                self.builder
+                    .build_struct_gep(self.vec_struct_type(), *slot, 2, "branchown.cap")
+            {
+                let _ = self
+                    .builder
+                    .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+            }
+            return;
+        }
         if let Some(slot) = self
             .vec_elem_field_clone_slots
             .get(&(arg_expr.span.offset, arg_expr.span.length))
         {
+            // Tell an enclosing branch compiler that this arm tail handed a
+            // container-element clone out, and with which element type, so the
+            // merge can own what escaped.
+            self.branch_arm_clone_taken = Some(
+                self.vec_elem_field_clone_elem_ty
+                    .get(&(arg_expr.span.offset, arg_expr.span.length))
+                    .copied()
+                    .flatten(),
+            );
             if let Ok(cap_ptr) =
                 self.builder
                     .build_struct_gep(self.vec_struct_type(), *slot, 2, "vfld.clone.cap")

@@ -1980,6 +1980,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Keyed on the condition's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(condition);
         let cond_val = self.compile_expr(condition)?.into_int_value();
+        // B-2026-08-28-44 — clear any takeover signal left by an unrelated
+        // expression compiled before this branch; only what THIS branch's arms
+        // hand out may arm the merge-point owner.
+        self.branch_arm_clone_taken = None;
         let fn_val = self.current_fn.unwrap();
         let then_bb = self.context.append_basic_block(fn_val, "then");
         let else_bb = self.context.append_basic_block(fn_val, "else");
@@ -2097,7 +2101,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
                         phi.add_incoming(&[(&tv, then_end_bb), (&ev, else_end_bb)]);
-                        return Ok(phi.as_basic_value());
+                        let merged = phi.as_basic_value();
+                        // B-2026-08-28-44 — own what an arm tail handed out.
+                        if let Some(elem_ty) = self.branch_arm_clone_taken.take() {
+                            self.own_branch_merged_clone(merged, elem_ty);
+                        }
+                        return Ok(merged);
                     }
                 }
                 Ok(placeholder)

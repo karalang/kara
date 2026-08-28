@@ -125,6 +125,103 @@ mod memory_sanitizer_tests {
         run_under_asan_opts(src, label, false, false, true)
     }
 
+    /// A container-element heap read handed out of a BRANCH VALUE gets an owner
+    /// at the merge (B-2026-08-28-44).
+    ///
+    /// An arm tail that reads `p[1].word` deep-clones — the container keeps its
+    /// own buffer — and registers that clone's cleanup so a NON-consuming read
+    /// does not leak. Handing the value out of the arm is a consuming position,
+    /// so the arm-tail suppressor neutralizes that cleanup; correct, because the
+    /// arm's slot must not free what escaped it. Nothing at the merge then owned
+    /// the escaping value, and the clone was simply lost: 3 bytes in 1
+    /// allocation under LSan.
+    ///
+    /// BOTH BRANCH FORMS ARE HERE because both leak, and that is worth pinning.
+    /// The row this fixture closes was filed claiming the `if` spelling was
+    /// clean and only `match` leaked; re-measuring found the opposite split on
+    /// its own fixtures and NO split at all once the consumer is held fixed.
+    /// The axis is the CONSUMER, not the construct, so the matrix is spelled out
+    /// rather than sampled.
+    ///
+    /// The two LEAKING consumer positions:
+    ///   - `println(<branch>)`, which borrows and never takes the clone over
+    ///   - a by-value call argument, which under this codegen leaves the caller
+    ///     owning the buffer and so never takes it over either
+    ///
+    /// The three OWNING positions are the controls, and they are not decoration
+    /// — each is a DOUBLE FREE if the merge owner is added without the takeover
+    /// half, because the destination owns the same buffer:
+    ///   - a `let` binding
+    ///   - a `Vec.push` argument
+    ///   - a `return` (the `pick` calls), which hands the value to the caller
+    ///
+    /// The DISCARDED statement rows are the fourth corner: `discarded_branch_-
+    /// spans` means no clone is made there at all, so the merge must find
+    /// nothing to own. A merge owner armed on a discard would free a buffer the
+    /// container still holds, which the trailing reads of `p` would then catch
+    /// as a use-after-free rather than a leak.
+    ///
+    /// Both `p[0].word` and `p[1].word` stay readable at the end, which is what
+    /// keeps "the read cloned" honest: if the read ever stopped cloning, these
+    /// would turn into a use-after-free instead of quietly passing.
+    #[test]
+    fn asan_branch_value_owns_the_container_element_clone_it_hands_out() {
+        assert_clean_asan_run(
+            r#"
+struct P { word: String, n: i64 }
+
+fn mkp() -> Vec[P] {
+    return [P { word: f"a{1}", n: 1 }, P { word: f"b{2}", n: 2 }];
+}
+
+fn use_it(s: String) -> i64 { return s.len(); }
+
+fn pick_if(ps: ref Vec[P], c: bool) -> String {
+    return if c { ps[0].word } else { ps[1].word };
+}
+
+fn pick_match(ps: ref Vec[P], c: bool) -> String {
+    return match c { true => ps[0].word, false => ps[1].word };
+}
+
+fn main() {
+    let p = mkp();
+    let c = p[0].n == 1;
+
+    println(if c { p[0].word } else { p[1].word });
+    println(match c { true => p[0].word, false => p[1].word });
+
+    println(f"{use_it(if c { p[0].word } else { p[1].word })}");
+    println(f"{use_it(match c { true => p[0].word, false => p[1].word })}");
+
+    let d = if c { p[0].word } else { p[1].word };
+    println(d);
+    let e = match c { true => p[0].word, false => p[1].word };
+    println(e);
+
+    let mut out: Vec[String] = Vec.new();
+    out.push(if c { p[0].word } else { p[1].word });
+    out.push(match c { true => p[0].word, false => p[1].word });
+    println(out[0]);
+    println(out[1]);
+
+    println(pick_if(p, c));
+    println(pick_match(p, c));
+
+    if c { p[0].word } else { p[1].word };
+    match c { true => p[0].word, false => p[1].word };
+
+    println(p[0].word);
+    println(p[1].word);
+}
+"#,
+            &[
+                "a1", "a1", "2", "2", "a1", "a1", "a1", "a1", "a1", "a1", "a1", "b2",
+            ],
+            "asan_branch_value_owns_the_container_element_clone_it_hands_out",
+        );
+    }
+
     /// A fresh `Array[T, N]` temporary compared with `==` drops its elements
     /// (B-2026-08-27-30).
     ///
