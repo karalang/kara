@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 215 | 2 |
-| run-vs-build | 202 | 7 |
+| run-vs-build | 203 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 150 | 0 |
 | codegen-gap | 147 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 73 | 5 |
+| soundness | 74 | 6 |
 | other | 63 | 0 |
 | crash | 60 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1160 | 13 |
+| codegen | 1162 | 15 |
 | typecheck | 278 | 0 |
-| interp | 216 | 8 |
+| interp | 218 | 10 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced · 14 open · 1683 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1725 surfaced · 16 open · 1683 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (16)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -144,6 +144,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1723 surfaced
 | B-2026-08-28-48 | 2026-08-28 | interp | low | A DISCARDED PAYLOAD-BEARING ENUM CTOR IN BARE STATEMENT POSITION LOSES ITS PAYLOAD'S `Drop` BODY IN THE INTERPRETER: `E.A(R { id: 41 });` is interp 1 / compiled 2, the statement-position twin of the `let _ =` shape B-2026-08-28-39 settled at two | — |
 | B-2026-08-28-49 | 2026-08-28 | codegen | low | TWO RESIDUALS OF B-2026-08-28-20, both pre-existing and measured identical before and after that row's fix. (1) The BOUND spelling `let h = make_outer(14).inner; println(h.tag);` leaks 3 bytes at -O2 and is CLEAN at -O0 -- a cleanup that runs but does not walk the field, not a missing dec. (2) A program with MORE THAN ONE shared-temp field read leaks exactly ONE box regardless of how many: one read is clean, two leak 42/2, three still leak 42/2, and a three-iteration loop leaks 84/4. A count flat in the straight-line case and growing in the loop points at a single slot or once-only emission being reused -- `deferred_shared_temp_release` is a single `Option` with a `debug_assert!` guarding exactly that reuse, and is the first thing to rule in or out. | — |
 | B-2026-08-28-50 | 2026-08-28 | codegen | medium | AN UNBOUND DESTRUCTURE FIELD WHOSE TYPE HAS NO `Drop` LEAKS ON A STRUCT-LITERAL SOURCE: `let W { r: _, n } = W { r: R { .. }, n: 1 }` where `R` carries a `Vec[String]` and declares no `Drop` loses 98 bytes on both compiled backends, while the same field over a CALL source or a PLACE source is clean -- the source axis B-2026-08-28-29 fixed for BODIES, still open for the memory of a Drop-free type | — |
+| B-2026-08-28-51 | 2026-08-28 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k: bool) -> R { let r = R { id: 41 }; if k { r } else { R { id: 99 } } }` with `k = true` prints `drop 41` / `41` / `drop 41`. This is the OVER-SCHEDULE horn of B-2026-08-28-22's mechanism -- `merge_outer_states` deliberately re-marks a conditionally-moved place `Owned` and relies on a runtime cap/null guard that exists for MEMORY and does not exist for a user `Drop` BODY -- and it refutes that row's premise that the tree uniformly picked the missed-body direction | — |
+| B-2026-08-28-52 | 2026-08-28 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R { let r = R { id: 41 }; if k { return r } R { id: 99 } }`) double-runs the body in the INTERPRETER when the branch is taken, and LOSES the body in CODEGEN when it is not. The interpreter is on the over-schedule horn of B-2026-08-28-22's mechanism and codegen is on the under-schedule horn, for the same binding | — |
 
 ### Relocated (2)
 
