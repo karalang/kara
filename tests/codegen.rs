@@ -8511,6 +8511,96 @@ fn main() {
         assert_eq!(out, "41400\n");
     }
 
+    /// B-2026-08-27-53 — a `Slice[T]` parameter fed from a field of a
+    /// BORROWED binding: `head(self.xs)` in an impl method, `head(g.xs)` for
+    /// `g: ref Bag[T]`, and `head(w.b.xs)` one hop deeper.
+    ///
+    /// `coerce_to_slice`'s place arm resolves the header through
+    /// `field_chain_place_ptr`, which BAILS when the chain's root is a
+    /// `ref`/`mut ref` param or a `ref self` receiver — correctly, for its
+    /// other callers, which suppress move-outs and must not write through a
+    /// borrow the callee does not own. The coercion read that `None` as
+    /// "carry on" and forwarded a raw 3-word `{ptr,len,cap}` to the 2-word
+    /// `Slice[T]` formal, so LLVM module verification hard-failed and the
+    /// program did not build at all — on a shape the interpreter runs.
+    ///
+    /// The row that reported this named a GENERIC-impl method, but genericity
+    /// is not the axis: a plain `impl` and a plain `ref` param failed
+    /// identically, while an OWNED param of the same struct built and ran.
+    /// The arms here pin the borrow axis rather than the generic one — a
+    /// generic impl receiver, a generic `ref` param, both element types, and
+    /// a two-hop chain whose owned spelling already built. Twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_slice_param_from_a_borrowed_field_place`.
+    #[test]
+    fn e2e_slice_param_from_a_borrowed_field_place() {
+        let Some(out) = run_program(
+            r#"struct Bag[=T] { xs: Vec[T] }
+struct Wrap { b: Bag[i64] }
+fn head[T](s: Slice[T]) -> T { return s[0]; }
+fn via_ref[T](g: ref Bag[T]) -> T { return head(g.xs); }
+fn nested(w: ref Wrap) -> i64 { return head(w.b.xs); }
+impl[T] Bag[T] {
+    fn first(ref self) -> T { return head(self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(a.first());
+    println(via_ref(a));
+    let mut n: Bag[i64] = Bag { xs: Vec.new() };
+    n.xs.push(7); n.xs.push(8);
+    println(f"{n.first()}");
+    println(f"{via_ref(n)}");
+    let w: Wrap = Wrap { b: n };
+    println(f"{nested(w)}");
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "aa\naa\n7\n7\n7\nend\n");
+    }
+
+    /// B-2026-08-27-53, write leg — the same coercion at a `mut Slice[i64]`
+    /// formal, through `mut ref self` and through a named `mut ref` param.
+    ///
+    /// Load-bearing for the same reason the `mut` arms of
+    /// `e2e_slice_param_from_a_place_argument` are: a header built over a COPY
+    /// of the borrowed struct would compile and read back fine while silently
+    /// dropping every write. `go` then `poke` each add 100 to element 0, so
+    /// the printed `101` and `201` are what prove the header points at the
+    /// caller's real buffer, and `a.xs[1]` staying `2` proves the write landed
+    /// at the right offset. Twin of `tests/interpreter.rs`'s
+    /// `test_mut_slice_param_from_a_borrowed_field_place`.
+    #[test]
+    fn e2e_mut_slice_param_from_a_borrowed_field_place() {
+        let Some(out) = run_program(
+            r#"struct Bag { xs: Vec[i64] }
+fn bump(s: mut Slice[i64]) { s[0] = s[0] + 100; }
+fn head(s: Slice[i64]) -> i64 { return s[0]; }
+fn poke(b: mut ref Bag) { bump(b.xs); }
+impl Bag {
+    fn go(mut ref self) { bump(mut self.xs); }
+    fn peek(ref self) -> i64 { return head(self.xs); }
+}
+fn main() {
+    let mut a: Bag = Bag { xs: Vec.new() };
+    a.xs.push(1); a.xs.push(2);
+    a.go();
+    println(f"{a.peek()}");
+    poke(mut a);
+    println(f"{a.peek()} {a.xs[1]}");
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "101\n201 2\nend\n");
+    }
+
     /// B-2026-08-05-40 — a `Slice[T]` parameter fed from a PLACE.
     ///
     /// `coerce_to_slice` understood a bare identifier, a range index, a

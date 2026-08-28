@@ -9782,7 +9782,101 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.arg_is_vec_header_place(arg) {
             return None;
         }
-        self.field_chain_place_ptr(arg)
+        if let Some(ptr) = self.field_chain_place_ptr(arg) {
+            return Some(ptr);
+        }
+        // B-2026-08-27-53 — `field_chain_place_ptr` BAILS when the field's base
+        // is a `ref`/`mut ref` param or a `ref self` receiver, and is right to:
+        // its other callers suppress move-outs, and writing through a borrow
+        // the callee does not own is what B-2026-07-21-5/-6 corrupted. Its doc
+        // names the way out for a caller that needs a real place through a
+        // borrow — load the slot explicitly — and this is that caller. Reading
+        // two words to build a slice header mutates nothing, so the hazard the
+        // bail exists for cannot arise here.
+        self.borrowed_field_vec_header_ptr(arg)
+    }
+
+    /// The Vec header inside a struct reached through a BORROWED root —
+    /// `head(self.xs)` in an impl method, `head(b.xs)` for `b: ref Bag`, and
+    /// the same one hop deeper (`head(o.inner.xs)`).
+    ///
+    /// A `ref`/`mut ref` slot holds a POINTER to the caller's aggregate rather
+    /// than the aggregate, so the field's address is one load further in; this
+    /// is `mem_place_ptr_and_value`'s ref-param arm applied to a field chain.
+    /// Without it `coerce_to_slice`'s place arm declined, the caller read
+    /// `None` as "carry on", and a raw 3-word `{ptr,len,cap}` was forwarded to
+    /// the 2-word `Slice[T]` formal — LLVM module verification hard-failed on
+    /// EVERY program of this shape. Genericity is not a factor: a plain `impl`
+    /// and a plain `ref` param failed identically, which is why this sits on
+    /// the borrow axis and not on the monomorphization one.
+    ///
+    /// Recurses so a chain matches what the OWNED root already accepts —
+    /// `field_chain_place_ptr` walks `o.inner.xs` for an owned `o`, and
+    /// stopping at one hop here would have left the borrowed spelling of a
+    /// shape that already builds still failing verification.
+    fn borrowed_field_vec_header_ptr(&mut self, arg: &Expr) -> Option<PointerValue<'ctx>> {
+        if !matches!(arg.kind, ExprKind::FieldAccess { .. }) {
+            return None;
+        }
+        self.borrowed_place_chain_ptr(arg)
+    }
+
+    /// Place pointer for a field chain whose ROOT is a `ref`/`mut ref` binding,
+    /// dereferencing that root and GEPing each hop.
+    ///
+    /// `None` unless the walk bottoms out at a borrowed root, which is what
+    /// keeps this off the owned path: `place_vec_header_ptr` consults
+    /// `field_chain_place_ptr` first, and that already resolves every owned
+    /// spelling. Reads only — the caller builds a slice header from two words
+    /// of the result and writes nothing, so the ownership hazard behind
+    /// `field_chain_place_ptr`'s borrowed-root bail cannot arise.
+    ///
+    /// Field hops only. An `Index` hop (`b.items[0].xs`) would have to
+    /// re-evaluate the subscript to recompute the element pointer, the same
+    /// purity question `field_chain_place_ptr`'s own `Index` arm gates on, and
+    /// no measurement backs answering it here.
+    fn borrowed_place_chain_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+        match &expr.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => {
+                let root = match &expr.kind {
+                    ExprKind::Identifier(n) => n.clone(),
+                    _ => "self".to_string(),
+                };
+                if !self.borrow_vars.ref_params.contains_key(root.as_str()) {
+                    return None;
+                }
+                let slot = self.variables.get(root.as_str())?.ptr;
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                Some(
+                    self.builder
+                        .build_load(ptr_ty, slot, &format!("{root}.deref.place"))
+                        .ok()?
+                        .into_pointer_value(),
+                )
+            }
+            ExprKind::FieldAccess { object, field } => {
+                let tn = self.place_chain_type_name(object)?;
+                // A `shared`/`par` hop's box layout is the neighbouring arm's
+                // job (B-2026-08-06-4); GEPing it as the plain aggregate would
+                // read past the handle — the same guard
+                // `arg_is_vec_header_place` applies at the outer level.
+                if self.type_decls.shared_types.contains_key(tn.as_str()) {
+                    return None;
+                }
+                let st = self.type_decls.struct_types.get(tn.as_str()).copied()?;
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(tn.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let base = self.borrowed_place_chain_ptr(object)?;
+                self.builder
+                    .build_struct_gep(st, base, idx as u32, &format!("{field}.place"))
+                    .ok()
+            }
+            _ => None,
+        }
     }
 
     /// The type-check half of [`Self::place_vec_header_ptr`], emitting no IR.

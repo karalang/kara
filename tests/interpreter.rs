@@ -31915,6 +31915,67 @@ fn test_param_struct_destructure_single_caller_fire() {
     );
 }
 
+/// B-2026-08-27-53 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_slice_param_from_a_borrowed_field_place`, same source and string.
+/// The interpreter always ran this shape; codegen could not BUILD it (LLVM
+/// module verification rejected a 3-word Vec header at a 2-word `Slice[T]`
+/// formal), so this side is the parity target the coercion fix meets.
+#[test]
+fn test_slice_param_from_a_borrowed_field_place() {
+    assert_eq!(
+        run(r#"struct Bag[=T] { xs: Vec[T] }
+struct Wrap { b: Bag[i64] }
+fn head[T](s: Slice[T]) -> T { return s[0]; }
+fn via_ref[T](g: ref Bag[T]) -> T { return head(g.xs); }
+fn nested(w: ref Wrap) -> i64 { return head(w.b.xs); }
+impl[T] Bag[T] {
+    fn first(ref self) -> T { return head(self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(a.first());
+    println(via_ref(a));
+    let mut n: Bag[i64] = Bag { xs: Vec.new() };
+    n.xs.push(7); n.xs.push(8);
+    println(f"{n.first()}");
+    println(f"{via_ref(n)}");
+    let w: Wrap = Wrap { b: n };
+    println(f"{nested(w)}");
+    println("end");
+}
+"#),
+        "aa\naa\n7\n7\n7\nend\n"
+    );
+}
+
+/// B-2026-08-27-53, write leg — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_mut_slice_param_from_a_borrowed_field_place`, same source and string.
+#[test]
+fn test_mut_slice_param_from_a_borrowed_field_place() {
+    assert_eq!(
+        run(r#"struct Bag { xs: Vec[i64] }
+fn bump(s: mut Slice[i64]) { s[0] = s[0] + 100; }
+fn head(s: Slice[i64]) -> i64 { return s[0]; }
+fn poke(b: mut ref Bag) { bump(b.xs); }
+impl Bag {
+    fn go(mut ref self) { bump(mut self.xs); }
+    fn peek(ref self) -> i64 { return head(self.xs); }
+}
+fn main() {
+    let mut a: Bag = Bag { xs: Vec.new() };
+    a.xs.push(1); a.xs.push(2);
+    a.go();
+    println(f"{a.peek()}");
+    poke(mut a);
+    println(f"{a.peek()} {a.xs[1]}");
+    println("end");
+}
+"#),
+        "101\n201 2\nend\n"
+    );
+}
+
 /// B-2026-08-27-48 — a struct DESTRUCTURED out of an owned TUPLE param
 /// (`let (r, n) = p;`) fires its user `Drop` body ONCE, not twice. Pre-fix
 /// the interpreter registered Drop slots for the bindings the tuple pattern
