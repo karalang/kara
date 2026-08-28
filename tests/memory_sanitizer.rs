@@ -57697,6 +57697,86 @@ fn main() {
         );
     }
 
+    /// A heap field read off a FIELD-ROOTED container is cloned —
+    /// `h.xs[0].name` and its `ref self` twin `self.xs[0].name`
+    /// (B-2026-08-28-42).
+    ///
+    /// `clone_vec_elem_heap_field_read` gated its container on
+    /// `ExprKind::Identifier`, so a field-rooted one declined the clone and the
+    /// read handed out a shallow alias of the element's buffer: `free(): double
+    /// free detected in tcache 2`, rc 134, on both compiled backends, from a
+    /// `karac check`-clean program the interpreter answered correctly.
+    ///
+    /// THE IDENTIFIER ROW IS THE CONTROL THAT LOCATES IT. The identical read
+    /// off a bare local `Vec[R]` was always clean, so neither the read nor the
+    /// element type is the variable — only the container's ROOT is. Keeping
+    /// both spellings here is what would catch a future change that fixes one
+    /// and regresses the other.
+    ///
+    /// The TUPLE spelling (`h.ps[0].0.name`) is here because the same gate is
+    /// duplicated in the tuple-index cloner, and the two were widened in
+    /// lockstep: a fix applied to only one leaves the pair disagreeing about
+    /// which containers own their elements.
+    ///
+    /// The argument and non-consuming rows are the other direction — this clone
+    /// carries its own cleanup, so a read nothing takes over must free it. They
+    /// were clean BEFORE the fix (an owned aggregate param is callee-owned by
+    /// entry copy, and a borrow frees nothing), which makes them the rows that
+    /// fail if the clone is registered without a takeover.
+    #[test]
+    fn test_field_rooted_container_heap_field_read_is_cloned() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct H { xs: Vec[R], k: i64 }
+struct H2 { ps: Vec[(R, i64)], k: i64 }
+struct Box2 { w: String }
+
+fn sink(s: String) -> i64 { return s.len(); }
+
+impl H { fn peek(ref self) -> String { return self.xs[0].name; } }
+impl H2 { fn peek(ref self) -> String { return self.ps[0].0.name; } }
+
+fn main() {
+    // the identifier-rooted control, always clean
+    let v: Vec[R] = [R { id: 8, name: f"m{8}" }];
+    let c = v[0].name;
+    println(c);
+    println(v[0].name);
+
+    let h = H { xs: [R { id: 8, name: f"m{8}" }], k: 1 };
+    // consuming positions
+    let s = h.xs[0].name;
+    println(s);
+    let b = Box2 { w: h.xs[0].name };
+    println(b.w);
+    let mut o: Vec[String] = Vec.new();
+    o.push(h.xs[0].name);
+    println(o[0]);
+    println(h.peek());
+    // non-consuming reads: the clone must free itself
+    println(sink(h.xs[0].name));
+    println(h.xs[0].name + "!");
+    println(h.xs[0].id);
+    // the container's element survives all of it
+    println(h.xs[0].name);
+
+    // the tuple spelling shares the gate
+    let h2 = H2 { ps: [(R { id: 9, name: f"p{9}" }, 1)], k: 1 };
+    let t = h2.ps[0].0.name;
+    println(t);
+    println(h2.peek());
+    println(h2.ps[0].0.name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "m8", "m8", "m8", "m8", "m8", "m8", "2", "m8!", "8", "m8", "p9", "p9", "p9",
+            ],
+            "field-rooted-container-heap-field-read",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///

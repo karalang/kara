@@ -4011,7 +4011,26 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(&index.kind, ExprKind::Range { .. }) {
             return Ok(val);
         }
-        let ExprKind::Identifier(cname) = &container.kind else {
+        // B-2026-08-28-42 — the container may be a FIELD (`h.xs[0].name`,
+        // `self.xs[0].name`) as well as a bare local. This gate accepted only
+        // an identifier, so a field-rooted container declined the clone and the
+        // read handed out a shallow alias of the element's buffer: `free():
+        // double free detected in tcache 2`, rc 134, on both compiled backends
+        // at `let` and at `return`, while `karac check` passed and the
+        // interpreter printed the field twice. The identifier spelling of the
+        // same read was clean, which is what isolates the ROOT rather than the
+        // read.
+        //
+        // What this gate is really asking — "is this an owning Vec / Slice /
+        // Map, so the element's heap has an owner that will free it" — is
+        // answered for a field from its DECLARED type rather than from a
+        // per-variable registry keyed on a name. `vec_index_elem_type_expr`
+        // below already resolves exactly that for a FieldAccess root (its
+        // `self.toks[i]` arm, with monomorph substitution) and is required to
+        // succeed a few lines down regardless, so a field that is not a
+        // collection still declines there. Fail-closed, and no second copy of
+        // the rule.
+        let (ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }) = &container.kind else {
             return Ok(val);
         };
         // B-2026-08-13-5 — an owning Vec, a SLICE, or a MAP. The container must
@@ -4040,11 +4059,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // diverging from it, which is also what the language says: a read off a
         // container is a COPY on both backends (mutating `let mut p = xs[0]`
         // leaves the lender's element untouched — measured, both containers).
-        if !self.var_types.slice_elem_types.contains_key(cname.as_str())
-            && !self.mapset.map_key_types.contains_key(cname.as_str())
-            && !self.var_types.vec_elem_types.contains_key(cname.as_str())
-        {
-            return Ok(val);
+        if let ExprKind::Identifier(cname) = &container.kind {
+            if !self.var_types.slice_elem_types.contains_key(cname.as_str())
+                && !self.mapset.map_key_types.contains_key(cname.as_str())
+                && !self.var_types.vec_elem_types.contains_key(cname.as_str())
+            {
+                return Ok(val);
+            }
         }
         // The element must be a non-shared user struct, and the field a direct
         // `{ptr,len,cap}` heap value — the shape whose alias was measured.
@@ -4459,14 +4480,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // same three the sibling accepts, and for the reason recorded there:
         // not cloning is not the safe side for a slice or a map either, and the
         // clone carries its own cleanup so it is not a leak.
-        let ExprKind::Identifier(cname) = &container.kind else {
+        // B-2026-08-28-42 — a FIELD-rooted container here too, for the reason
+        // and by the mechanism recorded on the sibling above. Widened in
+        // lockstep so the two spellings of the same read cannot disagree about
+        // which containers own their elements.
+        let (ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }) = &container.kind else {
             return Ok(val);
         };
-        if !self.var_types.slice_elem_types.contains_key(cname.as_str())
-            && !self.mapset.map_key_types.contains_key(cname.as_str())
-            && !self.var_types.vec_elem_types.contains_key(cname.as_str())
-        {
-            return Ok(val);
+        if let ExprKind::Identifier(cname) = &container.kind {
+            if !self.var_types.slice_elem_types.contains_key(cname.as_str())
+                && !self.mapset.map_key_types.contains_key(cname.as_str())
+                && !self.var_types.vec_elem_types.contains_key(cname.as_str())
+            {
+                return Ok(val);
+            }
         }
         let Some(TypeKind::Tuple(elems)) =
             self.vec_index_elem_type_expr(container).map(|te| te.kind)
