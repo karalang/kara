@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 212 | 3 |
-| run-vs-build | 197 | 8 |
+| run-vs-build | 198 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 149 | 1 |
 | codegen-gap | 147 | 2 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1149 | 18 |
+| codegen | 1150 | 18 |
 | typecheck | 278 | 0 |
-| interp | 208 | 7 |
+| interp | 208 | 6 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1710 surfaced · 18 open · 1666 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1711 surfaced · 18 open · 1667 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (18)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-28-4 | 2026-08-28 | interp+codegen | medium | A tuple-param destructure inside a CLOSURE is wrong on BOTH backends and in OPPOSITE directions: `let f = |p: (R, i64)| { let (r, n) = p; r.id + n };` runs the user `Drop` body TWICE under `karac run --interp` and ZERO times under `karac build`, for one object. The free-fn spelling of the same body is correct (1/1/1) after B-2026-08-27-48, which is what makes the closure the variable | — |
 | B-2026-08-28-10 | 2026-08-28 | codegen | medium | A STRUCT-PATTERN destructure leaf's user `Drop` body is wrong in TWO OPPOSITE DIRECTIONS depending on the source: from a LOCAL it runs TOO EARLY (`drop 41` then `42`, against the interpreter's `42` then `drop 41`), and from a CALL it does not run AT ALL. `struct W { r: R, n: i64 }  let W { r, n } = w;` -- the struct twin of B-2026-08-28-1, whose helper `track_owned_destructure_field_cleanup` ends in the same bare `track_struct_var` tail with no `drop_method_keys` check | — |
 | B-2026-08-28-11 | 2026-08-28 | codegen | medium | A GENERIC struct leaf destructured out of a tuple never runs its Drop-bearing field's body on ANY source path -- local, call result and tuple literal all print it under `karac run --interp` and nothing compiled: `struct Box2[T] { v: T }  let (b, n) = (Box2[R] { v: R { id: 41 } }, 1);`. The leaf has no recorded instantiation, so the field-bodies substitution is empty and `Box2 { v: T }` is judged Drop-free through a bare `T` | — |
 | B-2026-08-28-16 | 2026-08-28 | interp+codegen | medium | The B-2026-08-28-2 double `Drop` body SURVIVES when the tuple argument comes from a LOCAL instead of a literal: `let q = (R { id: 41 }, 1); let x = take(q);` still prints `drop 41` twice on all three backends after d5d7421. Same escaping-part asymmetry, different caller-side site -- the fresh-temp walk never sees a place argument, so this is the moved-out LOCAL's own cleanup firing alongside the result's. The control `-> i64` (returning the other element) is correctly 1 | — |
@@ -148,6 +147,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1710 surfaced
 | B-2026-08-28-32 | 2026-08-28 | codegen | low | A CONTAINER-ELEMENT HEAP READ CONSUMED BY AN UNBOUND TEMPORARY LEAKS: `println(Box2 { w: p[0].word }.w)`, `println((p[1].word, 9).0)`, and printing an `if`/`match`/block value without binding it all lose the deep clone the read emits -- 3 bytes in 1 allocation each under LSan. Pre-existing on the already-working FIELD spelling, which leaks the same shapes for the same byte counts; the BOUND form of every one is clean. The consuming temporary takes the clone over and then dies without freeing it. | — |
 | B-2026-08-28-34 | 2026-08-28 | codegen | medium | A FIELD READ THROUGH A TUPLE ELEMENT OF A CONTAINER ELEMENT never lowers: `v[0].0.id` where `v: Vec[(R, i64)]` fails `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while `karac check` accepts it and the interpreter answers it; binding the element first builds and runs. `place_chain_tuple_tes` has arms for Identifier, FieldAccess and TupleIndex and no `Index` arm, so a tuple held in a container element has no type source. The same resolution surface as B-2026-08-28-3, one source over. | — |
 | B-2026-08-28-37 | 2026-08-28 | codegen | high | A TUPLE-INDEX LEAF read through a BORROWED place double-frees: `fn peek(t: ref Wt) -> String { return t.pair.0; }` where `struct Wt { pair: (String, i64), k: i64 }` aborts with `free(): double free detected in tcache 2` (rc 134) on both compiled backends, while `karac check` passes and `--interp` prints the field twice. The FieldAccess leaf through the same borrowed place (`w.r.name`) is fixed by B-2026-08-28-25; this is the sibling one node kind over, and it never enters that arm because the arm is gated on the OUTERMOST node being a field access. | — |
+| B-2026-08-28-38 | 2026-08-28 | codegen | medium | A CLOSURE'S BY-VALUE STRUCT PARAM RUNS NO USER `Drop` BODY ON EITHER COMPILED BACKEND while the interpreter runs one: `let f = |r: R| { r.id };` and the destructuring `|w: W| { let W { r, n } = w; … }` both print nothing under `karac run` and `karac build` where one `drop 41` is due. The TUPLE-param spelling of the same shape is correct compiled (1/1/1), which localizes this to a closure's struct param rather than to closures generally -- codegen appears not to treat it as an owned param for drop purposes | — |
 
 ### Relocated (2)
 
@@ -179,9 +179,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1710 surfaced
 
 </details>
 
-### Fixed (1666)
+### Fixed (1667)
 
-<details><summary>1666 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1667 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1835,6 +1835,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1710 surfaced
 | B-2026-08-28-1 | codegen | high | BOTH COMPILED BACKENDS RUN NO USER `Drop` BODY AT ALL for a struct DESTRUCTURED out of a tuple that is NOT a param -- a tuple LOCAL or a CALL RESULT:… | 383a723 |
 | B-2026-08-28-2 | interp+codegen | medium | A user `Drop` body runs TWICE FOR ONE OBJECT on ALL THREE BACKENDS when a struct destructured out of a tuple param is RETURNED: `fn take(p: (R, i64))… | d5d7421 |
 | B-2026-08-28-3 | codegen | medium | A STRUCT FIELD READ THROUGH A TUPLE ELEMENT never lowers when the tuple came from a CALL: `let q = make(); q.0.id` (and `make().0.id`) fail `karac bu… | 0f058f1 |
+| B-2026-08-28-4 | interp+codegen | medium | A tuple-param destructure inside a CLOSURE is wrong on BOTH backends and in OPPOSITE directions: `let f = \|p: (R, i64)\| { let (r, n) = p; r.id + n };… | c4d53de |
 | B-2026-08-28-5 | codegen | high | EVERY `bool` COMPARISON INVERTS IN COMPILED CODE: `false < true` answers FALSE and `Vec[bool].sort()` sorts DESCENDING on jit/build/auto-par, while t… | 45d2e1b |
 | B-2026-08-28-6 | codegen | medium | `Vec.binary_search` ACCEPTS EVERY ELEMENT TYPE `sort` DOES BUT LOWERS ONLY INTEGER AND String -- tuples, nested Vec, Array, derived-Ord structs/enums… | 09913ea |
 | B-2026-08-28-7 | codegen | medium | TWO MORE RECEIVER SHAPES the block-receiver fix does not reach, both still `karac check`-clean and interpreter-correct but failing `karac build` with… | dac56eb |
