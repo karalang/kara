@@ -1557,6 +1557,87 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-60 — a tuple binding whose element is a STRUCT carrying a
+    /// `Vec[<heap>]` frees that `Vec`'s elements, not just its buffer.
+    ///
+    /// `tuple_elem_needs_deep_drop` chooses between two whole drop strategies
+    /// for every tuple binding. It admitted an element that IS a `Vec[<heap>]`
+    /// and not one that merely CONTAINS one, so the struct-wrapped spelling
+    /// took the LLVM-type drop — which reaches the `{ptr,len,cap}` buffer and
+    /// cannot see whether the elements behind it are scalars or `String`s.
+    ///
+    /// THE TWO SPELLINGS SIDE BY SIDE ARE THE DIAGNOSIS, and `direct-vec-elem`
+    /// is here because it was already correct: one ownership question answered
+    /// two ways, with the difference being only whether a struct sits between
+    /// the tuple and the `Vec`.
+    ///
+    /// `direct-string-field` is the boundary in the other direction. A struct
+    /// whose only heap is a plain `String` is freed correctly by the LLVM walk,
+    /// so the widened gate must NOT claim it — admitting every heap-owning
+    /// struct would move tuples that are already correct onto a different drop
+    /// for no reason.
+    #[test]
+    fn asan_tuple_binding_frees_a_struct_elements_vec_leaves() {
+        const N: &str = "fn mkv(n: i64) -> Vec[String] { let mut v = Vec[String].new(); v.push(f\"t{n}\"); v }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{N}struct R {{ id: i64, tags: Vec[String] }}\n\
+             \x20            fn main() {{ let p = (R {{ id: 41, tags: mkv(3) }}, 1); println(f\"{{p.1}}\") }}\n"
+            ),
+            &["1"],
+            "struct-wrapped-vec",
+        );
+        // The same `Vec` reached through TWO struct levels.
+        assert_clean_asan_run(
+            &format!(
+                "{N}struct Inner {{ tags: Vec[String] }}\n\
+             \x20            struct Outer {{ id: i64, inner: Inner }}\n\
+             \x20            fn main() {{ let p = (Outer {{ id: 41, inner: Inner {{ tags: mkv(3) }} }}, 1);\n\
+             \x20            println(f\"{{p.1}}\") }}\n"
+            ),
+            &["1"],
+            "two-struct-levels",
+        );
+        // Already correct, and the spelling that shows the gate was the axis.
+        assert_clean_asan_run(
+            &format!("{N}fn main() {{ let p = (mkv(3), 1); println(f\"{{p.1}}\") }}\n"),
+            &["1"],
+            "direct-vec-elem",
+        );
+        // BOUNDARY — a struct whose only heap is a direct `String`. The LLVM
+        // walk frees this correctly; the widened gate must leave it alone.
+        assert_clean_asan_run(
+            "struct S { id: i64, name: String }\n\
+             fn main() { let p = (S { id: 41, name: f\"n{41}\" }, 1);\n\
+             \x20            println(f\"{p.0.name} {p.1}\") }\n",
+            &["n41 1"],
+            "direct-string-field",
+        );
+        // The element MOVED OUT of the tuple — the move neutralizer has to keep
+        // working against the drop the widening newly selects.
+        assert_clean_asan_run(
+            &format!(
+                "{N}struct R {{ id: i64, tags: Vec[String] }}\n\
+             \x20            fn take(r: R) -> i64 {{ r.tags.len() }}\n\
+             \x20            fn main() {{ let p = (R {{ id: 41, tags: mkv(3) }}, 1);\n\
+             \x20            println(f\"{{take(p.0) + p.1}}\") }}\n"
+            ),
+            &["2"],
+            "element-moved-out",
+        );
+        // A Drop-BEARING struct element carrying the same `Vec`: one body, and
+        // the heap still fully freed.
+        assert_clean_asan_run(
+            &format!(
+                "{N}struct R {{ id: i64, tags: Vec[String] }}\n\
+             \x20            impl Drop for R {{ fn drop(mut ref self) {{ println(f\"drop {{self.id}}\") }} }}\n\
+             \x20            fn main() {{ let p = (R {{ id: 41, tags: mkv(3) }}, 1); println(f\"{{p.1}}\") }}\n"
+            ),
+            &["1", "drop 41"],
+            "drop-bearing-struct-elem",
+        );
+    }
+
     /// B-2026-08-28-56 — a tuple-typed destructure leaf owns its element's heap
     /// even when the element type declares no `Drop`.
     ///

@@ -7479,6 +7479,49 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Recurses through nested tuples, which the TypeExpr-driven walk also
     /// descends. Selects the deeper path at the tuple let-site
     /// (B-2026-08-02-26).
+    /// B-2026-08-28-60 — does `te` transitively contain a `Vec` whose ELEMENTS
+    /// own heap?
+    ///
+    /// This is deliberately NARROWER than `type_expr_has_drop_heap`, which
+    /// answers true for any heap-owning type. The question here is precisely
+    /// what the LLVM-type tuple drop UNDER-frees: it reaches a `Vec`'s
+    /// `{ptr,len,cap}` buffer but cannot see whether the elements behind it are
+    /// scalars or `String`s. A struct whose only heap is a direct `String`
+    /// field is freed correctly by that walk, so admitting it here would move
+    /// tuples that are already correct onto a different drop strategy for no
+    /// reason — and this predicate chooses that strategy for every tuple
+    /// binding in the program.
+    ///
+    /// Unguarded recursion, matching its sibling `type_expr_has_drop_heap`,
+    /// which walks struct fields the same way: a struct cannot transitively
+    /// contain itself BY VALUE, which is the invariant both rely on.
+    fn contains_vec_of_heap_elems(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.contains_vec_of_heap_elems(e)),
+            TypeKind::Path(p) => {
+                let Some(name) = p.segments.last() else {
+                    return false;
+                };
+                if crate::codegen::helpers::vec_inner_type_expr(te)
+                    .is_some_and(|inner| self.type_expr_has_drop_heap(&inner))
+                {
+                    return true;
+                }
+                // A `shared` element drops through the RC machinery, not the
+                // tuple walk — the same carve-out `tuple_elem_optres_drop_ok`
+                // and `zero_tuple_elem_cap_at` make.
+                if self.type_decls.shared_types.contains_key(name.as_str()) {
+                    return false;
+                }
+                self.type_decls
+                    .struct_field_type_exprs
+                    .get(name.as_str())
+                    .is_some_and(|fields| fields.iter().any(|f| self.contains_vec_of_heap_elems(f)))
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn tuple_elem_needs_deep_drop(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(inner) => inner.iter().any(|e| self.tuple_elem_needs_deep_drop(e)),
@@ -7491,6 +7534,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // ONLY heap hangs off an Option/Result payload looked
                     // heapless at every gate and got no drop at all.
                     || self.tuple_elem_optres_drop_ok(te)
+                    // B-2026-08-28-60 — a STRUCT element that merely CONTAINS
+                    // such a `Vec`. The first disjunct asks whether the element
+                    // IS a `Vec[<heap>]`; `let p = (R { tags: mkv(3) }, 1)` with
+                    // `R { tags: Vec[String] }` is not, so the tuple took the
+                    // LLVM-type drop — which reaches the `{ptr,len,cap}` buffer
+                    // and cannot see that its elements are `String`s. Measured:
+                    // the direct-`Vec` spelling is clean and the struct-wrapped
+                    // one loses the element.
+                    || self.contains_vec_of_heap_elems(te)
             }
             _ => false,
         }
