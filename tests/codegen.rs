@@ -108960,6 +108960,68 @@ fn main() {
         );
     }
 
+    /// A heap field read through a DEEPER PLACE rooted at a `ref` binding is a
+    /// COPY — `fn peek(w: ref W) -> String { w.r.name }` (B-2026-08-28-25).
+    ///
+    /// The abort this fixes is a memory error, gated under LSan by
+    /// `test_ref_rooted_deep_place_heap_read_is_cloned_not_aliased`. What THIS
+    /// test pins is the semantics the fix had to pick, which no sanitizer can
+    /// see, and which the two candidate fixes disagree about.
+    ///
+    /// Cloning the read gives the caller its own buffer and leaves the borrowed
+    /// struct alone. Cap-zeroing the source — the move model — also silences
+    /// the abort, and it is wrong here in a way it is not even for an owned
+    /// source: a `ref` binding does not own the caller's storage, so zeroing it
+    /// strands the caller's buffer with no owner and leaves the caller reading
+    /// a field it no longer holds. The interpreter settles it by printing the
+    /// field twice — once from the callee, once from the caller reading it back
+    /// — so every row here reads the source again afterwards, and the mutation
+    /// rows ask the question directly.
+    #[test]
+    fn test_e2e_ref_rooted_deep_place_heap_read_is_a_copy() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct W { r: R, n: i64 }
+
+fn peek(w: ref W) -> String { return w.r.name; }
+fn peek_tail(w: ref W) -> String { w.r.name }
+fn tuple_hop(p: ref (R, i64)) -> String { return p.0.name; }
+
+fn main() {
+    let v = W { r: R { id: 41, name: f"n{41}" }, n: 1 };
+    let mut s = peek(v);
+    s = s + "X";
+    println(s);
+    println(v.r.name);
+    println(peek_tail(v));
+    println(v.r.name);
+
+    let p = (R { id: 7, name: f"m{7}" }, 1);
+    let mut t = tuple_hop(p);
+    t = t + "Y";
+    println(t);
+    println(p.0.name);
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // `n41X` then `n41` is the copy: a move model prints `n41X` then empty
+        // or garbage for the borrowed struct's field.
+        assert_eq!(
+            expected, "n41X\nn41\nn41\nn41\nm7Y\nm7\n",
+            "interpreter oracle is wrong for a ref-rooted deep place read",
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "a heap field read through a ref-rooted deeper place must be a copy",
+        );
+    }
+
     /// A field read on an `if` / `if let` EXPRESSION receiver —
     /// `if c { make(1) } else { make(2) }.n` (B-2026-08-28-7 leg 2).
     ///

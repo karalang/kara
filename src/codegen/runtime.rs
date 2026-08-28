@@ -5447,6 +5447,24 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// Root identifier of a pure FIELD/TUPLE place chain — `w.r.name` → `w`,
+    /// `self.r.name` → `self`, `p.0.name` → `p` (B-2026-08-28-25).
+    ///
+    /// Deliberately NOT [`Self::place_root_ident`], which also walks through an
+    /// `Index` hop: a container element is a different owner with its own
+    /// cloner (the `clone_owned_vec_index_element` arm just above), and
+    /// admitting it here would clone the same read twice.
+    fn ref_chain_place_root(expr: &Expr) -> Option<&str> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            ExprKind::SelfValue => Some("self"),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::ref_chain_place_root(object)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn maybe_defensive_copy_param_arg(
         &mut self,
         arg_expr: &Expr,
@@ -5488,11 +5506,44 @@ impl<'ctx> super::Codegen<'ctx> {
         // tail (`compile_function` / mono tail), so it fires exactly in return
         // position.
         if let ExprKind::FieldAccess { object, field } = &arg_expr.kind {
-            let recv_name = match &object.kind {
+            let direct_recv = match &object.kind {
                 ExprKind::SelfValue => Some("self".to_string()),
                 ExprKind::Identifier(n) => Some(n.clone()),
                 _ => None,
             };
+            // B-2026-08-28-25 — a DEEPER place rooted at a `ref` binding:
+            // `fn peek(w: ref W) -> String { w.r.name }`, its `ref self` twin,
+            // and the tuple-hop `p.0.name`. The match above names the receiver
+            // only when it is the root ITSELF, so at two hops or more it
+            // answered `None` and this arm declined — the read handed the
+            // caller an alias of the borrowed struct's buffer and both freed
+            // it (`free(): double free detected in tcache 2`, rc 134, on both
+            // compiled backends, from a `karac check`-clean program the
+            // interpreter answered correctly, printing the field twice).
+            //
+            // Depth ONE was clean and so was the depth-two `let` spelling
+            // (B-2026-07-21-11's `clone_ref_chain_field_move_rhs`, hooked at
+            // the `let` sites only) — which is what isolates this to the
+            // deeper place in a consuming position with no intervening
+            // binding.
+            //
+            // A CLONE, NOT A SUPPRESSION, and the direction matters: a `ref`
+            // binding does not own the caller's storage, so cap-zeroing the
+            // source would strand the caller's buffer with no owner at all.
+            // The interpreter proves the read is a COPY — the caller still
+            // reads the field afterwards — which is what the E2E oracle pins.
+            //
+            // Restricted to a `ref`-param root, unlike the three root classes
+            // the depth-one gate below admits. The other two
+            // (`for_loop_owned_agg_vars`, `borrowed_agg_payload_struct_vars`)
+            // are left at their current depth exactly as measured; widening
+            // them is a separate question with its own failure mode (a clone
+            // nothing takes over is a leak), and nothing here needed it.
+            let recv_name = direct_recv.or_else(|| {
+                Self::ref_chain_place_root(object)
+                    .map(str::to_string)
+                    .filter(|r| self.borrow_vars.ref_params.contains_key(r))
+            });
             if let Some(recv_name) = recv_name {
                 // B-2026-08-01-28 — a for-loop struct ELEMENT binding is a
                 // shallow bit-copy of the container's slot, so like a borrowed
@@ -5537,7 +5588,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         .borrowed_agg_payload_struct_vars
                         .contains(recv_name.as_str())
                 {
-                    if let Some(struct_name) = self.inferred_receiver_type(object) {
+                    // `inferred_receiver_type` resolves the depth-one root;
+                    // a deeper place needs the chain walk (B-2026-08-28-25).
+                    // Ordered so the depth-one path is bit-identical to before.
+                    if let Some(struct_name) = self
+                        .inferred_receiver_type(object)
+                        .or_else(|| self.place_chain_type_name(object))
+                    {
                         let field_te = self
                             .type_decls
                             .struct_field_names

@@ -57327,6 +57327,97 @@ fn main() {
         );
     }
 
+    /// A HEAP FIELD read through a DEEPER PLACE rooted at a `ref` binding and
+    /// consumed with no intervening `let` — `fn peek(w: ref W) -> String {
+    /// w.r.name }` (B-2026-08-28-25).
+    ///
+    /// A `ref` binding does not own the caller's storage, so the loaded
+    /// `{ptr,len,cap}` was an ALIAS of the caller's buffer: the caller's drop
+    /// freed it and so did whatever the callee handed it to. `free(): double
+    /// free detected in tcache 2`, rc 134, on both compiled backends, from a
+    /// `karac check`-clean program.
+    ///
+    /// THE THREE CONTROLS ARE THE POINT, because each one alone would misplace
+    /// the cause. DEPTH ONE (`r.name` on a `ref R`) was already clean — so the
+    /// `ref` mode is not the variable. The depth-two `let` spelling
+    /// (`let s = w.r.name; s`) was already clean — so the depth is not the
+    /// variable either; `clone_ref_chain_field_move_rhs` covers that position.
+    /// And a SCALAR field through the same deeper place is clean, having no
+    /// buffer to free twice. What was broken is the intersection: two or more
+    /// hops, a heap leaf, and a consuming position with no binding.
+    ///
+    /// A CLONE, NOT A SUPPRESSION, and this fixture is shaped to catch the
+    /// wrong direction: every row reads the caller's field back AFTER the call.
+    /// Cap-zeroing the source would silence the abort and strand the caller's
+    /// buffer with no owner — a leak here, and a use-after-free for the reader.
+    ///
+    /// The argument and `Vec.push` rows are the other failure direction: this
+    /// helper also runs at ARGUMENT positions, so a clone nothing takes over
+    /// would show up as a leak rather than an abort.
+    #[test]
+    fn test_ref_rooted_deep_place_heap_read_is_cloned_not_aliased() {
+        let src = r#"
+struct R { id: i64, name: String }
+struct W { r: R, n: i64 }
+struct W3 { w: W, k: i64 }
+
+fn sink(s: String) -> i64 { return s.len(); }
+
+fn depth1(r: ref R) -> String { return r.name; }
+fn depth2_let(w: ref W) -> String { let s = w.r.name; return s; }
+fn depth2_ret(w: ref W) -> String { return w.r.name; }
+fn depth2_tail(w: ref W) -> String { w.r.name }
+fn depth3(x: ref W3) -> String { return x.w.r.name; }
+fn depth2_scalar(w: ref W) -> i64 { return w.r.id; }
+fn depth2_mut(w: mut ref W) -> String { return w.r.name; }
+fn depth2_struct(x: ref W3) -> R { return x.w.r; }
+fn tuple_hop(p: ref (R, i64)) -> String { return p.0.name; }
+fn arg_pos(w: ref W) -> i64 { return sink(w.r.name); }
+fn push_pos(w: ref W) -> i64 {
+    let mut o: Vec[String] = Vec.new();
+    o.push(w.r.name);
+    return o[0].len();
+}
+
+impl W3 { fn peek(ref self) -> String { return self.w.r.name; } }
+
+fn main() {
+    let a = R { id: 41, name: f"n{41}" };
+    println(depth1(a));
+    println(a.name);
+
+    let mut b = W { r: R { id: 41, name: f"n{41}" }, n: 1 };
+    println(depth2_let(b));
+    println(depth2_ret(b));
+    println(depth2_tail(b));
+    println(depth2_scalar(b));
+    println(arg_pos(b));
+    println(push_pos(b));
+    println(depth2_mut(mut b));
+    // the caller's field survives every one of those
+    println(b.r.name);
+
+    let c = W3 { w: W { r: R { id: 41, name: f"n{41}" }, n: 1 }, k: 2 };
+    println(depth3(c));
+    println(c.peek());
+    println(depth2_struct(c).name);
+    println(c.w.r.name);
+
+    let d = (R { id: 41, name: f"n{41}" }, 1);
+    println(tuple_hop(d));
+    println(d.0.name);
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "n41", "n41", "n41", "n41", "n41", "41", "3", "3", "n41", "n41", "n41", "n41",
+                "n41", "n41", "n41", "n41",
+            ],
+            "ref-rooted-deep-place-heap-read",
+        );
+    }
+
     /// A scalar field read on a `shared struct` block / `if` receiver is
     /// REFCOUNT-BALANCED (B-2026-08-28-7 leg 1).
     ///
