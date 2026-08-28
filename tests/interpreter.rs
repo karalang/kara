@@ -19467,6 +19467,49 @@ fn main() {
     assert_eq!(out, "0\n1\n2\n0\n0\n0\n2\n2\n");
 }
 
+/// `binary_search` carries element signedness under the tree-walker
+/// (B-2026-08-28-6).
+///
+/// The tree-walker's `sort` has ordered `Vec[u64]` / `Vec[usize]` unsigned
+/// since B-2026-07-04-8, but its `binary_search` arm kept calling the signed
+/// `value_compare`. So the two disagreed WITHIN one backend: `sort` produced
+/// `[1, 2, u64.MAX]`, `is_sorted` called it sorted, and `binary_search` then
+/// failed to find elements that are in it.
+///
+/// Codegen's binary_search was signed too, so the E2E twin in
+/// `tests/codegen.rs` could not have caught this — both backends returned the
+/// same wrong `None`. This is the only coverage of it on the default
+/// `cargo test` leg, and it pins literal output for the same reason.
+///
+/// The signed row is the over-correction guard: reading every integer as
+/// unsigned would satisfy the rows above it.
+#[test]
+fn binary_search_carries_element_signedness_under_the_tree_walker() {
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Vec[u64] = [1u64, 2u64, 18446744073709551615u64];
+    let s = a.is_sorted();
+    println(f"{s}");
+    let r1 = a.binary_search(2u64);
+    match r1 { Some(i) => println(f"{i}"), None => println("absent"), }
+    let r2 = a.binary_search(18446744073709551615u64);
+    match r2 { Some(i) => println(f"{i}"), None => println("absent"), }
+
+    let b: Vec[usize] = [1u64 as usize, 9223372036854775808u64 as usize];
+    let r3 = b.binary_search(9223372036854775808u64 as usize);
+    match r3 { Some(i) => println(f"{i}"), None => println("absent"), }
+
+    let c: Vec[i64] = [0 - 5, 0 - 1, 3];
+    let r4 = c.binary_search(0 - 5);
+    match r4 { Some(i) => println(f"{i}"), None => println("absent"), }
+}
+"#,
+    );
+    // sorted / 2 at index 1 / MAX at index 2 / 2^63 at index 1 / -5 first.
+    assert_eq!(out, "true\n1\n2\n1\n0\n");
+}
+
 /// `.cmp()` carries operand signedness under the tree-walker
 /// (B-2026-08-28-5).
 ///

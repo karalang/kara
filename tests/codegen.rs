@@ -107616,50 +107616,55 @@ fn main() {
     /// build-only assertion.
     #[test]
     fn test_e2e_sort_element_gate_matches_codegen_support() {
-        // (label, element type, literal, per-element print expression)
-        let rows: &[(&str, &str, &str, &str)] = &[
-            ("i64", "i64", "[3, 1, 2]", "f\"{e}\""),
-            ("u8", "u8", "[3, 1, 2]", "f\"{e}\""),
-            ("char", "char", "['c', 'a', 'b']", "f\"{e}\""),
+        // (label, element type, literal, per-element print expression, binary_search needle)
+        let rows: &[(&str, &str, &str, &str, &str)] = &[
+            ("i64", "i64", "[3, 1, 2]", "f\"{e}\"", "2"),
+            ("u8", "u8", "[3, 1, 2]", "f\"{e}\"", "2"),
+            ("char", "char", "['c', 'a', 'b']", "f\"{e}\"", "'b'"),
             // Restored with B-2026-08-28-5's fix. This table is what found
             // that bug: the row was held out while `Vec[bool].sort()` sorted
             // DESCENDING on all three compiled surfaces (bool lowers to `i1`,
             // whose set value reads as -1 when interpreted as signed), because
             // an entry here would have asserted the bug rather than caught it.
-            ("bool", "bool", "[true, false, true]", "f\"{e}\""),
-            ("String", "String", "[\"c\", \"a\"]", "f\"{e}\""),
+            ("bool", "bool", "[true, false, true]", "f\"{e}\"", "false"),
+            ("String", "String", "[\"c\", \"a\"]", "f\"{e}\"", "\"c\""),
             (
                 "F64",
                 "F64",
                 "[F64.from(2.0), F64.from(1.0)]",
                 "f\"{e.value}\"",
+                "F64.from(2.0)",
             ),
             (
                 "tuple",
                 "(i64, String)",
                 "[(2, \"b\"), (1, \"a\")]",
                 "f\"{e.0}{e.1}\"",
+                "(2, \"b\")",
             ),
             (
                 "nested Vec",
                 "Vec[String]",
                 "[[\"b\"], [\"a\"]]",
                 "f\"{e[0]}\"",
+                "[\"b\"]",
             ),
             (
                 "derived struct",
                 "P",
                 "[P { a: 3 }, P { a: 1 }]",
                 "f\"{e.a}\"",
+                "P { a: 3 }",
             ),
             (
                 "derived enum",
                 "Suit",
                 "[Suit.Spades, Suit.Clubs]",
                 "f\"{tag_suit(e)}\"",
+                "Suit.Spades",
             ),
         ];
-        for (label, elem, lit, print) in rows {
+        for (label, elem, lit, print, needle) in rows {
             let src = format!(
                 "#[derive(Ord, Eq)]\n\
                  struct P {{ a: i64 }}\n\
@@ -107696,7 +107701,144 @@ fn main() {
                 aot, expected,
                 "[{label}] compiled `Vec[{elem}].sort()` must match the interpreter"
             );
+
+            // ...and so must `binary_search`, which shares `sort`'s element
+            // gate (`require_ord_element`) and therefore accepts exactly the
+            // same element types at CHECK. Before B-2026-08-28-6 its codegen
+            // support was narrower still — a hand-rolled integer/String
+            // compare with an `else` that errored — so six of the rows above
+            // sorted fine and refused to build here. Asserting both methods
+            // over ONE table is what makes that class of split impossible to
+            // reintroduce: widen or narrow either method alone and a row fails.
+            let bs_src = format!(
+                "#[derive(Ord, Eq)]\n\
+                 struct P {{ a: i64 }}\n\
+                 #[derive(Ord, Eq)]\n\
+                 enum Suit {{ Clubs, Spades }}\n\
+                 fn main() {{\n\
+                     let mut v: Vec[{elem}] = {lit};\n\
+                     v.sort();\n\
+                     let r = v.binary_search({needle});\n\
+                     match r {{\n\
+                         Some(i) => println(f\"found {{i}}\"),\n\
+                         None => println(\"absent\"),\n\
+                     }}\n\
+                 }}"
+            );
+            let (bs_interp, bs_errs, _, _) = karac::run_program_full(&bs_src);
+            assert!(
+                bs_errs.is_empty(),
+                "[{label}] the element gate rejected `binary_search` on a type it admits \
+                 for `sort` — the two share `require_ord_element`, so this means the gate \
+                 or the call site drifted: {bs_errs:?}"
+            );
+            let bs_expected = bs_interp.join("");
+            // Anti-vacuity: every needle IS present, so `absent` here would
+            // mean the search ran and got the wrong answer rather than that
+            // the row is inert.
+            assert!(
+                bs_expected.starts_with("found "),
+                "[{label}] interpreter oracle did not find a needle that is present: \
+                 {bs_expected:?}"
+            );
+            let Some(bs_aot) = run_program(&bs_src) else {
+                return;
+            };
+            assert_eq!(
+                bs_aot, bs_expected,
+                "[{label}] compiled `Vec[{elem}].binary_search(..)` must match the \
+                 interpreter — including the index chosen among duplicate keys"
+            );
         }
+    }
+
+    /// `binary_search` orders elements the same way `sort` does — including
+    /// unsigned 64-bit (B-2026-08-28-6).
+    ///
+    /// This is the SILENT half of that row. The element-coverage half is loud
+    /// (a build error, pinned by the table above); this one returns a wrong
+    /// ANSWER: `binary_search`'s inline integer compare widened to i64 and
+    /// then compared SIGNED, which is right for `u8`..`u32` — they
+    /// zero-extend into the positive half — and wrong for `u64` / `usize` /
+    /// `u128`, where the widening is a no-op and the top of the range rides as
+    /// a negative i64.
+    ///
+    /// So on a Vec that `sort` ITSELF produced, and that `is_sorted` agrees is
+    /// sorted, `binary_search` searched a different order and answered `None`
+    /// for an element that is present. Rows 02 and 03 are that case.
+    ///
+    /// Neither backend could catch this by comparison: the interpreter's
+    /// `binary_search` called the signed `value_compare` while its own `sort`
+    /// used `value_compare_u64`, so BOTH BACKENDS AGREED on `None`. Pinned to
+    /// literal expected output for that reason — a twin against the
+    /// interpreter would have certified the shared wrong answer, which is
+    /// exactly how this survived.
+    ///
+    /// Row 04 is the guard against over-correction: a SIGNED element must stay
+    /// signed, and making every integer unsigned would satisfy rows 01-03.
+    /// Row 05 pins the duplicate-key index, which the fix had to preserve
+    /// while swapping the comparator underneath — Rust's branchless
+    /// `binary_search_by` picks a specific index among equal keys and the
+    /// interpreter uses std's, so codegen must agree.
+    #[test]
+    fn test_e2e_binary_search_orders_like_sort() {
+        let src = r#"
+fn main() {
+    // 01 — a plain unsigned vec, no high-bit element.
+    let a: Vec[u64] = [1u64, 2u64, 3u64];
+    let ra = a.binary_search(2u64);
+    match ra { Some(i) => println(f"01 {i}"), None => println("01 absent"), }
+
+    // 02-03 — the same vec with u64.MAX, which `sort` puts LAST and the
+    // signed compare treats as -1. Both lookups used to answer `absent`.
+    let b: Vec[u64] = [1u64, 2u64, 18446744073709551615u64];
+    let srt = b.is_sorted();
+    let rb = b.binary_search(2u64);
+    match rb { Some(i) => println(f"02 {srt} {i}"), None => println(f"02 {srt} absent"), }
+    let rc = b.binary_search(18446744073709551615u64);
+    match rc { Some(i) => println(f"03 {i}"), None => println("03 absent"), }
+
+    // 04 — signed elements must stay signed.
+    let d: Vec[i64] = [0 - 5, 0 - 1, 3];
+    let rd = d.binary_search(0 - 5);
+    match rd { Some(i) => println(f"04 {i}"), None => println("04 absent"), }
+
+    // 05 — duplicate keys: the index must match std's branchless variant.
+    let e: Vec[i64] = [1, 2, 2, 2, 3];
+    let re = e.binary_search(2);
+    match re { Some(i) => println(f"05 {i}"), None => println("05 absent"), }
+
+    // 06 — absent element still answers None.
+    let f: Vec[u64] = [1u64, 9u64];
+    let rf = f.binary_search(5u64);
+    match rf { Some(i) => println(f"06 {i}"), None => println("06 absent"), }
+}
+"#;
+        // Written out rather than borrowed from a backend: 2 sits at index 1,
+        // `[1, 2, u64.MAX]` is sorted and holds 2 at index 1 and MAX at index
+        // 2, -5 is first among signed elements, and 5 is genuinely absent.
+        let expected = "01 1\n\
+                        02 true 1\n\
+                        03 2\n\
+                        04 0\n\
+                        05 3\n\
+                        06 absent\n";
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        assert_eq!(
+            interp_out.join(""),
+            expected,
+            "the tree-walker must order binary_search like sort — rows 02/03 are the \
+             ones it used to get wrong, in agreement with codegen"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled `binary_search` must order elements exactly as `sort` does"
+        );
     }
 
     /// Primitive comparison and widening are signedness-aware, and `bool`

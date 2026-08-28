@@ -5823,11 +5823,22 @@ impl<'ctx> super::Codegen<'ctx> {
                             if args.len() != 1 {
                                 return Err("Slice.binary_search requires 1 argument".to_string());
                             }
-                            let elem_name = self.vec_elem_type_name(name).ok_or_else(|| {
-                                "Slice.binary_search: could not resolve the element type \
-                                 in codegen"
-                                    .to_string()
-                            })?;
+                            // Same shape as the Vec path (B-2026-08-28-6): the
+                            // comparator family keys on the element TYPE EXPR,
+                            // so require that rather than a plain named type —
+                            // a tuple element has no name and would otherwise
+                            // fail here instead of reaching the family.
+                            let elem_te = self
+                                .var_types
+                                .var_elem_type_exprs
+                                .get(name.as_str())
+                                .cloned();
+                            if elem_te.is_none() {
+                                return Err("Slice.binary_search: could not resolve the element \
+                                            type in codegen"
+                                    .to_string());
+                            }
+                            let elem_name = self.vec_elem_type_name(name).unwrap_or_default();
                             let elem_ty =
                                 *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -5851,8 +5862,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap()
                                     .into_int_value()
                             };
-                            return self
-                                .compile_binary_search(data, len, elem_ty, &elem_name, &args[0]);
+                            return self.compile_binary_search(
+                                data, len, elem_ty, &elem_name, elem_te, &args[0],
+                            );
                         }
                         // B-2026-08-14-9 — `chunks(n)` / `windows(n)`, the
                         // view-producers. Both return `Vec[Slice[T]]`, so the

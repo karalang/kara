@@ -1244,20 +1244,45 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    return Some(
-                        match v.binary_search_by(|probe| value_compare(probe, &needle)) {
-                            Ok(i) => Value::EnumVariant {
-                                enum_name: "Option".to_string(),
-                                variant: "Some".to_string(),
-                                data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
-                            },
-                            Err(_) => Value::EnumVariant {
-                                enum_name: "Option".to_string(),
-                                variant: "None".to_string(),
-                                data: EnumData::Unit,
-                            },
+                    // The SAME unsigned dispatch `sort` uses (B-2026-07-04-8),
+                    // which this arm never had: it compared with the signed
+                    // `value_compare`, so on a `Vec[u64]` holding a value ≥ 2⁶³
+                    // it searched an order `sort` had not produced and returned
+                    // `None` for an element that IS present (B-2026-08-28-6).
+                    //
+                    // Measured before the fix, on `[1, 2, u64.MAX]` — which
+                    // `sort` produces and `is_sorted` calls sorted:
+                    // `binary_search(2u64)` answered `None`, as did
+                    // `binary_search(u64.MAX)`. Codegen's binary_search was
+                    // signed too, so BOTH BACKENDS AGREED and no run-vs-build
+                    // differential could see it.
+                    // The RECEIVER span, not `sort`'s close-paren leaf: `sort()`
+                    // is typed `Unit` and so clobbers its receiver span, but
+                    // `binary_search` returns `Option[i64]`, which the close
+                    // paren carries and which peels to nothing. Measured — the
+                    // close-paren spelling copied from `sort` left this arm
+                    // signed and the reproducer unchanged. Receiver first,
+                    // close paren second, so neither shape is lost.
+                    let cmp = match self
+                        .span_unsigned_int_width(&object.span)
+                        .or_else(|| self.span_unsigned_int_width(args_close_span))
+                    {
+                        Some(64) => value_compare_u64,
+                        Some(128) => value_compare_u128,
+                        _ => value_compare,
+                    };
+                    return Some(match v.binary_search_by(|probe| cmp(probe, &needle)) {
+                        Ok(i) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
                         },
-                    );
+                        Err(_) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    });
                 }
             }
             "split_at" => {

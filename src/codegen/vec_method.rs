@@ -463,31 +463,37 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Three-way compare of an `elem` against the search `needle` for
     /// `Vec.binary_search`, returning an i64 sign (`<0` / `0` / `>0`) consistent
-    /// with the interpreter's `value_compare`. Integer elements (any width,
-    /// signed or unsigned) widen to i64 and compare signed (uint values are
-    /// non-negative i64, matching the interpreter's signed `i64::cmp`); `String`
-    /// elements route through `karac_string_cmp` (the same byte-lexicographic
-    /// order). Other element types are an honest "not yet supported" error — the
-    /// interpreter still handles them under `karac run`. Emits no basic blocks
-    /// (pure data-flow), so the caller's bisection loop stays simple.
+    /// with the interpreter's `value_compare`. Integer elements (any width)
+    /// widen to i64 and compare with their own signedness; `String` elements
+    /// route through `karac_string_cmp` (the same byte-lexicographic order);
+    /// EVERY other element type goes to the comparator family
+    /// (`emit_cmp_fn_for_type_expr`) — the same `karac_cmp_<T>` functions
+    /// `sort` uses, which is what makes the two methods accept the same
+    /// element types (B-2026-08-28-6). Emits no basic blocks (pure data-flow),
+    /// so the caller's bisection loop stays simple.
+    ///
+    /// `elem_te` is the element `TypeExpr` and is what the comparator family
+    /// keys on; `elem_name` stays for the two inline fast paths and is `""`
+    /// for an element with no plain named type (a tuple).
     fn emit_binary_search_cmp(
         &mut self,
         elem_val: BasicValueEnum<'ctx>,
         needle_val: BasicValueEnum<'ctx>,
         elem_name: &str,
+        elem_te: Option<&TypeExpr>,
     ) -> Result<IntValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        // NOT `helpers::primitive_name_is_unsigned`, deliberately (B-2026-08-28-5).
-        // Every other signedness list in codegen now routes through that shared
-        // predicate; this one cannot, because `is_uint` is also half of `is_int`
-        // just below — it doubles as the "which element types does binary_search
-        // support at all?" set. Folding the predicate in here would silently
-        // WIDEN support to `bool` and `char` rather than fix a signedness bug:
-        // both are absent from the SIGNED list too, so `Vec[bool].binary_search`
-        // errors at build today instead of inverting. Widening it is
-        // B-2026-08-28-6's work (teaching binary_search the comparator family),
-        // where it can carry its own gate and fixtures.
-        let is_uint = matches!(elem_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
+        // B-2026-08-28-5 left this list alone because folding in the shared
+        // predicate would have WIDENED support as a side effect of a signedness
+        // fix. This row is where that widening belongs, so `is_uint` is now the
+        // shared predicate — but note `is_int` deliberately does NOT gain
+        // `bool`/`char` from it: those have a comparator-family body, and
+        // sending them down the family keeps ONE lowering for them across
+        // `sort` and `binary_search` rather than a second inline copy.
+        let is_uint = matches!(
+            elem_name,
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "uint"
+        );
         let is_int =
             is_uint || matches!(elem_name, "i8" | "i16" | "i32" | "i64" | "i128" | "isize");
         if is_int {
@@ -497,13 +503,33 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             let a = self.widen_int_to_i64(a.into(), is_uint);
             let b = self.widen_int_to_i64(b.into(), is_uint);
+            // Compare with the element's OWN signedness. This pair was
+            // hardcoded signed, and the doc comment above used to justify it
+            // ("uint values are non-negative i64") — true for u8..u32, which
+            // zero-extend into the positive half, and false for `u64` /
+            // `usize` / `u128`, where widening is a no-op and the top of the
+            // range rides as a negative i64.
+            //
+            // The consequence was a SILENT wrong answer on a Vec that `sort`
+            // itself produced: `[1u64, 2u64, u64.MAX]` is sorted, `is_sorted`
+            // agrees, and `binary_search(2u64)` answered `None` — as did
+            // `binary_search(u64.MAX)`. The interpreter's binary_search was
+            // signed too, so BOTH BACKENDS AGREED and no run-vs-build
+            // differential could see it (B-2026-08-28-6). Unsigned compare is
+            // correct for the zero-extended narrow widths as well, so this one
+            // predicate covers every unsigned element.
+            let (lt_pred, gt_pred) = if is_uint {
+                (inkwell::IntPredicate::ULT, inkwell::IntPredicate::UGT)
+            } else {
+                (inkwell::IntPredicate::SLT, inkwell::IntPredicate::SGT)
+            };
             let lt = self
                 .builder
-                .build_int_compare(inkwell::IntPredicate::SLT, a, b, "bs.lt")
+                .build_int_compare(lt_pred, a, b, "bs.lt")
                 .unwrap();
             let gt = self
                 .builder
-                .build_int_compare(inkwell::IntPredicate::SGT, a, b, "bs.gt")
+                .build_int_compare(gt_pred, a, b, "bs.gt")
                 .unwrap();
             let neg1 = i64_t.const_int((-1i64) as u64, true);
             let pos1 = i64_t.const_int(1, false);
@@ -567,11 +593,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_int_value())
+        } else if let Some(cmp_fn) =
+            elem_te.and_then(|te| self.emit_cmp_fn_for_type_expr(&te.clone()))
+        {
+            // The comparator family — the SAME `karac_cmp_<T>` functions
+            // `Vec.sort()` lowers to (B-2026-08-28-6). Before this, everything
+            // that reached here was refused at build while sorting fine, so
+            // `sort` and `binary_search` disagreed about which element types
+            // exist: tuples, nested `Vec`, `Array`, derived-`Ord` structs and
+            // enums, `bool`, `char` and the `F64` wrapper were all check-green,
+            // correct under `--interp`, and a build error.
+            //
+            // Sharing the family rather than extending the inline compare is
+            // the whole point: a second hand-rolled ordering is what let the
+            // two methods drift apart, and it would have to re-derive
+            // lexicographic tuple order, nested-Vec order and declaration-order
+            // struct comparison — all of which already exist here, and all of
+            // which the interpreter's `value_compare` already agrees with.
+            //
+            // `karac_cmp_<T>` takes POINTERS, so both operands are spilled to
+            // entry allocas first (the same shape `compile_ordered_user_cmp`
+            // uses for `<` on a user type) and it returns the -1/0/+1 i64 this
+            // function is contracted to produce, so the caller's bisection loop
+            // is unchanged.
+            let cur_fn = self.current_fn.unwrap();
+            let a_slot = self.create_entry_alloca(cur_fn, "bs.cmp.a", elem_val.get_type());
+            let b_slot = self.create_entry_alloca(cur_fn, "bs.cmp.b", needle_val.get_type());
+            self.builder.build_store(a_slot, elem_val).unwrap();
+            self.builder.build_store(b_slot, needle_val).unwrap();
+            Ok(self
+                .builder
+                .build_call(cmp_fn, &[a_slot.into(), b_slot.into()], "bs.fcmp")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value())
         } else {
+            // Reached only when the comparator family itself declines the
+            // element type — the same set `Vec.sort()` refuses, so the two
+            // methods now fail together rather than at different boundaries.
             Err(format!(
                 "`Vec.binary_search` on element type `{elem_name}` is not yet supported under \
-                 `karac build` (codegen); it works under `karac run --interp`. Integer and String \
-                 element types are supported."
+                 `karac build` (codegen); it works under `karac run --interp`."
             ))
         }
     }
@@ -595,6 +658,7 @@ impl<'ctx> super::Codegen<'ctx> {
         len: IntValue<'ctx>,
         elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
         elem_name: &str,
+        elem_te: Option<TypeExpr>,
         needle_arg: &CallArg,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
@@ -676,7 +740,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, elem_ptr, "bs.elem")
             .unwrap();
-        let sign = self.emit_binary_search_cmp(elem_val, needle_val, elem_name)?;
+        let sign =
+            self.emit_binary_search_cmp(elem_val, needle_val, elem_name, elem_te.as_ref())?;
         let is_gt = self
             .builder
             .build_int_compare(
@@ -715,7 +780,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, elem_f_ptr, "bs.elem.f")
             .unwrap();
-        let sign_f = self.emit_binary_search_cmp(elem_f, needle_val, elem_name)?;
+        let sign_f =
+            self.emit_binary_search_cmp(elem_f, needle_val, elem_name, elem_te.as_ref())?;
         let is_eq = self
             .builder
             .build_int_compare(
@@ -8395,9 +8461,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.len() != 1 {
                     return Err("Vec.binary_search requires 1 argument".to_string());
                 }
-                let elem_name = self.vec_elem_type_name(var_name).ok_or_else(|| {
-                    "Vec.binary_search: could not resolve the element type in codegen".to_string()
-                })?;
+                // The element TYPE EXPR is what the comparator family keys
+                // on; the NAME only selects the two inline fast paths. Bailing
+                // on a missing name is what made `Vec[(i64, String)]` fail at a
+                // DIFFERENT exit from the other unsupported element types — a
+                // tuple has no plain named type, so it never even reached the
+                // comparator dispatch (B-2026-08-28-6). Require the type expr,
+                // and let the name be empty.
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
+                if elem_te.is_none() {
+                    return Err(
+                        "Vec.binary_search: could not resolve the element type in codegen"
+                            .to_string(),
+                    );
+                }
+                let elem_name = self.vec_elem_type_name(var_name).unwrap_or_default();
                 // The `{ptr, len, cap}` header; binary_search reads {ptr, len}.
                 let data = {
                     let p = self
@@ -8419,7 +8497,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_int_value()
                 };
-                self.compile_binary_search(data, len, elem_ty, &elem_name, &args[0])
+                self.compile_binary_search(data, len, elem_ty, &elem_name, elem_te, &args[0])
             }
             // `Vec.contains(x) -> bool` / `Slice.contains(x) -> bool` —
             // linear element scan. Each element is loaded and compared to
