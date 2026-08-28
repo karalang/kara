@@ -13810,6 +13810,118 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-57 — a fixed `Array[T, N]`'s elements run their user
+    /// `Drop` bodies, at the binding's live-range end, on every backend.
+    ///
+    /// The row reported `Array[E, 2]` of an own-`Drop` enum as interp
+    /// `dE dE dR3 mid end` vs compiled `mid end dE dE`: right count, wrong
+    /// PLACE. Reproducing it turned up something larger. The compiled `dE dE`
+    /// was coming from the MEMORY channel, which reached the body only because
+    /// `emit_drop_fn_for_type_expr` handed it the user-drop wrapper — the hole
+    /// B-2026-08-28-58 closed. With that shut, the compiled side ran NO array
+    /// element bodies at all, and measuring the surface showed it never had for
+    /// a STRUCT element either (the wrapper was already excluded for structs by
+    /// B-2026-07-30-11), which the row did not mention. So `struct-elems` and
+    /// `heap-struct-elems` are rows here, not just the enum the row names:
+    /// `Array` simply had no bodies walker, and the enum was the one element
+    /// type whose body leaked through the memory channel by accident.
+    ///
+    /// `moved-on-*` is the second half. A bare rebind `let b = a;` carries no
+    /// annotation, so the destination could not resolve its element type and
+    /// registered nothing while the move disarmed the source — bodies in the
+    /// interpreter, nowhere else. Type-agnostic (it failed identically for a
+    /// struct array) and fixed by the source-record fallback, which is why the
+    /// annotated spelling is pinned beside it: the two must not diverge.
+    #[test]
+    fn e2e_fixed_array_elements_run_their_user_drop_bodies() {
+        const H: &str = "enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             enum H { A(R), B }\n\
+             enum J { A(i64), B }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n\
+             struct S { name: String }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"drop S{self.name}\") } }\n";
+        for (label, body, want) in [
+            // The row's shape. Placement is the assertion: the bodies precede
+            // `mid`, they do not trail `end`.
+            (
+                "enum-elems-mixed",
+                "fn main() { let a: Array[E, 2] = [E.B, E.A(R { id: 3 })];\n\
+                 \x20            println(\"mid\"); println(\"end\"); }\n",
+                "drop E\ndrop E\ndrop R3\nmid\nend\n",
+            ),
+            (
+                "enum-elems-unit",
+                "fn main() { let a: Array[E, 1] = [E.B]; println(\"mid\"); }\n",
+                "drop E\nmid\n",
+            ),
+            // -54's predicate at this position: no own `Drop`, Drop-bearing
+            // payload.
+            (
+                "payload-only-enum-elem",
+                "fn main() { let a: Array[H, 1] = [H.A(R { id: 4 })];\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop R4\nmid\n",
+            ),
+            // The gap the row did not report: a STRUCT element never ran its
+            // body on the compiled backends either.
+            (
+                "struct-elems",
+                "fn main() { let a: Array[R, 2] = [R { id: 1 }, R { id: 2 }];\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop R1\ndrop R2\nmid\n",
+            ),
+            (
+                "heap-struct-elems",
+                "fn main() { let a: Array[S, 2] = [S { name: f\"x{1}\" }, S { name: f\"y{2}\" }];\n\
+                 \x20            println(\"mid\"); }\n",
+                "drop Sx1\ndrop Sy2\nmid\n",
+            ),
+            // MOVED ON, un-annotated destination — the source-record fallback.
+            (
+                "moved-on-enum",
+                "fn main() { let a: Array[E, 2] = [E.B, E.B];\n\
+                 \x20            let b = a; println(\"moved\"); }\n",
+                "drop E\ndrop E\nmoved\n",
+            ),
+            (
+                "moved-on-struct",
+                "fn main() { let a: Array[R, 2] = [R { id: 1 }, R { id: 2 }];\n\
+                 \x20            let b = a; println(\"moved\"); }\n",
+                "drop R1\ndrop R2\nmoved\n",
+            ),
+            // The ANNOTATED destination, which already worked, pinned so the
+            // two spellings cannot drift apart again.
+            (
+                "moved-on-enum-annotated",
+                "fn main() { let a: Array[E, 2] = [E.B, E.B];\n\
+                 \x20            let b: Array[E, 2] = a; println(\"moved\"); }\n",
+                "drop E\ndrop E\nmoved\n",
+            ),
+            // NESTED SCOPE — the bodies belong to the inner frame.
+            (
+                "nested-scope",
+                "fn main() { { let a: Array[E, 1] = [E.B]; println(\"inner\") }\n\
+                 \x20            println(\"outer\"); }\n",
+                "drop E\ninner\nouter\n",
+            ),
+            // BOUNDARY — an element type with no `Drop` anywhere runs nothing,
+            // so this is not "every array element fires".
+            (
+                "no-drop-elems",
+                "fn main() { let a: Array[J, 2] = [J.A(1), J.B]; println(\"mid\"); }\n",
+                "mid\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-28-40 — an own-`impl Drop` enum discarded by a wildcard
     /// destructure leaf runs its LIVE PAYLOAD's body too, not just its own.
     ///

@@ -7533,7 +7533,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .cloned()?;
                                         Some((te, arr_ty.len()))
                                     });
-                                if let Some((elem_te, n)) = arr_parts {
+                                if let Some((elem_te, n)) = arr_parts.clone() {
                                     let elem_ty = self.llvm_type_for_type_expr(&elem_te);
                                     self.make_array_param_callee_owned(
                                         var_name.as_str(),
@@ -7542,6 +7542,65 @@ impl<'ctx> super::Codegen<'ctx> {
                                         elem_ty,
                                         slot.ptr,
                                     );
+                                }
+                                // B-2026-08-28-57 — the elements' user `Drop`
+                                // BODIES, on the NLL channel, beside the memory
+                                // registration above. The array peer of the
+                                // `Vec` leg (B-2026-08-28-55) and the tuple leg
+                                // (B-2026-07-30-11); separate from
+                                // `make_array_param_callee_owned` because that
+                                // one registers the scope-exit MEMORY drop, and
+                                // a body belongs at the binding's live-range
+                                // end, where the interpreter puts it.
+                                //
+                                // Before this, an `Array[E, N]` of an
+                                // own-`Drop` enum ran its bodies from the memory
+                                // channel — at scope exit, after every later
+                                // statement — because
+                                // `emit_drop_fn_for_type_expr` handed that
+                                // channel the user-drop wrapper. Closing that
+                                // hole (B-2026-08-28-58) left the compiled side
+                                // silent, so this is the half that puts the
+                                // bodies back, in the right place.
+                                //
+                                // The element type is resolved on its OWN chain,
+                                // deliberately NOT by widening `arr_parts`: a
+                                // bare rebind `let b = a;` needs the source's
+                                // record to register the destination's walk, but
+                                // feeding that same fallback to
+                                // `make_array_param_callee_owned` gives `b` a
+                                // second MEMORY drop over elements `a` still
+                                // owns — measured as an ASAN double free on
+                                // `let a: Array[S, 2] = [..]; let b = a;`.
+                                // Bodies follow the move; memory does not.
+                                {
+                                    let bodies_parts = arr_parts.or_else(|| match &value.kind {
+                                        ExprKind::Identifier(src) => self
+                                            .var_types
+                                            .array_var_elem_te
+                                            .get(src.as_str())
+                                            .cloned(),
+                                        _ => None,
+                                    });
+                                    if let Some((elem_te, n)) = bodies_parts {
+                                        self.var_types
+                                            .array_var_elem_te
+                                            .insert(var_name.clone(), (elem_te.clone(), n));
+                                        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                                        if let Some(bodies) = self
+                                            .emit_array_elem_user_drop_bodies_fn(
+                                                elem_ty, &elem_te, n,
+                                            )
+                                        {
+                                            self.track_user_drop_var_with_fn(
+                                                "",
+                                                var_name,
+                                                slot.ptr,
+                                                bodies,
+                                                UserDropKind::ContainerElemBodies,
+                                            );
+                                        }
+                                    }
                                 }
                                 // Array-store slice (B-2026-06-22-2): a heap-env
                                 // closure stored in a fixed-size array element

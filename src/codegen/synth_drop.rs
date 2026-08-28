@@ -7472,6 +7472,72 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-08-28-57 — `__karac_dropelems_array_<T>_<N>`: the BODIES-ONLY
+    /// walk over a fixed `Array[T, N]` binding's elements, the array peer of
+    /// `emit_tuple_elem_user_drop_bodies_fn` and of the `Vec` element walker
+    /// B-2026-08-28-55 wired up.
+    ///
+    /// Frees nothing by construction — it calls `emit_slot_drop_bodies_at` per
+    /// element, the same primitive the tuple and slot walks use, and the
+    /// array's memory stays owned by the scope-exit `__karac_drop_array_te_*`
+    /// registered beside it. Bodies on the NLL channel, memory on the
+    /// scope-exit one: the split that keeps `karac run` and `karac build`
+    /// printing the same thing.
+    ///
+    /// A separate emitter rather than a reuse of the tuple one because an
+    /// array lowers to an `ArrayType`, which `build_struct_gep` cannot index;
+    /// the element GEP is the `[zero, idx]` form every other array walk uses.
+    /// Every element shares one `TypeExpr`, so the walk is emitted straight
+    /// line over `0..n` with no per-index type lookup.
+    pub(super) fn emit_array_elem_user_drop_bodies_fn(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        elem_te: &TypeExpr,
+        n: u32,
+    ) -> Option<FunctionValue<'ctx>> {
+        if n == 0 || !self.elem_te_runs_user_drop(elem_te) {
+            return None;
+        }
+        let fn_name = format!(
+            "__karac_dropelems_array_{}_{n}",
+            Self::display_mangle_te(elem_te)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let arr_ty = inkwell::types::BasicType::array_type(&elem_ty, n);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_t = self.context.i32_type();
+        let saved = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let walker = self.module.add_function(
+            &fn_name,
+            self.context.void_type().fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        self.current_fn = Some(walker);
+        let entry = self.context.append_basic_block(walker, "entry");
+        self.builder.position_at_end(entry);
+        let base = walker.get_nth_param(0).unwrap().into_pointer_value();
+        let zero = i32_t.const_zero();
+        let te = elem_te.clone();
+        for i in 0..n {
+            let idx = i32_t.const_int(i as u64, false);
+            let ep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(arr_ty, base, &[zero, idx], "da.elem")
+            };
+            let Ok(ep) = ep else { continue };
+            self.emit_slot_drop_bodies_at(ep, &te);
+        }
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
+        Some(walker)
+    }
+
     /// True when tuple element `te` owns heap the LLVM-type-driven aggregate
     /// drop ([`Self::synthesize_aggregate_drop_fn`]) would free only
     /// SHALLOWLY — today a `Vec[E]` / `VecDeque[E]` whose `E` itself owns heap,

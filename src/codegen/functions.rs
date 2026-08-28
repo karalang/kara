@@ -1447,6 +1447,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // String comparator). Repopulated below from params and at let sites.
         self.type_decls.enum_inst_var_types.clear();
         self.var_types.tuple_var_elem_tes.clear();
+        self.var_types.array_var_elem_te.clear();
         self.tuple_moved_elem_bodies.clear();
         self.type_decls.struct_moved_field_bodies.clear();
         self.var_types.optres_var_payload_tes.clear();

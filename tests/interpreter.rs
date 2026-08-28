@@ -33142,6 +33142,64 @@ fn test_own_drop_enum_member_runs_its_body_when_never_destructured() {
     );
 }
 
+/// B-2026-08-28-57, interpreter leg — the PARITY PIN for the compiled fix.
+///
+/// Unlike its siblings this one was green before the fix and after it: the
+/// interpreter always ran a fixed array's element bodies, at the binding's
+/// live-range end, and the whole divergence lived on the compiled side. It is
+/// here because the compiled twin
+/// (`codegen::e2e_fixed_array_elements_run_their_user_drop_bodies`) asserts the
+/// same strings, so a future change that "fixes" a mismatch by moving the
+/// INTERPRETER has to break this test to do it. The row it closes was a
+/// placement divergence, and placement is what a one-sided edit would quietly
+/// re-negotiate.
+#[test]
+fn fixed_array_elements_run_their_user_drop_bodies() {
+    const H: &str = "enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+         enum H { A(R), B }\n\
+         enum J { A(i64), B }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.id}\") } }\n";
+    for (label, body, want) in [
+        (
+            "enum-elems-mixed",
+            "fn main() { let a: Array[E, 2] = [E.B, E.A(R { id: 3 })];\n\
+             \x20            println(\"mid\"); println(\"end\"); }\n",
+            "drop E\ndrop E\ndrop R3\nmid\nend\n",
+        ),
+        (
+            "payload-only-enum-elem",
+            "fn main() { let a: Array[H, 1] = [H.A(R { id: 4 })]; println(\"mid\"); }\n",
+            "drop R4\nmid\n",
+        ),
+        (
+            "struct-elems",
+            "fn main() { let a: Array[R, 2] = [R { id: 1 }, R { id: 2 }];\n\
+             \x20            println(\"mid\"); }\n",
+            "drop R1\ndrop R2\nmid\n",
+        ),
+        (
+            "moved-on-enum",
+            "fn main() { let a: Array[E, 2] = [E.B, E.B]; let b = a; println(\"moved\"); }\n",
+            "drop E\ndrop E\nmoved\n",
+        ),
+        (
+            "nested-scope",
+            "fn main() { { let a: Array[E, 1] = [E.B]; println(\"inner\") }\n\
+             \x20            println(\"outer\"); }\n",
+            "drop E\ninner\nouter\n",
+        ),
+        (
+            "no-drop-elems",
+            "fn main() { let a: Array[J, 2] = [J.A(1), J.B]; println(\"mid\"); }\n",
+            "mid\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-58, interpreter leg — the twin of
 /// `codegen::e2e_own_drop_enum_as_optres_payload_runs_its_body`.
 ///

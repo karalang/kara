@@ -121,6 +121,19 @@ pub(crate) struct VarTypes<'ctx> {
     /// the body would then run on one backend and not the other. Cleared per
     /// function alongside `enum_inst_var_types`.
     pub(crate) tuple_var_elem_tes: HashMap<String, Vec<TypeExpr>>,
+    /// The array twin of [`Self::tuple_var_elem_tes`]: element `TypeExpr` and
+    /// length per let-bound fixed `Array[T, N]` variable, recorded where the
+    /// let-site resolves them (annotation, else the un-annotated path's
+    /// `array_elem_type_exprs`). A bare rebind `let b = a;` carries neither, so
+    /// without this the destination could not register the element-bodies walk
+    /// (`__karac_dropelems_array_*`) the move disarms on the source, and the
+    /// bodies ran in the interpreter and nowhere else (B-2026-08-28-57).
+    ///
+    /// Kept separate from `array_elem_type_exprs` on purpose: that table is
+    /// read by call dispatch, index lowering, method calls and the mono pass,
+    /// so widening WHAT lands in it to serve the drop walk would change
+    /// unrelated decisions. Cleared per function alongside its tuple peer.
+    pub(crate) array_var_elem_te: HashMap<String, (TypeExpr, u32)>,
     /// Resolved `Option[P]` / `Result[O, E]` instantiation per let-bound
     /// variable whose payload bodies walk registered
     /// (`__karac_dropelems_opt_*` / `__karac_dropelems_res_*`). Consulted by

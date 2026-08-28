@@ -1623,6 +1623,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-57 — the memory half of running a fixed `Array[T, N]`'s
+    /// element `Drop` bodies.
+    ///
+    /// `__karac_dropelems_array_*` is bodies-only by construction: it calls
+    /// `emit_slot_drop_bodies_at` per element and frees nothing, while the
+    /// array's storage stays owned by the scope-exit `__karac_drop_array_te_*`
+    /// registered on the same binding. Two actions over one slot is exactly the
+    /// arrangement that double-frees if the bodies leg also freed, and leaks if
+    /// adding it displaced the memory one — so every row carries a heap
+    /// `String` the newly-running body READS.
+    ///
+    /// `moved-on` is the row that matters most: the rebind fallback registers
+    /// the walk for the DESTINATION after the move disarms the source. Register
+    /// it per-owner rather than per-value and both fire over the same elements.
+    #[test]
+    fn asan_fixed_array_element_bodies_are_memory_balanced() {
+        const H: &str = "struct S { id: i64, name: String }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"drop S{self.name}\") } }\n";
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let a: Array[S, 2] = [S {{ id: 1, name: f\"x{{1}}\" }},\n\
+             \x20                                     S {{ id: 2, name: f\"y{{2}}\" }}];\n\
+             \x20            println(\"mid\"); }}\n"
+            ),
+            &["drop Sx1", "drop Sy2", "mid"],
+            "heap-struct-elems",
+        );
+        // MOVED ON, un-annotated destination — the source-record fallback. A
+        // per-owner widening double-frees here.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let a: Array[S, 2] = [S {{ id: 1, name: f\"x{{1}}\" }},\n\
+             \x20                                     S {{ id: 2, name: f\"y{{2}}\" }}];\n\
+             \x20            let b = a; println(\"moved\"); }}\n"
+            ),
+            &["drop Sx1", "drop Sy2", "moved"],
+            "moved-on",
+        );
+        // ENUM elements whose variant payload owns the heap — the walker's
+        // enum leg, reached through `emit_slot_drop_bodies_at` rather than the
+        // struct-field one.
+        assert_clean_asan_run(
+            "enum E { A(String), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"drop E\") } }\n\
+             fn main() { let a: Array[E, 2] = [E.B, E.A(f\"n{7}\")];\n\
+             \x20            println(\"mid\"); }\n",
+            &["drop E", "drop E", "mid"],
+            "enum-elems-heap-payload",
+        );
+        // NESTED SCOPE — the inner frame's drain owns both actions.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ {{ let a: Array[S, 1] = [S {{ id: 1, name: f\"x{{1}}\" }}];\n\
+             \x20                 println(\"inner\") }}\n\
+             \x20            println(\"outer\"); }}\n"
+            ),
+            &["drop Sx1", "inner", "outer"],
+            "nested-scope",
+        );
+    }
+
     #[test]
     fn asan_own_drop_enum_discarded_by_wildcard_leaf_is_balanced() {
         const H: &str = "enum E { A(R), B }\n\
