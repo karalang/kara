@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 212 | 4 |
+| leak | 212 | 3 |
 | run-vs-build | 197 | 8 |
 | missing-feature | 187 | 0 |
-| double-free | 148 | 2 |
+| double-free | 148 | 1 |
 | codegen-gap | 147 | 2 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1148 | 20 |
+| codegen | 1148 | 18 |
 | typecheck | 278 | 0 |
 | interp | 208 | 7 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced · 20 open · 1663 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced · 18 open · 1665 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-28). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (20)
+### Open (18)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -147,9 +147,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 | B-2026-08-28-29 | 2026-08-28 | codegen | medium | A destructure of a FRESH STRUCT source loses user `Drop` bodies on BOTH compiled backends while the interpreter runs one: `let W { r, n } = mk()` and the struct-literal spelling both print nothing where one `drop 41` is due. Two separable roots -- `expr_yields_fresh_owned_temp` admits only `Call`/`MethodCall`, so a struct LITERAL never reaches the leaf path at all (the tuple literal got exactly this widening in B-2026-08-28-1 and the struct spelling never did), and even on the admitted call spelling the BOUND leaf registers memory cleanup but no user body. PLACE, PARAM and TUPLE sources are all correct, which is what localizes it | — |
 | B-2026-08-28-31 | 2026-08-28 | interp+codegen | medium | AN ENUM WITH ITS OWN `impl Drop`, DISCARDED BY A WILDCARD DESTRUCTURE LEAF, RUNS NO BODY COMPILED while `karac run --interp` runs the enum's OWN body: `enum E { A(R), B } impl Drop for E { .. } let p = (E.A(R { id: 41 }), 1); let (_, n) = p;` prints `drop E` under `--interp` and nothing on either compiled backend. The payload walker the sibling row wires for payload-only enums is the WRONG body here -- admitting it prints the PAYLOAD's `drop R41` instead -- and the right one lives on the `karac_drop_<E>` wrapper, which also frees | — |
 | B-2026-08-28-32 | 2026-08-28 | codegen | low | A CONTAINER-ELEMENT HEAP READ CONSUMED BY AN UNBOUND TEMPORARY LEAKS: `println(Box2 { w: p[0].word }.w)`, `println((p[1].word, 9).0)`, and printing an `if`/`match`/block value without binding it all lose the deep clone the read emits -- 3 bytes in 1 allocation each under LSan. Pre-existing on the already-working FIELD spelling, which leaks the same shapes for the same byte counts; the BOUND form of every one is clean. The consuming temporary takes the clone over and then dies without freeing it. | — |
-| B-2026-08-28-33 | 2026-08-28 | codegen | low | A CLONED CONTAINER-ELEMENT STRUCT PASSED DIRECTLY AS AN OWNED ARGUMENT LEAKS 3 BYTES: `takes_r(w[1].0)` where `w: Vec[(R, i64)]`, because an owned aggregate param is callee-owned by ENTRY COPY and nothing owns the caller's clone. The bound form is clean. A knowing trade made by B-2026-08-28-24 -- the same expression DOUBLE-FREED before it -- filed so the remainder is visible; the fix needs a struct-shaped takeover in `suppress_source_vec_cleanup_for_arg_ex`, and registering the cleanup without it turns the leak back into a double free at `let`. | — |
 | B-2026-08-28-34 | 2026-08-28 | codegen | medium | A FIELD READ THROUGH A TUPLE ELEMENT OF A CONTAINER ELEMENT never lowers: `v[0].0.id` where `v: Vec[(R, i64)]` fails `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while `karac check` accepts it and the interpreter answers it; binding the element first builds and runs. `place_chain_tuple_tes` has arms for Identifier, FieldAccess and TupleIndex and no `Index` arm, so a tuple held in a container element has no type source. The same resolution surface as B-2026-08-28-3, one source over. | — |
-| B-2026-08-28-35 | 2026-08-28 | codegen | high | A STRUCT-VALUED FIELD READ OFF A CONTAINER ELEMENT IS NEVER CLONED AND DOUBLE-FREES: `let e = q[1].r` where `q: Vec[Q]`, `struct Q { r: R, n: i64 }` and `struct R { id: i64, name: String }` aborts under ASAN with `attempting double-free`, while the argument position is clean (an owned aggregate param entry-copies). The exact sibling of B-2026-08-28-24 one node kind over: `clone_vec_elem_heap_field_read` gates on `is_string_type_expr || extract_vec_elem_type` and declines a struct-valued field, so the read hands back a shallow alias with no clone anywhere. | — |
 
 ### Relocated (2)
 
@@ -181,9 +179,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 
 </details>
 
-### Fixed (1663)
+### Fixed (1665)
 
-<details><summary>1663 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1665 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1849,6 +1847,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1709 surfaced
 | B-2026-08-28-17 | interp+codegen | medium | THE STRUCT TWIN of B-2026-08-28-2: returning a field extracted from an owned STRUCT param runs its user `Drop` body TWICE on all three backends -- `s… | f697522 |
 | B-2026-08-28-24 | codegen | high | A TUPLE ELEMENT PROJECTED OUT OF A CONTAINER ELEMENT (`v[0].0`) IS NEVER CLONED AND DOUBLE-FREES ON BOTH COMPILED BACKENDS, AT EVERY POSITION INCLUDI… | 0723acf |
 | B-2026-08-28-30 | interp+codegen | medium | THE B-2026-08-28-12 WILDCARD DISCARD DISAGREES BETWEEN BACKENDS IN TWO OPPOSITE-DIRECTION SHAPES that its fix (429977d) did not cover: an ENUM elemen… | 34b1691 |
+| B-2026-08-28-33 | codegen | low | A CLONED CONTAINER-ELEMENT STRUCT PASSED DIRECTLY AS AN OWNED ARGUMENT LEAKS 3 BYTES: `takes_r(w[1].0)` where `w: Vec[(R, i64)]`, because an owned ag… | 54ca269 |
+| B-2026-08-28-35 | codegen | high | A STRUCT-VALUED FIELD READ OFF A CONTAINER ELEMENT IS NEVER CLONED AND DOUBLE-FREES: `let e = q[1].r` where `q: Vec[Q]`, `struct Q { r: R, n: i64 }`… | a0005b8 |
 | B-2026-08-28-36 | codegen | medium | A CONTAINER-ELEMENT TUPLE-INDEX READ WHOSE LEAF IS A WHOLE HEAP-CARRYING STRUCT LEAKS ITS CLONE when no destination adopts it: after B-2026-08-28-24… | 54ca269 |
 
 </details>
