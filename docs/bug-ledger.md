@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 227 | 1 |
-| run-vs-build | 222 | 8 |
+| run-vs-build | 223 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 148 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1202 | 9 |
+| codegen | 1203 | 9 |
 | typecheck | 278 | 0 |
-| interp | 234 | 6 |
+| interp | 235 | 6 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1767 surfaced · 10 open · 1731 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1768 surfaced · 10 open · 1732 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-28-67 | 2026-08-28 | interp+codegen | low | A `match` OVER A BARE USER ENUM RUNS THE PAYLOAD'S `Drop` BODY AND THE ENUM'S OWN IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `match e { E.A(r) => .. }` is interp `dR5 dE` vs compiled `dE dR5`; same count, different sequence | — |
-| B-2026-08-28-69 | 2026-08-28 | interp+codegen | medium | A DISCARDED `match` WHOSE ARM YIELDS ITS BOUND PAYLOAD RUNS NO `Drop` BODY IN THE INTERPRETER while both compiled backends run exactly one -- `match o { Some(r) => { r } .. };` in statement position is interp `dropped` vs compiled `dR1 dropped`; a discarded CALL result and a read-only arm both run it, so the loss is specific to the arm handing the binding on | — |
 | B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
 | B-2026-08-29-5 | 2026-08-29 | codegen | medium | A DISCARDED `match` / `if let` WHOSE ARM HANDS THE BOUND PAYLOAD OUT AS THE CONSTRUCT'S VALUE LEAKS IT -- `if let Some(s) = vv { s };` in statement position strands the whole 38 B buffer with NO reassignment anywhere in the program; binding the payload and USING it without handing it out is clean, so it is the hand-out-into-nothing that leaks, and it reproduces for `match`, for `if let`, and for a struct payload alike | — |
 | B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned enum / `Option` param has its payload bound out and NOT returned MISSES the payload's `Drop` body -- the `Option` leg on BOTH backends and the user-enum leg in the INTERPRETER only, against free-function oracles that run it once on all four surfaces. NOTE: this row's original measurements were taken while 277621a's since-reverted frame isolation was on main and do not reproduce -- see the CORRECTION | — |
@@ -140,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1767 surfaced
 | B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | A NAMED struct binding passed by value to a function that returns it runs the `Drop` body TWICE on all four surfaces -- for a FREE FUNCTION as well as a method, and for a block tail as well as `return r;`. NOTE: the row's free-function oracle and its `return`-vs-tail framing are both REFUTED, and the second body tracks a second real allocation (the callee's entry copy), so 'one body is due' is a design question rather than a measured defect -- see the CORRECTION | — |
 | B-2026-08-29-16 | 2026-08-29 | interp+codegen | medium | A GENERIC method that returns its owned param CONDITIONALLY is wrong in BOTH directions and diverges both ways -- param dies: interp 0 bodies / compiled 1; param escapes: interp 1 / compiled 2 -- and neither side can be corrected alone, because the callee-side flip that would settle it is declined for generics (B-2026-08-28-71) | — |
 | B-2026-08-29-19 | 2026-08-29 | interp+codegen | medium | ALL THREE BACKENDS run a `Drop` body TWICE when a match-arm payload is rebound, RE-WRAPPED into a fresh enum and matched again -- `Full(r) => { let m = r; let w = W.One(m); match w { W.One(z) => z.id } }` prints `dR1 dR1 v=1` where one body is due; the same rebind without the re-wrap is correct (B-2026-08-29-17), and the backends AGREE so no A/B gate can see it | — |
+| B-2026-08-29-20 | 2026-08-29 | interp+codegen | medium | THE `let _ = match …` SPELLING OF A DISCARDED MATCH RUNS NO `Drop` BODY IN THREE CELLS while its call twin (`let _ = mk();`) is correct on both backends -- two cells are agreed-but-wrong and one is a run-vs-build divergence; a different site from B-2026-08-28-69's bare-statement discard, and measured byte-identical across that fix | — |
 
 ### Relocated (2)
 
@@ -171,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1767 surfaced
 
 </details>
 
-### Fixed (1731)
+### Fixed (1732)
 
-<details><summary>1731 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1732 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1891,6 +1891,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1767 surfaced
 | B-2026-08-28-65 | codegen | medium | A `return <local>` NESTED IN A BRANCH LOSES THE LOCAL'S `Drop` BODY ON THE PATH THAT NEVER TAKES THE RETURN, on all three COMPILED backends while the… | f94c75c |
 | B-2026-08-28-66 | codegen | high | A CONSUMING ARM THAT HANDS ITS BOUND STRUCT PAYLOAD ON RUNS THAT PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `let k = match o { Some(r)… | 0e6f200 |
 | B-2026-08-28-68 | codegen | medium | A `Result` WITH ONE SIDE BOXED LOSES THE OTHER SIDE'S INLINE PAYLOAD WALK: `track_inline_result_payload_var`'s name-keyed `boxed_enum_payload_vars` e… | c886f1e |
+| B-2026-08-28-69 | interp+codegen | medium | A DISCARDED `match` WHOSE ARM YIELDS ITS BOUND PAYLOAD RUNS NO `Drop` BODY IN THE INTERPRETER while both compiled backends run exactly one -- `match… | 16a8791 |
 | B-2026-08-28-70 | interp+codegen | medium | A CONDITIONALLY-RETURNED owned param of a METHOD loses its `Drop` body IN THE INTERPRETER while all three compiled backends run it -- and the callee-… | 277621a |
 | B-2026-08-28-72 | codegen | medium | A `match` THAT IS A FUNCTION'S RETURNED VALUE RUNS THE YIELDED PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `fn take(o: Option[R]) -> R {… | 5746b82 |
 | B-2026-08-28-73 | codegen | high | REGRESSION from 77729f2 (NOT f862656, as first filed): A CONSUMING ARM THAT HANDS ITS BOUND BOXED ENUM PAYLOAD OUT AS THE MATCH'S VALUE DOUBLE-FREES… | 1caf601 |
