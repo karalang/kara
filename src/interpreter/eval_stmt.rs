@@ -2461,6 +2461,19 @@ impl<'a> super::Interpreter<'a> {
     /// borrowed view would double it against the real owner. Codegen twin:
     /// the same match in `compile_stmt`'s wildcard-let path; the two must
     /// stay identical or the backends fire on different shapes.
+    /// The value a match arm ultimately yields: an arm may be a bare
+    /// expression or a block, and only the block's tail is the value. Mirrors
+    /// codegen's `Codegen::block_tail_expr` so the two backends peel the same
+    /// way when deciding a discarded match's ownership.
+    fn arm_tail_expr(body: &Expr) -> &Expr {
+        match &body.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
+                b.final_expr.as_deref().map_or(body, Self::arm_tail_expr)
+            }
+            _ => body,
+        }
+    }
+
     fn discard_rhs_produces_owned_value(&self, rhs: &Expr, val: &Value) -> bool {
         match &rhs.kind {
             ExprKind::StructLiteral { .. } | ExprKind::Identifier(_) => true,
@@ -4168,8 +4181,31 @@ impl<'a> super::Interpreter<'a> {
                     // Needs no gate for the shapes that must stay silent: the
                     // walker is value-driven, and a read-only arm yields `Unit`,
                     // for which it is a no-op.
-                    ExprKind::Match { .. } => {
-                        self.run_discarded_value_user_drops(discarded);
+                    ExprKind::Match { arms, .. } => {
+                        // …but ONLY when no arm hands out a binding that is
+                        // still LIVE here. That gate is not defensive — it was
+                        // measured: `let r = R { id: 41 }; match n { 0 => r, _ =>
+                        // R { id: 9 } };` yields an ENCLOSING local, which owns
+                        // its own scope-exit body, and firing the walker on top
+                        // printed `drop 41` TWICE
+                        // (`test_conditionally_moved_local_user_drop_body_runs_once`,
+                        // the `discarded-match-statement` row).
+                        //
+                        // Liveness is exactly the discriminator, and it is
+                        // available for free at this point: an arm's payload
+                        // BINDING has already left scope by the time the
+                        // statement's discard runs, so it looks up to `None`
+                        // and correctly fires; an enclosing local is still in
+                        // scope, looks up to `Some`, and correctly does not.
+                        // Shape alone cannot tell them apart — both are a bare
+                        // `Identifier` at the arm tail.
+                        let hands_out_live_binding = arms.iter().any(|a| {
+                            matches!(&Self::arm_tail_expr(&a.body).kind,
+                                ExprKind::Identifier(n) if self.env.get(n).is_some())
+                        });
+                        if !hands_out_live_binding {
+                            self.run_discarded_value_user_drops(discarded);
+                        }
                     }
                     ExprKind::MethodCall { method, .. }
                         if !matches!(method.as_str(), "get" | "first" | "last" | "peek") =>

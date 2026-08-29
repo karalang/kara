@@ -18519,7 +18519,7 @@ fn main() {
         let hdr = "struct R { id: i64 }\n\
                    impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
                    fn mk(i: i64) -> R { return R { id: i }; }\n";
-        let rows: [(&str, &str, &str); 5] = [
+        let rows: [(&str, &str, &str); 6] = [
             (
                 "let o: Option[R] = Some(R { id: 1 });\n\
                  match o { Some(r) => { r } None => { R { id: 0 } } };\n\
@@ -18554,6 +18554,14 @@ fn main() {
                  println(\"dropped\");",
                 "dR7\ndropped\n",
                 "arm yields a call result",
+            ),
+            (
+                "let r = R { id: 41 };\n\
+                 let n = 0;\n\
+                 match n { 0 => r, _ => R { id: 9 } };\n\
+                 println(\"end\");",
+                "dR41\nend\n",
+                "BOUNDARY: arm hands out a LIVE enclosing local",
             ),
         ];
         for (body, expected, label) in rows {

@@ -44763,7 +44763,7 @@ fn field_rooted_container_element_heap_read_is_a_copy() {
 fn test_discarded_match_arm_value_runs_its_drop_body_once() {
     let hdr = "struct R { id: i64 }\n\
                impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
-    let rows: [(&str, &str, &str); 5] = [
+    let rows: [(&str, &str, &str); 6] = [
         // The arm hands on a BOUND payload — braced and bare.
         (
             "let o: Option[R] = Some(R { id: 1 });\n\
@@ -44801,6 +44801,14 @@ fn test_discarded_match_arm_value_runs_its_drop_body_once() {
              println(\"dropped\");",
             "dR7\ndropped",
             "arm yields a call result",
+        ),
+        (
+            "let r = R { id: 41 };\n\
+             let n = 0;\n\
+             match n { 0 => r, _ => R { id: 9 } };\n\
+             println(\"end\");",
+            "dR41\nend",
+            "BOUNDARY: arm hands out a LIVE enclosing local",
         ),
     ];
     for (body, expected, label) in rows {
