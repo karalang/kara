@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
+| run-vs-build | 232 | 7 |
 | leak | 231 | 4 |
-| run-vs-build | 230 | 6 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 149 | 1 |
@@ -104,15 +104,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 80 | 0 |
 | other | 63 | 0 |
 | crash | 61 | 0 |
-| use-after-free | 22 | 0 |
+| use-after-free | 23 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1215 | 10 |
+| codegen | 1218 | 11 |
 | typecheck | 278 | 0 |
-| interp | 243 | 7 |
+| interp | 243 | 6 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1782 surfaced · 11 open · 1744 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1785 surfaced · 12 open · 1746 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,8 +139,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1782 surfaced
 | B-2026-08-29-30 | 2026-08-29 | interp+codegen | medium | A DISCARDED `if` WITH NO `else` RUNS NO `Drop` BODY AND LEAKS -- `let _ = if n == 1 { R { .. } };` is silent on all three backends where one body is due, because a no-`else` merge yields a const-0 placeholder and the arm's value never reaches either discard site; the BARE-STATEMENT STRUCT LITERAL half of this row is FIXED (2ac067e), as is that commit's other find -- the bare spelling of the no-`else` `if` was a live run-vs-build divergence at fd4e80f, not the agreed silence first recorded here | — |
 | B-2026-08-29-31 | 2026-08-29 | interp+codegen | medium | THE `let _ =` SPELLING OF A DISCARDED BRANCH STILL STRANDS WHATEVER ITS ARM HANDS OUT -- B-2026-08-29-5 fixed the BARE-STATEMENT form, and the wildcard-let form of the same `if` / `match` leaks 9 B (enclosing local) or 3 B (bound payload) at KARAC_OPT_LEVEL=0 and runs NO `Drop` body on any backend; one row of the population is additionally a live run-vs-build divergence | — |
 | B-2026-08-29-32 | 2026-08-29 | codegen | medium | A DISCARDED BRANCH OR MATCH WHOSE ARMS ARE LITERALS OF A STRUCT WITH HEAP FIELDS BUT NO `impl Drop` LEAKS THEM -- `if c { P { a: payload(), b: 1 } } else { .. };` and `let _ = match .. { P { a: payload() } .. }` each strand 38 B, because the discard battery answers the BODIES question correctly (there is no body) and then returns before the memory one is ever asked | — |
-| B-2026-08-29-33 | 2026-08-29 | interp+codegen | medium | A MATERIALIZING ARM OVER A PROJECTION-PLACE ENUM SCRUTINEE RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY BACKEND -- `match s.e { E.A(r) => { let m = r; .. } }` is interp `m8 dR8 dE dR8` vs compiled `m8 dR8 dE dR0`, where the identifier spelling gives `m8 dR8 dE` | — |
 | B-2026-08-29-34 | 2026-08-29 | codegen | medium | A `Vector[bf16, N]` LANE OP ABORTS ISel ON arm64 AND wasm32 -- the vector legalizer SCALARIZES `<4 x bfloat> fadd` back into the unselectable scalar `bf16 fadd`, so the SIMD path keeps the disease B-2026-08-29-23 fixed for scalars. Non-monotonic: a one-op probe selects, a three-op one does not. | — |
+| B-2026-08-29-36 | 2026-08-29 | codegen | low | A TWO-HOP PROJECTION (`match w.s.e { .. }`) STILL RUNS A MATERIALIZING ARM'S PAYLOAD BODY ON THE ZEROED SLOT -- compiled `m8 dR8 dE dR0` vs interp `m8 dR8 dE dR8`, where the ONE-hop spelling now gives `m8 dR8 dE` on both | — |
+| B-2026-08-29-37 | 2026-08-29 | codegen | medium | A `ref self` METHOD WHOSE MATCH MOVES `self.e`'s PAYLOAD OUT RUNS THE ENUM'S OWN `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `dR8 dE n8 dE dR8` vs interp `dR8 n8 dE dR8`, the extra `dE` firing INSIDE the callee on the caller's struct | — |
 
 ### Relocated (2)
 
@@ -172,9 +173,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1782 surfaced
 
 </details>
 
-### Fixed (1744)
+### Fixed (1746)
 
-<details><summary>1744 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1746 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1922,6 +1923,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1782 surfaced
 | B-2026-08-29-23 | codegen | medium | EVERY SCALAR `bf16` OPERATION ABORTED ISel ON arm64 AND wasm32 -- `LLVM ERROR: Cannot select`, exit 134, no program output | 7ba9c46 |
 | B-2026-08-29-25 | interp+codegen | medium | A DISCARDED `if` RUNS NO `Drop` BODY IN EITHER STATEMENT FORM -- `if c { R { . | fd4e80f |
 | B-2026-08-29-29 | interp+codegen | medium | A PROJECTION-PLACE ENUM SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS, THE SECOND TIME ON THE ZEROED SLOT -- `match s.e {… | af86dfd |
+| B-2026-08-29-33 | interp+codegen | medium | A MATERIALIZING ARM OVER A PROJECTION-PLACE ENUM SCRUTINEE RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY BACKEND -- `match s.e { E.A(r) => { let m =… | 9f3e2cb |
+| B-2026-08-29-35 | codegen | high | THE THREE `let`-FORM LEGS NEVER RAN THE PROJECTION-PLACE PAYLOAD SUPPRESSOR, so `if let E.A(r) = s.e { let m = r; . | 9f3e2cb |
 
 </details>
 
