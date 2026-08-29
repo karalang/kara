@@ -33961,7 +33961,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         // it per field — and declines deliberately, because doing so alone
         // turns an agreed defect into a run-vs-build divergence, the trade
         // B-2026-08-29-19 already had to back out once for `Option`.
-        // UNFIXED (B-2026-08-29-40).
+        // UNFIXED (B-2026-08-29-43).
         (
             "pin-owndrop-mixed",
             format!(
@@ -33974,7 +33974,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         ),
         // A whole-value rebind after a MIXED wrap re-arms the full walk — the
         // mask is keyed on the binding and the destination registers afresh.
-        // UNFIXED (B-2026-08-29-41).
+        // UNFIXED (B-2026-08-29-44).
         (
             "pin-mixed-then-rebind",
             format!(
@@ -33987,7 +33987,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         // identically — so it is a move-suppression hole, not this rule. Both
         // spellings pinned, plus the FRESH-element case that is correct, since
         // the three together are what identify the defect.
-        // UNFIXED (B-2026-08-29-42).
+        // UNFIXED (B-2026-08-29-45).
         (
             "pin-vec-param-view",
             format!(
@@ -34015,7 +34015,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         // Moving a param view back OUT of the struct it was wrapped into: the
         // destination registers a body the caller also runs. Pre-existing, and
         // the local-source twin beside it is correct, which isolates the cause.
-        // UNFIXED (B-2026-08-29-44).
+        // UNFIXED (B-2026-08-29-47).
         (
             "pin-view-field-moved-out",
             format!(
@@ -34036,7 +34036,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         // temps in FORWARD argument order, both compiled backends in REVERSE.
         // Counts agree, order does not. The codegen twin pins `dR2 dR1` for
         // this same program, so the pair records the divergence explicitly.
-        // UNFIXED (B-2026-08-29-43).
+        // UNFIXED (B-2026-08-29-46).
         (
             "pin-two-owned-params-drop-order",
             format!(

@@ -38149,7 +38149,7 @@ fn main() {
         // only be swapped for a variant that drops ALL of them — so masking one
         // slot would cost the fresh field's body, the exact trade this row
         // exists to avoid. Left doubling, and the interpreter declines the same
-        // shape so the two stay agreed. UNFIXED (B-2026-08-29-40).
+        // shape so the two stay agreed. UNFIXED (B-2026-08-29-43).
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
@@ -38167,7 +38167,7 @@ fn main() {
         // per-slot mask is keyed on the binding, and the destination gets a
         // fresh registration with no mask. The all-views case propagates
         // view-ness instead, which is why `struct-then-rebind` above is fixed
-        // and this is not. UNFIXED (B-2026-08-29-41).
+        // and this is not. UNFIXED (B-2026-08-29-44).
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
@@ -38182,7 +38182,7 @@ fn main() {
         // LOCAL moved into one doubles identically, with no param anywhere, so
         // the cause is a move-suppression hole rather than caller-retains.
         // Both spellings pinned, because it is the pair that shows which bug it
-        // is. UNFIXED (B-2026-08-29-42).
+        // is. UNFIXED (B-2026-08-29-45).
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
@@ -38218,7 +38218,7 @@ fn main() {
         // inherits nothing about the field having been a VIEW, so it registers
         // a body the caller also runs. Pre-existing — measured identical on a
         // pre-fix build — and the LOCAL-source twin below is correct, which is
-        // what isolates the cause. UNFIXED (B-2026-08-29-44).
+        // what isolates the cause. UNFIXED (B-2026-08-29-47).
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
@@ -38242,7 +38242,7 @@ fn main() {
         // them forward. Counts agree, order does not — a run-vs-build
         // divergence with no wrap involved, pre-existing, and pinned on both
         // sides so a fix to either has to touch both. The interpreter twin
-        // pins `dR1 dR2`. UNFIXED (B-2026-08-29-43).
+        // pins `dR1 dR2`. UNFIXED (B-2026-08-29-46).
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
