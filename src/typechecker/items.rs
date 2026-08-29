@@ -4120,6 +4120,45 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-08-29-39 — an ANNOTATED `let` whose RHS is a polymorphic literal
+    /// records the literal's UNINSTANTIATED type, not the binding's.
+    ///
+    /// `check_expr(value, &declared)` verifies the RHS against the annotation
+    /// but does not re-record it, so a bare `None` in
+    /// `let x: Option[Node] = None;` leaves `expr_types[value.span]` holding
+    /// `Option[TypeParam("T")]` where the binding is `Option[Shared("Node")]`.
+    /// Measured, on exactly that program.
+    ///
+    /// That is not a cosmetic mismatch, because downstream passes read the
+    /// RHS type as the BINDING's type. `use_classifier`'s `Let` arm keys
+    /// `local_types` off `expr_types[value.span]`, and `is_copy_type` answers
+    /// `Option[T]` by asking whether every argument is `Copy` — a bare
+    /// `TypeParam` is not, so the binding was scored non-`Copy` and every
+    /// later use became a `Consume`. For an RC type that is wrong twice over:
+    /// `Option[Shared(_)]` IS `Copy` (a use bumps a refcount, it does not move
+    /// the binding), so `f(x); f(x)` drew a spurious use-after-move, and
+    /// `karac check` returned EXIT 1 on a program every backend compiles and
+    /// runs correctly. The same annotation spelled `= Some(..)` was clean,
+    /// because THAT RHS records the instantiated type.
+    ///
+    /// Narrow on purpose: it fires only when the annotation is fully concrete
+    /// and the recorded RHS type is not, so it can only ever replace an
+    /// unresolved type with the resolved one the annotation already committed
+    /// to. A generic annotation (`let v: Vec[T] = Vec.new()` inside `fn f[T]`)
+    /// is left exactly as it was.
+    fn record_declared_type_for_polymorphic_rhs(&mut self, value: &Expr, declared: &Type) {
+        if !type_is_fully_concrete(declared) {
+            return;
+        }
+        let key = SpanKey::from_span(&value.span);
+        match self.expr_types.get(&key) {
+            Some(recorded) if !type_is_fully_concrete(recorded) => {
+                self.expr_types.insert(key, declared.clone());
+            }
+            _ => {}
+        }
+    }
+
     fn check_unsolved_type_param(&mut self, inferred: &Type, span: &Span) {
         if matches!(inferred, Type::Error) {
             return;
@@ -4404,6 +4443,7 @@ impl<'a> super::TypeChecker<'a> {
                     let scope = self.current_body_dim_scope.clone();
                     let declared = self.lower_type_expr(ty_expr, &scope);
                     self.check_expr(value, &declared);
+                    self.record_declared_type_for_polymorphic_rhs(value, &declared);
                     declared
                 } else {
                     let inferred = self.infer_expr(value);

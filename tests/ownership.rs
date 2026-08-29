@@ -933,6 +933,96 @@ fn test_use_after_move_plain_struct_no_clone_autofix() {
 }
 
 #[test]
+fn option_shared_binding_initialized_to_none_is_not_use_after_move() {
+    // B-2026-08-29-39 — an ANNOTATED `let` whose RHS is a polymorphic literal
+    // recorded the LITERAL's uninstantiated type, not the binding's.
+    //
+    // `check_expr(value, &declared)` verifies a bare `None` against
+    // `Option[Node]` but did not re-record it, so `expr_types[value.span]`
+    // held `Option[TypeParam("T")]` where the binding is
+    // `Option[Shared("Node")]`. `use_classifier` keys `local_types` off that
+    // RHS type and `is_copy_type` answers `Option[T]` by asking whether every
+    // argument is `Copy` — a bare `TypeParam` is not — so the binding scored
+    // non-`Copy`, every later use became a Consume, and the UAM predicate
+    // fired on a program every backend compiles and runs correctly.
+    //
+    // `Option[shared T]` IS `Copy`: a use bumps a refcount, it does not move
+    // the binding. The same annotation spelled `= Some(..)` was always clean,
+    // because that RHS records the instantiated type — which is what made the
+    // initializer, and not the type, the variable.
+    ownership_ok(
+        "shared struct Node { val: i64, mut left: Option[Node] }\n\
+         fn f(t: Option[Node]) -> i64 {\n\
+             match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+         }\n\
+         fn main() {\n\
+             let x: Option[Node] = None;\n\
+             println(f\"{f(x)} {f(x)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn option_shared_binding_initialized_to_none_then_reassigned_is_not_use_after_move() {
+    // The same shape with a later reassignment — the accumulator that surfaced
+    // B-2026-08-29-39 in kata 298's differential:
+    //   `let mut acc: Option[TreeNode] = None; while … { acc = node(v, acc, None); }`
+    // Reassignment never rehabilitated the binding, because the classification
+    // came from the DECLARATION's RHS.
+    ownership_ok(
+        "shared struct Node { val: i64, mut left: Option[Node] }\n\
+         fn f(t: Option[Node]) -> i64 {\n\
+             match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+         }\n\
+         fn make(v: i64) -> Option[Node] { return Some(Node { val: v, left: None }); }\n\
+         fn main() {\n\
+             let mut x: Option[Node] = None;\n\
+             let mut i = 0;\n\
+             while i < 3 { x = make(i); i = i + 1; }\n\
+             println(f\"{f(x)} {f(x)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn option_of_a_moving_payload_initialized_to_none_still_reports_the_move() {
+    // The guard for the fix above: it must narrow the classification to the
+    // annotation, NOT suppress the diagnostic for `Option` generally. A
+    // `None`-initialized `Option[String]` and `Option[Vec[i64]]` carry
+    // genuinely move-only payloads and still warn — with the concrete type
+    // now recorded, so the `.clone()` auto-fix is offered correctly too.
+    for (payload, callee) in [
+        (
+            "String",
+            "fn f(t: Option[String]) -> i64 {\n\
+                        match t { None => { return 0; } Some(s) => { return s.len(); } }\n\
+                    }\n",
+        ),
+        (
+            "Vec[i64]",
+            "fn f(t: Option[Vec[i64]]) -> i64 {\n\
+                          match t { None => { return 0; } Some(v) => { return v.len(); } }\n\
+                      }\n",
+        ),
+    ] {
+        let src = format!(
+            "{callee}\
+             fn main() {{\n\
+                 let x: Option[{payload}] = None;\n\
+                 println(f\"{{f(x)}} {{f(x)}}\");\n\
+             }}"
+        );
+        let errors = ownership_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+            "Option[{payload}] moves its payload and must still report the reuse"
+        );
+    }
+}
+
+#[test]
 fn test_ownership_cycle_has_suggestion() {
     let errors = ownership_errors(
         "struct A { b: B }\n\
