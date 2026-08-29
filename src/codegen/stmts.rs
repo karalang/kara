@@ -15384,6 +15384,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .span_tables
                     .string_typed_exprs
                     .contains(&(tail.span.offset, tail.span.length)),
+                // B-2026-08-28-69 — a STRUCT LITERAL arm mints a fresh owned
+                // value exactly as a call does, but `expr_yields_fresh_owned_temp`
+                // recognizes only `Call`/`MethodCall`, so `match n { 1 => { R {
+                // id: 7 } } .. };` was declined at this gate and its `Drop` body
+                // ran on NO backend. Admitted HERE rather than by widening that
+                // predicate, which has many other consumers whose freshness
+                // question is a different one (entry-copy depth, RC transfer);
+                // this gate's only consumers are the discard sites.
+                ExprKind::StructLiteral { .. } => true,
                 _ => self.expr_yields_fresh_owned_temp(tail),
             };
             if !ok {

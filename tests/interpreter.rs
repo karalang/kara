@@ -44746,3 +44746,86 @@ fn field_rooted_container_element_heap_read_is_a_copy() {
         assert_eq!(run(&format!("{DECL}{body}\n")), *want, "[{label}]");
     }
 }
+
+/// B-2026-08-28-69 — a DISCARDED `match` whose arm value is an owned
+/// Drop-bearing temp must run that body exactly once, on every backend.
+///
+/// Exactly one `R` is constructed and nothing takes it, so it dies at the
+/// statement. Before the fix the interpreter ran NO body for an arm handing on
+/// a bound payload (the compiled backends ran one), and BOTH sides ran none
+/// when the arm minted a fresh value — an agreed-but-wrong cell that only an
+/// A/B comparison can see, since the memory is balanced either way.
+///
+/// The two halves had to land together: an earlier interpreter-only attempt at
+/// this row was measured and REVERTED because it moved the divergence instead
+/// of removing it.
+#[test]
+fn test_discarded_match_arm_value_runs_its_drop_body_once() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+    let rows: [(&str, &str, &str); 5] = [
+        // The arm hands on a BOUND payload — braced and bare.
+        (
+            "let o: Option[R] = Some(R { id: 1 });\n\
+             match o { Some(r) => { r } None => { R { id: 0 } } };\n\
+             println(\"dropped\");",
+            "dR1\ndropped",
+            "braced arm yields the bound payload",
+        ),
+        (
+            "let o: Option[R] = Some(R { id: 1 });\n\
+             match o { Some(r) => r, None => R { id: 0 } };\n\
+             println(\"dropped\");",
+            "dR1\ndropped",
+            "bare arm yields the bound payload",
+        ),
+        // The arm mints a FRESH value — a struct literal, braced and bare.
+        (
+            "let n = 1;\n\
+             match n { 1 => { R { id: 7 } } _ => { R { id: 0 } } };\n\
+             println(\"dropped\");",
+            "dR7\ndropped",
+            "braced arm yields a fresh literal",
+        ),
+        (
+            "let n = 1;\n\
+             match n { 1 => R { id: 7 }, _ => R { id: 0 } };\n\
+             println(\"dropped\");",
+            "dR7\ndropped",
+            "bare arm yields a fresh literal",
+        ),
+        // …and via a CALL, which reaches the tracker's other type-resolution arm.
+        (
+            "let n = 1;\n\
+             match n { 1 => mk(7), _ => mk(0) };\n\
+             println(\"dropped\");",
+            "dR7\ndropped",
+            "arm yields a call result",
+        ),
+    ];
+    for (body, expected, label) in rows {
+        let src = format!(
+            "{hdr}fn mk(i: i64) -> R {{ return R {{ id: i }}; }}\nfn main() {{\n{body}\n}}\n"
+        );
+        assert_eq!(run(&src).trim(), expected, "[{label}]");
+    }
+}
+
+/// The two controls that localize the fix above: a discarded CALL result and a
+/// read-only arm both already ran exactly one body on every backend, and must
+/// keep doing so — they are what prove the change did not widen into
+/// discarded temporaries generally or into arm bindings generally.
+#[test]
+fn test_discarded_match_controls_keep_their_single_body() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+    let call = format!("{hdr}fn mk() -> R {{ return R {{ id: 1 }}; }}\nfn main() {{ mk(); println(\"dropped\"); }}\n");
+    assert_eq!(run(&call).trim(), "dR1\ndropped", "[discarded call result]");
+    let read = format!(
+        "{hdr}fn main() {{\n\
+         let o: Option[R] = Some(R {{ id: 1 }});\n\
+         match o {{ Some(r) => {{ println(f\"saw{{r.id}}\") }} None => {{ println(\"none\") }} }};\n\
+         println(\"dropped\");\n}}\n"
+    );
+    assert_eq!(run(&read).trim(), "saw1\ndR1\ndropped", "[read-only arm]");
+}

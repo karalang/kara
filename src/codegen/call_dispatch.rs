@@ -3132,6 +3132,32 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
     ) {
         let ret_ty_name = match &tail.kind {
+            // B-2026-08-28-69 — a discarded `match` whose arms all yield a
+            // fresh owned value. `discarded_match_value_tail` already ADMITS
+            // this shape at the statement discard site, but every arm of this
+            // resolution keyed on a call, so a `Match` tail produced no type
+            // name and the battery below registered nothing: the value's body
+            // ran on NO backend. Measured silent in every spelling — braced
+            // arms, bare arms, `let _ =`, and arms that are CALLS — which is
+            // what distinguishes this cell from the two the row reported.
+            //
+            // All arms yield the same type (the match's own), so the FIRST
+            // arm's tail decides it. Resolved through the same two shapes this
+            // routine already understands plus a struct literal, which is the
+            // canonical way an arm mints a fresh owned value.
+            ExprKind::Match { arms, .. } => arms.first().and_then(|arm| {
+                let t = Self::block_tail_expr(&arm.body);
+                match &t.kind {
+                    ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+                    ExprKind::Call { callee, .. } => match &callee.kind {
+                        ExprKind::Identifier(fn_name) => {
+                            self.fn_sig.fn_return_type_names.get(fn_name).cloned()
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(fn_name) => {
                     self.fn_sig.fn_return_type_names.get(fn_name).cloned()

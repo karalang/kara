@@ -18499,6 +18499,89 @@ fn main() {
     /// owned-self shape is silent (the consumed value's drop is the
     /// documented owned-self residual). Twin of `tests/interpreter.rs`'s
     /// `test_owned_self_enum_receiver_single_fire`.
+    /// B-2026-08-28-69 — the compiled twin of
+    /// `test_discarded_match_arm_value_runs_its_drop_body_once`.
+    ///
+    /// A DISCARDED `match` whose arm value is an owned Drop-bearing temp runs
+    /// that body exactly once. The two halves landed together because either
+    /// alone MOVES the divergence: the interpreter under-fired when an arm
+    /// handed on a bound payload, and BOTH backends were silent when an arm
+    /// minted a fresh value. The fresh-value cells are the ones this file
+    /// gained — `try_track_discarded_user_drop_temp` resolved a type name only
+    /// from a call, so a `Match` tail registered nothing even though
+    /// `discarded_match_value_tail` already admitted the shape.
+    ///
+    /// Memory is balanced in every cell either way, so no ASAN/LSan corpus can
+    /// reach this class — only an A/B output comparison can, which is why the
+    /// interpreter twin is the other half of the pin.
+    #[test]
+    fn e2e_discarded_match_arm_value_runs_its_drop_body_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mk(i: i64) -> R { return R { id: i }; }\n";
+        let rows: [(&str, &str, &str); 5] = [
+            (
+                "let o: Option[R] = Some(R { id: 1 });\n\
+                 match o { Some(r) => { r } None => { R { id: 0 } } };\n\
+                 println(\"dropped\");",
+                "dR1\ndropped\n",
+                "braced arm yields the bound payload",
+            ),
+            (
+                "let o: Option[R] = Some(R { id: 1 });\n\
+                 match o { Some(r) => r, None => R { id: 0 } };\n\
+                 println(\"dropped\");",
+                "dR1\ndropped\n",
+                "bare arm yields the bound payload",
+            ),
+            (
+                "let n = 1;\n\
+                 match n { 1 => { R { id: 7 } } _ => { R { id: 0 } } };\n\
+                 println(\"dropped\");",
+                "dR7\ndropped\n",
+                "braced arm yields a fresh literal",
+            ),
+            (
+                "let n = 1;\n\
+                 match n { 1 => R { id: 7 }, _ => R { id: 0 } };\n\
+                 println(\"dropped\");",
+                "dR7\ndropped\n",
+                "bare arm yields a fresh literal",
+            ),
+            (
+                "let n = 1;\n\
+                 match n { 1 => mk(7), _ => mk(0) };\n\
+                 println(\"dropped\");",
+                "dR7\ndropped\n",
+                "arm yields a call result",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(expected), "[{label}]");
+        }
+        // The two controls: both already ran exactly one body and must keep to
+        // it — they are what prove the change did not widen into discarded
+        // temporaries generally or into arm bindings generally.
+        let call = format!("{hdr}fn main() {{ mk(1); println(\"dropped\"); }}\n");
+        assert_eq!(
+            run_program(&call).as_deref(),
+            Some("dR1\ndropped\n"),
+            "[discarded call result]"
+        );
+        let read = format!(
+            "{hdr}fn main() {{\n\
+             let o: Option[R] = Some(R {{ id: 1 }});\n\
+             match o {{ Some(r) => {{ println(f\"saw{{r.id}}\") }} None => {{ println(\"none\") }} }};\n\
+             println(\"dropped\");\n}}\n"
+        );
+        assert_eq!(
+            run_program(&read).as_deref(),
+            Some("saw1\ndR1\ndropped\n"),
+            "[read-only arm]"
+        );
+    }
+
     #[test]
     fn e2e_owned_self_enum_receiver_single_fire() {
         let Some(out) = run_program(

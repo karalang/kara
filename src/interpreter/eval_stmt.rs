@@ -4153,6 +4153,24 @@ impl<'a> super::Interpreter<'a> {
                     // gate uses (`user_method_returns_owned_struct`; builtin
                     // borrow names excluded outright). Codegen twin: the
                     // MethodCall arm of `try_track_discarded_user_drop_temp`.
+                    // B-2026-08-28-69 — a DISCARDED `match` whose arm value is
+                    // an owned Drop-bearing temp. This dispatch had no `Match`
+                    // arm, so the value never reached the shared discard walker
+                    // and its body ran on this backend alone out of four.
+                    //
+                    // Landed TOGETHER with the codegen half (the `Match` arm of
+                    // `try_track_discarded_user_drop_temp` and the struct-literal
+                    // admission in `discarded_match_value_tail`), because either
+                    // alone MOVES the divergence rather than removing it — the
+                    // measurement that got an earlier interpreter-only attempt at
+                    // this row reverted.
+                    //
+                    // Needs no gate for the shapes that must stay silent: the
+                    // walker is value-driven, and a read-only arm yields `Unit`,
+                    // for which it is a no-op.
+                    ExprKind::Match { .. } => {
+                        self.run_discarded_value_user_drops(discarded);
+                    }
                     ExprKind::MethodCall { method, .. }
                         if !matches!(method.as_str(), "get" | "first" | "last" | "peek") =>
                     {
