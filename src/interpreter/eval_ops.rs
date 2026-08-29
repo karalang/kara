@@ -394,14 +394,80 @@ impl<'a> super::Interpreter<'a> {
     /// A no-op for f64, for a non-float result (every comparison, every
     /// integer op), and for a span the typechecker recorded nothing at.
     pub(super) fn round_float_to_span_width(&self, v: Value, span: &Span) -> Value {
-        use crate::typechecker::types::Type;
         let Value::Float(f) = v else {
             return v;
         };
+        match self.span_float_width(span) {
+            Some(size) => super::round_float_to_declared_size(f, size),
+            None => Value::Float(f),
+        }
+    }
+
+    /// Evaluate a unary float function AT the receiver's declared width.
+    ///
+    /// The tree-walk carries every float as an f64, so the obvious thing is to
+    /// call the f64 function and round the result into the narrow slot. That is
+    /// exact for `+ - * /` and `sqrt` (a single correctly-rounded operation with
+    /// 2p+2 intermediate bits — see `round_float_to_span_width`), but NOT for the
+    /// transcendentals: computing `cosh` in f64 and rounding to f32 differs from
+    /// `coshf` by up to 1 ULP, because two roundings are not one. Codegen calls
+    /// the f32 symbol, so the interpreter has to as well or the two backends
+    /// disagree — measured on `cosh`, `sinh`, `log10` and `atan`
+    /// (B-2026-08-29-41).
+    ///
+    /// f16 / bf16 go through the f32 function and are rounded down to their own
+    /// width by the caller, which is exactly what codegen does for a half format
+    /// (B-2026-08-29-42 routes them to the `f`-suffixed libm symbol), so the two
+    /// agree by construction rather than by coincidence.
+    pub(super) fn eval_at_span_width(
+        &self,
+        span: &Span,
+        x: f64,
+        wide: fn(f64) -> f64,
+        narrow: fn(f32) -> f32,
+    ) -> f64 {
+        use crate::typechecker::types::FloatSize;
+        match self.span_float_width(span) {
+            Some(FloatSize::F32 | FloatSize::F16 | FloatSize::BF16) => narrow(x as f32) as f64,
+            _ => wide(x),
+        }
+    }
+
+    /// Two-argument twin of [`Self::eval_at_span_width`], for `pow` / `atan2` /
+    /// `hypot` / `copysign`.
+    pub(super) fn eval_at_span_width2(
+        &self,
+        span: &Span,
+        x: f64,
+        y: f64,
+        wide: fn(f64, f64) -> f64,
+        narrow: fn(f32, f32) -> f32,
+    ) -> f64 {
+        use crate::typechecker::types::FloatSize;
+        match self.span_float_width(span) {
+            Some(FloatSize::F32 | FloatSize::F16 | FloatSize::BF16) => {
+                narrow(x as f32, y as f32) as f64
+            }
+            _ => wide(x, y),
+        }
+    }
+
+    /// The DECLARED float width at `span`, if the typechecker recorded a float
+    /// type there. `None` for a non-float and for a span it recorded nothing at.
+    ///
+    /// Split out of `round_float_to_span_width` (which is now a thin wrapper)
+    /// because callers need the width itself, not just a rounding: a narrow
+    /// receiver has to COMPUTE at that width, not compute at f64 and round
+    /// afterwards. The two differ by up to 1 ULP on the transcendentals, which
+    /// is a run-vs-build divergence rather than a rounding detail
+    /// (B-2026-08-29-41).
+    pub(super) fn span_float_width(
+        &self,
+        span: &Span,
+    ) -> Option<crate::typechecker::types::FloatSize> {
+        use crate::typechecker::types::Type;
         let key = crate::resolver::SpanKey::from_span(span);
-        let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
-            return Value::Float(f);
-        };
+        let ty = self.typecheck_result.expr_types.get(&key)?;
         // Same container peel as `span_int_width`: the element-wise
         // `Column[T] ⊕ x` / `Tensor[T, S] ⊕ x` / `Vector[T, N] ⊕ x` arms
         // recurse per slot with the CONTAINER expression's span, so the
@@ -416,8 +482,8 @@ impl<'a> super::Interpreter<'a> {
             other => other,
         };
         match ty {
-            Type::Float(size) => super::round_float_to_declared_size(f, *size),
-            _ => Value::Float(f),
+            Type::Float(size) => Some(*size),
+            _ => None,
         }
     }
 

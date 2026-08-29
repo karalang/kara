@@ -3412,18 +3412,42 @@ impl<'a> super::Interpreter<'a> {
 
         // Built-in float arithmetic helpers (typed in expr_method_call.rs,
         // float-only): `recip` = `1.0 / x`; `to_degrees` / `to_radians` scale
-        // by Rust's exact constants. Codegen replicates the same `fdiv`/`fmul`
-        // and constants, so `run == build` is bit-exact.
+        // by Rust's exact constants; `fract` = `x - trunc(x)`.
+        //
+        // COMPUTED at the receiver's declared width and rounded into it, as
+        // at `sqrt` and the `float_math` arm below. This comment used to claim codegen "replicates
+        // the same `fdiv`/`fmul` and constants, so `run == build` is bit-exact",
+        // which held only at f64: codegen does the arithmetic at the DECLARED
+        // width, so `(2.0bf16).to_degrees()` is 114.5 compiled, where computing
+        // in f64 and keeping it gave 114.59155902616465 (B-2026-08-29-41). The
+        // tell was that the interpreter printed those same 17 digits for f32,
+        // f16 AND bf16 — a result that never touched the receiver's width.
+        //
+        // `fract` and `signum` above are exact in every format and so were never
+        // visibly wrong (`x - trunc(x)` of a representable `x` is representable,
+        // the same structural reason `floor`/`ceil`/`round`/`trunc` are safe in
+        // the vector twin B-2026-08-29-40). They are rounded here anyway, so the
+        // arm does not depend on which of its methods happen to be exact.
         if matches!(method, "recip" | "to_degrees" | "to_radians" | "fract") && args.is_empty() {
             if let Value::Float(f) = &obj {
+                // Same width rule as the transcendentals below: COMPUTE at the
+                // declared width. Rounding an f64 product into f32 is not the
+                // same as multiplying in f32 — `to_degrees` / `to_radians`
+                // still missed codegen on 6 and 8 of 60 f32 inputs when this
+                // arm merely rounded, and match on 60/60 computing at f32.
+                macro_rules! at_width {
+                    ($m:ident) => {
+                        self.eval_at_span_width(span, *f, f64::$m, f32::$m)
+                    };
+                }
                 let r = match method {
-                    "recip" => f.recip(),
-                    "to_degrees" => f.to_degrees(),
-                    "to_radians" => f.to_radians(),
-                    "fract" => f.fract(),
+                    "recip" => at_width!(recip),
+                    "to_degrees" => at_width!(to_degrees),
+                    "to_radians" => at_width!(to_radians),
+                    "fract" => at_width!(fract),
                     _ => unreachable!(),
                 };
-                return Value::Float(r);
+                return self.round_float_to_span_width(Value::Float(r), span);
             }
         }
 
@@ -3513,13 +3537,20 @@ impl<'a> super::Interpreter<'a> {
         // codegen's `llvm.sqrt`). Float-only; integer receivers fall through.
         if method == "sqrt" && args.is_empty() {
             if let Value::Float(f) = &obj {
-                // Round to the receiver's declared width, same as the binop
-                // path: codegen calls `sqrtf` for an `f32` receiver, and an
-                // f64 result left unrounded is not even representable in the
-                // f32 slot it lands in (B-2026-08-14-7). `span` aliases the
+                // COMPUTE at the receiver's declared width, then round into
+                // it: codegen calls `sqrtf` for an `f32` receiver, and an f64
+                // result left unrounded is not even representable in the f32
+                // slot it lands in (B-2026-08-14-7). `span` aliases the
                 // receiver span and holds the call's RESULT type, which for
                 // these `-> Self` methods is the receiver type.
-                return self.round_float_to_span_width(Value::Float(f.sqrt()), span);
+                //
+                // `sqrt` is correctly rounded in IEEE-754, so computing at f64
+                // and rounding gives the same answer here; it goes through the
+                // same helper as its transcendental neighbours so the family
+                // has one rule rather than a per-method judgement call
+                // (B-2026-08-29-41).
+                let r = self.eval_at_span_width(span, *f, f64::sqrt, f32::sqrt);
+                return self.round_float_to_span_width(Value::Float(r), span);
             }
         }
 
@@ -3535,45 +3566,61 @@ impl<'a> super::Interpreter<'a> {
                 let x = *x;
                 match kind {
                     crate::float_math::FloatMathKind::Unary if args.is_empty() => {
+                        // Each arm names the f64 and f32 function for one
+                        // method, so the two width paths cannot drift apart —
+                        // a single list, not two that must be kept in step.
+                        macro_rules! at_width {
+                            ($m:ident) => {
+                                self.eval_at_span_width(span, x, f64::$m, f32::$m)
+                            };
+                        }
                         let r = match method {
-                            "sin" => x.sin(),
-                            "cos" => x.cos(),
-                            "tan" => x.tan(),
-                            "exp" => x.exp(),
-                            "ln" => x.ln(),
-                            "log2" => x.log2(),
-                            "floor" => x.floor(),
-                            "ceil" => x.ceil(),
-                            "round" => x.round(),
-                            "asin" => x.asin(),
-                            "acos" => x.acos(),
-                            "atan" => x.atan(),
-                            "sinh" => x.sinh(),
-                            "cosh" => x.cosh(),
-                            "tanh" => x.tanh(),
-                            "exp2" => x.exp2(),
-                            "log10" => x.log10(),
-                            "trunc" => x.trunc(),
-                            "asinh" => x.asinh(),
-                            "acosh" => x.acosh(),
-                            "atanh" => x.atanh(),
-                            "exp_m1" => x.exp_m1(),
-                            "ln_1p" => x.ln_1p(),
+                            "sin" => at_width!(sin),
+                            "cos" => at_width!(cos),
+                            "tan" => at_width!(tan),
+                            "exp" => at_width!(exp),
+                            "ln" => at_width!(ln),
+                            "log2" => at_width!(log2),
+                            "floor" => at_width!(floor),
+                            "ceil" => at_width!(ceil),
+                            "round" => at_width!(round),
+                            "asin" => at_width!(asin),
+                            "acos" => at_width!(acos),
+                            "atan" => at_width!(atan),
+                            "sinh" => at_width!(sinh),
+                            "cosh" => at_width!(cosh),
+                            "tanh" => at_width!(tanh),
+                            "exp2" => at_width!(exp2),
+                            "log10" => at_width!(log10),
+                            "trunc" => at_width!(trunc),
+                            "asinh" => at_width!(asinh),
+                            "acosh" => at_width!(acosh),
+                            "atanh" => at_width!(atanh),
+                            "exp_m1" => at_width!(exp_m1),
+                            "ln_1p" => at_width!(ln_1p),
                             _ => unreachable!("float_math unary classify/match drift"),
                         };
-                        // Narrow-width round, as at `sqrt` above. For the
-                        // transcendentals this is a nearest-f32 of the f64
-                        // result rather than a claim of bit-identity with
-                        // libm's `sinf`/`expf`/`logf` — see B-2026-08-14-7.
+                        // Narrow-width round, as at `sqrt` above. The COMPUTE
+                        // now happens at the declared width too, so an `f32`
+                        // receiver goes through `coshf`/`log10f` exactly as
+                        // codegen does, instead of taking a nearest-f32 of the
+                        // f64 result — the two differ by up to 1 ULP, and that
+                        // gap was a live run-vs-build divergence on `cosh`,
+                        // `sinh`, `log10` and `atan` (B-2026-08-29-41).
                         return self.round_float_to_span_width(Value::Float(r), span);
                     }
                     crate::float_math::FloatMathKind::Binary if args.len() == 1 => {
                         if let Value::Float(y) = self.eval_expr_inner(&args[0].value) {
+                            macro_rules! at_width2 {
+                                ($m:ident) => {
+                                    self.eval_at_span_width2(span, x, y, f64::$m, f32::$m)
+                                };
+                            }
                             let r = match method {
-                                "pow" => x.powf(y),
-                                "atan2" => x.atan2(y),
-                                "hypot" => x.hypot(y),
-                                "copysign" => x.copysign(y),
+                                "pow" => at_width2!(powf),
+                                "atan2" => at_width2!(atan2),
+                                "hypot" => at_width2!(hypot),
+                                "copysign" => at_width2!(copysign),
                                 _ => unreachable!("float_math binary classify/match drift"),
                             };
                             return self.round_float_to_span_width(Value::Float(r), span);

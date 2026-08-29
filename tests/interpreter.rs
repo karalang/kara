@@ -24425,6 +24425,66 @@ fn test_vector_unary_math_rounds_lanes_to_element_width() {
     );
 }
 
+// A scalar float method must be COMPUTED at the receiver's declared width, not
+// computed in f64 and rounded into it afterwards. The tree-walk carries every
+// float as an f64, so the second is the tempting shortcut — and it is exact for
+// `+ - * /` and `sqrt`, where one correctly-rounded operation with 2p+2
+// intermediate bits gives the same answer either way. It is NOT exact for the
+// transcendentals: two roundings are not one, and codegen calls the f32 symbol.
+//
+// B-2026-08-29-41 filed this as `to_degrees` / `to_radians` / `cosh`. Measured,
+// the set was bigger and the mechanism split in two:
+//
+//   * `to_degrees` / `to_radians` / `recip` never touched the width AT ALL — the
+//     interpreter printed the same 17 digits for f32, f16 and bf16. `recip` was
+//     not in the row: it shares their arm, and was missed because the row's
+//     receiver made `1/x` exact. That is the same "agrees by luck of the inputs"
+//     trap the vector twin B-2026-08-29-40 documents.
+//   * `cosh`, and with it `sinh` / `log10` / `atan`, DID round but computed in
+//     f64 first, landing 1 ULP off codegen on 34 of 160 f32 samples.
+//
+// Both are fixed by one rule, so both are pinned here. Every value below is
+// `karac run`'s, and the f64 pair at the end is the boundary: f64 must NOT move,
+// since a fix that computed everything at f32 would visibly truncate it.
+#[test]
+fn test_scalar_float_methods_compute_at_the_declared_width() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let a: f32 = 2.0f32;\n\
+             \x20   println(a.to_degrees());\n\
+             \x20   println(a.to_radians());\n\
+             \x20   println(a.cosh());\n\
+             \x20   let h: f16 = 2.0f16;\n\
+             \x20   println(h.to_degrees());\n\
+             \x20   let b: bf16 = 2.0bf16;\n\
+             \x20   println(b.to_degrees());\n\
+             \x20   let three: bf16 = 3.0bf16;\n\
+             \x20   println(three.recip());\n\
+             \x20   let t: f32 = 3.0f32;\n\
+             \x20   println(t.recip());\n\
+             \x20   let s: f32 = 0.2857142984867096f32;\n\
+             \x20   println(s.sinh());\n\
+             \x20   println(s.log10());\n\
+             \x20   println(s.atan());\n\
+             \x20   let d: f64 = 2.0;\n\
+             \x20   println(d.to_degrees());\n\
+             \x20   println(d.cosh());\n\
+             }\n"),
+        "114.59156036376953\n\
+         0.03490658476948738\n\
+         3.7621958255767822\n\
+         114.5625\n\
+         114.5\n\
+         0.333984375\n\
+         0.3333333432674408\n\
+         0.2896174490451813\n\
+         -0.5440680384635925\n\
+         0.2782996594905853\n\
+         114.59155902616465\n\
+         3.7621956910836314\n"
+    );
+}
+
 #[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
