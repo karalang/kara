@@ -32808,6 +32808,156 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-70, interpreter leg — a METHOD's owned param runs its user
+/// `Drop` body exactly once, wherever it dies.
+///
+/// The interpreter twin of `e2e_method_owned_param_user_drop_body_runs_once`
+/// in `tests/codegen.rs`, which carries the same cases with the same expected
+/// output. Keep the two in step verbatim: the row is about the four surfaces
+/// agreeing, so a divergence shows up as one of the two tests failing.
+///
+/// The two halves fail in OPPOSITE directions, which is why both files need the
+/// full matrix rather than half each. A method frame reaches no caller-side
+/// `run_fresh_temp_arg_drops` in this backend, so before the fix it owned
+/// nothing and every param that died inside ran ZERO bodies here — while the
+/// compiled backends, whose caller always fired, ran TWO for any param the
+/// method handed back.
+#[test]
+fn test_method_owned_param_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct B2 { n: i64 }\n";
+    for (label, body, want) in [
+        // The row's headline program, on the direction where the param DIES
+        // INSIDE. Pre-fix this printed `99` / `drop 99` — R{41}'s body lost.
+        (
+            "cond-return-dies",
+            "impl B2 { fn pick(ref self, r: R, k: bool) -> R { if k { r } else { R { id: 99 } } } }\n\
+             fn main() { let b = B2 { n: 1 }; let x = b.pick(R { id: 41 }, false); \
+             println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // The same program with `k` flipped: the param escapes, so the frame's
+        // registration must be DISARMED by the per-path flag rather than fire.
+        (
+            "cond-return-escapes",
+            "impl B2 { fn pick(ref self, r: R, k: bool) -> R { if k { r } else { R { id: 99 } } } }\n\
+             fn main() { let b = B2 { n: 1 }; let x = b.pick(R { id: 41 }, true); \
+             println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // NEVER RETURNED — the plainest shape, and the one showing this is not
+        // only about conditional returns. Pre-fix: `7` alone, zero bodies.
+        (
+            "never-returned",
+            "impl B2 { fn eat(ref self, r: R) -> i64 { 7 } }\n\
+             fn main() { let b = B2 { n: 1 }; let v = b.eat(R { id: 41 }); println(f\"{v}\") }\n",
+            "drop 41\n7\n",
+        ),
+        // UNCONDITIONALLY returned — the result binding owns it, so the frame
+        // must NOT claim it. Correct here before and after; it is the compiled
+        // side that doubled.
+        (
+            "always-returned",
+            "impl B2 { fn id(ref self, r: R) -> R { r } }\n\
+             fn main() { let b = B2 { n: 1 }; let x = b.id(R { id: 41 }); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "always-returned-aggregate",
+            "struct H { r: R }\n\
+             impl B2 { fn wrap(ref self, r: R) -> H { H { r: r } } }\n\
+             fn main() { let b = B2 { n: 1 }; let h = b.wrap(R { id: 21 }); \
+             println(f\"{h.r.id}\") }\n",
+            "21\ndrop 21\n",
+        ),
+        (
+            "return-stmt-all-exits-yield",
+            "impl B2 { fn both(ref self, r: R, k: bool) -> R { if k { return r; } r } }\n\
+             fn main() { let b = B2 { n: 1 }; let z = b.both(R { id: 23 }, false); \
+             println(f\"{z.id}\") }\n",
+            "23\ndrop 23\n",
+        ),
+        // A `return` that yields something ELSE, so the param dies on that
+        // path and the caller must keep firing. Pre-fix this backend lost the
+        // body; an earlier draft of the fix lost it on the COMPILED backends
+        // too, by standing the caller down on the union predicate.
+        (
+            "return-stmt-other-value-keeps-caller-fire",
+            "impl B2 { fn early(ref self, r: R, k: bool) -> R \
+             { if k { return R { id: 98 } ; } r } }\n\
+             fn main() { let b = B2 { n: 1 }; let y = b.early(R { id: 22 }, true); \
+             println(f\"{y.id}\") }\n",
+            "drop 22\n98\ndrop 98\n",
+        ),
+        (
+            "two-params-one-returned",
+            "impl B2 { fn two(ref self, a: R, b: R, k: bool) -> R { if k { a } else { b } } }\n\
+             fn main() { let s = B2 { n: 1 }; \
+             let x = s.two(R { id: 4 }, R { id: 5 }, false); println(f\"{x.id}\") }\n",
+            "drop 4\n5\ndrop 5\n",
+        ),
+        // Receiver MODES — the ownership question is about the ARGUMENT, not
+        // the receiver, so all three modes must answer alike. Pre-fix all three
+        // printed zero bodies here.
+        (
+            "mut-ref-self-receiver",
+            "impl B2 { fn eat(mut ref self, r: R) -> i64 { self.n = self.n + 1; 8 } }\n\
+             fn main() { let mut c = B2 { n: 1 }; let v = c.eat(R { id: 2 }); println(f\"{v}\") }\n",
+            "drop 2\n8\n",
+        ),
+        (
+            "owned-self-receiver",
+            "impl B2 { fn eat(self, r: R) -> i64 { 9 } }\n\
+             fn main() { let d = B2 { n: 1 }; let v = d.eat(R { id: 3 }); println(f\"{v}\") }\n",
+            "drop 3\n9\n",
+        ),
+        (
+            "generic-method-param-dies",
+            "struct G1 { n: i64 }\n\
+             impl G1 { fn gm[T](ref self, r: R, t: T) -> i64 { 3 } }\n\
+             fn main() { let g = G1 { n: 1 }; let a = g.gm(R { id: 31 }, 5); println(f\"{a}\") }\n",
+            "drop 31\n3\n",
+        ),
+        // CROSS-FRAME ISOLATION, and this one is interpreter-only by nature:
+        // the moved-out sets are keyed by BINDING NAME with no frame qualifier,
+        // and the method path never had the free-fn path's save/restore. So
+        // `add`'s `r` — legitimately marked moved-out, it goes into `self.xs` —
+        // suppressed the LATER method's unrelated `r`. Renaming that second
+        // param to `q` was enough to make the body reappear, which is how it was
+        // identified. Pre-fix: no `drop 12`.
+        (
+            "moved-out-marks-do-not-leak-across-frames",
+            "struct Box3 { xs: Vec[R] }\n\
+             impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }\n\
+             struct G2 { n: i64 }\n\
+             impl G2 { fn eat(ref self, r: R) -> i64 { 3 } }\n\
+             fn main() { let mut bx = Box3 { xs: Vec.new() }; \
+             bx.add(R { id: 11 }); println(\"added\"); \
+             let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f\"{v}\") }\n",
+            "drop 11\nadded\ndrop 12\n3\n",
+        ),
+        // CONTROLS — the free-function twins, unanimous on all four surfaces
+        // before and after. They are the oracle the method cases are measured
+        // against, so a change that "fixed" methods by moving free functions
+        // would fail here.
+        (
+            "free-fn-oracle-always-returned",
+            "fn id2(r: R) -> R { r }\n\
+             fn main() { let x = id2(R { id: 41 }); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "free-fn-oracle-never-returned",
+            "fn eat2(r: R) -> i64 { 7 }\n\
+             fn main() { let v = eat2(R { id: 41 }); println(f\"{v}\") }\n",
+            "drop 41\n7\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-17, interpreter leg — one user `Drop` body per object when the
 /// callee returns a FIELD pulled out of an owned struct param. The struct twin
 /// of `test_returned_tuple_param_element_user_drop_body_runs_once`.

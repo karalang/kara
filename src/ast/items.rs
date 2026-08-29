@@ -1442,6 +1442,152 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     walk_block(&f.body, param_name)
 }
 
+/// B-2026-08-28-70 — does `f` hand parameter `arg_index` back to its caller on
+/// EVERY exit?
+///
+/// The complement of [`fn_conditionally_returns_param_bare`], and the two are
+/// used together: that one asks "escapes on SOME path" (so the callee owns the
+/// body behind a per-path flag), this asks "escapes on ALL paths" (so the
+/// CALLER's result binding owns it outright and the caller must not fire).
+///
+/// Deliberately NOT [`fn_returns_param`], which is the UNION over return sites
+/// and therefore answers true for a param that escapes on one path and dies on
+/// another. Standing a caller down on that union is exactly the trade
+/// B-2026-08-28-22 was filed for: measured on the method path, reusing it lost
+/// `impl B4 { fn early(ref self, r: R, k: bool) -> R { if k { return R { id: 98 }; } r } }`'s
+/// body for `r` when `k` was true, on all three compiled backends, where the
+/// pre-existing behaviour had it right. "Escapes somewhere" is not "someone
+/// else owns it".
+///
+/// Two conditions, both required:
+///
+///  1. every LEAF TAIL of the body yields the param, and
+///  2. every `return` the walker can see yields it too.
+///
+/// "Yields" matches [`fn_returns_param`]'s own notion — the bare identifier, or
+/// an aggregate literal that moves the param into itself (`H { r: r }`,
+/// `(r, 9)`), since the value crosses the frame boundary inside the aggregate
+/// exactly as it does bare.
+///
+/// COVERAGE LIMIT, stated rather than hidden: the `return` walk mirrors
+/// [`fn_returns_param`]'s traversal, so a `return` buried somewhere that
+/// traversal does not descend into (inside a call argument, say) is invisible
+/// here as it is there. Condition 1 is what keeps that from mattering in
+/// practice — it already requires the body's tail to BE the param or an
+/// aggregate around it, so admitted bodies are structurally narrow. Every
+/// decline is the pre-existing behaviour, so the failure direction of a miss is
+/// a body that keeps firing where it always did, never a new silent loss.
+pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    let name = name.as_str();
+
+    /// The same test [`fn_returns_param`] applies at a return site.
+    fn yields(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::StructLiteral { fields, .. } => fields.iter().any(|f| yields(&f.value, name)),
+            ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name)),
+            _ => false,
+        }
+    }
+    fn leaf_tails<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &e.kind {
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                match &then_block.final_expr {
+                    Some(t) => leaf_tails(t, out),
+                    None => out.push(e),
+                }
+                match else_branch {
+                    Some(x) => leaf_tails(x, out),
+                    None => out.push(e),
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    leaf_tails(&arm.body, out);
+                }
+            }
+            ExprKind::Block(b) => match &b.final_expr {
+                Some(t) => leaf_tails(t, out),
+                None => out.push(e),
+            },
+            _ => out.push(e),
+        }
+    }
+    /// Is there a `return` that does NOT hand the param back? A bare `return;`
+    /// counts: it exits without yielding, so the param dies on that path.
+    fn bad_return_expr(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => !yields(inner, name) || bad_return_expr(inner, name),
+            ExprKind::Return(None) => true,
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => bad_return_block(b, name),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                bad_return_block(then_block, name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| bad_return_expr(x, name))
+            }
+            ExprKind::Match { arms, .. } => arms.iter().any(|a| bad_return_expr(&a.body, name)),
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => bad_return_block(body, name),
+            _ => false,
+        }
+    }
+    fn bad_return_block(b: &Block, name: &str) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => bad_return_expr(e, name),
+            StmtKind::Let { value, .. } => bad_return_expr(value, name),
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| bad_return_expr(fe, name))
+    }
+
+    let Some(tail) = f.body.final_expr.as_deref() else {
+        // No tail expression at all: every exit is a `return`, and a body whose
+        // only exits are returns is left to the `return` channel rather than
+        // claimed here.
+        return false;
+    };
+    let mut tails = Vec::new();
+    leaf_tails(tail, &mut tails);
+    if tails.is_empty() || !tails.iter().all(|t| yields(t, name)) {
+        return false;
+    }
+    !bad_return_block(&f.body, name)
+}
+
 /// B-2026-08-28-22 — is `f`'s positional parameter `arg_index` returned on SOME
 /// tail paths and not others, by a route the conditional-move drop flag can
 /// actually clear?

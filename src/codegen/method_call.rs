@@ -7388,8 +7388,61 @@ impl<'ctx> super::Codegen<'ctx> {
                     // is its position among the non-self args. The sibling
                     // `fn_returns_param(f, pidx)` call above is the odd one out
                     // on this key, not this.
-                    let escapes_frame =
-                        self.call_arg_moves_into_outliving_place(&qualified, i, false);
+                    // B-2026-08-28-70 — the RETURN-PASSTHROUGH half, which was
+                    // absent here entirely: a method that hands an argument
+                    // back left the caller registering a body the RESULT
+                    // binding also owns, so `impl B2 { fn id(ref self, r: R) ->
+                    // R { r } }` over `let x = b.id(R { id: 41 });` ran R{41}'s
+                    // `Drop` body TWICE on all three compiled backends against
+                    // once in the interpreter and once for the free-function
+                    // twin.
+                    //
+                    // NOT `call_arg_flows_into_return`, the predicate the
+                    // free-fn registrar uses. That one is the UNION over return
+                    // sites, so it answers true for a param that escapes on one
+                    // path and DIES on another; standing the caller down on it
+                    // measurably lost `fn early(ref self, r: R, k: bool) -> R {
+                    // if k { return R { id: 98 }; } r }`'s body for `r` at
+                    // `k = true`, where today's always-fire had it right. The
+                    // caller may only stand down where some OTHER owner is
+                    // certain, which is exactly these two:
+                    //
+                    //  * `fn_always_returns_param` — every exit hands it back,
+                    //    so the caller's result binding owns it;
+                    //  * `fn_conditionally_returns_param_bare` — the callee-side
+                    //    flip in `compile_function` takes ownership behind
+                    //    B-2026-08-28-51's per-path flag, which is the same
+                    //    admission rule that flip uses, so the two agree by
+                    //    construction rather than by convention.
+                    //
+                    // Every other shape keeps the pre-existing always-fire, so
+                    // no shape can newly LOSE a body through this edit.
+                    //
+                    // `i`, not `pidx`: `find_function_ast` hands back the raw
+                    // AST method whose `params` exclude the receiver — verified
+                    // by instrumentation (`B2.pick` → `self_param=true
+                    // params=["r", "k"]`), the same key the sibling
+                    // `call_arg_moves_into_outliving_place` is called on here.
+                    let handed_off = self
+                        .program_snapshot
+                        .as_deref()
+                        .and_then(|p| super::declarations::find_function_ast(p, &qualified))
+                        .is_some_and(|f| {
+                            // The always-returns leg needs no callee
+                            // cooperation — the result binding owns it — so it
+                            // holds for a GENERIC method too. The conditional
+                            // leg does: it hands ownership to the callee-side
+                            // flip, which `compile_function` declines for
+                            // generics (B-2026-08-28-71, the corrupted mono
+                            // param slot). Standing the caller down there would
+                            // leave nobody owning the body, so generics keep
+                            // today's always-fire on that leg alone.
+                            crate::ast::fn_always_returns_param(f, i)
+                                || (f.generic_params.is_none()
+                                    && crate::ast::fn_conditionally_returns_param_bare(f, i))
+                        });
+                    let escapes_frame = handed_off
+                        || self.call_arg_moves_into_outliving_place(&qualified, i, false);
                     self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
                     // Fresh-heap by-value arg materialization — the method-call
                     // sibling of the #20 arm in `compile_call` (call_dispatch.rs).

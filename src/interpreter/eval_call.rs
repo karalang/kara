@@ -2552,6 +2552,124 @@ impl<'a> super::Interpreter<'a> {
         out
     }
 
+    /// B-2026-08-28-70 — the owned params of IMPL METHOD `type_name.method`
+    /// whose `Drop` body this frame must own.
+    ///
+    /// The method sibling of [`Self::cond_returned_param_drop_names`], and it
+    /// admits a STRICTLY WIDER set, because the two frames differ in who else
+    /// could fire. A free function's argument reaches the caller's
+    /// `run_fresh_temp_arg_drops`, so the callee owns only the params the
+    /// caller stood down for — the conditionally-returned ones. A METHOD's
+    /// arguments reach no caller-side fire at all in this backend (the reason
+    /// `owned_param_frame_is_method` exists), so the frame is the ONLY owner
+    /// there is and every param that dies inside must fire here or nowhere.
+    /// Measured: `impl B2 { fn eat(ref self, r: R) -> i64 { 7 } }` ran ZERO
+    /// bodies against one on all three compiled backends and one for the
+    /// free-function twin.
+    ///
+    /// The exclusions are the escape routes, and each hands the value to a
+    /// different owner:
+    ///
+    ///  * UNCONDITIONALLY returned — the caller's result binding owns it.
+    ///    Registering here as well is a double body, which is what the
+    ///    `fn_returns_param && !conditionally` pair rules out. A callee that
+    ///    returns the param on SOME paths keeps its registration and relies on
+    ///    B-2026-08-28-51's per-path flag to disarm on the path that returned
+    ///    it, exactly as the free-fn sibling does.
+    ///  * Moved into an outliving place (`self.xs.push(x)`) — the new home
+    ///    owns it (B-2026-08-26-9).
+    ///  * A `ref` / `mut ref` param is borrowed, never owned.
+    ///
+    /// A `return r` shape is deliberately left where it is: `fn_returns_param`
+    /// sees the return site and `fn_conditionally_returns_param_bare` declines
+    /// `return` statements outright, so such a param is excluded here and keeps
+    /// today's behaviour on every backend rather than gaining a new
+    /// interpreter-only fire. That is the same line the free-fn sibling draws.
+    ///
+    /// Generics are claimed like any other shape EXCEPT the
+    /// conditionally-returned one, which codegen cannot hand to the callee
+    /// (B-2026-08-28-71) — see the gate's own comment.
+    pub(crate) fn method_param_drop_names(&self, type_name: &str, method: &str) -> Vec<String> {
+        let Some(f) = self.impl_method_ast(type_name, method) else {
+            return Vec::new();
+        };
+        let generic = f.generic_params.is_some();
+        let mut out = Vec::new();
+        // `f.params` is the RAW AST method, whose params EXCLUDE the receiver
+        // (`self` lives in `self_param`), so `i` indexes the predicates
+        // directly. Codegen's `compile_function` sees a LOWERED method with
+        // `self` at param 0 and counts from there; both were verified by
+        // instrumentation rather than assumed.
+        for (i, p) in f.params.iter().enumerate() {
+            let Some(name) = p.name() else { continue };
+            if matches!(
+                p.ty.kind,
+                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+            ) {
+                continue;
+            }
+            if crate::ast::fn_moves_param_into_outliving_place(f, i) {
+                continue;
+            }
+            // Handed back on EVERY exit — the caller's result binding owns it.
+            // `fn_always_returns_param` rather than `fn_returns_param`, for the
+            // reason its doc gives: the union answers true for a param that
+            // escapes on one path and dies on another, and skipping on that
+            // would lose the body on the path where it died. A param that
+            // escapes on SOME path keeps its registration here and relies on
+            // B-2026-08-28-51's per-path flag to disarm on the path that
+            // returned it — the same split codegen's method-argument site
+            // makes, with the same two predicates.
+            if crate::ast::fn_always_returns_param(f, i) {
+                continue;
+            }
+            // A GENERIC method's conditionally-returned param is the one shape
+            // this frame must NOT claim. Codegen cannot hand it to the callee
+            // there — `compile_function`'s flip declines generics for
+            // B-2026-08-28-71's corrupted mono param slot — so its caller keeps
+            // firing; claiming it here would fix the interpreter alone and turn
+            // a shared gap into a run-vs-build divergence. Every OTHER generic
+            // shape is claimed exactly like a non-generic one, which is what
+            // brings `fn gm[T](ref self, r: R, t: T) -> i64 { 3 }` from zero
+            // bodies to one.
+            if generic && crate::ast::fn_conditionally_returns_param_bare(f, i) {
+                continue;
+            }
+            // Plain user-`Drop` structs only, the same narrowing the free-fn
+            // sibling applies: a `shared` struct drops through the RC path and
+            // never this drain, and the enum-payload channel is a different
+            // registration.
+            let Some(Value::Struct { name: tn, .. }) = self.env.get(name) else {
+                continue;
+            };
+            if self.program.drop_method_keys.contains_key(tn.as_str()) {
+                out.push(name.to_string());
+            }
+        }
+        out
+    }
+
+    /// The raw AST of impl method `type_name.method`, receiver excluded from
+    /// `params`. Mirrors the lookup `method_owned_param_names` runs.
+    fn impl_method_ast(&self, type_name: &str, method: &str) -> Option<&crate::ast::Function> {
+        self.program.items.iter().find_map(|item| {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                return None;
+            };
+            let target = match &imp.target_type.kind {
+                crate::ast::TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                _ => None,
+            };
+            if target != Some(type_name) {
+                return None;
+            }
+            imp.items.iter().find_map(|it| match it {
+                crate::ast::ImplItem::Method(m) if m.name == method => Some(&**m),
+                _ => None,
+            })
+        })
+    }
+
     fn owned_param_names_of_fn(&self, fn_name: &str) -> std::collections::HashSet<String> {
         self.program
             .items

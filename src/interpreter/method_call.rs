@@ -506,11 +506,52 @@ impl<'a> super::Interpreter<'a> {
                 // A method frame hands its args to no caller-side fire — see
                 // `owned_param_frame_is_method`.
                 self.owned_param_frame_is_method.push(true);
+                // B-2026-08-28-70 — and BECAUSE it reaches no caller-side fire,
+                // this frame owns the `Drop` body of every owned param that
+                // dies inside it. Seeded here, immediately before the body, so
+                // `eval_block_inner` adopts it into the body block's own
+                // cleanup; a tail that hands the param back disarms it through
+                // `record_conditional_move_tail`. Same channel as the free-fn
+                // seeding in `eval_call`, wider admission — see
+                // `method_param_drop_names`.
+                self.pending_param_drop_bindings = self.method_param_drop_names(&type_name, method);
+                // B-2026-08-28-70 — isolate the callee frame's moved-out sets,
+                // exactly as `eval_call` does for a free fn. They are keyed by
+                // BINDING NAME with no frame qualifier, so without this a mark
+                // left by one method leaks into the next frame that happens to
+                // reuse the name: `Box3.add`'s `r` (moved into `self.xs`, so
+                // legitimately marked there) suppressed the `Drop` slot of an
+                // unrelated later method's `r`, and renaming that param to `q`
+                // was enough to make the body reappear. Pre-existing — the
+                // method path never had the free-fn path's save/restore — but
+                // it only became observable once this frame started owning its
+                // params, so it is fixed here rather than left as a trap.
+                //
+                // Taken AFTER B-2026-08-01-7's owned-enum-receiver insert just
+                // above, deliberately: that insert names a CALLER-scope binding
+                // and is meant for the caller's frame, so it must ride out on
+                // the saved copy rather than be wiped by the restore.
+                let saved_moved_out = (
+                    std::mem::take(&mut self.moved_out_user_drop_bindings),
+                    std::mem::take(&mut self.moved_out_enum_payload_bindings),
+                    std::mem::take(&mut self.moved_out_drop_field_bindings),
+                    std::mem::take(&mut self.moved_out_container_bodies_bindings),
+                    std::mem::take(&mut self.moved_out_tuple_elem_bodies),
+                    std::mem::take(&mut self.moved_out_struct_field_bodies),
+                );
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
+                (
+                    self.moved_out_user_drop_bindings,
+                    self.moved_out_enum_payload_bindings,
+                    self.moved_out_drop_field_bindings,
+                    self.moved_out_container_bodies_bindings,
+                    self.moved_out_tuple_elem_bodies,
+                    self.moved_out_struct_field_bodies,
+                ) = saved_moved_out;
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if pushed_self_mode {

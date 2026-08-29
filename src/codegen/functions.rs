@@ -2608,20 +2608,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `fn_conditionally_returns_param_bare` admits only shapes whose
                 // escape routes that flag provably clears — see its doc for the
                 // aggregate-literal route it must exclude, and why.
-                // FREE FUNCTIONS ONLY. A method reaches its caller through
-                // `method_call.rs`, whose argument handling is a separate path
-                // from `call_dispatch.rs`'s, and it does NOT decline the body
-                // drop for a conditionally-returned arg. Registering here as
-                // well produced two bodies for one object — measured
-                // `drop 41` / `drop 41` / `99` / `drop 99` on all three
-                // compiled backends for `impl B2 { fn pick(ref self, r: R, k:
-                // bool) -> R { if k { r } else { R { id: 99 } } } }`. The
-                // callee-side flip is only ever sound where the caller has
-                // already stood down, so the method half needs its caller
-                // audited first and is filed as B-2026-08-28-70 rather than
-                // guessed at here. A method is named `Type.method` at this
-                // point (`self` occupying param 0), so the `.` is the
-                // discriminator.
+                // METHODS INCLUDED since B-2026-08-28-70. This was free
+                // functions only, because a method's caller did NOT decline the
+                // body drop for a conditionally-returned arg and registering
+                // here as well produced two bodies for one object. That caller
+                // now stands down — `call_arg_flows_into_return` resolves a
+                // `Type.method` key through `find_function_ast`, and the
+                // method-argument registrar ORs it into `escapes_frame` the way
+                // the free-fn registrar always has — so the precondition the
+                // flip needs ("only ever sound where the caller has already
+                // stood down") holds on this path too, and the exclusion would
+                // now LOSE the body rather than protect against doubling it.
+                //
+                // Note the two sites index the callee's params under DIFFERENT
+                // conventions, each internally consistent: `func` here is
+                // codegen's lowered `Type.method` with `self` occupying param 0
+                // (so `i` counts from the receiver), while the caller-side
+                // `find_function_ast` hands back the RAW AST method whose
+                // `params` exclude the receiver (so it counts from the first
+                // real argument). Both were verified by instrumentation rather
+                // than assumed, since two comments in `method_call.rs`
+                // disagreed about which convention that lookup follows.
                 // NON-GENERIC ONLY, alongside free-functions-only. A generic
                 // callee is compiled through `compile_mono_function`, which has
                 // its own param loop; registering there passed the body-count
@@ -2636,7 +2643,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 // rather than trading a missed body for garbage output;
                 // filed as B-2026-08-28-71.
                 if func.generic_params.is_none()
-                    && !func.name.contains('.')
                     && !self.is_coroutine_compiled(&func.name)
                     && crate::ast::fn_conditionally_returns_param_bare(func, i)
                     && !crate::ast::fn_moves_param_into_outliving_place(func, i)

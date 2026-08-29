@@ -60263,6 +60263,71 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-70 — the MEMORY half of the method owned-argument
+    /// ownership fix: every heap-carrying param a method takes by value is
+    /// allocated once and freed once, on the path where it dies and on the path
+    /// where it is handed back.
+    ///
+    /// The body-count half lives in `tests/codegen.rs` and `tests/interpreter.rs`;
+    /// this pins that neither the caller's stand-down nor the callee's new
+    /// registration orphans or double-frees a buffer. The direction that most
+    /// needed proving is `always-returned`: the caller now declines its
+    /// arg-site fire for a param the method hands back, and a stand-down is
+    /// only ever correct when someone else owns the value — if the result
+    /// binding did not, this would be a leak rather than a wrong line of
+    /// output, and no body-count fixture would see it.
+    ///
+    /// Seeded from `env.args().len()` and read back per object, because the
+    /// harness compiles at -O2 and a provably-dead allocation is deleted along
+    /// with the evidence (the B-2026-08-24-5 lesson). `String` payloads are
+    /// built with f-strings rather than literals: a literal is rodata with
+    /// `cap == 0` and is never freed, so it cannot witness a double free.
+    #[test]
+    fn asan_method_owned_param_bodies_are_memory_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct H { r: R }
+struct B2 { n: i64 }
+impl B2 {
+    fn eat(ref self, r: R) -> i64 { 7 }
+    fn id(ref self, r: R) -> R { r }
+    fn pick(ref self, r: R, k: bool) -> R { if k { r } else { R { id: 99, name: f"n99" } } }
+    fn wrap(ref self, r: R) -> H { H { r: r } }
+    fn two(ref self, a: R, b: R, k: bool) -> R { if k { a } else { b } }
+    fn early(ref self, r: R, k: bool) -> R { if k { return R { id: 98, name: f"n98" }; } r }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let b = B2 { n: 1 };
+    let v = b.eat(R { id: base, name: f"a{base}" });
+    println(f"{v}");
+    let w = b.id(R { id: base, name: f"b{base}" });
+    println(f"{w.id}");
+    let c = b.pick(R { id: base, name: f"c{base}" }, false);
+    println(f"{c.id}");
+    let d = b.pick(R { id: base, name: f"d{base}" }, true);
+    println(f"{d.id}");
+    let e = b.wrap(R { id: base, name: f"e{base}" });
+    println(f"{e.r.id}");
+    let g = b.two(R { id: base, name: f"g{base}" }, R { id: base, name: f"h{base}" }, false);
+    println(f"{g.id}");
+    let i = b.early(R { id: base, name: f"i{base}" }, true);
+    println(f"{i.id}");
+    b.eat(R { id: base, name: f"j{base}" });
+    println("end");
+}
+"#,
+            &[
+                "drop a1", "7", "1", "drop b1", "drop c1", "99", "drop n99", "1", "drop d1", "1",
+                "drop e1", "drop g1", "1", "drop h1", "drop i1", "98", "drop n98", "drop j1",
+                "end",
+            ],
+            "method-owned-param-bodies",
+        );
+    }
+
     /// B-2026-08-28-15 — a heap-carrying element moved out of an owned tuple
     /// by `.N` at an ESCAPING position leaves the frame; the tuple's own
     /// scope-exit drop must not free it a second time.
