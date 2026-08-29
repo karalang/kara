@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 221 | 2 |
+| leak | 223 | 3 |
 | run-vs-build | 212 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 152 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1185 | 8 |
+| codegen | 1187 | 9 |
 | typecheck | 278 | 0 |
 | interp | 228 | 4 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1748 surfaced · 8 open · 1714 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1750 surfaced · 9 open · 1715 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1748 surfaced
 | B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
 | B-2026-08-28-72 | 2026-08-28 | codegen | medium | A `match` THAT IS A FUNCTION'S RETURNED VALUE RUNS THE YIELDED PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `fn take(o: Option[R]) -> R { match o { Some(r) => { r } .. } }` is interp `dR1` vs compiled `dR1 dR1`; memory stays balanced and NO pattern-binding registration fires, so it is not the arm registration B-2026-08-28-66 turned out to be | — |
 | B-2026-08-28-74 | 2026-08-28 | codegen | medium | THREE REAL LEAKS THE DEFAULT LSan CONFIGURATION HIDES: a `shared` ENUM broken out of a `loop` (32 B x 3 fixtures, `pick`) and a tensor ref-return (72 B), reported only under `LSAN_OPTIONS=use_stacks=0` -- the fixtures assert cleanliness by name and pass today; the rest of the suite is clean, with -O2 showing ZERO real leaks across 1289 fixtures | — |
-| B-2026-08-28-75 | 2026-08-29 | codegen | medium | A CONSUMING `while let` OVER A BOXED `Option[enum]` PAYLOAD LOSES THE BOX ENVELOPE WHEN THE SCRUTINEE VARIABLE IS REASSIGNED IN THE LOOP -- 76 B per call (32 B box + 44 B `String`); the same reassignment without the `while let`, and the same `while let` without the reassignment, are both clean, and it is a REGRESSION from 77729f2 | — |
+| B-2026-08-29-1 | 2026-08-29 | codegen | medium | A BARE `String` / `Vec` PAYLOAD INSIDE AN `Option` OR `Result` NEVER HAS ITS BUFFER FREED WHEN THE BINDING IS REASSIGNED -- `let mut vv: Option[String] = Some(s); vv = None;` leaks the whole buffer (38 B measured), and so does `Option[Vec[i64]]` (80 B) and `Result[String, i64]` (38 B); the displaced payload's user `Drop` BODY fires correctly on all three backends, so this is the memory half alone, and the STRUCT payload twin (`Option[D]` for `struct D { s: String }`) is CLEAN | — |
+| B-2026-08-29-2 | 2026-08-29 | codegen | low | A NESTED-BOX `Result[Option[Wide], i64]` LOSES ITS INNER `String` ON REASSIGNMENT -- 38 B per store, in BOTH the moved-in and the directly-initialized spelling, so the `nested_boxed_payload_vars` population frees its ENVELOPE but never walks the box's interior | — |
 
 ### Relocated (2)
 
@@ -169,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1748 surfaced
 
 </details>
 
-### Fixed (1714)
+### Fixed (1715)
 
-<details><summary>1714 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1715 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1889,6 +1890,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1748 surfaced
 | B-2026-08-28-66 | codegen | high | A CONSUMING ARM THAT HANDS ITS BOUND STRUCT PAYLOAD ON RUNS THAT PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `let k = match o { Some(r)… | 0e6f200 |
 | B-2026-08-28-68 | codegen | medium | A `Result` WITH ONE SIDE BOXED LOSES THE OTHER SIDE'S INLINE PAYLOAD WALK: `track_inline_result_payload_var`'s name-keyed `boxed_enum_payload_vars` e… | c886f1e |
 | B-2026-08-28-73 | codegen | high | REGRESSION from 77729f2 (NOT f862656, as first filed): A CONSUMING ARM THAT HANDS ITS BOUND BOXED ENUM PAYLOAD OUT AS THE MATCH'S VALUE DOUBLE-FREES… | 1caf601 |
+| B-2026-08-28-75 | codegen | medium | REASSIGNING AN `Option`/`Result` BINDING WHOSE BOXED PAYLOAD ARRIVED BY A WHOLE-VALUE MOVE FROM ANOTHER BINDING ORPHANS THE PAYLOAD BOX ON EVERY STOR… | d5c4606 |
 
 </details>
 
