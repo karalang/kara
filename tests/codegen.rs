@@ -12949,15 +12949,18 @@ fn main() {
                  fn main() { let x = take(false); println(f\"{x.id}\"); }\n",
                 "drop n41\n99\ndrop n99\n",
             ),
-            // NOT FIXED, pinned deliberately — an owned by-value PARAM is
-            // caller-drops, and its lost body is B-2026-08-28-22's channel.
-            // Aligned-wrong on all four surfaces, so this row is the tripwire
-            // for -22 rather than a claim about this fix.
+            // WAS the tripwire for B-2026-08-28-22's channel — an owned by-value
+            // PARAM is caller-drops, and this shape lost its body, aligned-wrong
+            // on all four surfaces. It fires correctly since B-2026-08-29-21,
+            // which taught `fn_conditionally_returns_param_bare` to read a
+            // `return` operand as an exit leaf instead of declining the function
+            // outright. Kept as the regression guard for that. The interpreter
+            // twin of this case is in `tests/interpreter.rs`, same label.
             (
                 "param-nested-return",
                 "fn take(r: R, k: bool) -> R { if k { return r; } R { id: 99 } }\n\
                  fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\"); }\n",
-                "99\ndrop 99\n",
+                "drop 41\n99\ndrop 99\n",
             ),
         ] {
             assert_eq!(
@@ -13376,16 +13379,60 @@ fn main() {
                  fn main() { let x = take(R { id: 41 }, true); println(f\"{x.r.id}\"); }\n",
                 "41\ndrop 41\n",
             ),
-            // BOUNDARY — a `return` statement inside a branch. Codegen clears the
-            // flag at match arms and block tails but NOT at a `return` operand (it
-            // suppresses those statically), so this route is outside the mechanism
-            // and the predicate declines it. Still the pre-fix output; that shape is
-            // B-2026-08-28-65 / -52.
+            // A `return` statement inside a branch — the MIXED spelling, one exit
+            // a `return` and the other a block tail. Declined outright on the
+            // stated ground that "codegen clears the flag at match arms and block
+            // tails but NOT at a `return` operand". That had stopped being true:
+            // B-2026-08-28-65 added `guard_user_drop_for_nested_return`, which
+            // stores `false` into the same per-path flag at a nested `return`, so
+            // the mechanism already reached here and only the predicate was still
+            // refusing. B-2026-08-29-21 lifted it. (-65 and -52 were the LOCAL
+            // spelling; the PARAM analogue is what stayed open.)
             (
-                "return-in-branch-declined",
+                "return-in-branch-admitted",
                 "fn take(r: R, k: bool) -> R { if k { return r; } R { id: 99 } }\n\
                  fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\"); }\n",
-                "99\ndrop 99\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // Its escaping twin — the path the flag must clear on. This is what
+            // proves the admission did not create a double.
+            (
+                "return-in-branch-admitted-escaping",
+                "fn take(r: R, k: bool) -> R { if k { return r; } R { id: 99 } }\n\
+                 fn main() { let x = take(R { id: 41 }, true); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // The TAIL spelling of the same mixed shape (`return r` with no
+            // semicolon, so it is the branch block's final expression rather than
+            // a statement). It is a separate cell because the statement hooks
+            // never see it: on the interpreter it needed its own seeding, and
+            // without that it ran the body TWICE on the escaping path.
+            (
+                "return-as-branch-tail-escaping",
+                "fn take(r: R, k: bool) -> R { if k { return r } R { id: 99 } }\n\
+                 fn main() { let x = take(R { id: 41 }, true); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // B-2026-08-29-21's own program: BOTH exits spelled as `return`, on a
+            // METHOD. Pre-fix the escaping path ran `drop 7` / `got 7` / `drop 7`
+            // on all three compiled backends against one interpreter body.
+            (
+                "method-return-both-exits-escaping",
+                "struct T { n: i64 }\n\
+                 impl T { fn take(ref self, r: R, k: bool) -> R \
+                 { if k { return r; } return R { id: 98 }; } }\n\
+                 fn main() { let t = T { n: 1 }; \
+                 let a = t.take(R { id: 7 }, true); println(f\"got {a.id}\"); }\n",
+                "got 7\ndrop 7\n",
+            ),
+            (
+                "method-return-both-exits-dying",
+                "struct T { n: i64 }\n\
+                 impl T { fn take(ref self, r: R, k: bool) -> R \
+                 { if k { return r; } return R { id: 98 }; } }\n\
+                 fn main() { let t = T { n: 1 }; \
+                 let a = t.take(R { id: 7 }, false); println(f\"got {a.id}\"); }\n",
+                "drop 7\ngot 98\ndrop 98\n",
             ),
             // A GENERIC callee, admitted since B-2026-08-28-71. A monomorph is
             // compiled through `compile_mono_function`, which has its own param

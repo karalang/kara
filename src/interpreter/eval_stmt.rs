@@ -320,6 +320,27 @@ impl<'a> super::Interpreter<'a> {
             // B-2026-08-28-51 — must run BEFORE the static retraction below,
             // which removes from `cleanup` the very entry this consults to tell
             // a binding THIS block owns from one declared in an enclosing block.
+            // B-2026-08-29-21 — a `return <ident>` in a block's TAIL position
+            // (`if k { return r }`, no semicolon) is a `return` the statement
+            // hook above never sees: it is the block's final expression, not a
+            // statement, so neither `note_escaping_stmt_sites` nor the
+            // statement-loop `record_conditional_move_tail` reaches it. Seed and
+            // record it here, on the OPERAND, exactly as the statement spelling
+            // does. Seeding is unconditional and safe because a `return`
+            // operand always escapes — that is what distinguishes it from the
+            // enclosing `if`, which is a discarded statement and deliberately
+            // not a seed.
+            //
+            // Without this the interpreter ran the body TWICE on the returning
+            // path once the predicate started admitting the mixed spelling:
+            // `drop a` / `got 1` / `drop a`, against one body on all three
+            // compiled backends, whose `guard_user_drop_for_nested_return` is
+            // reached from the `return` expression itself and so never had the
+            // gap.
+            if let ExprKind::Return(Some(inner)) = &expr.kind {
+                self.note_escaping_site(inner);
+                self.record_conditional_move_tail(inner, &cleanup);
+            }
             self.record_conditional_move_tail(expr, &cleanup);
             self.suppress_tail_expr_user_drop(expr, &mut cleanup);
             // Container twin: a bare-identifier tail moves the container out

@@ -1797,20 +1797,22 @@ pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bo
             _ => out.push(e),
         }
     }
-    /// Condition 4 — any `return` operand that may mention the parameter.
-    /// Mirrors [`fn_returns_param`]'s traversal so the two agree on where a
-    /// return site can appear.
-    fn return_mentions_expr(e: &Expr, name: &str) -> bool {
+    /// Condition 4 — collect every `return` operand as an additional EXIT
+    /// leaf, so the `return` spelling of a conditional hand-back is analysed
+    /// exactly like the block-tail one. Mirrors [`fn_returns_param`]'s
+    /// traversal so the two agree on where a return site can appear.
+    fn collect_return_leaves<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
         match &e.kind {
             ExprKind::Return(Some(inner)) => {
-                may_mention(inner, name) || return_mentions_expr(inner, name)
+                leaf_tails(inner, out);
+                collect_return_leaves(inner, out);
             }
-            ExprKind::Return(None) => false,
+            ExprKind::Return(None) => {}
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => return_mentions_block(b, name),
+            | ExprKind::Par(b) => collect_return_leaves_block(b, out),
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -1821,42 +1823,45 @@ pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bo
                 else_branch,
                 ..
             } => {
-                return_mentions_block(then_block, name)
-                    || else_branch
-                        .as_deref()
-                        .is_some_and(|x| return_mentions_expr(x, name))
+                collect_return_leaves_block(then_block, out);
+                if let Some(x) = else_branch.as_deref() {
+                    collect_return_leaves(x, out);
+                }
             }
             ExprKind::Match { arms, .. } => {
-                arms.iter().any(|a| return_mentions_expr(&a.body, name))
+                for a in arms {
+                    collect_return_leaves(&a.body, out);
+                }
             }
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => return_mentions_block(body, name),
-            _ => false,
+            | ExprKind::LabeledBlock { body, .. } => collect_return_leaves_block(body, out),
+            _ => {}
         }
     }
-    fn return_mentions_block(b: &Block, name: &str) -> bool {
-        b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Expr(e) => return_mentions_expr(e, name),
-            StmtKind::Let { value, .. } => return_mentions_expr(value, name),
-            _ => false,
-        }) || b
-            .final_expr
-            .as_deref()
-            .is_some_and(|fe| return_mentions_expr(fe, name))
+    fn collect_return_leaves_block<'a>(b: &'a Block, out: &mut Vec<&'a Expr>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) => collect_return_leaves(e, out),
+                StmtKind::Let { value, .. } => collect_return_leaves(value, out),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            collect_return_leaves(fe, out);
+        }
     }
 
-    if return_mentions_block(&f.body, name) {
-        return false;
-    }
-
-    let Some(tail) = f.body.final_expr.as_deref() else {
-        return false;
-    };
+    // Every EXIT leaf: the body tail's leaves, plus each `return` operand's.
+    // A function whose exits are ALL `return` statements has no tail at all,
+    // which is why the tail is optional here rather than required.
     let mut leaves = Vec::new();
-    leaf_tails(tail, &mut leaves);
+    if let Some(tail) = f.body.final_expr.as_deref() {
+        leaf_tails(tail, &mut leaves);
+    }
+    collect_return_leaves_block(&f.body, &mut leaves);
     // A single leaf is the unconditional shape — no branch, nothing to guard.
     if leaves.len() < 2 {
         return false;

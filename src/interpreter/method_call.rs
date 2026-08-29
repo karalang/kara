@@ -514,7 +514,35 @@ impl<'a> super::Interpreter<'a> {
                 // `record_conditional_move_tail`. Same channel as the free-fn
                 // seeding in `eval_call`, wider admission — see
                 // `method_param_drop_names`.
-                self.pending_param_drop_bindings = self.method_param_drop_names(&type_name, method);
+                let param_drop_names = self.method_param_drop_names(&type_name, method);
+                // B-2026-08-29-11, PARAM LEG — `moved_out_user_drop_bindings` is
+                // keyed by bare NAME with no frame qualifier, and the method
+                // path deliberately does not isolate it (see the note below).
+                // So a mark this frame makes on its OWN param — which is what
+                // the tail/`return` disarm does on the escaping path — outlives
+                // the call and silences the identically-named param of the NEXT
+                // call, whose value dies inside it and needs its body.
+                //
+                // Measured: one method called three times, escaping in the
+                // middle, ran `drop d` / `drop c` / (nothing) in the
+                // interpreter against `drop d` / `drop c` / `drop e` on all
+                // three compiled backends — an order-dependent missed body, and
+                // a run-vs-build divergence only visible when an escaping call
+                // precedes a dying one.
+                //
+                // Save and restore ONLY these names' membership rather than the
+                // whole set. The blanket isolation is what B-2026-08-29-9
+                // measured as load-bearing (a callee that binds a payload out of
+                // an owned enum param and returns it relies on the CALLER's mark
+                // leaking in, and isolating turned that into a DOUBLE body); a
+                // caller's pre-existing mark on one of these names is preserved
+                // here exactly, so that shape is untouched. What is undone is
+                // only a mark this frame itself introduced.
+                let param_drop_marks: Vec<(String, bool)> = param_drop_names
+                    .iter()
+                    .map(|n| (n.clone(), self.moved_out_user_drop_bindings.contains(n)))
+                    .collect();
+                self.pending_param_drop_bindings = param_drop_names;
                 // B-2026-08-29-9 — the callee frame's moved-out sets are
                 // deliberately NOT isolated here, though `eval_call` isolates a
                 // free fn's. They are keyed by BINDING NAME with no frame
@@ -548,6 +576,13 @@ impl<'a> super::Interpreter<'a> {
                 } else {
                     self.eval_body_growing(&body)
                 };
+                for (name, was_marked) in param_drop_marks {
+                    if was_marked {
+                        self.moved_out_user_drop_bindings.insert(name);
+                    } else {
+                        self.moved_out_user_drop_bindings.remove(&name);
+                    }
+                }
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if pushed_self_mode {
