@@ -2095,7 +2095,48 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
-            let flows_into_return = self.call_arg_flows_into_return(name, i);
+            // B-2026-08-29-3 — a METHOD reaches this loop under a plain
+            // `Type.method` key, which `call_arg_flows_into_return`'s
+            // `Item::Function`-only scan answers `false` for. So a generic
+            // method that hands an argument back left the caller registering a
+            // body the RESULT binding also owns: `impl G1 { fn gm_ret[T](ref
+            // self, r: R, t: T) -> R { r } }` ran R's `Drop` body TWICE on all
+            // three compiled backends against once in the interpreter, and once
+            // for both the non-generic and free-function twins.
+            //
+            // The same two predicates the non-generic method-argument site asks
+            // (`method_call.rs`), with the same split: `fn_always_returns_param`
+            // needs no callee cooperation, so it holds for a generic callee too,
+            // while the conditional leg hands ownership to a callee-side flip
+            // that `compile_mono_function` declines for generics
+            // (B-2026-08-28-71) — standing down on that leg would leave nobody
+            // owning the body.
+            //
+            // THE INDEX HERE IS RECEIVER-INCLUSIVE, the opposite of the sibling
+            // site: this loop's `args` carry the receiver, so a two-parameter
+            // method iterates i = 0, 1, 2 while `find_function_ast` hands back
+            // the raw AST method whose `params` exclude it. Established by
+            // instrumentation before writing this, not inferred — the
+            // conventions genuinely differ per site here, which is what
+            // B-2026-08-28-70 had to verify the same way.
+            let handed_off = self
+                .program_snapshot
+                .as_deref()
+                .and_then(|p| super::declarations::find_function_ast(p, name))
+                .is_some_and(|f| {
+                    let ast_i = if f.self_param.is_some() {
+                        match i.checked_sub(1) {
+                            Some(x) => x,
+                            None => return false,
+                        }
+                    } else {
+                        i
+                    };
+                    crate::ast::fn_always_returns_param(f, ast_i)
+                        || (f.generic_params.is_none()
+                            && crate::ast::fn_conditionally_returns_param_bare(f, ast_i))
+                });
+            let flows_into_return = self.call_arg_flows_into_return(name, i) || handed_off;
             // B-2026-08-26-9 — the monomorphized leg of the same union the
             // free-fn arg loop computes: a callee that STORES this argument into
             // `self` or into a `ref`/`mut ref` param leaves it alive in the

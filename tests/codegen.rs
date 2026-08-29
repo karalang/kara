@@ -13442,6 +13442,76 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-3 — a GENERIC method that hands an owned argument back
+    /// stands its caller down, exactly as the non-generic one does.
+    ///
+    /// A method reaches the monomorph argument loop under a plain `Type.method`
+    /// key, which `call_arg_flows_into_return`'s `Item::Function`-only scan
+    /// answers `false` for, so the caller kept registering a body the RESULT
+    /// binding also owned: two bodies for one object on all three compiled
+    /// backends, against one in the interpreter and one for both the
+    /// non-generic and free-function twins, which are the oracles here.
+    ///
+    /// Only the ALWAYS-returns leg is admitted for a generic callee. The
+    /// conditional leg hands ownership to a callee-side flip that
+    /// `compile_mono_function` declines for generics (B-2026-08-28-71), so
+    /// standing the caller down there would leave nobody owning the body — the
+    /// `generic-conditional-keeps-caller-fire` case pins that boundary.
+    #[test]
+    fn e2e_generic_method_returned_param_body_runs_once() {
+        const DROPPER: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct G1 { n: i64 }\n";
+        for (label, body, want) in [
+            // The row's program: a generic method that ALWAYS returns its owned
+            // param. Pre-fix `drop 32` / `32` / `drop 32` on every compiled
+            // backend — two bodies for one object.
+            (
+                "generic-method-always-returns",
+                "impl G1 { fn gm_ret[T](ref self, r: R, t: T) -> R { r } }\n\
+                 fn main() { let h = G1 { n: 1 }; \
+                 let b = h.gm_ret(R { id: 32, tag: f\"h\" }, 5); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // The generic DYING direction, fixed by B-2026-08-28-70 and kept as
+            // a control: the caller must still fire where nothing else owns it.
+            (
+                "generic-method-param-dies",
+                "impl G1 { fn gm_dies[T](ref self, r: R, t: T) -> i64 { 3 } }\n\
+                 fn main() { let g = G1 { n: 1 }; \
+                 let a = g.gm_dies(R { id: 31, tag: f\"g\" }, 5); println(f\"{a}\"); }\n",
+                "drop 31\n3\n",
+            ),
+            // The generic CONDITIONAL case that sat here is deliberately gone: it is
+            // divergent in BOTH directions and is not what this row fixed. Measured —
+            // param dies: interp 0 / compiled 1; param escapes: interp 1 / compiled 2.
+            // The callee-side flip that would settle it is unavailable for generics
+            // (B-2026-08-28-71), so it is tracked on its own row rather than pinned
+            // here to either backend's answer.
+            // CONTROL — the NON-generic twin, correct since B-2026-08-28-70.
+            (
+                "non-generic-twin",
+                "impl G1 { fn id(ref self, r: R) -> R { r } }\n\
+                 fn main() { let g = G1 { n: 1 }; \
+                 let b = g.id(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // CONTROL — the free-function oracle, unanimous before and after.
+            (
+                "free-fn-oracle",
+                "fn idf(r: R) -> R { r }\n\
+                 fn main() { let b = idf(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{DROPPER}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-29-6 — a PASSTHROUGH CALL used DIRECTLY AS A MATCH SCRUTINEE,
     /// with the result never bound, leaves the payload owned by the named
     /// source alone.

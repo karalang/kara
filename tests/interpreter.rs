@@ -32859,6 +32859,60 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-3, interpreter leg — a GENERIC method that hands an owned
+/// argument back runs its `Drop` body exactly once.
+///
+/// The twin of `e2e_generic_method_returned_param_body_runs_once` in
+/// `tests/codegen.rs`, carrying the same cases with the same expected output.
+/// Keep the two in step verbatim.
+///
+/// This backend was CORRECT before the fix, so these are controls: the defect
+/// was a compiled-only double body, and what they pin is that codegen moved onto
+/// the interpreter's answer rather than both moving.
+#[test]
+fn test_generic_method_returned_param_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct G1 { n: i64 }\n";
+    for (label, body, want) in [
+        (
+            "generic-method-always-returns",
+            "impl G1 { fn gm_ret[T](ref self, r: R, t: T) -> R { r } }\n\
+             fn main() { let h = G1 { n: 1 }; \
+             let b = h.gm_ret(R { id: 32, tag: f\"h\" }, 5); println(f\"{b.id}\") }\n",
+            "32\ndrop 32\n",
+        ),
+        (
+            "generic-method-param-dies",
+            "impl G1 { fn gm_dies[T](ref self, r: R, t: T) -> i64 { 3 } }\n\
+             fn main() { let g = G1 { n: 1 }; \
+             let a = g.gm_dies(R { id: 31, tag: f\"g\" }, 5); println(f\"{a}\") }\n",
+            "drop 31\n3\n",
+        ),
+        // The generic CONDITIONAL case that sat here is deliberately gone: it is
+        // divergent in BOTH directions and is not what this row fixed. Measured —
+        // param dies: interp 0 / compiled 1; param escapes: interp 1 / compiled 2.
+        // The callee-side flip that would settle it is unavailable for generics
+        // (B-2026-08-28-71), so it is tracked on its own row rather than pinned
+        // here to either backend's answer.
+        (
+            "non-generic-twin",
+            "impl G1 { fn id(ref self, r: R) -> R { r } }\n\
+             fn main() { let g = G1 { n: 1 }; \
+             let b = g.id(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\") }\n",
+            "32\ndrop 32\n",
+        ),
+        (
+            "free-fn-oracle",
+            "fn idf(r: R) -> R { r }\n\
+             fn main() { let b = idf(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\") }\n",
+            "32\ndrop 32\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-9 — a METHOD that RETURNS a payload bound out of its owned
 /// enum / `Option` param runs that payload's `Drop` body ONCE.
 ///
