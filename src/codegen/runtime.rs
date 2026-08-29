@@ -6445,6 +6445,109 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Returns `None` when the binding's surface type isn't a known
     /// value-type enum; the cleanup hook then becomes a no-op for that
     /// binding (matches v1 conservative behavior — no spurious cleanup).
+    /// B-2026-08-29-19 — is `e` an identifier that NAMES A PARAM VIEW: an
+    /// owned (non-`ref`) parameter of the function being compiled, or a local
+    /// that inherited view-ness from one (`param_view_locals`)?
+    ///
+    /// The same test the `let` and assign rebind paths already spell inline
+    /// (B-2026-08-01-15 / -16); named here because the constructor leg below
+    /// needs it per ARGUMENT rather than once per statement.
+    pub(super) fn expr_is_param_view(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(src)
+            if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
+                && !self.borrow_vars.ref_params.contains_key(src.as_str()))
+                || self.payload_vars.param_view_locals.contains(src.as_str()))
+    }
+
+    /// B-2026-08-29-19 — does `value` construct `enum_name`'s variant entirely
+    /// out of PARAM VIEWS, so the payload bodies belong to the CALLER and this
+    /// binding must not arm a walker of its own?
+    ///
+    /// Under caller-retains, a value moved out of an owned param is a VIEW: the
+    /// caller runs its `Drop` body. B-2026-08-01-15 propagates that through a
+    /// plain rebind (`let m = r;`) and B-2026-08-29-17 through a match-arm
+    /// rebind. A CONSTRUCTOR is the same move one level up — `let w = W.One(r);`
+    /// stores the view into a fresh local — and it was never covered, so the
+    /// binding's `__karac_dropelems_enum_<E>` walk fired on top of the caller's
+    /// and the body ran TWICE. Every wrap kind measured the same way (enum,
+    /// struct literal, tuple, Vec, `Some`), on all three backends, which is why
+    /// no A/B parity gate could see it.
+    ///
+    /// EVERY walker-visited payload must be a view, not merely one. A mixed
+    /// `W2.Two(r, R { id: 2 })` shares a single walker between both slots, so
+    /// dropping it wholesale would silently lose the FRESH payload's body —
+    /// trading this double for a miss of exactly the same severity. The mixed
+    /// case therefore keeps its walker and stays wrong; correcting it needs a
+    /// per-slot masked walker, the enum sibling of
+    /// `emit_user_drop_field_bodies_fn_skipping` (B-2026-08-29-24).
+    ///
+    /// The per-field admission test is character-for-character the walker's own
+    /// in `emit_enum_payload_user_drop_bodies_fn`: a non-generic, non-shared
+    /// struct path that `type_runs_user_drop` admits. That correspondence is
+    /// what makes "all visited payloads" mean the same thing on both sides —
+    /// a field the walker would skip contributes no body, so it must not be
+    /// able to disqualify the suppression either.
+    pub(super) fn enum_ctor_payload_bodies_are_caller_owned(
+        &self,
+        enum_name: &str,
+        value: &Expr,
+    ) -> bool {
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return false;
+        };
+        // `E.V(..)` (Path) and bare `V(..)` (Identifier) are the two
+        // constructor spellings `enum_name_for_binding` resolves; take the
+        // variant name from the same two shapes so this agrees with whatever
+        // enum it decided the binding has.
+        let variant = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } => match segments.last() {
+                Some(v) => v.clone(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        let generic_params = self.enum_generic_param_names(enum_name);
+        let Some((_, _, tes)) = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, v, _)| *v == variant)
+        else {
+            return false;
+        };
+        let mut visited_any = false;
+        for (fi, te) in tes.iter().enumerate() {
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            let Some(name) = p.segments.first().cloned() else {
+                continue;
+            };
+            if generic_params.contains(&name) {
+                continue;
+            }
+            if self.type_decls.shared_types.contains_key(&name)
+                || !self.type_decls.struct_types.contains_key(&name)
+            {
+                continue;
+            }
+            if !self.type_runs_user_drop(&name, &mut Vec::new()) {
+                continue;
+            }
+            // A payload the walker WOULD visit. It must be a view, and the
+            // argument must actually be there — a variant applied to fewer
+            // arguments than it declares is not a shape to reason about.
+            let Some(arg) = args.get(fi) else {
+                return false;
+            };
+            if !self.expr_is_param_view(&arg.value) {
+                return false;
+            }
+            visited_any = true;
+        }
+        visited_any
+    }
+
     pub(super) fn enum_name_for_binding(
         &self,
         var_name: &str,

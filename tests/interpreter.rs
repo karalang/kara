@@ -33425,6 +33425,111 @@ fn test_method_owned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-19 — WRAPPING a param view into a fresh enum ran the payload's
+/// `Drop` body TWICE in this backend too, so the shape agreed with both
+/// compiled backends on the wrong answer and no A/B gate could see it.
+///
+/// The rule is B-2026-08-01-15's, one level of syntax up: a value moved out of
+/// an owned param is a VIEW whose body the caller runs, and that survives a
+/// CONSTRUCTOR exactly as it survives `let m = r;`. The interpreter half is
+/// `let_ctor_payloads_are_param_views`, gating the binding's Drop slot the same
+/// way codegen gates its `__karac_dropelems_enum_<E>` walk.
+///
+/// The last three cases are guard rails against over-suppression, which here
+/// means a MISSING body — the same severity as the double being fixed, so the
+/// fix is deliberately conditional rather than a blanket retraction. The mixed
+/// case is pinned at the defect's three bodies for that reason (B-2026-08-29-24);
+/// so is `Some(r)`, whose payload rides the `optres_*` leg on the compiled side
+/// where no walker exists to withhold — fixing only this backend there turned
+/// an agreed defect into a run-vs-build divergence, measured.
+#[test]
+fn test_wrapped_owned_param_payload_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Box2 { Full(R), Empty }\n\
+         enum W { One(R), None2 }\n";
+    for (label, body, want) in [
+        // The row's shape: rebind, re-wrap, re-match.
+        (
+            "wrap-rebind-rematch",
+            "fn take(o: Box2) -> i64 { match o { Box2.Full(r) => { let m = r; \
+             let w = W.One(m); match w { W.One(z) => { z.id } W.None2 => { 0 } } } \
+             Box2.Empty => { 0 } } }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); let v = take(o); \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=1\n",
+        ),
+        // Neither the rebind nor the second match is load-bearing.
+        (
+            "wrap-only",
+            "fn take(o: Box2) -> i64 { match o { Box2.Full(r) => { let w = W.One(r); 7 } \
+             Box2.Empty => { 0 } } }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); let v = take(o); \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=7\n",
+        ),
+        // The minimal shape — no enum payload, no `match` anywhere.
+        (
+            "wrap-plain-param",
+            "fn take(r: R) -> i64 { let w = W.One(r); 7 }\n\
+             fn main() { let v = take(R { id: 1 }); println(f\"v={v}\") }\n",
+            "dR1\nv=7\n",
+        ),
+        // View-ness must propagate THROUGH the wrap.
+        (
+            "wrap-then-rebind",
+            "fn take(r: R) -> i64 { let w = W.One(r); let w2 = w; 7 }\n\
+             fn main() { let v = take(R { id: 1 }); println(f\"v={v}\") }\n",
+            "dR1\nv=7\n",
+        ),
+        // A METHOD frame registers its own slots (B-2026-08-27-48: a method's
+        // arguments reach no caller-side fire), and one body is still correct.
+        (
+            "wrap-in-method",
+            "struct T { tag: i64 }\n\
+             impl T { fn take(ref self, r: R) -> i64 { let w = W.One(r); 7 } }\n\
+             fn main() { let t = T { tag: 0 }; let v = t.take(R { id: 1 }); \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=7\n",
+        ),
+        // GUARD RAIL — a genuine LOCAL wrapped: the callee owns it and must fire.
+        (
+            "guard-local-wrapped",
+            "fn take() -> i64 { let m = R { id: 1 }; let w = W.One(m); \
+             match w { W.One(z) => { z.id } W.None2 => { 0 } } }\n\
+             fn main() { let v = take(); println(f\"v={v}\") }\n",
+            "dR1\nv=1\n",
+        ),
+        // GUARD RAIL — a payload constructed FRESH inside the wrap.
+        (
+            "guard-fresh-payload",
+            "fn take(k: i64) -> i64 { let w = W.One(R { id: k }); 7 }\n\
+             fn main() { let v = take(1); println(f\"v={v}\") }\n",
+            "dR1\nv=7\n",
+        ),
+        // GUARD RAIL — MIXED payloads share one walk, so the suppression must
+        // decline; pinned at the defect rather than at the preferred answer.
+        (
+            "guard-mixed-payloads",
+            "enum W2 { Two(R, R), None3 }\n\
+             fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2 }); 7 }\n\
+             fn main() { let v = take(R { id: 1 }); println(f\"v={v}\") }\n",
+            "dR1\ndR2\ndR1\nv=7\n",
+        ),
+        // GUARD RAIL — `Some(r)` is excluded to hold parity with codegen, whose
+        // generic payload has no walker to withhold. Pinned at the defect.
+        (
+            "guard-option-wrap",
+            "fn take(r: R) -> i64 { let q = Some(r); 7 }\n\
+             fn main() { let v = take(R { id: 1 }); println(f\"v={v}\") }\n",
+            "dR1\ndR1\nv=7\n",
+        ),
+    ] {
+        let src = format!("{DROPPER}{body}");
+        assert_eq!(run(&src), want, "case {label}");
+    }
+}
+
 /// B-2026-08-29-14, interpreter leg — a METHOD that hands its owned param back
 /// with `return r;` rather than as a BLOCK TAIL runs the body exactly once.
 ///

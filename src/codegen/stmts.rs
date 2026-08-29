@@ -7440,7 +7440,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             //  * after, because a frame drains LIFO: the memory
                             //    action must be pushed FIRST so the body runs
                             //    before the fields it reads are freed.
-                            if let Some(bodies) = self.emit_enum_payload_user_drop_bodies_fn(&name)
+                            //
+                            // B-2026-08-29-19 — UNLESS the constructor moved a
+                            // PARAM VIEW in. `let w = W.One(r);` where `r` came
+                            // out of an owned param stores a value whose body
+                            // the CALLER runs, so arming this walk on top of it
+                            // ran the body twice on every backend. Marking the
+                            // binding a param view propagates that the way
+                            // B-2026-08-01-15 does for a plain rebind, so a
+                            // later `let w2 = w;` inherits it too.
+                            // The bare-rebind spelling (`let w2 = w;` over an
+                            // enum param, or over a local this rule already
+                            // marked) is the same transfer with no constructor
+                            // in the way; codegen armed a second walker there
+                            // while the interpreter did not, so that shape was
+                            // additionally a run-vs-build divergence.
+                            if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
+                                || self.expr_is_param_view(value)
+                            {
+                                self.payload_vars.param_view_locals.insert(var_name.clone());
+                            } else if let Some(bodies) =
+                                self.emit_enum_payload_user_drop_bodies_fn(&name)
                             {
                                 self.track_user_drop_var_with_fn(
                                     "",

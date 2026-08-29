@@ -1316,6 +1316,90 @@ impl<'a> super::Interpreter<'a> {
     /// destructure of a LOCAL (`let h2 = h; let Holder { r } = h2;`)
     /// stays registered — the move-indirected double is a recorded
     /// residual, matching codegen's depth-0 behavior.
+    /// B-2026-08-29-19 — does the variant constructor `value`, whose result was
+    /// just bound to `bname`, carry ONLY payloads that are param VIEWS?
+    ///
+    /// Interpreter twin of codegen's `enum_ctor_payload_bodies_are_caller_owned`.
+    /// Under caller-retains a value moved out of an owned param is a view whose
+    /// `Drop` body the CALLER runs; B-2026-08-01-15 propagates that through a
+    /// plain rebind and B-2026-08-29-17 through a match-arm rebind, but the
+    /// constructor — the same move one level up — was never covered, so the
+    /// fresh binding registered a Drop slot and the body ran TWICE. Both
+    /// compiled backends did the same, which is why no A/B gate could see it.
+    ///
+    /// The per-payload admission test is deliberately
+    /// [`Self::value_runs_user_drop`] over the BOUND value, because that is
+    /// exactly what [`Self::run_enum_payload_user_drops_value`] — this
+    /// backend's `__karac_dropelems_enum_<E>` — will visit. Codegen's twin asks
+    /// its own `type_runs_user_drop`, the established pair. Each side asking the
+    /// question its own walker asks is what makes the two agree by construction
+    /// rather than by convention; asking a NARROWER question here would
+    /// over-suppress and lose a body codegen still runs.
+    ///
+    /// EVERY visited payload must be a view, not merely one: `W2.Two(r, R { .. })`
+    /// shares one walk between both slots, so suppressing wholesale would trade
+    /// this double for a MISSING body on the fresh payload. The mixed case keeps
+    /// its slot and stays wrong (B-2026-08-29-24).
+    fn let_ctor_payloads_are_param_views(&self, bname: &str, value: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return false;
+        };
+        // The two constructor spellings, matching codegen's twin: `E.V(..)` and
+        // bare `V(..)`.
+        let variant = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } => match segments.last() {
+                Some(v) => v.clone(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        let Some(Value::EnumVariant {
+            enum_name,
+            variant: bound_variant,
+            data: EnumData::Tuple(payloads),
+        }) = self.env.get(bname)
+        else {
+            return false;
+        };
+        // `Option` / `Result` are excluded to MATCH CODEGEN, not because the
+        // shape is correct there. Their payload TypeExpr is the enum's own
+        // generic parameter, which `emit_enum_payload_user_drop_bodies_fn`
+        // skips, so no walker exists for codegen's twin to withhold and
+        // `let q = Some(r);` still doubles on both compiled backends. Fixing
+        // only this side turned an agreed defect into a run-vs-build
+        // divergence — measured, which is how the exclusion got written — and
+        // an agreed defect is the better of the two until the `optres_*` leg
+        // that owns those payloads is fixed alongside (B-2026-08-29-24).
+        if enum_name == "Option" || enum_name == "Result" {
+            return false;
+        }
+        // A struct-VARIANT constructor is not an `ExprKind::Call`, so only the
+        // tuple form reaches here; requiring the bound variant to be the one
+        // the syntax names keeps a shadowed constructor from being read as one.
+        if bound_variant != variant {
+            return false;
+        }
+        let mut visited_any = false;
+        for (i, payload) in payloads.iter().enumerate() {
+            if !self.value_runs_user_drop(payload) {
+                continue;
+            }
+            let Some(arg) = args.get(i) else {
+                return false;
+            };
+            let is_view = matches!(&arg.value.kind, ExprKind::Identifier(src)
+                if self.owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(src.as_str())));
+            if !is_view {
+                return false;
+            }
+            visited_any = true;
+        }
+        visited_any
+    }
+
     fn let_destructures_owned_param(&mut self, stmt: &Stmt) -> bool {
         let (pattern, value) = match &stmt.kind {
             StmtKind::Let { pattern, value, .. } => (pattern, value),
@@ -1367,6 +1451,20 @@ impl<'a> super::Interpreter<'a> {
                     .last()
                     .is_some_and(|params| params.contains(src.as_str()));
                 if src_is_view {
+                    let bname = bname.clone();
+                    if let Some(top) = self.owned_param_names_stack.last_mut() {
+                        top.insert(bname);
+                    }
+                    return true;
+                }
+            }
+            // B-2026-08-29-19 — the CONSTRUCTOR spelling of the same move.
+            // `let w = W.One(r);` stores a param view into a fresh local; the
+            // caller still runs that payload's body, so registering a Drop slot
+            // for `w` ran it twice. Propagates view-ness like the bare rebind
+            // above, so `let w2 = w;` inherits it.
+            if let PatternKind::Binding(bname) = &pattern.kind {
+                if self.let_ctor_payloads_are_param_views(bname, value) {
                     let bname = bname.clone();
                     if let Some(top) = self.owned_param_names_stack.last_mut() {
                         top.insert(bname);

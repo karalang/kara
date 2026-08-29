@@ -36937,6 +36937,197 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-19 — WRAPPING a param view into a fresh enum runs the
+    /// payload's `Drop` body TWICE, on all three backends.
+    ///
+    ///     fn take(r: R) -> i64 { let w = W.One(r); 7 }   // dR1 dR1
+    ///
+    /// Under caller-retains a value moved out of an owned param is a VIEW: the
+    /// caller runs its body. B-2026-08-01-15 propagates that across a plain
+    /// rebind and B-2026-08-29-17 across a match-arm rebind, but a CONSTRUCTOR
+    /// — the same move one level up — was never covered, so the fresh binding
+    /// armed a `__karac_dropelems_enum_<E>` walk on top of the caller's fire.
+    ///
+    /// THE ROW THAT FILED THIS DESCRIBED A LARGER SHAPE than the defect needs.
+    /// It was found as `let m = r; let w = W.One(m); match w { .. }` and framed
+    /// as being about the rebind and the re-match; both are red herrings. The
+    /// third case below is the whole bug with neither of them — no rebind, no
+    /// second match, no enum payload, no `match` at all — and the row's own
+    /// shape is a consequence. It also guessed the move-out retraction fails to
+    /// run for a view; it runs, and correctly finds nothing to retract, because
+    /// a view never had a registration. The surplus is the WRAPPER's walk.
+    ///
+    /// Cases 5-8 are the guard rails, and they are the reason the fix is a
+    /// conditional rather than a blanket retraction:
+    ///
+    ///  * 5 wraps a genuine LOCAL. Its body is the callee's to run and stays.
+    ///  * 6 constructs a FRESH payload inside the wrap — no view anywhere.
+    ///  * 7 is MIXED (`W2.Two(r, R { id: 2 })`), one view and one fresh sharing
+    ///    a single walker. Pinned at the DEFECT's three bodies deliberately:
+    ///    the walk cannot be dropped per-slot, so suppressing it wholesale
+    ///    would trade this double for a MISSING body on the fresh payload —
+    ///    the same severity, the other direction. Tracked as B-2026-08-29-24;
+    ///    when a masked walker lands, this line becomes `dR2\ndR1\nv=7`.
+    ///  * 8 ESCAPES the wrap by returning it, where the callee is not the owner
+    ///    and nothing may be withheld.
+    ///
+    /// ASAN/LSan are clean on all of these INCLUDING a heap-carrying payload
+    /// (measured — the row left it open): the frees were balanced before and
+    /// after, so this was only ever a body-count defect.
+    ///
+    /// Every backend agreed on the wrong answer, so no A/B parity gate could
+    /// see it and the expectation has to be absolute. Case 4 is the exception
+    /// that proves it — `let w2 = w;` over an enum PARAM was additionally a
+    /// run-vs-build divergence, interp at one body and both compiled backends
+    /// at two, with the interpreter already right.
+    #[test]
+    fn test_e2e_wrapped_param_view_payload_drops_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R {\n\
+                   \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                   }\n\
+                   enum Box2 { Full(R), Empty }\n\
+                   enum W { One(R), None2 }\n";
+        // 1. The row's exact shape: rebind, re-wrap, re-match.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> i64 {{\n\
+                 \x20   match o {{\n\
+                 \x20       Box2.Full(r) => {{\n\
+                 \x20           let m = r;\n\
+                 \x20           let w = W.One(m);\n\
+                 \x20           match w {{ W.One(z) => {{ z.id }} W.None2 => {{ 0 }} }}\n\
+                 \x20       }}\n\
+                 \x20       Box2.Empty => {{ 0 }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = take(o);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+        // 2. Neither the rebind nor the second match is load-bearing.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> i64 {{\n\
+                 \x20   match o {{ Box2.Full(r) => {{ let w = W.One(r); 7 }} Box2.Empty => {{ 0 }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = take(o);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=7\n")
+        );
+        // 3. The whole defect with no enum payload and no `match` at all —
+        //    the minimal shape, and the one that shows the row's framing was
+        //    incidental.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R) -> i64 {{ let w = W.One(r); 7 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = take(R {{ id: 1 }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=7\n")
+        );
+        // 4. The bare rebind of an enum PARAM: the divergent leg (interp was
+        //    already at one body, both compiled backends at two).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(w: W) -> i64 {{ let w2 = w; 7 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = take(W.One(R {{ id: 1 }}));\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=7\n")
+        );
+        // 4b. View-ness must propagate THROUGH the wrap, or the chained rebind
+        //     re-arms a walker the wrap just withheld.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R) -> i64 {{ let w = W.One(r); let w2 = w; 7 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = take(R {{ id: 1 }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=7\n")
+        );
+        // 5. GUARD — a genuine local's body is the callee's to run.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take() -> i64 {{\n\
+                 \x20   let m = R {{ id: 1 }};\n\
+                 \x20   let w = W.One(m);\n\
+                 \x20   match w {{ W.One(z) => {{ z.id }} W.None2 => {{ 0 }} }}\n\
+                 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+        // 6. GUARD — a payload constructed FRESH inside the wrap.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(k: i64) -> i64 {{ let w = W.One(R {{ id: k }}); 7 }}\n\
+                 fn main() {{ let v = take(1); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=7\n")
+        );
+        // 7. GUARD — MIXED payloads keep the shared walker and stay at the
+        //    defect's three bodies. Pinned as observed, not as preferred; see
+        //    the doc above and B-2026-08-29-24.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64 }\n\
+                 impl Drop for R {\n\
+                 \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                 }\n\
+                 enum W2 { Two(R, R), None3 }\n\
+                 fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2 }); 7 }\n\
+                 fn main() { let v = take(R { id: 1 }); println(f\"v={v}\"); }"
+            )
+            .as_deref(),
+            Some("dR1\ndR2\ndR1\nv=7\n")
+        );
+        // 8. GUARD — the wrap ESCAPES, so the callee owns nothing to withhold.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> W {{\n\
+                 \x20   match o {{ Box2.Full(r) => {{ W.One(r) }} Box2.Empty => {{ W.None2 }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let w = take(o);\n\
+                 \x20   println(\"mid\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nmid\n")
+        );
+    }
+
     /// B-2026-08-29-17's guard rails — the shapes where the arm binding really
     /// IS the only owner, and whose body the view propagation must not silence.
     ///

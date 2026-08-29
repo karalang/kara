@@ -53580,6 +53580,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-19 — the MEMORY half of the wrapped-param-view double body,
+    /// with a HEAP-CARRYING payload.
+    ///
+    /// `let w = W.One(r);` over an owned param ran `R`'s `Drop` body twice on
+    /// every backend. The row that filed it explicitly left open whether the
+    /// frees were balanced too — "a heap-carrying payload should be re-measured
+    /// before assuming the memory side is balanced" — and they are: this fixture
+    /// was ASAN-clean BEFORE the fix as well as after, so the defect was only
+    /// ever a body count. That is worth pinning rather than merely recording,
+    /// because the obvious reading of the shape says otherwise: the callee's
+    /// `w` and the caller's entry copy hold the same String buffer, which looks
+    /// exactly like a double free and is not one.
+    ///
+    /// `name` is read BYTE-WISE in the body for this file's usual reason —
+    /// a `Drop` that never touches the field lets `-O2` delete the allocation
+    /// and both of its frees, which would hide a real double free here.
+    ///
+    /// Case 2 keeps the MIXED payload shape (B-2026-08-29-24) under the
+    /// sanitizer: it still runs one body too many, and this asserts that the
+    /// surplus stays a body and never becomes a second free.
+    #[test]
+    fn asan_wrapped_param_view_payload_frees_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+enum W { One(R), None2 }
+fn take(r: R) -> i64 { let w = W.One(r); 7 }
+fn main() {
+    let v = take(R { id: 1, name: f"heap-one" });
+    println(f"v={v}");
+}
+"#,
+            &["dR1 heap-one", "v=7"],
+            "wrapped_param_view_payload",
+        );
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+enum W2 { Two(R, R), None3 }
+fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2, name: f"fresh" }); 7 }
+fn main() {
+    let v = take(R { id: 1, name: f"heap-one" });
+    println(f"v={v}");
+}
+"#,
+            &["dR1 heap-one", "dR2 fresh", "dR1 heap-one", "v=7"],
+            "wrapped_param_view_mixed_payloads",
+        );
+    }
+
     /// B-2026-08-09-16 — a `let` that moves an arm payload taken off an OWNED
     /// ENUM PARAM must retract the source's memory action, not only its body.
     ///
