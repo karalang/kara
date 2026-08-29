@@ -36604,6 +36604,188 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-17 — a `match` / `if let` / `while let` arm that REBINDS a
+    /// payload bound out of an OWNED-PARAM scrutinee ran that payload's `Drop`
+    /// body twice, on ALL THREE backends.
+    ///
+    /// The bind itself was already right: under caller-retains a payload bound
+    /// out of an owned param is a VIEW of the callee's entry copy, so it
+    /// registers memory-only and the CALLER fires the body. What was missing is
+    /// that the view-ness did not PROPAGATE — `let m = r;` inside the arm minted
+    /// a genuinely owned local, which registered its own body and ran the one
+    /// the caller was already going to run.
+    ///
+    /// B-2026-08-01-15 established exactly this rule one level up (`let h2 = h;`
+    /// over the PARAM itself propagates, and is correct); this is the same rule
+    /// for a payload bound out of the param. Both backends carry it now —
+    /// `param_view_locals` in codegen, `owned_param_names_stack` in the
+    /// interpreter — and they had the identical hole.
+    ///
+    /// BOTH BACKENDS AGREED ON THE WRONG ANSWER, which is why no A/B gate could
+    /// see it and why this test asserts an absolute expectation rather than
+    /// parity. Fixing one side alone would have converted an agreed defect into
+    /// a divergence — measured mid-fix, when the codegen half landed first.
+    #[test]
+    fn test_e2e_rebound_owned_param_payload_drops_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R {\n\
+                   \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                   }\n\
+                   enum Box2 { Full(R), Empty }\n";
+        // The defect: owned-param scrutinee, rebind, payload does NOT escape.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> i64 {{\n\
+                 \x20   match o {{ Box2.Full(r) => {{ let m = r; m.id }} Box2.Empty => {{ 0 }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = take(o);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+        // `Option` carries it through the same channel.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64 }\n\
+                 impl Drop for R {\n\
+                 \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                 }\n\
+                 fn take(o: Option[R]) -> i64 {\n\
+                 \x20   match o { Some(r) => { let m = r; m.id } None => { 0 } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let o: Option[R] = Some(R { id: 1 });\n\
+                 \x20   let v = take(o);\n\
+                 \x20   println(f\"v={v}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+        // `if let` — a separate binding path in the interpreter, and it needed
+        // its own leg. B-2026-08-28-63 already had to close a spelling-dependent
+        // split in this family once.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> i64 {{\n\
+                 \x20   if let Box2.Full(r) = o {{ let m = r; m.id }} else {{ 0 }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = take(o);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+        // TRANSITIVE — two levels of rebind.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> i64 {{\n\
+                 \x20   match o {{\n\
+                 \x20       Box2.Full(r) => {{ let m = r; let n = m; n.id }}\n\
+                 \x20       Box2.Empty => {{ 0 }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = take(o);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+    }
+
+    /// B-2026-08-29-17's guard rails — the shapes where the arm binding really
+    /// IS the only owner, and whose body the view propagation must not silence.
+    ///
+    /// The fix keys on the scrutinee being an OWNED PARAM, which is exactly the
+    /// condition under which some caller fires instead. Every case here fails
+    /// that condition, so every one must keep its body. An over-broad
+    /// propagation silences all of them, and a lost `Drop` body reads as a
+    /// passing test unless something pins the output.
+    #[test]
+    fn test_e2e_rebound_non_param_payload_still_fires_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R {\n\
+                   \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                   }\n\
+                   enum Box2 { Full(R), Empty }\n";
+        // LOCAL scrutinee — no caller owns it, so the rebind must keep the body.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = match o {{ Box2.Full(r) => {{ let m = r; m.id }} Box2.Empty => {{ 0 }} }};\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 \x20   println(\"end\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\nend\n")
+        );
+        // FRESH-TEMP scrutinee — the match owns the value outright.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn mk() -> Box2 {{ Box2.Full(R {{ id: 1 }}) }}\n\
+                 fn main() {{\n\
+                 \x20   let v = match mk() {{ Box2.Full(r) => {{ let m = r; m.id }} Box2.Empty => {{ 0 }} }};\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=1\n")
+        );
+        // A SECOND owned param that is never matched keeps its own caller-side
+        // fire — the propagation must be per-binding, not per-frame. Two values
+        // are constructed here, so two bodies are correct.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2, p: R) -> i64 {{\n\
+                 \x20   let s = match o {{ Box2.Full(r) => {{ let m = r; m.id }} Box2.Empty => {{ 0 }} }};\n\
+                 \x20   s + p.id\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let v = take(o, R {{ id: 2 }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR2\ndR1\nv=3\n")
+        );
+        // The rebind ESCAPES as the function's return value — the caller's
+        // binding is then the sole owner and fires exactly once, there.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> R {{\n\
+                 \x20   match o {{ Box2.Full(r) => {{ let m = r; m }} Box2.Empty => {{ R {{ id: 0 }} }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let k = take(o);\n\
+                 \x20   println(f\"k={{k.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("k=1\ndR1\n")
+        );
+    }
+
     /// B-2026-08-29-8 — a `match` arm that REBINDS its payload to a local and
     /// yields that local as the arm's BLOCK TAIL ran the payload's `Drop` body
     /// twice on both compiled backends, against the interpreter's single fire.

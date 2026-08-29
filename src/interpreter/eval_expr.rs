@@ -1048,6 +1048,30 @@ impl<'a> super::Interpreter<'a> {
                     };
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
+                    // B-2026-08-29-17, `if let` leg — propagate the view-ness of a
+                    // payload bound out of an OWNED-PARAM scrutinee, exactly as
+                    // the `match` arm does in `pattern_match.rs`. Without it
+                    // `if let Full(r) = o { let m = r; m.id }` doubled the
+                    // body while the `match` spelling of the same program was
+                    // correct — the spelling-dependent split B-2026-08-28-63
+                    // already had to close once for this family.
+                    if matches!(&value.kind, ExprKind::Identifier(n)
+                        if self.owned_param_names_stack
+                            .last()
+                            .is_some_and(|params| params.contains(n.as_str())))
+                    {
+                        {
+                            for bound in pattern.binding_names() {
+                                {
+                                    if let Some(top) = self.owned_param_names_stack.last_mut() {
+                                        {
+                                            top.insert(bound);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     for n in stash_names {
                         // B-2026-08-28-63 — the `if let` / `while let` copies of
                         // the `match` arm gate in `pattern_match.rs`. All three
@@ -1200,6 +1224,30 @@ impl<'a> super::Interpreter<'a> {
                     };
                     self.env.push_scope();
                     self.bind_pattern(pattern, val);
+                    // B-2026-08-29-17, `while let` leg — propagate the view-ness of a
+                    // payload bound out of an OWNED-PARAM scrutinee, exactly as
+                    // the `match` arm does in `pattern_match.rs`. Without it
+                    // `while let Full(r) = o { let m = r; .. }` doubled the
+                    // body while the `match` spelling of the same program was
+                    // correct — the spelling-dependent split B-2026-08-28-63
+                    // already had to close once for this family.
+                    if matches!(&value.kind, ExprKind::Identifier(n)
+                        if self.owned_param_names_stack
+                            .last()
+                            .is_some_and(|params| params.contains(n.as_str())))
+                    {
+                        {
+                            for bound in pattern.binding_names() {
+                                {
+                                    if let Some(top) = self.owned_param_names_stack.last_mut() {
+                                        {
+                                            top.insert(bound);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     for n in stash_names {
                         // B-2026-08-28-63 — the `if let` / `while let` copies of
                         // the `match` arm gate in `pattern_match.rs`. All three

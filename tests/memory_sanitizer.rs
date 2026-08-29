@@ -53597,13 +53597,29 @@ fn main() {
     /// change. Case 4 keeps the payload inside the callee, where the binding is
     /// the sole owner and the free must still happen.
     ///
-    /// Case 4's `Drop` body prints TWICE, and that is not this row. The callee's
-    /// param is entry-copied, so caller and callee hold genuinely distinct
-    /// buffers; the payload never escapes, so the caller keeps its own walk and
-    /// each buffer runs one body. Two frees, two bodies — memory-consistent, the
-    /// same reading `call_dispatch`'s own-wrapper note records, and identical on
-    /// `--interp`. Pinned as observed rather than as preferred, so a later change
-    /// to that shape shows up here instead of passing silently.
+    /// Case 4's `Drop` body printed TWICE until B-2026-08-29-17, and this pin
+    /// was explicitly "observed rather than preferred, so a later change to that
+    /// shape shows up here instead of passing silently". It did, and the change
+    /// was the right direction, so the expectation is now ONE body.
+    ///
+    /// The reading that justified two — "the callee's param is entry-copied, so
+    /// caller and callee hold genuinely distinct buffers, and each buffer runs
+    /// one body" — is refuted by the free-function ORACLE, the same test this
+    /// file uses elsewhere to decide questions like it. Strip the enum wrapper
+    /// and nothing else changes about the ownership:
+    ///
+    ///     fn take_keep(p: Res) -> i64 { let k: Res = p; k.id }
+    ///
+    /// Same owned param, same entry copy, same heap payload, same rebind, same
+    /// non-escape — and it printed ONE body before B-2026-08-29-17 and one
+    /// after, on every backend. If entry-copying really implied two bodies, the
+    /// oracle would print two. It never has. What differed was only that the
+    /// PAYLOAD spelling failed to propagate the param's view-ness to the rebind,
+    /// which is the defect that row fixed.
+    ///
+    /// ASAN is clean either way, and that is worth stating: the frees were
+    /// balanced before and are balanced now, so this line was never a memory
+    /// question. Only the body count moved.
     ///
     /// Every payload is read BYTE-WISE, and it is what makes the bug visible at
     /// all: with a `Drop` body that never touches `name`, the optimizer deletes
@@ -53676,7 +53692,6 @@ fn main() {
                 "di0",
                 "drop 0 di0",
                 "drop 0 kp0",
-                "drop 0 kp0",
                 "kp 0",
                 "al1",
                 "drop 1 al1",
@@ -53685,7 +53700,6 @@ fn main() {
                 "di1",
                 "drop 1 di1",
                 "drop 1 kp1",
-                "drop 1 kp1",
                 "kp 1",
                 "al2",
                 "drop 2 al2",
@@ -53693,7 +53707,6 @@ fn main() {
                 "drop 2 me2",
                 "di2",
                 "drop 2 di2",
-                "drop 2 kp2",
                 "drop 2 kp2",
                 "kp 2",
                 "end",

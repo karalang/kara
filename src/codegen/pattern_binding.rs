@@ -1061,6 +1061,40 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // the registration goes memory-only (the
                                 // `else` arm) — the wrapper here doubled the
                                 // body on both backends.
+                                let payload_of_owned_param = self
+                                    .pattern_state
+                                    .current_variant_payload_bindings
+                                    .contains(name.as_str())
+                                    && self.pattern_state.pattern_binding_scrutinee_is_owned_param;
+                                // B-2026-08-29-17 — and record the view-ness, so
+                                // a REBIND of this binding inherits it.
+                                //
+                                // The memory-only registration below is right,
+                                // but it only covers the binding itself. `let m
+                                // = r;` inside the arm then reached the let
+                                // site's `rhs_is_param_view` test, which admits
+                                // the param itself and transitive rebinds of it
+                                // and had no idea `r` was a payload view — so
+                                // `m` took the full `track_user_drop_var`
+                                // channel and ran the body the CALLER was
+                                // already going to run. Measured `dR1 dR1 v=1`
+                                // where one body is due, on ALL THREE backends,
+                                // for `Full(r) => { let m = r; m.id }`; the same
+                                // arm without the rebind, and the same rebind
+                                // over a LOCAL scrutinee, are both correct.
+                                //
+                                // `param_view_locals` is exactly this concept —
+                                // its doc already says "a destructure or match
+                                // on one is a param-view bind exactly like the
+                                // direct param case" — so a payload view belongs
+                                // in it for the same reason a whole-param rebind
+                                // does (B-2026-08-01-15). Adding it here also
+                                // makes a nested `match m { .. }` take the
+                                // owned-param gates, which is the same
+                                // transitivity that set already provides.
+                                if payload_of_owned_param {
+                                    self.payload_vars.param_view_locals.insert(name.clone());
+                                }
                                 if self.drop_rc.user_drop_wrapper_fns.contains_key(tn)
                                     && self
                                         .pattern_state

@@ -33106,6 +33106,103 @@ fn test_method_passthrough_arg_aliases_the_source_payload() {
     }
 }
 
+/// B-2026-08-29-17, interpreter leg — a `match` / `if let` arm that REBINDS a
+/// payload bound out of an OWNED-PARAM scrutinee runs that payload's `Drop`
+/// body exactly once.
+///
+/// The interpreter twin of `test_e2e_rebound_owned_param_payload_drops_once`
+/// and `test_e2e_rebound_non_param_payload_still_fires_once` in
+/// `tests/codegen.rs`, carrying the same cases with the same expected output.
+/// Keep the two in step verbatim.
+///
+/// BOTH FILES NEED THE FULL MATRIX rather than half each, and for a sharper
+/// reason than usual here: all three backends AGREED on the doubled body, so
+/// parity could not see the defect and fixing one side alone would have
+/// manufactured a divergence. That happened mid-fix — the codegen half landed
+/// first and turned `dR1 dR1` into an interp-vs-compiled split until the
+/// interpreter half followed. These absolute expectations are what would catch
+/// a future one-sided change.
+#[test]
+fn test_rebound_owned_param_payload_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Box2 { Full(R), Empty }\n";
+    for (label, body, want) in [
+        // The defect: owned-param scrutinee, rebind, payload does NOT escape.
+        // Pre-fix `dR1 / dR1 / v=1` — one body too many, on every backend.
+        (
+            "rebind-nonescaping",
+            "fn take(o: Box2) -> i64 \
+             { match o { Box2.Full(r) => { let m = r; m.id } Box2.Empty => { 0 } } }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); let v = take(o); \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=1\n",
+        ),
+        // `if let` — a separate binding path in this backend, and it needed its
+        // own leg; the `match` spelling was fixed first and this one still
+        // doubled.
+        (
+            "rebind-iflet",
+            "fn take(o: Box2) -> i64 \
+             { if let Box2.Full(r) = o { let m = r; m.id } else { 0 } }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); let v = take(o); \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=1\n",
+        ),
+        // TRANSITIVE — two levels of rebind.
+        (
+            "rebind-two-levels",
+            "fn take(o: Box2) -> i64 \
+             { match o { Box2.Full(r) => { let m = r; let n = m; n.id } Box2.Empty => { 0 } } }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); let v = take(o); \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=1\n",
+        ),
+        // GUARD RAIL — a LOCAL scrutinee has no caller behind it, so the arm
+        // binding really is the only owner and the rebind must keep the body.
+        (
+            "guard-local-scrutinee",
+            "fn main() { let o: Box2 = Box2.Full(R { id: 1 }); \
+             let v = match o { Box2.Full(r) => { let m = r; m.id } Box2.Empty => { 0 } }; \
+             println(f\"v={v}\"); println(\"end\") }\n",
+            "dR1\nv=1\nend\n",
+        ),
+        // GUARD RAIL — a FRESH-TEMP scrutinee, owned outright by the match.
+        (
+            "guard-fresh-temp",
+            "fn mk() -> Box2 { Box2.Full(R { id: 1 }) }\n\
+             fn main() { let v = match mk() \
+             { Box2.Full(r) => { let m = r; m.id } Box2.Empty => { 0 } }; \
+             println(f\"v={v}\") }\n",
+            "dR1\nv=1\n",
+        ),
+        // GUARD RAIL — a second owned param that is never matched keeps its own
+        // caller-side fire. Two values are constructed, so two bodies are right,
+        // and the propagation has to be per-binding rather than per-frame.
+        (
+            "guard-unmatched-second-param",
+            "fn take(o: Box2, p: R) -> i64 \
+             { let s = match o { Box2.Full(r) => { let m = r; m.id } Box2.Empty => { 0 } }; \
+             s + p.id }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); \
+             let v = take(o, R { id: 2 }); println(f\"v={v}\") }\n",
+            "dR2\ndR1\nv=3\n",
+        ),
+        // GUARD RAIL — the rebind ESCAPES as the return value, so the caller's
+        // binding owns it and fires once, there.
+        (
+            "guard-rebind-escapes",
+            "fn take(o: Box2) -> R \
+             { match o { Box2.Full(r) => { let m = r; m } Box2.Empty => { R { id: 0 } } } }\n\
+             fn main() { let o: Box2 = Box2.Full(R { id: 1 }); let k = take(o); \
+             println(f\"k={k.id}\") }\n",
+            "k=1\ndR1\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-70, interpreter leg — a METHOD's owned param runs its user
 /// `Drop` body exactly once, wherever it dies.
 ///

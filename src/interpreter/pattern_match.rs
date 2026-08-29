@@ -60,6 +60,42 @@ impl<'a> super::Interpreter<'a> {
                 for bound in arm.pattern.binding_names() {
                     self.rearm_container_bodies_for_name(&bound);
                 }
+                // B-2026-08-29-17 — a payload bound out of an OWNED-PARAM
+                // scrutinee is a VIEW of the callee's entry copy, and the
+                // view-ness has to PROPAGATE so a rebind of it inherits the
+                // ownership story.
+                //
+                // The bind itself is already correct: `scrutinee_expr_is_consuming`
+                // answers false for an owned param (B-2026-08-01-13's
+                // caller-retains carve-out), so no Drop slot is registered for
+                // the binding. But `let m = r;` inside the arm then reached
+                // `let_destructures_owned_param`, whose `src_is_view` test
+                // consults exactly this set — and `r` was not in it, so `m`
+                // registered a slot of its own and ran the body the CALLER was
+                // already going to run. Measured `dR1 dR1 v=1` where one body
+                // is due, for `Full(r) => { let m = r; m.id }`.
+                //
+                // This set IS the view set: B-2026-08-01-15's whole-param
+                // rebind propagates by inserting into it, and a payload view
+                // belongs there for the same reason. Codegen twin: the
+                // `param_view_locals` insert in `pattern_binding.rs`, which
+                // carries the identical rule and had the identical hole.
+                //
+                // Gated on the scrutinee being an owned param, so a LOCAL or
+                // fresh-temp scrutinee — where the arm binding really is the
+                // only owner — is untouched and keeps registering its slot.
+                if scrutinee_place.is_some_and(|sp| {
+                    matches!(&sp.kind, ExprKind::Identifier(n)
+                        if self.owned_param_names_stack
+                            .last()
+                            .is_some_and(|params| params.contains(n.as_str())))
+                }) {
+                    for bound in arm.pattern.binding_names() {
+                        if let Some(top) = self.owned_param_names_stack.last_mut() {
+                            top.insert(bound);
+                        }
+                    }
+                }
                 // B-2026-07-30-11 (match-arm leg): the taken arm's moved-out
                 // Drop-bearing payload bindings get REAL Drop slots. Stash
                 // them; the arm body's block executor adopts them into its
