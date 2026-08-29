@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 224 | 3 |
-| run-vs-build | 213 | 5 |
+| run-vs-build | 213 | 4 |
 | missing-feature | 187 | 0 |
 | double-free | 154 | 1 |
 | codegen-gap | 148 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1191 | 10 |
+| codegen | 1191 | 9 |
 | typecheck | 278 | 0 |
-| interp | 228 | 3 |
+| interp | 228 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1754 surfaced · 10 open · 1718 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1754 surfaced · 9 open · 1719 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-28-53 | 2026-08-28 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away prints `drop 47` / `drop W5` under jit and build and `drop W5` / `drop 47` under the interpreter. design.md § Drop ordering specifies parent first, so the interpreter is the correct leg. COUNTS are right on all three (one body each) -- this is ordering alone, and it is confined to the DISCARDED-result shape: the same program binding the result agrees on all three backends. | — |
 | B-2026-08-28-67 | 2026-08-28 | interp+codegen | low | A `match` OVER A BARE USER ENUM RUNS THE PAYLOAD'S `Drop` BODY AND THE ENUM'S OWN IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `match e { E.A(r) => .. }` is interp `dR5 dE` vs compiled `dE dR5`; same count, different sequence | — |
 | B-2026-08-28-69 | 2026-08-28 | interp+codegen | medium | A DISCARDED `match` WHOSE ARM YIELDS ITS BOUND PAYLOAD RUNS NO `Drop` BODY IN THE INTERPRETER while both compiled backends run exactly one -- `match o { Some(r) => { r } .. };` in statement position is interp `dropped` vs compiled `dR1 dropped`; a discarded CALL result and a read-only arm both run it, so the loss is specific to the arm handing the binding on | — |
 | B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
@@ -171,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1754 surfaced
 
 </details>
 
-### Fixed (1718)
+### Fixed (1719)
 
-<details><summary>1718 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1719 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1876,6 +1875,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1754 surfaced
 | B-2026-08-28-50 | codegen | medium | AN UNBOUND DESTRUCTURE FIELD WHOSE TYPE HAS NO `Drop` LEAKS ON A STRUCT-LITERAL SOURCE: `let W { r: _, n } = W { r: R { . | bf7c226 |
 | B-2026-08-28-51 | interp+codegen | high | A CONDITIONALLY-MOVED LOCAL RETURNED FROM A BRANCH TAIL RUNS ITS `Drop` BODY TWICE AND IS THEN USED AFTER THE DROP, on all four surfaces: `fn take(k:… | 74223ee |
 | B-2026-08-28-52 | interp+codegen | medium | ONE PROGRAM, WRONG IN OPPOSITE DIRECTIONS ON THE TWO BACKENDS: a local moved out by an explicit `return r` inside a branch (`fn take(k: bool) -> R {… | f94c75c |
+| B-2026-08-28-53 | interp+codegen | low | A DISCARDED own-`Drop` parent temp runs its FIELD's `Drop` body BEFORE its own on the two compiled backends and AFTER it in the interpreter: `take(W… | 43e93bc |
 | B-2026-08-28-54 | interp+codegen | medium | AN ENUM WITH NO OWN `Drop` BUT A DROP-BEARING PAYLOAD RUNS NO BODY ON ANY BACKEND when held as a struct field or tuple element: `enum E2 { A(R), B }`… | 0e872dd |
 | B-2026-08-28-55 | interp+codegen | medium | A `Vec` ELEMENT OF AN OWN-`Drop` ENUM RUNS NO BODY ON ANY BACKEND: `let mut v = Vec.new(); v.push(E.B)` is 0/0/0 while the TUPLE element of the same… | 0ad7a39 |
 | B-2026-08-28-56 | codegen | medium | A TUPLE-TYPED DESTRUCTURE LEAF WHOSE ELEMENT TYPE HAS NO `Drop` GETS NO MEMORY OWNER, on either source: `let (inner, n) = ((R { . | 3e4a63b |
