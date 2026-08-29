@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 231 | 4 |
-| run-vs-build | 229 | 6 |
+| run-vs-build | 230 | 7 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 148 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
-| soundness | 80 | 1 |
+| soundness | 80 | 0 |
 | other | 63 | 0 |
 | crash | 61 | 0 |
 | use-after-free | 22 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1213 | 10 |
+| codegen | 1214 | 10 |
 | typecheck | 278 | 0 |
-| interp | 241 | 6 |
+| interp | 243 | 7 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1780 surfaced · 11 open · 1742 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1781 surfaced · 11 open · 1743 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -137,10 +137,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1780 surfaced
 | B-2026-08-29-24 | 2026-08-29 | interp+codegen | medium | A param VIEW wrapped into a MIXED-payload enum, or into a STRUCT / TUPLE / VEC / `Some`, still runs its `Drop` body TWICE -- `let w = W2.Two(r, R { id: 2 })` prints `dR1 dR2 dR1` where `dR1 dR2` is due, and `let s = S { r: r }` prints `dR1 dR1`; B-2026-08-29-19 fixed only the SINGLE-payload enum wrap, because the shared walker cannot be withheld per slot and `Option`'s generic payload has no walker at all | — |
 | B-2026-08-29-27 | 2026-08-29 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL MINTS A FRESH OWNED TEMP LEAKS IT WHEN THE CONSUMER IS A METHOD RECEIVER OR A CALL ARGUMENT -- `if c { mk(n) } else { mk(n+1) }.contains("x")` strands 36 B, and so do the `match` spelling, a BARE BLOCK `{ mk(n) }.contains("x")` with no branch in it at all, and `use_it(if c { mk(n) } else { mk(n+1) })`; the same call unwrapped is clean, so it is the block/arm hand-out into a non-registering consumer that leaks | — |
 | B-2026-08-29-28 | 2026-08-29 | interp+codegen | low | A FRESH-TEMP ENUM SCRUTINEE'S OWN `Drop` BODY RUNS AT THE MATCH ON THE INTERPRETER AND AT THE END OF THE ENCLOSING SCOPE ON BOTH COMPILED BACKENDS -- `match mk() { E.A(r) => .. }` is interp `v7 dR7 dE s1 s2 s3` vs compiled `v7 dR7 s1 s2 s3 dE`; same count, different place | — |
-| B-2026-08-29-29 | 2026-08-29 | codegen | medium | A PROJECTION-PLACE ENUM SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS, THE SECOND TIME ON THE ZEROED SLOT -- `match s.e { E.A(r) => .. }` prints `dR8:n8 dE dR0:` where one payload fire is due; the `t.0` spelling is the same bug and also loses `dE` on the interpreter | — |
 | B-2026-08-29-30 | 2026-08-29 | interp+codegen | medium | A DISCARDED `if` WITH NO `else` RUNS NO `Drop` BODY AND LEAKS -- `let _ = if n == 1 { R { .. } };` is silent on all three backends where one body is due, because a no-`else` merge yields a const-0 placeholder and the arm's value never reaches either discard site; the BARE-STATEMENT STRUCT LITERAL half of this row is FIXED (2ac067e), as is that commit's other find -- the bare spelling of the no-`else` `if` was a live run-vs-build divergence at fd4e80f, not the agreed silence first recorded here | — |
 | B-2026-08-29-31 | 2026-08-29 | interp+codegen | medium | THE `let _ =` SPELLING OF A DISCARDED BRANCH STILL STRANDS WHATEVER ITS ARM HANDS OUT -- B-2026-08-29-5 fixed the BARE-STATEMENT form, and the wildcard-let form of the same `if` / `match` leaks 9 B (enclosing local) or 3 B (bound payload) at KARAC_OPT_LEVEL=0 and runs NO `Drop` body on any backend; one row of the population is additionally a live run-vs-build divergence | — |
 | B-2026-08-29-32 | 2026-08-29 | codegen | medium | A DISCARDED BRANCH OR MATCH WHOSE ARMS ARE LITERALS OF A STRUCT WITH HEAP FIELDS BUT NO `impl Drop` LEAKS THEM -- `if c { P { a: payload(), b: 1 } } else { .. };` and `let _ = match .. { P { a: payload() } .. }` each strand 38 B, because the discard battery answers the BODIES question correctly (there is no body) and then returns before the memory one is ever asked | — |
+| B-2026-08-29-33 | 2026-08-29 | interp+codegen | medium | A MATERIALIZING ARM OVER A PROJECTION-PLACE ENUM SCRUTINEE RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY BACKEND -- `match s.e { E.A(r) => { let m = r; .. } }` is interp `m8 dR8 dE dR8` vs compiled `m8 dR8 dE dR0`, where the identifier spelling gives `m8 dR8 dE` | — |
 
 ### Relocated (2)
 
@@ -172,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1780 surfaced
 
 </details>
 
-### Fixed (1742)
+### Fixed (1743)
 
-<details><summary>1742 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1743 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1920,6 +1920,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1780 surfaced
 | B-2026-08-29-21 | codegen | medium | A NON-GENERIC method whose owned param is returned CONDITIONALLY, with BOTH exits spelled as `return` statements, runs the param's `Drop` body TWICE… | 64e3e90 |
 | B-2026-08-29-22 | runtime | high | EVERY COMPILED macOS BINARY THAT RECORDS AN ERROR-RETURN-TRACE FRAME ABORTS AT EXIT -- SIGABRT / exit 134 and a raw Rust panic (`use of std::thread::… | 7a8107c2 |
 | B-2026-08-29-25 | interp+codegen | medium | A DISCARDED `if` RUNS NO `Drop` BODY IN EITHER STATEMENT FORM -- `if c { R { . | fd4e80f |
+| B-2026-08-29-29 | interp+codegen | medium | A PROJECTION-PLACE ENUM SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS, THE SECOND TIME ON THE ZEROED SLOT -- `match s.e {… | af86dfd |
 
 </details>
 
