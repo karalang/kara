@@ -34692,6 +34692,173 @@ fn consuming_arm_runs_the_bound_enum_payloads_drop_body() {
     }
 }
 
+/// B-2026-08-28-67 — a `match` / `if let` arm that only READS THROUGH the
+/// payload it binds runs the two `Drop` bodies in the COMPILED order: the
+/// enum's own first, its payload's second.
+///
+/// Before the fix the interpreter printed them the other way round (`dR5 dE`
+/// against the compiled `dE dR5`) — same count, so every count-based fixture in
+/// the -46/-47/-54/-55/-57/-58/-63 family stayed green while the two backends
+/// disagreed on sequence. Which order is right is settled by design.md § Part 8
+/// ("drop each field in order" is what the compiler does AFTER the user's drop
+/// body returns), and independently by the interpreter contradicting itself: a
+/// direct `let x = E.A(R { .. });` already printed `dE` then `dR5` here.
+///
+/// The rows split into two groups that must NOT move together, which is the
+/// whole point of the fixture:
+///
+///   * READ-THROUGH — the binding is only projected (`r.id`), used as a method
+///     receiver (`r.get()` / `r.eat()`, either receiver mode), or not mentioned
+///     at all. Nothing was moved out, so the scrutinee keeps its payload walk
+///     and runs both bodies at its own death. These are the rows the fix moved.
+///   * MATERIALIZED — the binding appears somewhere as a bare value (a call
+///     argument, a `let` right-hand side, an aggregate element). The arm really
+///     does own it, and these rows were ALREADY correct on all four surfaces;
+///     they are here so a future edit cannot "fix" the first group by breaking
+///     the second.
+///
+/// `interpolation-hole` is load-bearing in a way its neighbours are not: the
+/// only mention of `r` is inside an `f"…"` hole. `consume_class`'s walker does
+/// not descend into `InterpolatedStringLit`, so reusing it here would have
+/// scored the row read-through and produced `h5 dE dR5` — the wrong half of the
+/// split. It is why `binding_use`'s walk is exhaustive over `ExprKind`.
+#[test]
+fn readthrough_arm_leaves_the_payload_with_its_enum() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         impl R { fn get(ref self) -> i64 { self.id }\n\
+         \x20         fn eat(self) -> i64 { self.id } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         enum H { A(R), B }\n\
+         struct W { r: R }\n\
+         fn keep(r: R) -> i64 { r.id }\n\
+         fn mk() -> E { E.A(R { id: 7 }) }\n";
+    for (label, body, want) in [
+        // ── read-through: the scrutinee keeps the payload ──────────────────
+        (
+            "read-field",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+            "v5\ndE\ndR5\npost\n",
+        ),
+        (
+            "never-mentioned",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { println(\"got\") } E.B => {} }\n",
+            "got\ndE\ndR5\npost\n",
+        ),
+        (
+            "method-ref-self",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { println(f\"v{r.get()}\") } E.B => {} }\n",
+            "v5\ndE\ndR5\npost\n",
+        ),
+        (
+            // An OWNED-`self` receiver is still a read-through here: every
+            // compiled backend leaves the payload with the scrutinee for it,
+            // measured, so the receiver's mode is not the question.
+            "method-owned-self",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { println(f\"v{r.eat()}\") } E.B => {} }\n",
+            "v5\ndE\ndR5\npost\n",
+        ),
+        (
+            "guard-reads-only",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) if r.id == 5i64 => { println(\"g\") }\n\
+             \x20           E.A(r) => { println(\"o\") } E.B => {} }\n",
+            "g\ndE\ndR5\npost\n",
+        ),
+        (
+            "if-let",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 if let E.A(r) = e { println(f\"v{r.id}\") }\n",
+            "v5\ndE\ndR5\npost\n",
+        ),
+        (
+            // The spelling the divergence was first seen through: an inner
+            // `match` over a payload that is itself an arm binding.
+            "nested-in-option",
+            "let o: Option[E] = Some(E.A(R { id: 3 }));\n\
+             \x20 match o { Some(x) => { match x { E.A(r) => { println(\"inner\") }\n\
+             \x20                                  E.B => {} } } None => {} }\n",
+            "inner\ndE\ndR3\npost\n",
+        ),
+        // ── materialized: the arm owns the payload (unchanged controls) ────
+        (
+            "interpolation-hole",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { println(f\"h{keep(r)}\") } E.B => {} }\n",
+            "h5\ndR5\ndE\npost\n",
+        ),
+        (
+            "free-fn-argument",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { let k = keep(r); println(f\"k{k}\") } E.B => {} }\n",
+            "k5\ndR5\ndE\npost\n",
+        ),
+        (
+            "let-rebind",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+            "m5\ndR5\ndE\npost\n",
+        ),
+        (
+            "struct-literal-field",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) => { let w = W { r: r }; println(f\"w{w.r.id}\") } E.B => {} }\n",
+            "w5\ndR5\ndE\npost\n",
+        ),
+        (
+            // MIXED ARMS — the shape that proves the disarm and the stash are
+            // ONE decision. The disarm is a whole-match retraction (matching
+            // codegen's compile-time one, which cannot be path-sensitive), so
+            // the materializing FIRST arm retracts the walk even when the
+            // read-through SECOND arm is the one taken. A cut of this fix that
+            // asked the stash only about the taken arm stood it down anyway and
+            // printed `v5 dE`, losing `dR5`.
+            "mixed-arms-one-materializes",
+            "let e = E.A(R { id: 5 });\n\
+             \x20 match e { E.A(r) if r.id == 1i64 => { let m = r; println(f\"m{m.id}\") }\n\
+             \x20           E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+            "v5\ndR5\ndE\npost\n",
+        ),
+        // ── boundary: a FRESH-TEMP scrutinee keeps the arm stash ───────────
+        (
+            // The gate stands the arm stash down only where the DISARM could
+            // have retracted the scrutinee's walk — an identifier or `self`
+            // place. `match mk() { .. }` has a stash but nothing named to
+            // retract, so standing it down hands the payload to nobody: an
+            // earlier cut of this fix printed `v7 dE`, with `dR7` gone
+            // entirely. This row is that regression, pinned.
+            //
+            // Interpreter-only on purpose. The compiled side puts the
+            // scrutinee's own `dE` after the enclosing statement here
+            // (`v7 dR7 post dE`), which is a SEPARATE pre-existing divergence
+            // filed as its own row — asserting it in the compiled twin would
+            // pin a bug as if it were the contract.
+            "fresh-temp-scrutinee",
+            "match mk() { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+            "v7\ndR7\ndE\npost\n",
+        ),
+        // ── boundary: no own `Drop`, so nothing to order against ───────────
+        (
+            // `H` has a Drop-bearing payload but no `Drop` of its own. There is
+            // no destructor whose fields must all be present, so the gate stays
+            // out and this row is untouched by the fix — it agreed before and
+            // agrees after.
+            "no-own-drop-enum",
+            "let e = H.A(R { id: 5 });\n\
+             \x20 match e { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+            "v5\ndR5\npost\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-57, interpreter leg — the PARITY PIN for the compiled fix.
 ///
 /// Unlike its siblings this one was green before the fix and after it: the

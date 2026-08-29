@@ -69,7 +69,7 @@ mod closures;
 mod collections;
 mod column;
 mod conc_state;
-mod consume_class;
+pub(crate) mod consume_class;
 mod contract_state;
 mod control_flow;
 mod control_flow_bce;

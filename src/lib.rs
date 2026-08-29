@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod attribute_validator;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod binding_use;
 pub mod build_cache;
 pub mod call_graph;
 pub mod catalog;

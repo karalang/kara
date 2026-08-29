@@ -108,7 +108,20 @@ impl<'a> super::Interpreter<'a> {
                 // routing); a field-access place is a view whose owner still
                 // walks, and a borrow accessor's payload aliases the
                 // container's element (see `scrutinee_expr_is_consuming`).
-                let consuming_scrutinee = matches!(scrutinee, Value::EnumVariant { .. })
+                // B-2026-08-28-67 — the stash's half of the read-through
+                // gate; see `arm_only_reads_payload_through`. Kept beside the
+                // consuming-scrutinee test rather than folded into it because
+                // the two ask different questions: that one is about where the
+                // SCRUTINEE came from, this one about what the ARM does.
+                let arm_reads_through = match scrutinee {
+                    Value::EnumVariant { enum_name, .. } => {
+                        scrutinee_place.is_some_and(Self::place_walk_is_retractable)
+                            && !self.match_disarms_payload_walk(enum_name, arms)
+                    }
+                    _ => false,
+                };
+                let consuming_scrutinee = !arm_reads_through
+                    && matches!(scrutinee, Value::EnumVariant { .. })
                     && scrutinee_place.is_none_or(|sp| self.scrutinee_expr_is_consuming(sp));
                 if consuming_scrutinee {
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
@@ -323,10 +336,7 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         let enum_name = enum_name.clone();
-        if arms
-            .iter()
-            .any(|arm| self.pattern_consumes_user_drop_payload(&enum_name, &arm.pattern))
-        {
+        if self.match_disarms_payload_walk(&enum_name, arms) {
             self.moved_out_enum_payload_bindings.insert(name);
         }
     }
@@ -335,11 +345,20 @@ impl<'a> super::Interpreter<'a> {
     /// `if let` site (codegen's `control_flow.rs` mirror of the `match` call).
     /// Runs BEFORE the match test, like codegen's compile-time retraction,
     /// which cannot know whether the pattern will match at runtime.
+    ///
+    /// `scope` is the `then_block` the binding lives in, so the
+    /// B-2026-08-28-67 read-through gate can be asked the same question the
+    /// `match` arm asks — both spellings must answer it identically, the
+    /// spelling-dependent split being exactly the shape B-2026-08-28-63 had to
+    /// close once already for this family. `None` means the binding ESCAPES the
+    /// construct (`let … else` binds into the enclosing block), where there is
+    /// no scope to inspect and the payload is materialized by definition.
     pub(crate) fn disarm_moved_out_enum_payload_one(
         &mut self,
         scrutinee_place: &Expr,
         scrutinee: &Value,
         pattern: &Pattern,
+        scope: Option<&Block>,
     ) {
         let name = match &scrutinee_place.kind {
             ExprKind::Identifier(n) => n.clone(),
@@ -350,7 +369,10 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         let enum_name = enum_name.clone();
-        if self.pattern_consumes_user_drop_payload(&enum_name, pattern) {
+        if self.pattern_consumes_user_drop_payload(&enum_name, pattern)
+            && !scope
+                .is_some_and(|b| self.let_form_only_reads_payload_through(&enum_name, pattern, b))
+        {
             self.moved_out_enum_payload_bindings.insert(name);
         }
     }
@@ -434,6 +456,125 @@ impl<'a> super::Interpreter<'a> {
             },
             _ => false,
         }
+    }
+
+    /// Does this `match` retract the scrutinee's payload walk — i.e. does ANY
+    /// arm move a Drop-bearing payload out?
+    ///
+    /// THE ONE DECISION BOTH HALVES ASK (B-2026-08-28-67). The disarm and the
+    /// arm stash must agree exactly: retract without stashing and the body is
+    /// owned by nobody, stash without retracting and it fires twice. Expressing
+    /// that as two parallel conditions is how they drift, and it did — the
+    /// disarm scans EVERY arm (it is a whole-match retraction, matching
+    /// codegen's compile-time one, which cannot be path-sensitive) while a first
+    /// cut asked the stash only about the TAKEN arm. A match mixing the two
+    /// kinds of arm then retracted the walk for the materializing arm and stood
+    /// the stash down for the read-through one:
+    ///
+    /// ```text
+    /// match e { E.A(r) if r.id == 1i64 => { let m = r; .. }
+    ///           E.A(r) => { println(f"v{r.id}") }  E.B => {} }
+    /// ```
+    ///
+    /// took the second arm and printed `v5 dE` — `dR5` gone — against the
+    /// compiled `v5 dR5 dE`. Routing both through this function makes the
+    /// lockstep structural instead of a thing to remember.
+    fn match_disarms_payload_walk(&self, enum_name: &str, arms: &[MatchArm]) -> bool {
+        arms.iter().any(|arm| {
+            self.pattern_consumes_user_drop_payload(enum_name, &arm.pattern)
+                && !self.arm_only_reads_payload_through(
+                    enum_name,
+                    &arm.pattern,
+                    &arm.body,
+                    arm.guard.as_ref(),
+                )
+        })
+    }
+
+    /// Can [`Self::disarm_moved_out_enum_payload`] retract THIS place's payload
+    /// walk? Only an identifier or `self` place has a walk to hand back
+    /// (`moved_out_enum_payload_bindings` is keyed by name), so only there can
+    /// B-2026-08-28-67's read-through gate stand the arm stash down.
+    ///
+    /// A FRESH-TEMP scrutinee (`match mk() { E.A(r) => .. }`) is the shape this
+    /// exists for. It has a stash but no disarm — nothing named to retract — so
+    /// standing the stash down there hands the payload to NOBODY: measured
+    /// `v7 dE`, with the payload's `dR7` gone entirely, against `v7 dR7 dE`.
+    /// That is the same "the two decisions live in different places" failure the
+    /// row records for the first attempt at this fix, reached from the other
+    /// side.
+    fn place_walk_is_retractable(place: &Expr) -> bool {
+        matches!(place.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+    }
+
+    /// B-2026-08-28-67 — does this arm merely READ THROUGH every Drop-bearing
+    /// payload it binds out of `enum_name`, never materializing one as a value?
+    ///
+    /// When it does, the payload was not moved out at all: the scrutinee still
+    /// owns it and its own `Drop` walk runs the body, AFTER the enum's own body
+    /// — which is design.md § Part 8's order ("drop each field in order ... after
+    /// the user's drop body returns") and what all three compiled backends
+    /// already produce. The interpreter's arm stash otherwise fires the payload
+    /// body at the ARM's end, i.e. BEFORE the scrutinee's own, so the two
+    /// backends printed the same two lines in opposite orders.
+    ///
+    /// Gated by the CALLERS on the enum having its own `impl Drop`, which is
+    /// what makes the move-out illegitimate rather than merely mistimed:
+    /// "Partial moves out of a struct field are rejected if the struct has a
+    /// `Drop` impl: the drop body assumes all fields are present"
+    /// (design.md § Part 8, Interaction with move semantics). Without an own
+    /// body there is no destructor to strand and nothing to order against —
+    /// measured identical on every backend either way.
+    ///
+    /// Read-through is decided structurally by `binding_use`, NOT by
+    /// `consume_class::binding_only_borrowed`: that predicate models a
+    /// free-function argument as entry-copied and therefore non-consuming, but
+    /// `keep(r)` materializes `r` and every backend agrees the ARM owns it
+    /// there. The two predicates part company on exactly that shape.
+    fn arm_only_reads_payload_through(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        self.payload_bindings_all(enum_name, pattern, |n| {
+            crate::binding_use::binding_only_read_through(n, body)
+                && guard.is_none_or(|g| crate::binding_use::binding_only_read_through(n, g))
+        })
+    }
+
+    /// `if let` / `while let` sibling of [`Self::arm_only_reads_payload_through`],
+    /// whose scope is a `Block` rather than an arm expression. Deliberately NOT
+    /// offered to `let … else`: that pattern binds into the ENCLOSING block, so
+    /// the payload outlives any scope this could inspect and is materialized by
+    /// definition.
+    pub(super) fn let_form_only_reads_payload_through(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+        block: &Block,
+    ) -> bool {
+        self.payload_bindings_all(enum_name, pattern, |n| {
+            crate::binding_use::binding_only_read_through_block(n, block)
+        })
+    }
+
+    /// Shared core of the two above: the enum owns a `Drop` body, the pattern
+    /// really does bind a Drop-bearing payload out, and `f` holds for every
+    /// such binding.
+    fn payload_bindings_all(
+        &self,
+        enum_name: &str,
+        pattern: &Pattern,
+        f: impl Fn(&str) -> bool,
+    ) -> bool {
+        if !self.program.drop_method_keys.contains_key(enum_name) {
+            return false;
+        }
+        let names = self.arm_moved_user_drop_payload_bindings(enum_name, pattern);
+        // Nothing bound out: leave the caller's own gate to decide, unchanged.
+        !names.is_empty() && names.iter().all(|n| f(n))
     }
 
     pub(super) fn arm_moved_user_drop_payload_bindings(

@@ -1020,7 +1020,7 @@ impl<'a> super::Interpreter<'a> {
                 // disarm: once this pattern moves a Drop-bearing payload out,
                 // the source binding's payload-body walk must skip it, matching
                 // codegen's retraction at `control_flow.rs`'s owned-variable arm.
-                self.disarm_moved_out_enum_payload_one(value, &val, pattern);
+                self.disarm_moved_out_enum_payload_one(value, &val, pattern, Some(then_block));
                 let result = if self.try_match_pattern(pattern, &val) {
                     // B-2026-07-30-11 (if-let leg): a consuming scrutinee's
                     // moved-out Drop-bearing payload bindings get REAL Drop
@@ -1035,7 +1035,24 @@ impl<'a> super::Interpreter<'a> {
                     // ALIASES the container's element — firing here doubled
                     // the body against the container's own walk (the same
                     // exclusion codegen's `scrutinee_is_borrow_call` makes).
-                    let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
+                    // B-2026-08-28-67, `if let` leg — a then-block that only
+                    // READS THROUGH the payload moved nothing out, so the
+                    // scrutinee keeps the walk and the stash stands down. Must
+                    // move in lockstep with the disarm above.
+                    let reads_through = match &val {
+                        // Identifier / `self` place only — that is where the
+                        // disarm above has a walk to hand back. See
+                        // `place_walk_is_retractable`.
+                        Value::EnumVariant { enum_name, .. } => {
+                            matches!(value.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                                && self.let_form_only_reads_payload_through(
+                                    enum_name, pattern, then_block,
+                                )
+                        }
+                        _ => false,
+                    };
+                    let consuming_scrutinee = !reads_through
+                        && matches!(val, Value::EnumVariant { .. })
                         && self.scrutinee_expr_is_consuming(value);
                     let stash_names: Vec<String> = if consuming_scrutinee {
                         if let Value::EnumVariant { ref enum_name, .. } = val {
@@ -1211,6 +1228,11 @@ impl<'a> super::Interpreter<'a> {
                     // `Vec[Res]` never ran r's body on this backend. Same
                     // gate: owning fresh temps and identifier/`self` places;
                     // borrow accessors excluded.
+                    // B-2026-08-28-67 deliberately does NOT gate here. This
+                    // path has no disarm — the scrutinee is re-evaluated per
+                    // iteration, so there is no stable binding whose walk could
+                    // be handed the payload back — and a stash that stands down
+                    // with nothing to stand down TO loses the body outright.
                     let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
                         && self.scrutinee_expr_is_consuming(value);
                     let stash_names: Vec<String> = if consuming_scrutinee {

@@ -3810,7 +3810,10 @@ impl<'a> super::Interpreter<'a> {
                 // skip it or the body runs twice (once via the source's walk
                 // at its NLL death — before the binding is even used — and
                 // once via the binding's own slot).
-                self.disarm_moved_out_enum_payload_one(value, &val, pattern);
+                // `None`: a `let … else` pattern binds into the ENCLOSING
+                // block, so B-2026-08-28-67's read-through gate has no scope to
+                // inspect and the payload is materialized by definition.
+                self.disarm_moved_out_enum_payload_one(value, &val, pattern, None);
                 if self.try_match_pattern(pattern, &val) {
                     self.bind_pattern(pattern, val);
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
