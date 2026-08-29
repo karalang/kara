@@ -3458,17 +3458,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 BasicValueEnum::FloatValue(fv) => {
                     let fty = fv.get_type();
                     let one = fty.const_float(1.0);
-                    let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.copysign")
-                        .unwrap_or_else(|| panic!("llvm.copysign intrinsic must exist"));
-                    let decl = intrinsic
-                        .get_declaration(&self.module, &[fty.into()])
-                        .unwrap_or_else(|| panic!("llvm.copysign declaration for float type"));
-                    let signed_one = self
-                        .builder
-                        .build_call(decl, &[one.into(), fv.into()], "sgn.cs")
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic();
+                    // bf16 routes through f32 — `llvm.copysign.bf16` is
+                    // unselectable off x86 (B-2026-08-29-34). The result comes
+                    // back in the receiver's type, so the `select` below still
+                    // sees two operands of one type.
+                    let signed_one: BasicValueEnum<'ctx> = self
+                        .build_float_intrinsic_bf16_safe("llvm.copysign", &[one, fv], "sgn.cs")
+                        .into();
                     // `fcmp uno x, x` is true iff `x` is NaN — return `x` then.
                     let is_nan = self
                         .build_float_compare_bf16_safe(
@@ -3497,6 +3493,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(method, "recip" | "to_degrees" | "to_radians" | "fract") && args.is_empty() {
             let v = self.compile_expr(object)?;
             if let BasicValueEnum::FloatValue(fv) = v {
+                // bf16 is widened for the WHOLE block and rounded back once at
+                // the end (B-2026-08-29-34): every arm below computes with
+                // native float ops on `fty`, which on bf16 are unselectable
+                // off x86. Widening here rather than per-arm also keeps the
+                // multi-step `fract` from rounding its intermediate.
+                let (fv, narrow_bf16) = self.widen_bf16_scalar(fv, "fh.in");
                 let fty = fv.get_type();
                 let r = match method {
                     "recip" => {
@@ -3517,7 +3519,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.builder.build_float_mul(fv, c, "to_rad").unwrap()
                     }
                     _ => {
-                        // `fract` = `x - trunc(x)` (round toward zero).
+                        // `fract` = `x - trunc(x)` (round toward zero). `fv` is
+                        // already widened above, so this instantiates
+                        // `llvm.trunc` at f32/f64, never at bfloat.
                         let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.trunc")
                             .unwrap_or_else(|| panic!("llvm.trunc intrinsic must exist"));
                         let decl = intrinsic
@@ -3535,6 +3539,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap()
                     }
                 };
+                let r = self.narrow_bf16_scalar(r, narrow_bf16, "fh.out");
                 return Ok(r.into());
             }
         }
@@ -3731,18 +3736,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if method == "sqrt" && args.is_empty() {
             let v = self.compile_expr(object)?;
             if let BasicValueEnum::FloatValue(fv) = v {
-                let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.sqrt")
-                    .expect("llvm.sqrt intrinsic must exist");
-                let decl = intrinsic
-                    .get_declaration(&self.module, &[fv.get_type().into()])
-                    .expect("llvm.sqrt declaration for float type");
-                let r = self
-                    .builder
-                    .build_call(decl, &[fv.into()], "fsqrt")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic();
-                return Ok(r);
+                // bf16 goes through f32: `llvm.sqrt.bf16` aborts ISel on
+                // aarch64 and wasm32 (B-2026-08-29-34).
+                let r = self.build_float_intrinsic_bf16_safe("llvm.sqrt", &[fv], "fsqrt");
+                return Ok(r.into());
             }
         }
 
@@ -3837,8 +3834,32 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(kind) = crate::float_math::classify(method) {
             let v = self.compile_expr(object)?;
             if let BasicValueEnum::FloatValue(fv) = v {
+                // B-2026-08-29-42 — `is_f32` used to be a BINARY choice, so a
+                // REDUCED-PRECISION receiver (`f16` / `bf16`) fell into the
+                // f64 arm: it called the double-precision libm symbol and
+                // declared it as `bfloat tan(bfloat)`, a signature libm does
+                // not have. libm then read a double out of 16 bits and the
+                // program silently got garbage — `x.tan()` returned `x`,
+                // `x.hypot(y)` returned 2.4e16. Wrong ANSWERS, on every
+                // target including x86, with no diagnostic.
+                //
+                // Neither half format has a libm entry point of its own, so
+                // both widen to f32, call the `f`-suffixed symbol, and round
+                // back. (This is also what the reduced-precision semantics
+                // ask for: compute in f32, round once.)
                 let fty = fv.get_type();
-                let is_f32 = fty == self.context.f32_type();
+                let f32_t = self.context.f32_type();
+                let f64_t = self.context.f64_type();
+                // A half format picks the `f`-suffixed symbol; the actual
+                // widening happens INSIDE the libm branch only. Widening `fv`
+                // out here would silently reach the intrinsic path below too,
+                // whose `build_float_intrinsic_bf16_safe` would then see an
+                // f32 receiver, decide no narrowing is due, and leak f32
+                // precision out of a bf16-typed expression. (That is not
+                // hypothetical — the first draft did exactly this, and the
+                // interp-vs-codegen sweep is what caught it.)
+                let half = fty != f32_t && fty != f64_t;
+                let is_f32 = fty == f32_t || half;
                 // `tan` / `atan2` have no LLVM-18 intrinsic — call libm directly,
                 // picking the width-correct symbol (`f`-suffixed for f32).
                 let libm_sym = match (method, is_f32) {
@@ -3876,6 +3897,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => None,
                 };
                 if let Some(sym) = libm_sym {
+                    // Widen the receiver for the call only (see `half` above).
+                    let call_fty = if half { f32_t } else { fty };
+                    let fv = self.build_float_cast_bf16_safe(fv, call_fty, "flibm.x32");
+                    let fty = call_fty;
                     let mut call_args = vec![fv.into()];
                     let mut params = vec![fty.into()];
                     if matches!(kind, crate::float_math::FloatMathKind::Binary) {
@@ -3885,6 +3910,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "{method} argument must be a float value (typechecker invariant)"
                             );
                         };
+                        // Same widening as the receiver — a half-width second
+                        // operand would corrupt the call the same way.
+                        let yv = self.build_float_cast_bf16_safe(yv, fty, "flibm.y32");
                         call_args.push(yv.into());
                         params.push(fty.into());
                     }
@@ -3900,8 +3928,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_call(fn_val, &call_args, "flibm")
                         .unwrap()
                         .try_as_basic_value()
-                        .unwrap_basic();
-                    return Ok(r);
+                        .unwrap_basic()
+                        .into_float_value();
+                    let r = if half {
+                        self.build_float_cast_bf16_safe(r, v.get_type().into_float_type(), "flibm")
+                    } else {
+                        r
+                    };
+                    return Ok(r.into());
                 }
                 let intrinsic_name = match method {
                     "sin" => "llvm.sin",
@@ -3919,25 +3953,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     "copysign" => "llvm.copysign",
                     _ => unreachable!("float_math codegen classify/match drift"),
                 };
-                let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name)
-                    .unwrap_or_else(|| panic!("{intrinsic_name} intrinsic must exist"));
-                let decl = intrinsic
-                    .get_declaration(&self.module, &[fty.into()])
-                    .unwrap_or_else(|| panic!("{intrinsic_name} declaration for float type"));
+                // Routed through the bf16-safe wrapper: instantiating any of
+                // these at `bfloat` emits an `llvm.<op>.bf16` that aborts ISel
+                // on aarch64 and wasm32 (B-2026-08-29-34). Every entry in the
+                // table above is affected, which is why the widening lives at
+                // the shared call rather than in the per-method arms.
                 let r = match kind {
                     crate::float_math::FloatMathKind::Binary => {
-                        let av = self.compile_expr(&args[0].value)?;
-                        self.builder
-                            .build_call(decl, &[fv.into(), av.into()], "fmath")
+                        let av = self.compile_expr(&args[0].value)?.into_float_value();
+                        self.build_float_intrinsic_bf16_safe(intrinsic_name, &[fv, av], "fmath")
                     }
                     crate::float_math::FloatMathKind::Unary => {
-                        self.builder.build_call(decl, &[fv.into()], "fmath")
+                        self.build_float_intrinsic_bf16_safe(intrinsic_name, &[fv], "fmath")
                     }
-                }
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic();
-                return Ok(r);
+                };
+                return Ok(r.into());
             }
         }
 

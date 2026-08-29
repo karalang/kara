@@ -115374,6 +115374,246 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-34 — NO `Vector[bf16, N]` LANE OP MAY LOWER TO A NATIVE
+    /// `<N x bfloat>` LLVM NODE. The vector twin of
+    /// `bf16_operations_emit_no_native_bfloat_node`, and it needs to exist
+    /// separately for a reason the scalar test cannot cover.
+    ///
+    /// THE IR HERE CONTAINS NO SCALAR `bfloat` NODE AT ALL. It is the AArch64
+    /// *vector* legalizer that scalarizes `<4 x bfloat> fadd` down into the
+    /// scalar `bf16 fadd` that then cannot be selected, so the scalar scan
+    /// reports a clean module for a program that aborts at ISel. wasm32 dies
+    /// one step earlier, on `fp_to_bf16`.
+    ///
+    /// Measured with llc-18 (`-mtriple` reproduces the target's ISel exactly
+    /// from an x86 host): before the fix this fixture's shape aborted with
+    /// `Cannot select: bf16 = fadd` on `aarch64-unknown-linux-gnu` and
+    /// `aarch64-apple-darwin`, and `Cannot select: i32 = fp_to_bf16` on
+    /// `wasm32-unknown-wasi`.
+    ///
+    /// WHY THE FIXTURE IS BIG, AND WHY A SMALL ONE WOULD LIE. A two-line
+    /// `a + b` plus a lane read SELECTS on aarch64 at every opt level — not
+    /// because the node is selectable but because llc CONSTANT-FOLDS the add
+    /// away, so zero `fadd`s reach ISel. Operands here are derived from
+    /// `env.args().len()` so nothing folds, and the surface is swept wide
+    /// enough that any one unrouted site shows up.
+    #[test]
+    fn vector_bf16_operations_emit_no_native_bfloat_node() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let s: bf16 = (n as f32) as bf16;
+    let t: bf16 = ((n + 1) as f32) as bf16;
+    let a: Vector[bf16, 4] = Vector[bf16, 4](s, t, s, t);
+    let b: Vector[bf16, 4] = Vector[bf16, 4].splat(t);
+    println(f"arith={(a + b).reduce_sum()} {(a - b).reduce_sum()} {(a * b).reduce_sum()} {(a / b).reduce_sum()} {(a % b).reduce_sum()}");
+    println(f"cmp={(a < b)[0]} {(a == b)[0]} {(a != b)[0]} {(a <= b)[0]} {(a > b)[0]} {(a >= b)[0]}");
+    println(f"math={a.sqrt().reduce_sum()} {a.exp().reduce_sum()} {b.ln().reduce_sum()}");
+    println(f"act={a.sigmoid().reduce_sum()} {a.tanh().reduce_sum()}");
+    println(f"round={a.floor().reduce_sum()} {a.ceil().reduce_sum()} {a.round().reduce_sum()} {a.trunc().reduce_sum()}");
+    println(f"red={a.reduce_min()} {a.reduce_max()} {a.reduce_product()} {a.dot(b)}");
+    println(f"lanes={a.reverse().reduce_sum()} {a.rotate_lanes_left(1).reduce_sum()} {a.replace(0, 1.0bf16).reduce_sum()} {a[0]}");
+}
+"#,
+        );
+        // Same opcode-anchored matching as the scalar sibling, widened to the
+        // `<N x bfloat>` spelling. Anchoring on `= <opcode> ` rather than a
+        // bare substring matters for the same reason it does there: an LLVM
+        // value NAME derived from an op (`%fneg = bitcast …`) trips a loose
+        // match, and those bitcasts are exactly what the fix emits.
+        const OPS: [&str; 13] = [
+            "= fadd ",
+            "= fsub ",
+            "= fmul ",
+            "= fdiv ",
+            "= frem ",
+            "= fneg ",
+            "= fcmp ",
+            "= fptrunc ",
+            "= fpext ",
+            "= fptosi ",
+            "= fptoui ",
+            "= sitofp ",
+            "= uitofp ",
+        ];
+        let mut offenders: Vec<&str> = Vec::new();
+        for line in ir.lines() {
+            let t = line.trim();
+            let touches_bf16 = t.contains(" bfloat") || t.contains("x bfloat>");
+            let native_op = touches_bf16 && OPS.iter().any(|op| t.contains(op));
+            // `llvm.sqrt.v4bf16` and friends: an intrinsic is a native bf16 op
+            // wearing a call's clothing, and the vector transcendentals are
+            // where that form actually bit.
+            let native_intrinsic = t.contains("@llvm.") && t.contains("bf16");
+            if native_op || native_intrinsic {
+                offenders.push(line);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "emitted native `bfloat` node(s) — unselectable on aarch64 and wasm32:\n{}",
+            offenders.join("\n")
+        );
+        // Anti-vacuity, and it has to be the VECTOR shape: the scalar test's
+        // `alloca bfloat` would be satisfied by a fixture whose vectors had
+        // all been optimized into scalars, which is the one way this assertion
+        // could hold while covering nothing.
+        assert!(
+            ir.contains("x bfloat>"),
+            "fixture stopped producing `<N x bfloat>` values at all — the \
+             no-native-node assertion above would then hold vacuously"
+        );
+    }
+
+    /// B-2026-08-29-34, the behavioural half: a `Vector[bf16, N]` still
+    /// computes the right answers after every lane op is rerouted through
+    /// `<N x float>`.
+    ///
+    /// The values are the ones the "each operation widens to f32 and rounds
+    /// back" rule gives, and they are what the INTERPRETER produces for the
+    /// same program — the A/B oracle. Its sibling above catches the
+    /// regression; this one catches a *wrong* widening, e.g. a round-to-
+    /// nearest-even step that differs from the scalar path's and so makes
+    /// `reduce_sum` (which folds lanes through the SCALAR fold) disagree with
+    /// itself.
+    #[test]
+    fn e2e_vector_bf16_operations_lower_without_a_native_bfloat_node() {
+        assert_eq!(
+            run_program(
+                r#"
+fn main() {
+    let a: Vector[bf16, 4] = Vector[bf16, 4](1.5bf16, 2.5bf16, 1.5bf16, 2.5bf16);
+    let b: Vector[bf16, 4] = Vector[bf16, 4].splat(0.5bf16);
+    println(f"add={(a + b).reduce_sum()} sub={(a - b).reduce_sum()}");
+    println(f"mul={(a * b).reduce_sum()} div={(a / b).reduce_sum()}");
+    println(f"cmp={(a > b)[0]} {(a < b)[0]} {(a == b)[0]}");
+    println(f"red={a.reduce_min()} {a.reduce_max()} {a.dot(b)}");
+    println(f"round={a.floor().reduce_sum()} {a.ceil().reduce_sum()}");
+    println(f"sqrt={a.sqrt().reduce_sum()}");
+}
+"#
+            ),
+            Some(
+                "add=10 sub=6\n\
+                 mul=4 div=16\n\
+                 cmp=true false false\n\
+                 red=1.5 2.5 4\n\
+                 round=6 10\n\
+                 sqrt=5.625\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-29-34 — the SCALAR math methods, which B-2026-08-29-23 left
+    /// emitting `llvm.<op>.bf16`.
+    ///
+    /// That row fixed the plain-instruction sites and `min`/`max` and stopped
+    /// there, so `sqrt` / `exp` / `ln` / `log2` / `log10` / `exp2` / `sin` /
+    /// `cos` / `floor` / `ceil` / `round` / `trunc` / `signum` / `recip` /
+    /// `to_degrees` / `fract` all still instantiated an overloaded intrinsic
+    /// at `bfloat`. Every one aborts ISel off x86 (measured: `bf16 = fsqrt`,
+    /// `bf16 = fexp`, `bf16 = ffloor`), and from the moment -23's guard
+    /// landed they were a hard compile error on EVERY host, because that
+    /// guard's first pass matches intrinsics by name and `llvm.sqrt.bf16`
+    /// contains "bf16".
+    ///
+    /// The scalar fixture in `bf16_operations_emit_no_native_bfloat_node`
+    /// exercises arithmetic, comparison, `abs`, `min`/`max` and `clamp` — and
+    /// passed throughout, which is exactly why this list needs its own
+    /// fixture rather than a line appended to that one.
+    #[test]
+    fn scalar_bf16_math_methods_emit_no_native_bfloat_intrinsic() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let a: bf16 = ((n + 1) as f32) as bf16;
+    let b: bf16 = ((n + 2) as f32) as bf16;
+    println(f"m1={a.sqrt()} {a.exp()} {a.ln()} {a.log2()} {a.log10()} {a.exp2()}");
+    println(f"m2={a.sin()} {a.cos()} {a.tan()} {a.atan()} {a.asin()} {a.acos()}");
+    println(f"m3={a.sinh()} {a.cosh()} {a.tanh()} {a.ln_1p()} {a.exp_m1()}");
+    println(f"m4={a.floor()} {a.ceil()} {a.round()} {a.trunc()} {a.fract()}");
+    println(f"m5={a.signum()} {a.recip()} {a.to_degrees()} {a.to_radians()}");
+    println(f"m6={a.atan2(b)} {a.hypot(b)} {a.pow(b)}");
+}
+"#,
+        );
+        let offenders: Vec<&str> = ir
+            .lines()
+            .filter(|l| l.contains("@llvm.") && l.contains("bf16"))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "instantiated an LLVM intrinsic at `bfloat` — unselectable on \
+             aarch64 and wasm32:\n{}",
+            offenders.join("\n")
+        );
+        assert!(
+            ir.contains("bfloat"),
+            "fixture stopped exercising bf16 at all"
+        );
+    }
+
+    /// B-2026-08-29-42 — a REDUCED-PRECISION receiver picked the DOUBLE
+    /// libm symbol, and got silent garbage.
+    ///
+    /// The `tan` / `atan2` / inverse-trig / hyperbolic set has no LLVM-18
+    /// intrinsic, so codegen calls libm directly and chose the symbol with
+    /// `let is_f32 = fty == f32_type()` — a BINARY test. `f16` and `bf16` are
+    /// neither, so they took the f64 arm: they called `tan` (not `tanf`) and
+    /// declared it `bfloat tan(bfloat)`, a signature libm does not have. libm
+    /// read a double out of 16 bits.
+    ///
+    /// This one is worth a fixture of its own because it is NOT the
+    /// `Cannot select` class the neighbouring tests are about: it produced
+    /// WRONG ANSWERS on every target, x86 included, with no diagnostic —
+    /// `x.tan()` returned `x` unchanged and `x.hypot(y)` returned 2.4e16.
+    /// A test that only asserts "it compiles" passes against the bug.
+    #[test]
+    fn e2e_half_precision_libm_calls_use_the_f32_symbol() {
+        // f16 and bf16 both round 2.0 exactly, so the two agree here; the
+        // point is the VALUES, not the width.
+        for ty in ["f16", "bf16"] {
+            let src = format!(
+                r#"
+fn main() {{
+    let x: {ty} = 2.0 as f32 as {ty};
+    let y: {ty} = 3.0 as f32 as {ty};
+    println(f"tan={{x.tan()}} atan={{x.atan()}} sinh={{x.sinh()}}");
+    println(f"hypot={{x.hypot(y)}} atan2={{x.atan2(y)}}");
+}}
+"#
+            );
+            let out = run_program(&src);
+            assert!(out.is_some(), "{ty} program failed to build");
+            let out = out.unwrap();
+            // The bug's signature: every unary result came back as the
+            // receiver (2), and hypot returned a huge integer.
+            assert!(
+                !out.contains("tan=2 "),
+                "{ty}: `tan` returned its receiver — the f64-symbol bug:\n{out}"
+            );
+            assert!(
+                out.starts_with("tan=-2.1"),
+                "{ty}: expected tan(2) ≈ -2.18, got:\n{out}"
+            );
+            assert!(
+                out.contains("atan=1.1"),
+                "{ty}: expected atan(2) ≈ 1.107, got:\n{out}"
+            );
+            assert!(
+                out.contains("sinh=3.6"),
+                "{ty}: expected sinh(2) ≈ 3.627, got:\n{out}"
+            );
+            assert!(
+                out.contains("hypot=3.6"),
+                "{ty}: expected hypot(2,3) ≈ 3.606, got:\n{out}"
+            );
+        }
+    }
+
     /// B-2026-08-27-5 — the compiled twin of
     /// `eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche`.
     ///

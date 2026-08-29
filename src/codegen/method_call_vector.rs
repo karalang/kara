@@ -489,6 +489,20 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         recv: inkwell::values::VectorValue<'ctx>,
     ) -> Option<inkwell::values::VectorValue<'ctx>> {
+        // B-2026-08-29-34 — bf16 is widened to f32 for the WHOLE body, then
+        // rounded back once at the end. Every arm below (the `llvm.*` vector
+        // intrinsics, and the `exp`/`ln` polynomials `sigmoid` and `tanh`
+        // build on) would otherwise emit native `<N x bfloat>` nodes that
+        // aarch64 and wasm32 cannot select. Widening HERE rather than at each
+        // of the ~40 interior builder calls is what keeps the arms readable
+        // and leaves no site to forget: `vt`, `ft` and the `splat` closure
+        // below all derive from `recv`, so they follow the widened type
+        // automatically.
+        //
+        // It is also more accurate than per-op widening would be — the
+        // polynomial intermediates stay in f32 instead of being rounded to
+        // bf16 after every step.
+        let (recv, narrow_bf16) = self.widen_bf16_vector(recv, "vfu.in");
         let vt = recv.get_type();
         let ft = vt.get_element_type().into_float_type();
         let n = vt.get_size();
@@ -543,6 +557,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         })
+        .map(|out| self.narrow_bf16_vector(out, narrow_bf16, "vfu.out"))
     }
 
     pub(super) fn compile_vector_exp(

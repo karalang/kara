@@ -5628,6 +5628,275 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_float_value()
     }
 
+    /// `<N x bfloat>` → `<N x float>`, the VECTOR twin of
+    /// [`Self::emit_bf16_to_f32`] (B-2026-08-29-34).
+    ///
+    /// WHY A SEPARATE FUNCTION AND NOT A LANE LOOP OVER THE SCALAR ONE. A
+    /// lane loop would be correct but would emit `N` extract/insert pairs,
+    /// re-scalarizing exactly the vector the caller is trying to keep whole.
+    /// Every step of the scalar sequence is an integer or bitcast op with an
+    /// elementwise vector form, so this is a STRUCTURAL MIRROR instead: same
+    /// steps, same order, `<N x _>` types throughout. That is what makes the
+    /// two agree bit-for-bit by construction rather than by convention — the
+    /// property `Vector[bf16, N].reduce_sum()` depends on, since it folds
+    /// lanes through the SCALAR path and must reach the same answer.
+    fn emit_bf16_vector_to_f32(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let n = vv.get_type().get_size();
+        let i16v = self.context.i16_type().vec_type(n);
+        let i32v = self.context.i32_type().vec_type(n);
+        let f32v = self.context.f32_type().vec_type(n);
+        let bits16 = self
+            .builder
+            .build_bit_cast(vv, i16v, &format!("{name}.b16"))
+            .unwrap()
+            .into_vector_value();
+        let bits32 = self
+            .builder
+            .build_int_z_extend(bits16, i32v, &format!("{name}.z"))
+            .unwrap();
+        // inkwell has no const-splat constructor; `const_vector` over N copies
+        // of the same constant is the equivalent, and LLVM prints it back as
+        // a `splat (i32 16)`.
+        let sixteen = {
+            let c = self.context.i32_type().const_int(16, false);
+            let lanes = vec![c; n as usize];
+            inkwell::types::VectorType::const_vector(&lanes)
+        };
+        let shifted = self
+            .builder
+            .build_left_shift(bits32, sixteen, &format!("{name}.shl"))
+            .unwrap();
+        self.builder
+            .build_bit_cast(shifted, f32v, name)
+            .unwrap()
+            .into_vector_value()
+    }
+
+    /// `<N x float>` → `<N x bfloat>`, the VECTOR twin of
+    /// [`Self::emit_f32_to_bf16`] (B-2026-08-29-34) — same round-to-nearest-
+    /// even bias trick, same NaN-quieting select, elementwise.
+    ///
+    /// The `fcmp uno` here is on `<N x float>`, which every target selects;
+    /// it is the one non-integer step and it is deliberately NOT routed
+    /// through the bf16-safe compare wrapper (its operand is already f32, so
+    /// the wrapper would be a no-op, and on the scalar side the equivalent
+    /// call would cycle back into this family).
+    fn emit_f32_vector_to_bf16(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let n = vv.get_type().get_size();
+        let i16_t = self.context.i16_type();
+        let i32_t = self.context.i32_type();
+        let i16v = i16_t.vec_type(n);
+        let i32v = i32_t.vec_type(n);
+        let bf16v = self.context.bf16_type().vec_type(n);
+        let splat_i32 = |c: u64| {
+            let lanes = vec![i32_t.const_int(c, false); n as usize];
+            inkwell::types::VectorType::const_vector(&lanes)
+        };
+        let bits = self
+            .builder
+            .build_bit_cast(vv, i32v, &format!("{name}.f2bf.bits"))
+            .unwrap()
+            .into_vector_value();
+        let hi = self
+            .builder
+            .build_right_shift(bits, splat_i32(16), false, &format!("{name}.f2bf.hi"))
+            .unwrap();
+        let lsb = self
+            .builder
+            .build_and(hi, splat_i32(1), &format!("{name}.f2bf.lsb"))
+            .unwrap();
+        let biased = self
+            .builder
+            .build_int_add(bits, splat_i32(0x7FFF), &format!("{name}.f2bf.bias"))
+            .unwrap();
+        let rounded = self
+            .builder
+            .build_int_add(biased, lsb, &format!("{name}.f2bf.rnd"))
+            .unwrap();
+        let is_nan = self
+            .builder
+            .build_float_compare(
+                inkwell::FloatPredicate::UNO,
+                vv,
+                vv,
+                &format!("{name}.f2bf.isnan"),
+            )
+            .unwrap();
+        let nan_bits = self
+            .builder
+            .build_or(bits, splat_i32(0x0040_0000), &format!("{name}.f2bf.qnan"))
+            .unwrap();
+        let sel = self
+            .builder
+            .build_select(is_nan, nan_bits, rounded, &format!("{name}.f2bf.sel"))
+            .unwrap()
+            .into_vector_value();
+        let out_hi = self
+            .builder
+            .build_right_shift(sel, splat_i32(16), false, &format!("{name}.f2bf.out"))
+            .unwrap();
+        let out16 = self
+            .builder
+            .build_int_truncate(out_hi, i16v, &format!("{name}.f2bf.tr"))
+            .unwrap();
+        self.builder
+            .build_bit_cast(out16, bf16v, name)
+            .unwrap()
+            .into_vector_value()
+    }
+
+    /// Widen a `<N x bfloat>` operand to `<N x float>` so a vector op can be
+    /// emitted on a type every target can select; a no-op on any other
+    /// element type. The `bool` says whether widening happened, and is what
+    /// the caller feeds back to [`Self::narrow_bf16_vector`].
+    ///
+    /// B-2026-08-29-34. This is the VECTOR half of the LLVM-18 gap
+    /// [`Self::build_float_cast_bf16_safe`] documents for scalars, and it
+    /// needs its own plumbing for a reason worth stating: the emitted IR
+    /// contains no scalar `bfloat` node at all, so no scalar-level check or
+    /// fix reaches it. It is the AArch64 *vector* legalizer that scalarizes
+    /// `<N x bfloat>` lane ops down to the scalar `bf16` nodes that then
+    /// cannot be selected — the disease of the scalar row, one step removed.
+    ///
+    /// Measured with llc-18 (`-mtriple` reproduces the target's ISel exactly
+    /// from an x86 host): a `Vector[bf16, 4]` add + multiply + reductions
+    /// aborts with `Cannot select: bf16 = fadd` on `aarch64-unknown-linux-gnu`
+    /// and `aarch64-apple-darwin`, and with `Cannot select: i32 = fp_to_bf16`
+    /// on `wasm32-unknown-wasi`.
+    ///
+    /// A SMALLER PROBE IS NOT EVIDENCE OF HEALTH, and the reason is a trap
+    /// worth naming: a two-line `a + b` followed by a lane read selects fine
+    /// on aarch64 at every opt level — because llc CONSTANT-FOLDS the add
+    /// away and zero `fadd`s reach ISel, not because the node was selectable.
+    /// Check that the op survives into the asm before reading a green probe
+    /// as a passing one.
+    pub(super) fn widen_bf16_vector(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        name: &str,
+    ) -> (inkwell::values::VectorValue<'ctx>, bool) {
+        let elem = vv.get_type().get_element_type();
+        if !elem.is_float_type() || elem.into_float_type() != self.context.bf16_type() {
+            return (vv, false);
+        }
+        (self.emit_bf16_vector_to_f32(vv, name), true)
+    }
+
+    /// Round a `<N x float>` result back to `<N x bfloat>`, undoing
+    /// [`Self::widen_bf16_vector`]. `narrow` is that function's second
+    /// return value; when it is false this is the identity, so a call site
+    /// reads the same whatever the element type is.
+    pub(super) fn narrow_bf16_vector(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        narrow: bool,
+        name: &str,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        if !narrow {
+            return vv;
+        }
+        self.emit_f32_vector_to_bf16(vv, name)
+    }
+
+    /// Widen a scalar `bf16` to `f32`, reporting whether it happened — the
+    /// scalar twin of [`Self::widen_bf16_vector`], for a site that computes a
+    /// WHOLE expression rather than one op.
+    ///
+    /// [`Self::build_float_cast_bf16_safe`] already converts in both
+    /// directions; this pair exists because widening a boundary is a
+    /// different job from converting a value, and doing it once per boundary
+    /// is what keeps the interior of a multi-step lowering (`fract` =
+    /// `x - trunc(x)`, `signum` = `copysign(1, x)`) free of per-op routing
+    /// that is easy to add a sixth step to and forget.
+    pub(super) fn widen_bf16_scalar(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> (inkwell::values::FloatValue<'ctx>, bool) {
+        if fv.get_type() != self.context.bf16_type() {
+            return (fv, false);
+        }
+        (
+            self.build_float_cast_bf16_safe(fv, self.context.f32_type(), name),
+            true,
+        )
+    }
+
+    /// Round an `f32` back to `bf16`, undoing [`Self::widen_bf16_scalar`];
+    /// the identity when `narrow` is false.
+    pub(super) fn narrow_bf16_scalar(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        narrow: bool,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        if !narrow {
+            return fv;
+        }
+        self.build_float_cast_bf16_safe(fv, self.context.bf16_type(), name)
+    }
+
+    /// Call an overloaded LLVM float intrinsic WITHOUT ever instantiating it
+    /// at `bfloat`.
+    ///
+    /// An intrinsic is a native bf16 op wearing a call's clothing, and it is
+    /// the half of the LLVM-18 gap that is easiest to miss: `llvm.sqrt.bf16`
+    /// looks like a call, not like an `fadd`, so a review that sweeps for
+    /// arithmetic opcodes walks straight past it. B-2026-08-29-23 fixed the
+    /// plain-instruction sites and `min`/`max`, and left `sqrt` / `exp` /
+    /// `ln` / `log2` / `log10` / `exp2` / `sin` / `cos` / `floor` / `ceil` /
+    /// `round` / `trunc` / `copysign` / `pow` emitting `llvm.*.bf16` — every
+    /// one of which aborts ISel on aarch64 and wasm32 (measured: `bf16 =
+    /// fsqrt`, `bf16 = fexp`, `bf16 = ffloor`).
+    ///
+    /// Widening to `f32` also makes these MORE accurate, not less: the
+    /// intrinsic computes at f32 and rounds once, where a native bf16
+    /// intrinsic would round its intermediate.
+    pub(super) fn build_float_intrinsic_bf16_safe(
+        &self,
+        base: &str,
+        args: &[inkwell::values::FloatValue<'ctx>],
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let (widened, narrow): (Vec<inkwell::values::FloatValue<'ctx>>, bool) = {
+            let mut any = false;
+            let v = args
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    let (w, did) = self.widen_bf16_scalar(*a, &format!("{name}.a{i}32"));
+                    any |= did;
+                    w
+                })
+                .collect();
+            (v, any)
+        };
+        let fty = widened[0].get_type();
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(base)
+            .unwrap_or_else(|| panic!("{base} intrinsic must exist"));
+        let decl = intrinsic
+            .get_declaration(&self.module, &[fty.into()])
+            .unwrap_or_else(|| panic!("{base} declaration for float type"));
+        let call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
+            widened.iter().map(|v| (*v).into()).collect();
+        let r = self
+            .builder
+            .build_call(decl, &call_args, name)
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_float_value();
+        self.narrow_bf16_scalar(r, narrow, &format!("{name}.bf"))
+    }
+
     /// Float comparison that never emits an `fcmp` whose operands are
     /// `bfloat` — the compare half of the same LLVM-18 gap
     /// [`Self::build_float_cast_bf16_safe`] documents for the conversion
@@ -6071,6 +6340,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// where the target supports it and scalarizes otherwise (the auto-fallback
     /// rule, handled by the backend). Only `+ - * / %` reach here — the
     /// typechecker rejects every other operator on vectors.
+    ///
+    /// "SCALARIZES OTHERWISE" IS NOT A SAFETY NET FOR EVERY ELEMENT TYPE, and
+    /// reading it as one is what let B-2026-08-29-34 ship. `bf16` is the
+    /// counterexample: the fallback scalarizes `<N x bfloat>` into scalar
+    /// `bf16` nodes that LLVM 18 then cannot select AT ALL on aarch64 or
+    /// wasm32, so the "fallback" aborts the compiler rather than degrading
+    /// performance. That is why the bf16 arm below widens to `<N x float>`
+    /// first instead of trusting the legalizer.
     fn compile_vector_binop(
         &mut self,
         op: &BinOp,
@@ -6080,12 +6357,29 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let is_float = lv.get_type().get_element_type().is_float_type();
         let result: BasicValueEnum<'ctx> = if is_float {
+            // B-2026-08-29-34 — a `<N x bfloat>` lane op is unselectable on
+            // aarch64 and wasm32: the VECTOR legalizer scalarizes it into the
+            // scalar `bf16` nodes B-2026-08-29-23 documents, so the IR need
+            // not contain a scalar `bfloat` node anywhere for the program to
+            // abort at ISel. Widen to `<N x float>`, operate there, round the
+            // result back — the same rule the scalar path follows, and exact
+            // in both directions because a bf16 is a truncated f32.
+            let (lv, wide) = self.widen_bf16_vector(lv, "vbf.l");
+            let (rv, _) = self.widen_bf16_vector(rv, "vbf.r");
             match op {
-                BinOp::Add => self.builder.build_float_add(lv, rv, "vadd").unwrap().into(),
-                BinOp::Sub => self.builder.build_float_sub(lv, rv, "vsub").unwrap().into(),
-                BinOp::Mul => self.builder.build_float_mul(lv, rv, "vmul").unwrap().into(),
-                BinOp::Div => self.builder.build_float_div(lv, rv, "vdiv").unwrap().into(),
-                BinOp::Mod => self.builder.build_float_rem(lv, rv, "vrem").unwrap().into(),
+                // Arithmetic yields a value in the ELEMENT type, so it rounds
+                // back. The comparisons below do not: their result is an
+                // `<N x i1>` mask, which is already a legal type.
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                    let r = match op {
+                        BinOp::Add => self.builder.build_float_add(lv, rv, "vadd").unwrap(),
+                        BinOp::Sub => self.builder.build_float_sub(lv, rv, "vsub").unwrap(),
+                        BinOp::Mul => self.builder.build_float_mul(lv, rv, "vmul").unwrap(),
+                        BinOp::Div => self.builder.build_float_div(lv, rv, "vdiv").unwrap(),
+                        _ => self.builder.build_float_rem(lv, rv, "vrem").unwrap(),
+                    };
+                    self.narrow_bf16_vector(r, wide, "vbf.res").into()
+                }
                 // Comparisons → per-lane mask `<N x i1>`. Ordered float
                 // predicates match the scalar float compares.
                 BinOp::Eq => self

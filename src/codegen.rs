@@ -8303,14 +8303,24 @@ impl<'ctx> Codegen<'ctx> {
     /// scan on EVERY host converts that into a deterministic compiler error
     /// wherever the code is built.
     ///
-    /// SCALAR ONLY, DELIBERATELY. A `<N x bfloat>` lane op is broken the same
-    /// way — aarch64's vector legalizer SCALARIZES it back to a `bf16 fadd`
-    /// and then cannot select that, and wasm32 dies on `fp_to_bf16` — but
-    /// `Vector[bf16, N]` reaches that path through ~18 vector-typed sites
-    /// needing their own `<N x float>` widening, so it is tracked separately
-    /// as B-2026-08-29-34 rather than fixed here. Rejecting it in this guard
-    /// without fixing it would turn code that works on x86 today into a hard
-    /// compile error everywhere, which is a worse trade than the status quo.
+    /// VECTORS TOO, since B-2026-08-29-34 fixed them. A `<N x bfloat>` lane
+    /// op is broken the same way and for a subtler reason: the emitted IR
+    /// contains no scalar `bfloat` node at all, and it is aarch64's VECTOR
+    /// legalizer that scalarizes the lane op back into the `bf16 fadd` it
+    /// then cannot select (wasm32 dies one step earlier, on `fp_to_bf16`).
+    /// So a scalar-only scan would report a clean module for a program that
+    /// aborts at ISel.
+    ///
+    /// That row's own note said extending the guard to vectors WITHOUT
+    /// fixing them would be a worse trade than the status quo — it would
+    /// turn `Vector[bf16, N]` code that works on x86 into a hard error
+    /// everywhere. That was right, and it is also why the two land in one
+    /// commit. Note the note was already half-overtaken: pass 1 matches
+    /// intrinsics BY NAME, and `llvm.sqrt.v4bf16` contains "bf16", so the
+    /// nine vector transcendental/rounding methods were rejected from the
+    /// moment B-2026-08-29-23 landed. Widening pass 2 to match the plain
+    /// `<N x bfloat>` instruction forms is what makes the guard's coverage
+    /// uniform instead of an accident of how each op is spelled.
     ///
     /// COST, MEASURED rather than assumed. A name scan over the module's
     /// functions plus one typed walk of its instructions. An earlier draft
@@ -8369,12 +8379,22 @@ impl<'ctx> Codegen<'ctx> {
                             | Op::SIToFP
                             | Op::UIToFP
                     ) {
-                        let hits = BasicTypeEnum::try_from(inst.get_type())
-                            .is_ok_and(|t| t == bf16_t)
+                        // A bf16 reaches ISel in two shapes: the scalar type
+                        // and `<N x bfloat>`. Matching only the scalar one
+                        // would miss every `Vector[bf16, N]` lane op, which
+                        // the vector legalizer turns INTO the scalar form far
+                        // downstream of anything visible here
+                        // (B-2026-08-29-34).
+                        let is_bf16 = |t: BasicTypeEnum<'_>| {
+                            t == bf16_t
+                                || (t.is_vector_type()
+                                    && t.into_vector_type().get_element_type() == bf16_t)
+                        };
+                        let hits = BasicTypeEnum::try_from(inst.get_type()).is_ok_and(is_bf16)
                             || (0..inst.get_num_operands()).any(|n| {
                                 inst.get_operand(n)
                                     .and_then(|o| o.value())
-                                    .is_some_and(|v| v.get_type() == bf16_t)
+                                    .is_some_and(|v| is_bf16(v.get_type()))
                             });
                         if hits {
                             return Err(Self::native_bf16_error(
@@ -8395,11 +8415,14 @@ impl<'ctx> Codegen<'ctx> {
     fn native_bf16_error(what: &str, whence: &str) -> String {
         format!(
             "internal error: codegen emitted a native `bfloat` {what} in `{whence}`. \
-             LLVM 18 cannot select any scalar bf16 arithmetic, comparison or \
-             conversion on aarch64 or wasm32 (it aborts with `LLVM ERROR: Cannot \
-             select`), so bf16 must be widened to f32 — route the site through \
-             `build_float_compare_bf16_safe`, `build_float_neg_bf16_safe` or \
-             `build_float_cast_bf16_safe`."
+             LLVM 18 cannot select bf16 arithmetic, comparison or conversion on \
+             aarch64 or wasm32 (it aborts with `LLVM ERROR: Cannot select`), \
+             scalar or `<N x bfloat>` alike — a vector lane op is scalarized \
+             into the unselectable scalar form by the target's vector \
+             legalizer. bf16 must be widened to f32: route a scalar site \
+             through `build_float_compare_bf16_safe`, \
+             `build_float_neg_bf16_safe` or `build_float_cast_bf16_safe`, and \
+             a vector site through `widen_bf16_vector` / `narrow_bf16_vector`."
         )
     }
 
