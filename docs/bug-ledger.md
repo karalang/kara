@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 155 | 0 |
 | codegen-gap | 149 | 1 |
 | diagnostics | 111 | 0 |
-| false-positive | 99 | 0 |
+| false-positive | 100 | 1 |
 | perf | 84 | 0 |
 | soundness | 80 | 0 |
 | other | 63 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 278 | 0 |
 | interp | 243 | 5 |
 | other | 70 | 0 |
-| ownership | 65 | 0 |
+| ownership | 66 | 1 |
 | cli | 64 | 0 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1786 surfaced · 12 open · 1747 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1787 surfaced · 13 open · 1747 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -142,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1786 surfaced
 | B-2026-08-29-36 | 2026-08-29 | codegen | low | A TWO-HOP PROJECTION (`match w.s.e { .. }`) STILL RUNS A MATERIALIZING ARM'S PAYLOAD BODY ON THE ZEROED SLOT -- compiled `m8 dR8 dE dR0` vs interp `m8 dR8 dE dR8`, where the ONE-hop spelling now gives `m8 dR8 dE` on both | — |
 | B-2026-08-29-37 | 2026-08-29 | codegen | medium | A `ref self` METHOD WHOSE MATCH MOVES `self.e`'s PAYLOAD OUT RUNS THE ENUM'S OWN `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `dR8 dE n8 dE dR8` vs interp `dR8 n8 dE dR8`, the extra `dE` firing INSIDE the callee on the caller's struct | — |
 | B-2026-08-29-38 | 2026-08-29 | codegen | medium | A method's FRESH-TEMP argument whose value is handed back out runs its `Drop` body TWICE on both compiled backends against once in the interpreter -- the passthrough guard that would suppress the caller-side temp drop is gated on `ExprKind::Identifier`, which a temp never is | — |
+| B-2026-08-29-39 | 2026-08-29 | ownership | medium | A BINDING INITIALIZED TO `None` IS CLASSIFIED AS NON-RC FOR THE REST OF ITS LIFE, so reusing an `Option[shared T]` after passing it by value is reported as a move-after-move -- and `karac check` EXITS 1. `let mut x: Option[Node] = None;` warns on two `f(x)` calls; the identical program with `let mut x = make(0);` is clean. Later reassignment does not rehabilitate it. The `help` gives the game away by asserting the value "has no `.clone()` -- that exists only on ... RC types" when `.clone()` compiles and runs, so the pass has concluded the binding is not RC at all. | — |
 
 ### Relocated (2)
 
