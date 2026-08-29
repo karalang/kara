@@ -3569,6 +3569,25 @@ impl ErrorTraceState {
 /// its own entry, so no chain can be interleaved with or cleared by another.
 static ERROR_TRACES: Mutex<Option<HashMap<ThreadId, ErrorTraceState>>> = Mutex::new(None);
 
+/// The thread that recorded the FIRST frame — the one whose chain
+/// `print_trace_at_exit` prints.
+///
+/// Captured during normal execution rather than read back at exit, because
+/// `std::thread::current()` is itself TLS-backed: on macOS the main thread's
+/// thread-local data is destroyed BEFORE the C runtime drains its `atexit`
+/// handlers, and since 1.83 std panics on that access rather than minting a
+/// fresh handle. Calling it from the handler therefore aborted every program
+/// that pushed a frame — SIGABRT and a raw Rust panic in place of the trace.
+/// This is the same destructor-ordering hazard the comment on `ERROR_TRACES`
+/// records; keying the map by `ThreadId` dodged it for the map itself, but
+/// not for the lookup key.
+///
+/// First-push is the right thread to capture. When the pool never dispatched,
+/// every `?` site runs on the calling thread, so first-pusher == the thread
+/// that returns from `main`. When it did, `PAR_DISPATCHED` short-circuits the
+/// printer before the key is used at all.
+static TRACE_OWNER: OnceLock<ThreadId> = OnceLock::new();
+
 /// Set once the program actually dispatches work to the WORKER POOL.
 ///
 /// This — not "did another thread record frames" — is what tells the exit
@@ -3739,6 +3758,9 @@ fn read_optional_utf8_slice(ptr: *const u8, len: usize) -> Option<String> {
 fn register_trace_atexit_once() {
     static REGISTERED: OnceLock<()> = OnceLock::new();
     REGISTERED.get_or_init(|| {
+        // Read the thread identity HERE, while this thread's TLS is still
+        // alive — see `TRACE_OWNER` for why the exit handler cannot.
+        let _ = TRACE_OWNER.set(std::thread::current().id());
         // SAFETY: `atexit` accepts an `extern "C" fn()` pointer. The
         // handler reads the global mutex-protected state (still valid
         // during atexit, unlike thread_local) and writes to stderr.
@@ -3792,7 +3814,6 @@ extern "C" fn print_trace_at_exit() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    let me = std::thread::current().id();
     let map = match guard.as_ref() {
         Some(m) => m,
         None => return,
@@ -3809,7 +3830,6 @@ extern "C" fn print_trace_at_exit() {
     // run. Say so instead. design.md § Error return traces defers cross-task
     // `?` propagation ("No async interaction yet") to Phase 6; this is that
     // case, reached without the program containing any concurrency of its own.
-    let here = map.get(&me);
     if PAR_DISPATCHED.load(Ordering::Relaxed) {
         eprintln!(
             "Error return trace: unavailable — the `?` chain was split across \
@@ -3818,7 +3838,7 @@ extern "C" fn print_trace_at_exit() {
         );
         return;
     }
-    let Some(state) = here else {
+    let Some(state) = TRACE_OWNER.get().and_then(|owner| map.get(owner)) else {
         return;
     };
     if state.frames.is_empty() {
