@@ -351,10 +351,30 @@ impl<'a> super::Interpreter<'a> {
                 self.record_conditional_move_tail(inner, &cleanup);
             }
             self.record_conditional_move_tail(expr, &cleanup);
-            self.suppress_tail_expr_user_drop(expr, &mut cleanup);
+            // B-2026-08-29-57 — the two move-records below must see THROUGH a
+            // tail `return`, exactly as the statement loop's
+            // `suppress_return_stmt_user_drop` and its container twin already
+            // do for `return r;`. Both match on `Identifier`, so handed the
+            // `Return` node itself they silently did nothing, and a function
+            // whose body ends `return out` with NO trailing semicolon dropped
+            // `out` at its own scope exit as well as handing it to the caller:
+            // `mid dR1 v1 dR1` from the interpreter against `mid v1 dR1` from
+            // every compiled backend. The same function written `return out;`
+            // was correct, and so was the bare tail `out` -- the semicolon was
+            // the whole difference, because it decides whether the `Return`
+            // arrives here as a `final_expr` or up there as a statement.
+            //
+            // B-2026-08-29-21 added this same unwrap for `note_escaping_site`
+            // and `record_conditional_move_tail` and stopped there; this is the
+            // rest of that hook.
+            let moved_out = match &expr.kind {
+                ExprKind::Return(Some(inner)) => inner.as_ref(),
+                _ => expr,
+            };
+            self.suppress_tail_expr_user_drop(moved_out, &mut cleanup);
             // Container twin: a bare-identifier tail moves the container out
             // as the block's result.
-            self.record_container_bodies_move_sources(expr);
+            self.record_container_bodies_move_sources(moved_out);
             let v = self.eval_expr_inner(expr);
             if let Some(cf) = self.pending_cf.take() {
                 let path = ExitPath::classify(&cf);

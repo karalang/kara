@@ -36112,6 +36112,146 @@ fn method_owned_optres_arg_runs_its_payload_body_like_a_free_fn() {
     }
 }
 
+/// B-2026-08-29-57 and -65, interpreter leg — the twin of
+/// `codegen::e2e_tail_return_hands_the_value_out_like_a_return_statement`,
+/// asserting the same strings so a later one-sided edit cannot re-negotiate
+/// them.
+///
+/// A `return x` in a block's TAIL position, with
+/// no trailing semicolon, hands `x` to the caller exactly as `return x;`
+/// does. One `Drop` body is due either way, and the semicolon must not be
+/// a semantic change.
+///
+/// It was one, twice over, in two different places:
+///
+///   * a returned LOCAL ran its body twice on the INTERPRETER (-57) —
+///     `mid dR1 v1 dR1` against `mid v1 dR1` compiled. The block-exit hook
+///     drives `suppress_tail_expr_user_drop` and its container twin, both
+///     of which match on `Identifier`; handed the `Return` node itself they
+///     silently did nothing, so the callee dropped the local at its own
+///     scope exit as well as handing it out. The statement loop's
+///     `suppress_return_stmt_user_drop` already unwrapped the `Return`,
+///     which is exactly why `return out;` was correct.
+///   * a returned PARAM ran its body twice on EVERY backend (-64), so no
+///     A/B gate could see it. `fn_always_returns_param` collects the body's
+///     leaf tails and requires each to YIELD the param; a tail `return r`
+///     reached that walk as the `Return` node, yielded nothing, and the
+///     predicate declined for a body whose only exit hands the param back.
+///     The no-tail arm is what made `return r;` correct.
+///
+/// Both are the same shape one level apart, which is why they are pinned
+/// together: every tail-`return` row here has its `return x;` twin beside
+/// it, and the two must print the same string.
+///
+/// `branch-*` and `param-dies-*` are the guards on the widened walk. The
+/// first keeps a sibling local that is NOT returned dying inside; the
+/// second keeps the predicate declining when no `return` yields the param,
+/// where a too-permissive walk would stand the caller down and LOSE a body
+/// rather than duplicate one.
+#[test]
+fn tail_return_hands_the_value_out_like_a_return_statement() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct T { n: i64 }\n\
+         fn t_local(k: i64) -> R { let out: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return out }\n\
+         fn s_local(k: i64) -> R { let out: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return out; }\n\
+         fn b_local(k: i64) -> R { let out: R = R { id: k, tag: f\"t\" }; println(\"mid\"); out }\n\
+         fn t_enum(k: i64) -> E { let out: E = E.A(R { id: k, tag: f\"t\" }); println(\"mid\"); return out }\n\
+         fn t_opt(k: i64) -> Option[R] { let o: Option[R] = Some(R { id: k, tag: f\"t\" }); println(\"mid\"); return o }\n\
+         fn t_param(r: R) -> R { println(\"mid\"); return r }\n\
+         fn s_param(r: R) -> R { println(\"mid\"); return r; }\n\
+         fn t_branch(k: i64, flag: bool) -> R { let a: R = R { id: k, tag: f\"a\" }; let b: R = R { id: k + 50, tag: f\"b\" }; println(\"mid\"); if flag { return a } else { return b } }\n\
+         fn t_dies(r: R, flag: bool) -> i64 { if flag { return 1 } println(\"mid\"); return 0 }\n\
+         impl T {\n\
+         \x20   fn m_local(ref self, k: i64) -> R { let out: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return out }\n\
+         \x20   fn m_param(ref self, r: R) -> R { println(\"mid\"); return r } }\n";
+    for (label, body, want) in [
+            // THE ROW: a tail `return out` with NO trailing semicolon.
+            (
+                "local-tail-return",
+                "let v: R = t_local(1); println(f\"v{v.id}\");\n",
+                "mid\nv1\ndR1\npost\n",
+            ),
+            // The same function with a semicolon, and with no `return` at all.
+            // All three must print the same thing.
+            (
+                "local-stmt-return",
+                "let v: R = s_local(1); println(f\"v{v.id}\");\n",
+                "mid\nv1\ndR1\npost\n",
+            ),
+            (
+                "local-bare-tail",
+                "let v: R = b_local(1); println(f\"v{v.id}\");\n",
+                "mid\nv1\ndR1\npost\n",
+            ),
+            (
+                "enum-local-tail-return",
+                "let v: E = t_enum(4);\n\
+                 \x20 match v { E.A(r) => { println(f\"v{r.id}\") } E.B => { println(\"vB\") } }\n",
+                "mid\nv4\ndE\ndR4\npost\n",
+            ),
+            (
+                "option-local-tail-return",
+                "let v: Option[R] = t_opt(5);\n\
+                 \x20 match v { Some(r) => { println(f\"v{r.id}\") } None => { println(\"vN\") } }\n",
+                "mid\nv5\ndR5\npost\n",
+            ),
+            // The PARAM half — `fn_always_returns_param`'s leaf-tail walk. This
+            // pair doubled on EVERY backend, so no A/B gate saw it.
+            (
+                "param-tail-return",
+                "let p: R = R { id: 6, tag: f\"p\" }; let v: R = t_param(p); println(f\"v{v.id}\");\n",
+                "mid\nv6\ndR6\npost\n",
+            ),
+            (
+                "param-stmt-return",
+                "let p: R = R { id: 7, tag: f\"p\" }; let v: R = s_param(p); println(f\"v{v.id}\");\n",
+                "mid\nv7\ndR7\npost\n",
+            ),
+            (
+                "method-local-tail-return",
+                "let t = T { n: 1 }; let v: R = t.m_local(8); println(f\"v{v.id}\");\n",
+                "mid\nv8\ndR8\npost\n",
+            ),
+            (
+                "method-param-tail-return",
+                "let t = T { n: 1 }; let p: R = R { id: 9, tag: f\"p\" };\n\
+                 \x20 let v: R = t.m_param(p); println(f\"v{v.id}\");\n",
+                "mid\nv9\ndR9\npost\n",
+            ),
+            // GUARD for the leaf-tail walk seeing through `return`: only the
+            // returned local escapes, the sibling still dies inside.
+            (
+                "branch-tail-returns-then",
+                "let v: R = t_branch(10, true); println(f\"v{v.id}\");\n",
+                "mid\ndR60\nv10\ndR10\npost\n",
+            ),
+            (
+                "branch-tail-returns-else",
+                "let v: R = t_branch(11, false); println(f\"v{v.id}\");\n",
+                "mid\ndR11\nv61\ndR61\npost\n",
+            ),
+            // GUARD in the other direction: no `return` yields the param, so
+            // the predicate must keep declining and the caller must keep
+            // firing. A too-permissive leaf-tail walk loses these bodies.
+            (
+                "param-dies-early-return",
+                "let p: R = R { id: 12, tag: f\"p\" }; let v: i64 = t_dies(p, true); println(f\"v{v}\");\n",
+                "dR12\nv1\npost\n",
+            ),
+            (
+                "param-dies-late-return",
+                "let p: R = R { id: 13, tag: f\"p\" }; let v: i64 = t_dies(p, false); println(f\"v{v}\");\n",
+                "mid\ndR13\nv0\npost\n",
+            ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-48, interpreter leg — the twin of
 /// `codegen::e2e_arm_assigned_payload_that_is_returned_runs_one_drop_body`,
 /// asserting the same strings so a later one-sided edit cannot re-negotiate

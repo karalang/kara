@@ -1551,6 +1551,20 @@ pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
                 Some(t) => leaf_tails(t, out),
                 None => out.push(e),
             },
+            // B-2026-08-29-65 — a tail `return x` is a RETURN SITE, not a leaf
+            // tail value. Reached here as the node itself it satisfied nothing,
+            // so condition 1 failed and the predicate declined for a body whose
+            // every exit hands the param back:
+            // `fn f(r: R) -> R { println("m"); return r }` ran the `Drop` body
+            // TWICE on every backend while the same function written
+            // `return r;` — which has no tail at all and takes the no-tail arm
+            // below — ran it once. The semicolon was the whole difference.
+            // A bare `return;` still pushes the node and so still declines,
+            // which is correct: it yields nothing.
+            ExprKind::Return(inner) => match inner.as_deref() {
+                Some(x) => leaf_tails(x, out),
+                None => out.push(e),
+            },
             _ => out.push(e),
         }
     }
