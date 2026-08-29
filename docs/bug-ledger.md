@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 224 | 3 |
 | run-vs-build | 216 | 6 |
 | missing-feature | 187 | 0 |
-| double-free | 155 | 2 |
+| double-free | 155 | 1 |
 | codegen-gap | 148 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1194 | 11 |
+| codegen | 1194 | 10 |
 | typecheck | 278 | 0 |
 | interp | 229 | 3 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1758 surfaced · 12 open · 1720 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1758 surfaced · 11 open · 1721 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1758 surfaced
 | B-2026-08-29-3 | 2026-08-29 | codegen | medium | A GENERIC method that UNCONDITIONALLY returns its owned param still runs the param's `Drop` body TWICE on all three compiled backends against once in the interpreter -- the monomorph path does not reach the method-argument stand-down that B-2026-08-28-70 added | — |
 | B-2026-08-29-5 | 2026-08-29 | codegen | medium | A DISCARDED `match` / `if let` WHOSE ARM HANDS THE BOUND PAYLOAD OUT AS THE CONSTRUCT'S VALUE LEAKS IT -- `if let Some(s) = vv { s };` in statement position strands the whole 38 B buffer with NO reassignment anywhere in the program; binding the payload and USING it without handing it out is clean, so it is the hand-out-into-nothing that leaks, and it reproduces for `match`, for `if let`, and for a struct payload alike | — |
 | B-2026-08-29-6 | 2026-08-29 | codegen | high | A passthrough call used DIRECTLY AS A MATCH SCRUTINEE (`match take(s) { .. }`, the result never bound) DOUBLE-FREES the inline `Option`/`Result` payload on all three compiled backends -- for a FREE FUNCTION as well as a method, so it is not the method-path gap B-2026-08-29-4 closed | — |
-| B-2026-08-29-7 | 2026-08-29 | codegen | high | An `Option` MATCH ARM THAT REBINDS ITS HEAP PAYLOAD TO A LOCAL AND RETURNS IT IS A DOUBLE FREE ON BOTH COMPILED BACKENDS -- `match b { Some(r) => { let k = r; return k; } .. }` over `Option[Res]` with `Res { id, name: String }` aborts with `free(): double free detected in tcache 2` where the interpreter prints correctly; the `Result` twin, the value-enum twin, and the scalar-payload twin are all CLEAN, and so is the same arm without the intermediate `let` | — |
 | B-2026-08-29-8 | 2026-08-29 | codegen | medium | A MATCH ARM THAT REBINDS ITS PAYLOAD TO A LOCAL AND YIELDS IT AS THE ARM'S BLOCK TAIL RUNS THE `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `Box2.Full(r) => { let m = r; m }` is interp `dR1` vs compiled `dR1 dR1`, the extra fire at the ARM BLOCK's exit for a value that escapes; the `return` spelling of the same arm is correct, and value enums and `Option` carry it alike | — |
 | B-2026-08-29-9 | 2026-08-29 | interp | high | REGRESSION (277621a): A METHOD that RETURNS a payload bound out of its owned enum / `Option` param now runs that payload's `Drop` BODY TWICE IN THE INTERPRETER -- `impl T { fn take(ref self, b: Box2) -> Res { match b { Box2.Full(r) => { return r; } .. } } }` was interp-and-compiled `drop 7 e7` at 277621a^ and is interp `drop 7 e7 / got 7 / drop 7 e7` vs compiled `got 7 / drop 7 e7` at main; the FREE-FUNCTION spelling is correct on both | — |
 | B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned `Option[T]` param has its payload bound out and NOT returned MISSES the payload's `Drop` body under codegen -- interp `drop 7 / v=7` vs compiled `v=7`; the VALUE-ENUM twin of the identical program is correct on both, and codegen's miss is PRE-EXISTING (277621a fixed the interpreter half of an agreed silence, which is what made this visible) | — |
@@ -173,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1758 surfaced
 
 </details>
 
-### Fixed (1720)
+### Fixed (1721)
 
-<details><summary>1720 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1721 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1899,6 +1898,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1758 surfaced
 | B-2026-08-28-75 | codegen | medium | REASSIGNING AN `Option`/`Result` BINDING WHOSE BOXED PAYLOAD ARRIVED BY A WHOLE-VALUE MOVE FROM ANOTHER BINDING ORPHANS THE PAYLOAD BOX ON EVERY STOR… | d5c4606 |
 | B-2026-08-29-1 | codegen | medium | A BARE `String` / `Vec` PAYLOAD INSIDE AN `Option` OR `Result` NEVER HAS ITS BUFFER FREED WHEN THE BINDING IS REASSIGNED -- `let mut vv: Option[Strin… | 98bddee |
 | B-2026-08-29-4 | codegen | high | A METHOD that hands an inline `Option`/`Result` argument back DOUBLE-FREES the payload on all three compiled backends (glibc abort, valgrind `Invalid… | 8d8d1b4 |
+| B-2026-08-29-7 | codegen | high | An `Option` MATCH ARM THAT REBINDS ITS HEAP PAYLOAD TO A LOCAL AND RETURNS IT IS A DOUBLE FREE ON BOTH COMPILED BACKENDS -- `match b { Some(r) => { l… | 905d73f |
 
 </details>
 
