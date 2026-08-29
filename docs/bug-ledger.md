@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 227 | 1 |
-| run-vs-build | 224 | 8 |
+| run-vs-build | 225 | 9 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 148 | 1 |
@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 84 | 0 |
 | soundness | 79 | 0 |
 | other | 63 | 0 |
-| crash | 60 | 0 |
+| crash | 61 | 0 |
 | use-after-free | 22 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1204 | 9 |
+| codegen | 1205 | 10 |
 | typecheck | 278 | 0 |
 | interp | 235 | 6 |
 | other | 70 | 0 |
@@ -118,15 +118,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 64 | 0 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
-| runtime | 32 | 0 |
+| runtime | 33 | 0 |
 | resolver | 27 | 0 |
 | effect | 26 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1769 surfaced · 10 open · 1733 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1771 surfaced · 11 open · 1734 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,6 +140,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1769 surfaced
 | B-2026-08-29-19 | 2026-08-29 | interp+codegen | medium | ALL THREE BACKENDS run a `Drop` body TWICE when a match-arm payload is rebound, RE-WRAPPED into a fresh enum and matched again -- `Full(r) => { let m = r; let w = W.One(m); match w { W.One(z) => z.id } }` prints `dR1 dR1 v=1` where one body is due; the same rebind without the re-wrap is correct (B-2026-08-29-17), and the backends AGREE so no A/B gate can see it | — |
 | B-2026-08-29-20 | 2026-08-29 | interp+codegen | medium | THE `let _ = match …` SPELLING OF A DISCARDED MATCH RUNS NO `Drop` BODY IN THREE CELLS while its call twin (`let _ = mk();`) is correct on both backends -- two cells are agreed-but-wrong and one is a run-vs-build divergence; a different site from B-2026-08-28-69's bare-statement discard, and measured byte-identical across that fix | — |
 | B-2026-08-29-21 | 2026-08-29 | codegen | medium | A NON-GENERIC method whose owned param is returned CONDITIONALLY, with BOTH exits spelled as `return` statements, runs the param's `Drop` body TWICE under all three compiled backends on the ESCAPING path -- interp `got 7 / drop 7 e7` vs aot `drop 7 e7 / got 7 / drop 7 e7`; the free-function twin is correct on every surface, and the DYING path already agrees | — |
+| B-2026-08-29-23 | 2026-08-29 | codegen | medium | A `bf16` COMPARISON ABORTS THE LLJIT ON arm64 -- `LLVM ERROR: Cannot select: setcc ... setoeq` in `karac_eq_bf16`, exit 134 with NO program output -- while the SAME source compiled AOT prints the right six lines and exits 0. A run-vs-build split on the half-precision comparator. | — |
 
 ### Relocated (2)
 
@@ -171,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1769 surfaced
 
 </details>
 
-### Fixed (1733)
+### Fixed (1734)
 
-<details><summary>1733 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1734 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1910,6 +1911,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1769 surfaced
 | B-2026-08-29-14 | codegen | medium | A METHOD that returns its owned param with `return r;` (rather than as a BLOCK TAIL) runs the param's `Drop` body TWICE under codegen for a FRESH-TEM… | 7df22de |
 | B-2026-08-29-17 | interp+codegen | medium | ALL THREE BACKENDS run a match-arm payload's `Drop` body TWICE when the arm REBINDS it to a local that does NOT escape -- `Box2.Full(r) => { let m =… | 8bc9955 |
 | B-2026-08-29-18 | codegen | medium | THE OUTER-`Result` SPELLING OF THE NESTED-ENVELOPE LEAK: `Result[Option[Wide], i64]` and `Result[Option[String], i64]` still strand the innermost pay… | c794214 |
+| B-2026-08-29-22 | runtime | high | EVERY COMPILED macOS BINARY THAT RECORDS AN ERROR-RETURN-TRACE FRAME ABORTS AT EXIT -- SIGABRT / exit 134 and a raw Rust panic (`use of std::thread::… | 7a8107c2 |
 
 </details>
 
