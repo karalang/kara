@@ -57664,6 +57664,100 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-13 — an arm/branch tail that hands out a bound `shared`
+    /// value TRANSFERS its ref, and the consuming `let` was taking a second.
+    ///
+    /// The transfer is deliberate and correct: `suppress_source_vec_cleanup_
+    /// for_arg_ex`'s shared arm balances the source's queued dec with a fresh
+    /// inc, so "the consumer becomes the new owner of one ref". What was
+    /// missing is the other half — the `block_tail_shared_transfer` record the
+    /// let site reads to SKIP its own receive-inc. It existed for a direct
+    /// `shared` FIELD tail (B-2026-08-06-15) and for nothing else, so a bound
+    /// shared identifier handed out of a match arm or an if-let branch was
+    /// counted twice and the box never reached zero.
+    ///
+    /// Traced, `let keep = match t { .. Bin(l, r) => l };` over a recursive
+    /// `shared enum`: three incs (arm binding, transfer, let) against three
+    /// decs (arm, let, the parent's drop walk) over a birth of 1 — final
+    /// refcount 1, one box lost. The RETURN spelling was already clean because
+    /// a `Call` RHS is fresh, so the caller's binding never took the extra inc;
+    /// that asymmetry is what made this look like a freshness bug when it is
+    /// not.
+    ///
+    /// TWO CAUSES, and the rows below separate them:
+    ///  * a CONSUMED result (`let keep = …`) needed the transfer RECORDED, at
+    ///    three leaf sites — the match arm tail, the value-position block tail,
+    ///    and an if-let's THEN branch, which is compiled in `compile_if_let`
+    ///    and reaches neither of the other two (the same "third leaf hook" gap
+    ///    B-2026-08-27-34 records for `Option[shared T]`).
+    ///  * a DISCARDED construct has no consumer at all, so the transfer inc is
+    ///    never spent. Those rows gate the inc on `branch_value_is_owned`, the
+    ///    same predicate the boxed-payload neutralizer nearby already uses for
+    ///    "a DISCARDED match result has no destination".
+    ///
+    /// Unlike B-2026-08-28-74 and B-2026-08-29-12, this leak SURVIVES -O2 on
+    /// the recursive shape (measured pre-fix: 11 allocs / 10 frees, 32 B lost
+    /// at the level this suite compiles at), so these rows assert here without
+    /// needing a container to defeat the optimizer.
+    #[test]
+    fn asan_branch_tail_shared_transfer_is_not_double_counted() {
+        let rows: [(&str, &str, &str); 8] = [
+            // CONSUMED — the row's minimal repro, and its variants.
+            (
+                "let t = mk(); let keep = match t { Num(a) => E.Num(a), Bin(l, r) => l }; println(9);",
+                "9",
+                "shared-child-match-bound",
+            ),
+            (
+                "let t = mk(); let keep = match t { Num(a) => E.Num(a), Bin(l, r) => l };                  match keep { Num(a) => println(a), Bin(l, r) => println(9) }",
+                "1",
+                "shared-child-match-bound-read",
+            ),
+            (
+                "let keep = match mk() { Num(a) => E.Num(a), Bin(l, r) => l }; println(9);",
+                "9",
+                "shared-child-match-freshtemp",
+            ),
+            (
+                "let t = mk(); let keep = if let Bin(l, r) = t { l } else { E.Num(0) }; println(9);",
+                "9",
+                "shared-child-iflet-bound",
+            ),
+            (
+                "let t = mk(); let keep = { match t { Num(a) => E.Num(a), Bin(l, r) => l } }; println(9);",
+                "9",
+                "shared-child-block-wrapped",
+            ),
+            // DISCARDED — no consumer, so the transfer inc must not be emitted.
+            (
+                "let t = mk(); match t { Num(a) => E.Num(a), Bin(l, r) => l }; println(9);",
+                "9",
+                "shared-child-match-discarded",
+            ),
+            (
+                "let t = mk(); if let Bin(l, r) = t { l } else { E.Num(0) }; println(9);",
+                "9",
+                "shared-child-iflet-discarded",
+            ),
+            // The RETURN control: already clean, and the row that would fail if
+            // the record over-reached and suppressed a genuinely needed inc.
+            (
+                "let k = pick(); match k { Num(a) => println(a), Bin(l, r) => println(9) }",
+                "1",
+                "shared-child-returned-control",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!(
+                "shared enum E {{ Num(i64), Bin(E, E) }}\n\
+                 fn mk() -> E {{ return E.Bin(E.Num(1), E.Num(2)); }}\n\
+                 fn pick() -> E {{ let t = mk(); return match t {{ Num(a) => E.Num(a), Bin(l, r) => l }}; }}\n\
+                 fn main() {{ {body} }}\n"
+            );
+            assert_clean_asan_run_min_allocs(&src, &[expected], label, 8);
+        }
+    }
+
     /// B-2026-08-28-74 (leak 1) — a `match` / `if let` / `let…else` /
     /// `while let` over a FRESH `shared` enum TEMPORARY never released the RC
     /// box, so the box and everything it owned leaked.

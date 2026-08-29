@@ -1725,6 +1725,16 @@ pub(super) struct Codegen<'ctx> {
     /// Cleared before each let RHS is compiled and again once consumed, so it
     /// only ever describes the block immediately to its left.
     pub(crate) block_tail_shared_transfer: bool,
+    /// B-2026-08-29-13 — did the most recent
+    /// `suppress_source_vec_cleanup_for_arg_ex` actually emit the bare-`shared`
+    /// TRANSFER inc? Recorded rather than re-derived so the flag and the inc
+    /// cannot drift apart: the predicate lives in exactly one place, the ~87
+    /// call sites that funnel through that helper all set it, and only the two
+    /// TAIL sites (a value-position block tail, a match/if-let arm tail) read
+    /// it back to raise `block_tail_shared_transfer`. Reading it anywhere else
+    /// would be wrong — `let x = { v.push(n); other };` applies a transfer for
+    /// the push that has nothing to do with what the block hands out.
+    pub(crate) shared_transfer_applied: bool,
     /// B-2026-07-22-2 — the most recent FRESH call-result struct temp
     /// materialized by a field access in expression position
     /// (`println(mk().s)` / `take(mk().s)` / `mkv().v.len()`):
@@ -6022,6 +6032,7 @@ impl<'ctx> Codegen<'ctx> {
             },
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
+            shared_transfer_applied: false,
             freshtemp_field_access_slot: None,
             bce: BceState {
                 len_alias: HashMap::new(),

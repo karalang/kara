@@ -7948,6 +7948,10 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_expr: &Expr,
         apply_shared_transfer: bool,
     ) {
+        // B-2026-08-29-13 — reset the transfer record for THIS call. See
+        // `Codegen::shared_transfer_applied` for why it is recorded here and
+        // read only at the two tail sites.
+        self.shared_transfer_applied = false;
         // B-2026-08-10-21 — the source of a `UseAfterMove` keeps its cleanup.
         //
         // Every one of this helper's ~87 call sites funnels here, which is why
@@ -8462,6 +8466,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Ok(loaded) = self.builder.build_load(ptr_ty, slot.ptr, "move.rc.load") {
                         let p = loaded.into_pointer_value();
                         self.emit_refcount_inc(var_name, info.heap_type, p);
+                        // The +1 this just emitted IS the consumer's ref; a
+                        // tail site must stop its consumer taking a second.
+                        self.shared_transfer_applied = true;
                     }
                 }
                 return;

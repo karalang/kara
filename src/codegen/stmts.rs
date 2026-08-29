@@ -894,6 +894,16 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Identifier(n) => {
                 self.suppress_source_vec_cleanup_for_arg(tail);
+                // B-2026-08-29-13 — a bare `shared` binding handed out here is
+                // TRANSFERRED, exactly as the `FieldAccess` arm below documents
+                // for a direct shared field: the suppressor above disarmed the
+                // source's rc-dec and emitted a balancing inc, so the single ref
+                // leaves with this value and the consumer's let-site
+                // receive-inc must be skipped. Taking one stranded the count one
+                // above zero and leaked the box.
+                if self.shared_transfer_applied {
+                    self.block_tail_shared_transfer = true;
+                }
                 // B-2026-08-07-1 — a BRANCH-LEAF tail that hands out a
                 // boxed-payload enum binding (`if hit { found } else {
                 // Option.None }` as a function's tail). The function-body

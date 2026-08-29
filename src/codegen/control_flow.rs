@@ -402,7 +402,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // double-freed (exit 133 — pre-existing for OWNED scrutinees
             // like `v.pop()`, not just the Map.get borrow class).
             if let Some(fe) = then_block.final_expr.as_deref() {
-                self.suppress_source_vec_cleanup_for_arg(fe);
+                // B-2026-08-29-13 — same ownership gate as `compile_match`'s
+                // arm tail: the bare-`shared` transfer inc IS the consumer's
+                // ref, so a DISCARDED `if let` (whose scrutinee span
+                // `compute_discarded_branch_spans` records) must not emit one —
+                // nothing would ever spend it. Only the shared arm is gated;
+                // every other suppression this call performs still runs.
+                let owns_result = self.branch_value_is_owned(value);
+                self.suppress_source_vec_cleanup_for_arg_ex(fe, owns_result);
+                // B-2026-08-29-13 — the THIRD leaf hook for the bare-`shared`
+                // TRANSFER record, for exactly the reason the `Option[shared T]`
+                // note below gives: `compile_block_with_frame` covers plain `if`
+                // and an if-let's ELSE branch, but an if-let's THEN branch is
+                // compiled here and reaches neither that site nor
+                // `compile_match`'s arm tail. Without the raise, the consuming
+                // `let` took its own receive-inc on top of the transfer's and
+                // the box leaked -- `let keep = if let Bin(l, r) = t { l } else
+                // { .. };` at 11 allocs / 10 frees while the `match` spelling of
+                // the same program was clean.
+                if self.shared_transfer_applied {
+                    self.block_tail_shared_transfer = true;
+                }
                 // B-2026-08-27-34 — the `Option[shared T]` sibling of the
                 // suppressor above, and the THIRD leaf hook of the family
                 // B-2026-08-26-12 introduced. That fix placed the retain in

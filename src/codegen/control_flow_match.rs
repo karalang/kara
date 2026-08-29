@@ -966,7 +966,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // is the same missing runtime bit shape A needs. Emitted here,
                 // in the arm's own basic block, so the clear is path-local.
                 self.arm_conditional_move_tail_flag(&arm.body);
-                self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                // B-2026-08-29-13 — the bare-`shared` TRANSFER inc is gated on
+                // the match's result actually having an owner, the same
+                // `branch_value_is_owned` reasoning the boxed-payload
+                // neutralizer below records: "neutralizing assumes the
+                // destination registers a drop of its own, and a DISCARDED
+                // match result has no destination at all". The transfer's inc
+                // is the consumer's ref; with no consumer it is never spent and
+                // the box leaks (`match t { Bin(l, r) => l };` in statement
+                // position, 11 allocs / 10 frees). Only the shared arm is gated
+                // — every other suppression this call performs still runs.
+                let owns_result = self.branch_value_is_owned(scrutinee);
+                self.suppress_source_vec_cleanup_for_arg_ex(&arm.body, owns_result);
+                // B-2026-08-29-13 — the match-arm sibling of the block-tail
+                // record in `suppress_block_tail_cleanup`. An arm yielding a
+                // bare `shared` binding transfers the ref; without this the
+                // consuming `let` took its own inc on top and the box leaked.
+                // The arm tail does not route through `suppress_block_tail_cleanup`,
+                // so it needs the raise here.
+                if self.shared_transfer_applied {
+                    self.block_tail_shared_transfer = true;
+                }
                 // B-2026-08-26-12 — the `Option[shared T]` arm-tail retain, the
                 // match sibling of the value-position-block hook in
                 // `compile_block_with_frame`. A bare `Option[shared]` binding
