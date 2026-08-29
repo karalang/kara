@@ -910,6 +910,66 @@ impl<'ctx> super::Codegen<'ctx> {
                 // compile-time edit and could not tell the two branches apart.
                 let n = n.clone();
                 self.suppress_boxed_enum_payload_cleanup_for_owner(&n);
+                // B-2026-08-29-8 — the USER-DROP channel, which this site was
+                // missing while its function-body sibling has had it since
+                // B-2026-07-22-2. `suppress_cleanup_for_tail_return`
+                // (call_dispatch.rs) ends its Identifier arm with exactly this
+                // call, on the stated ground that "the source binding's value
+                // is moved out as the function return value ... the caller will
+                // fire it when its own binding for the returned value goes out
+                // of scope". A VALUE-POSITION block tail is the same move to
+                // the same effect, and only the memory and boxed-payload
+                // channels were being neutralized here.
+                //
+                // Measured: `match o { Box2.Full(r) => { let m = r; m } .. }`
+                // ran the payload's `Drop` body at the ARM's exit and again at
+                // the caller's binding — `dR1 / C k=1 / dR1` against the
+                // interpreter's single `dR1`. The `return` spelling of the same
+                // arm was already correct, because it routes through the
+                // function sibling instead; `{ r }` without the rebind was too,
+                // because a payload bound out of an owned-param scrutinee
+                // registers memory-only (caller-retains) and has no UserDrop to
+                // retract. It is specifically the REBIND that creates an owned
+                // local here, and the block tail that hands it out.
+                //
+                // Bodies only — the retraction frees nothing — so the memory
+                // story is untouched and stays with
+                // `suppress_source_vec_cleanup_for_arg` above.
+                //
+                // TOP FRAME ONLY, and that scoping is the whole correctness
+                // argument rather than a conservatism. B-2026-08-28-51 split
+                // this family in two: a tail identifier owned by an ENCLOSING
+                // frame is conditionally moved (the branch that names it moves
+                // it, every sibling branch does not), so it takes a RUNTIME
+                // per-path flag via `arm_conditional_move_tail_flag` — armed
+                // immediately above this call. A binding owned by the
+                // INNERMOST frame cannot be conditional: the frame it lives in
+                // is the one being handed out, so the move happens on every
+                // path that reaches here. That is exactly what
+                // `emit_user_drop_call_guarded`'s doc means by "the innermost
+                // frame is the ordinary tail-move the static suppressor already
+                // handles correctly, and its scoping — the retraction only
+                // reaches the frame that owns the action — is exactly why that
+                // case never needed a runtime bit".
+                //
+                // `suppress_user_drop_for_var` does NOT have that scoping — it
+                // walks every live frame — so calling it here silences an outer
+                // binding a branch leaf merely names. Measured, and it is a
+                // real regression rather than a theoretical one:
+                // `let k = if a.id > 0 { a } else { b };` over two `Drop`
+                // bindings went from `dR2 / k=1 / dR1` (correct, and what the
+                // interpreter prints) to `k=1 / dR1` — `b`'s body lost on the
+                // path where it dies in place. Retaining only in the top frame
+                // keeps `m` and leaves `a` / `b` to the runtime flag.
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                    frame.retain(|action| {
+                        !matches!(
+                            action,
+                            crate::codegen::state::CleanupAction::UserDrop { binding_name, .. }
+                                if binding_name == &n
+                        )
+                    });
+                }
             }
             // B-2026-08-06-8 — a FIELD tail (`let x = { let b = mk(); b.v };`).
             // The function-body sibling `suppress_cleanup_for_tail_return` hands

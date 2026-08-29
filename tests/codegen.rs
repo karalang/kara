@@ -36604,6 +36604,148 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-8 — a `match` arm that REBINDS its payload to a local and
+    /// yields that local as the arm's BLOCK TAIL ran the payload's `Drop` body
+    /// twice on both compiled backends, against the interpreter's single fire.
+    ///
+    /// The value-position block-tail suppressor (`suppress_block_tail_cleanup`,
+    /// stmts.rs) neutralized the memory and boxed-payload channels for an
+    /// Identifier tail but never the USER-DROP one, which its function-body
+    /// sibling `suppress_cleanup_for_tail_return` has called since
+    /// B-2026-07-22-2. Same rule, two sites, one channel missing at one of them.
+    ///
+    /// THE THREE CONTROLS ARE WHAT NAME THE MECHANISM, and each is pinned below:
+    /// the `return` spelling of the identical arm was already correct (it routes
+    /// through the function sibling), and the arm WITHOUT the rebind was too (a
+    /// payload bound out of an owned-param scrutinee registers memory-only under
+    /// caller-retains, so there is no `UserDrop` to retract). It is specifically
+    /// the rebind — which creates a genuinely owned local — combined with the
+    /// block tail that hands it out.
+    ///
+    /// Memory stays balanced on both sides of this fix (`suppress_user_drop_for_var`
+    /// frees nothing), so neither the ASAN corpus nor the parity oracle's memory
+    /// half can see this class. The output pin is the only signal.
+    #[test]
+    fn test_e2e_rebound_arm_payload_as_block_tail_drops_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R {\n\
+                   \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                   }\n\
+                   enum Box2 { Full(R), Empty }\n";
+        // The defect: rebind + block tail, over a user value enum.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> R {{\n\
+                 \x20   match o {{ Box2.Full(r) => {{ let m = r; m }} Box2.Empty => {{ R {{ id: 0 }} }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let k = take(o);\n\
+                 \x20   println(f\"C k={{k.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("C k=1\ndR1\n")
+        );
+        // `Option` carries it identically — the suppressor is keyed on the tail
+        // being an Identifier, not on the scrutinee's type.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64 }\n\
+                 impl Drop for R {\n\
+                 \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                 }\n\
+                 fn take(o: Option[R]) -> R {\n\
+                 \x20   match o { Some(r) => { let m = r; m } None => { R { id: 0 } } }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let o: Option[R] = Some(R { id: 1 });\n\
+                 \x20   let k = take(o);\n\
+                 \x20   println(f\"C k={k.id}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("C k=1\ndR1\n")
+        );
+        // CONTROL — the `return` spelling was already correct and must stay so.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> R {{\n\
+                 \x20   match o {{\n\
+                 \x20       Box2.Full(r) => {{ let m = r; return m; }}\n\
+                 \x20       Box2.Empty => {{ return R {{ id: 0 }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let k = take(o);\n\
+                 \x20   println(f\"C k={{k.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("C k=1\ndR1\n")
+        );
+        // CONTROL — no rebind. The payload binding itself has no `UserDrop`
+        // under caller-retains, so this shape never had the defect and the new
+        // call must not disturb it.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(o: Box2) -> R {{\n\
+                 \x20   match o {{ Box2.Full(r) => {{ r }} Box2.Empty => {{ R {{ id: 0 }} }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let o: Box2 = Box2.Full(R {{ id: 1 }});\n\
+                 \x20   let k = take(o);\n\
+                 \x20   println(f\"C k={{k.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("C k=1\ndR1\n")
+        );
+        // GUARD RAIL, and the one that matters: a BRANCH LEAF naming an OUTER
+        // binding must keep its body on the path where it dies in place.
+        //
+        // This is not a hypothetical. The first version of this fix called
+        // `suppress_user_drop_for_var`, which walks EVERY live frame, and it
+        // silenced `b` here — `k=1 / dR1 / end` against the correct
+        // `dR2 / k=1 / dR1 / end` the interpreter prints, a fresh divergence
+        // introduced by the fix. Only the top-frame retraction is correct, and
+        // this assertion is what distinguishes the two.
+        //
+        // `a` and `b` live in an ENCLOSING frame, so they are B-2026-08-28-51's
+        // runtime per-path flag's business, not this static site's.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn main() {{\n\
+                 \x20   let a = R {{ id: 1 }};\n\
+                 \x20   let b = R {{ id: 2 }};\n\
+                 \x20   let k = if a.id > 0 {{ a }} else {{ b }};\n\
+                 \x20   println(f\"k={{k.id}}\");\n\
+                 \x20   println(\"end\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR2\nk=1\ndR1\nend\n")
+        );
+        // GUARD RAIL — a block-local that does NOT escape still fires inside
+        // the block. The retraction must key on the tail, not on locality.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn main() {{\n\
+                 \x20   let v = {{ let t = R {{ id: 3 }}; t.id }};\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR3\nv=3\n")
+        );
+    }
+
     /// B-2026-08-29-7 — a `match` arm over an owned `Option[T]` param that
     /// REBINDS its payload to a local and lets that local escape is a DOUBLE
     /// FREE on both compiled backends, on a program `--interp` runs correctly.
