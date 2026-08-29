@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 314 | 3 |
-| run-vs-build | 240 | 11 |
+| miscompile | 316 | 5 |
+| run-vs-build | 240 | 10 |
 | leak | 232 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1229 | 17 |
+| codegen | 1231 | 19 |
 | typecheck | 278 | 0 |
-| interp | 254 | 13 |
+| interp | 254 | 12 |
 | other | 70 | 0 |
 | ownership | 66 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1799 surfaced · 19 open · 1753 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1801 surfaced · 20 open · 1754 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (19)
+### Open (20)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1799 surfaced
 | B-2026-08-29-36 | 2026-08-29 | codegen | low | A TWO-HOP PROJECTION (`match w.s.e { .. }`) STILL RUNS A MATERIALIZING ARM'S PAYLOAD BODY ON THE ZEROED SLOT -- compiled `m8 dR8 dE dR0` vs interp `m8 dR8 dE dR8`, where the ONE-hop spelling now gives `m8 dR8 dE` on both | — |
 | B-2026-08-29-37 | 2026-08-29 | codegen | medium | A `ref self` METHOD WHOSE MATCH MOVES `self.e`'s PAYLOAD OUT RUNS THE ENUM'S OWN `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `dR8 dE n8 dE dR8` vs interp `dR8 n8 dE dR8`, the extra `dE` firing INSIDE the callee on the caller's struct | — |
 | B-2026-08-29-38 | 2026-08-29 | codegen | medium | A method's FRESH-TEMP argument whose value is handed back out runs its `Drop` body TWICE on both compiled backends against once in the interpreter -- the passthrough guard that would suppress the caller-side temp drop is gated on `ExprKind::Identifier`, which a temp never is | — |
-| B-2026-08-29-40 | 2026-08-29 | interp | medium | The INTERPRETER's `Vector[bf16, N]` unary math never rounds lanes back to the element width -- it computes every lane in f64 and keeps the excess precision, so `a.sqrt().reduce_sum()` disagrees with codegen. The other eight methods agree BY LUCK OF THE INPUTS, not by correctness. | — |
 | B-2026-08-29-41 | 2026-08-29 | interp | low | The INTERPRETER computes `to_degrees` / `to_radians` / `cosh` at f64 and returns an f64-precision value whatever the receiver's width, so all three disagree with codegen on f32, f16 and bf16. `to_degrees` prints the same 17 digits for every width. | — |
 | B-2026-08-29-43 | 2026-08-29 | interp+codegen | medium | A MIXED STRUCT LITERAL over a struct with its OWN `impl Drop` still runs a param view's `Drop` body TWICE -- `let s = Sd3 { a: r, b: R { id: 2 } }` prints `dSd3 dR2 dR1 dR1` where `dSd3 dR2 dR1` is due; B-2026-08-29-24 fixed every other mixed wrap, and declined this one because such a struct's field bodies run inside the TYPE-LEVEL `karac_drop_<T>` wrapper, which can only be swapped for a variant that drops ALL of them | none |
 | B-2026-08-29-44 | 2026-08-29 | interp+codegen | medium | A WHOLE-VALUE REBIND AFTER A MIXED WRAP RE-ARMS THE WALK THE MASK JUST WITHHELD -- `let w = W2.Two(r, R { id: 2 }); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, because B-2026-08-29-24's per-slot mask is keyed on the BINDING and the destination registers afresh with no mask | none |
@@ -149,6 +148,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1799 surfaced
 | B-2026-08-29-49 | 2026-08-29 | interp+codegen | medium | A METHOD arm that moves an owned enum param's payload into a `mut ref` param runs the payload's `Drop` body ONE TIME TOO MANY -- unanimous on all four surfaces, so A/B-invisible | — |
 | B-2026-08-29-50 | 2026-08-29 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run the user `Drop` body TWICE for one object -- the two shapes B-2026-08-29-15's bare hand-back fix deliberately declined. Both AGREE across interp/JIT/AOT, so no A/B gate can see either | — |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
+| B-2026-08-29-52 | 2026-08-29 | codegen | high | Printing a `Vector[T, N]` gives THREE DIFFERENT ANSWERS -- the interpreter renders the lanes, the JIT prints a raw POINTER (the same one for two different vectors), and AOT prints one stray lane. `karac check` accepts it with no diagnostic. | — |
+| B-2026-08-29-53 | 2026-08-29 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range. The SCALAR `x.tanh()` on the same value in the SAME binary returns the correct 1. | — |
 
 ### Relocated (2)
 
@@ -180,9 +181,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1799 surfaced
 
 </details>
 
-### Fixed (1753)
+### Fixed (1754)
 
-<details><summary>1753 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1754 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1939,6 +1940,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1799 surfaced
 | B-2026-08-29-35 | codegen | high | THE THREE `let`-FORM LEGS NEVER RAN THE PROJECTION-PLACE PAYLOAD SUPPRESSOR, so `if let E.A(r) = s.e { let m = r; . | 9f3e2cb |
 | B-2026-08-29-39 | ownership | medium | A BINDING INITIALIZED TO `None` IS CLASSIFIED AS NON-RC FOR THE REST OF ITS LIFE, so reusing an `Option[shared T]` after passing it by value is repor… | c793ad0 |
 | B-2026-08-29-42 | codegen | high | A REDUCED-PRECISION RECEIVER (`f16` / `bf16`) CALLED THE DOUBLE-PRECISION libm SYMBOL and got silent garbage -- `x.tan()` returned `x`, `x.hypot(y)`… | e860b90 |
+| B-2026-08-29-40 | interp | medium | The INTERPRETER's `Vector[bf16, N]` unary math never rounds lanes back to the element width -- it computes every lane in f64 and keeps the excess pre… | 5f226ed |
 
 </details>
 
