@@ -32850,6 +32850,31 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
              println(f\"{x.id}\") }\n",
             "41\ndrop n41\n",
         ),
+        // B-2026-08-29-16 — the generic METHOD spelling of the same conditional
+        // shape, which was wrong in BOTH directions and in OPPOSITE senses:
+        // measured at 907b378^, param dies gave interp 0 bodies / compiled 1, and
+        // param escapes gave interp 1 / compiled 2. The dying leg below is the
+        // RED one on THIS backend; its codegen twin is the control, and the
+        // escaping pair is the mirror image. Keep the two files in step.
+        (
+            "generic-method-conditional-param-dies",
+            "struct G1 { n: i64 }\n\
+             impl G1 { fn gm_pick[T](ref self, r: R, k: bool, t: T) -> R \
+             { if k { r } else { R { id: 99 } } } }\n\
+             fn main() { let g = G1 { n: 1 }; \
+             let x = g.gm_pick(R { id: 41 }, false, 7); println(f\"{x.id}\") }\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // Control here, RED on the compiled twin.
+        (
+            "generic-method-conditional-param-escapes",
+            "struct G1 { n: i64 }\n\
+             impl G1 { fn gm_pick[T](ref self, r: R, k: bool, t: T) -> R \
+             { if k { r } else { R { id: 99 } } } }\n\
+             fn main() { let g = G1 { n: 1 }; \
+             let x = g.gm_pick(R { id: 41 }, true, 7); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
         // BOUNDARY — the callee never returns the param, so the caller already
         // owned the drop and nothing changes.
         (

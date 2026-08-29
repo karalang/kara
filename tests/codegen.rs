@@ -13495,11 +13495,11 @@ fn main() {
     /// backends, against one in the interpreter and one for both the
     /// non-generic and free-function twins, which are the oracles here.
     ///
-    /// Only the ALWAYS-returns leg is admitted for a generic callee. The
-    /// conditional leg hands ownership to a callee-side flip that
-    /// `compile_mono_function` declines for generics (B-2026-08-28-71), so
-    /// standing the caller down there would leave nobody owning the body — the
-    /// `generic-conditional-keeps-caller-fire` case pins that boundary.
+    /// The CONDITIONAL leg is admitted too, since B-2026-08-28-71 taught
+    /// `compile_mono_function` to install the callee-side per-path flip for a
+    /// monomorph. Before that it could not be stood down — the callee had no
+    /// way to own the body — which is what B-2026-08-29-16 tracked, and the two
+    /// `generic-method-conditional-*` cases below are that row's program.
     #[test]
     fn e2e_generic_method_returned_param_body_runs_once() {
         const DROPPER: &str = "struct R { id: i64, tag: String }\n\
@@ -13525,12 +13525,40 @@ fn main() {
                  let a = g.gm_dies(R { id: 31, tag: f\"g\" }, 5); println(f\"{a}\"); }\n",
                 "drop 31\n3\n",
             ),
-            // The generic CONDITIONAL case that sat here is deliberately gone: it is
-            // divergent in BOTH directions and is not what this row fixed. Measured —
-            // param dies: interp 0 / compiled 1; param escapes: interp 1 / compiled 2.
-            // The callee-side flip that would settle it is unavailable for generics
-            // (B-2026-08-28-71), so it is tracked on its own row rather than pinned
-            // here to either backend's answer.
+            // B-2026-08-29-16 — the generic CONDITIONAL pair, which used to be
+            // wrong in BOTH directions and in OPPOSITE senses: measured at
+            // 907b378^, the param-dies leg was interp 0 bodies / compiled 1, and
+            // the param-escapes leg interp 1 / compiled 2. Neither backend could
+            // be corrected alone, because the static answer cannot be precise —
+            // which path runs is a runtime fact — so the resolution had to be the
+            // callee-side per-path flag, which `compile_mono_function` did not
+            // install for a monomorph until B-2026-08-28-71.
+            //
+            // CONTROL on this backend: the dying leg was already the right count
+            // here, and it is the interpreter twin that was RED for it.
+            (
+                "generic-method-conditional-param-dies",
+                "impl G1 { fn gm_pick[T](ref self, r: R, k: bool, t: T) -> R \
+                 { if k { r } else { R { id: 99, tag: f\"z\" } } } }\n\
+                 fn main() { let g = G1 { n: 1 }; \
+                 let a = g.gm_pick(R { id: 41, tag: f\"a\" }, false, 5); \
+                 println(f\"{a.id}\"); }\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // RED on this backend: `drop 41` / `41` / `drop 41` before the fix —
+            // the caller registered a body the result binding also owned. The
+            // row's free-function contrast (0 bodies on BOTH backends before -71,
+            // the documented B-2026-08-28-22 trade) is pinned by
+            // `generic-callee-dying-path` in the -22 suite, so it is not repeated here.
+            (
+                "generic-method-conditional-param-escapes",
+                "impl G1 { fn gm_pick[T](ref self, r: R, k: bool, t: T) -> R \
+                 { if k { r } else { R { id: 99, tag: f\"z\" } } } }\n\
+                 fn main() { let g = G1 { n: 1 }; \
+                 let a = g.gm_pick(R { id: 41, tag: f\"a\" }, true, 5); \
+                 println(f\"{a.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
             // CONTROL — the NON-generic twin, correct since B-2026-08-28-70.
             (
                 "non-generic-twin",
