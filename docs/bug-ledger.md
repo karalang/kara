@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 187 | 0 |
 | double-free | 156 | 1 |
 | codegen-gap | 149 | 0 |
-| diagnostics | 111 | 0 |
+| diagnostics | 112 | 1 |
 | false-positive | 100 | 0 |
 | perf | 86 | 2 |
 | soundness | 80 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 278 | 0 |
 | interp | 257 | 11 |
 | other | 70 | 0 |
-| ownership | 66 | 0 |
+| ownership | 67 | 1 |
 | cli | 65 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1811 surfaced · 26 open · 1758 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1812 surfaced · 27 open · 1758 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (26)
+### Open (27)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -156,6 +156,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1811 surfaced
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
+| B-2026-08-29-64 | 2026-08-29 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E0500 as a NON-BLOCKING warning -- `karac check` prints `warning[ownership]` then `All checks passed`, and `karac build` produces a working binary and exits 0 | — |
 
 ### Relocated (2)
 
