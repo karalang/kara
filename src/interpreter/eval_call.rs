@@ -2650,6 +2650,68 @@ impl<'a> super::Interpreter<'a> {
         out
     }
 
+    /// B-2026-08-29-11, CALLER leg — a bare-identifier arg passed BY VALUE to a
+    /// method no longer belongs to the caller's binding, so that binding must
+    /// stop walking it.
+    ///
+    /// This is the counterpart of `owned_param_frame_is_method`, and it exists
+    /// because of it. A FREE fn follows the caller-retains convention — its
+    /// owned-param scrutinee is non-consuming and the CALLER fires the payload
+    /// body — so `eval_call` marks only the passthrough subset
+    /// (`record_passthrough_arg_moves`). A METHOD frame is declared to own its
+    /// arguments outright (B-2026-08-29-10), so for a method the caller must
+    /// stand down on EVERY by-value arg, not just the ones handed back.
+    ///
+    /// Both destinations of the value are covered by the one rule: if the
+    /// payload dies inside, the frame's arm stash fires it; if it is handed
+    /// back, the caller's binding for the RESULT fires it. Either way the
+    /// ARGUMENT binding is no longer an owner.
+    ///
+    /// Nothing marked this before, and nothing had to: the callee's own mark
+    /// leaked out of the frame under a shared binding name and disarmed the
+    /// caller by accident. That only worked while the caller SPELLED its
+    /// binding the same as the param, and the frame isolation removes the
+    /// leak, so the mark is made here on purpose.
+    ///
+    /// `record_container_move_source_name` carries the narrowing: a container
+    /// or field-carried-Drop value is disarmed, while an own-`Drop` struct
+    /// stays armed because a by-value struct param is ENTRY-COPIED and the two
+    /// frames genuinely hold distinct values.
+    pub(crate) fn record_method_arg_moves(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: &[crate::ast::CallArg],
+    ) {
+        let Some(f) = self.impl_method_ast(type_name, method) else {
+            return;
+        };
+        // `f.params` excludes the receiver, so `i` indexes it directly — the
+        // raw-AST convention `method_param_drop_names` documents, NOT codegen's
+        // self-at-0 one.
+        let moved: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(i, arg)| {
+                let ExprKind::Identifier(n) = &arg.value.kind else {
+                    return None;
+                };
+                let p = f.params.get(i)?;
+                // A borrow is a view: the caller keeps it and keeps its walk.
+                if matches!(
+                    p.ty.kind,
+                    crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                ) {
+                    return None;
+                }
+                Some(n.clone())
+            })
+            .collect();
+        for n in moved {
+            self.record_container_move_source_name(&n);
+        }
+    }
+
     /// The raw AST of impl method `type_name.method`, receiver excluded from
     /// `params`. Mirrors the lookup `method_owned_param_names` runs.
     fn impl_method_ast(&self, type_name: &str, method: &str) -> Option<&crate::ast::Function> {

@@ -33115,6 +33115,174 @@ fn test_method_owned_enum_param_payload_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-11 — a method frame's moved-out marks stay INSIDE it, and the
+/// caller stands down on every by-value argument it hands over.
+///
+/// Both halves are one change. The interpreter's `moved_out_*` sets are keyed by
+/// BINDING NAME with no frame qualifier, and the method path did not isolate a
+/// callee's copies the way `eval_call` does for a free fn. Two frames that
+/// happened to reuse a name therefore shared marks, in BOTH directions:
+///
+///   - a mark one method made outlived its frame and silenced an unrelated
+///     LATER method's identically-named param (`missed-body-*` below), and
+///   - the caller's walk over an argument it had already handed away was
+///     silenced only by the callee's mark leaking back OUT under that same
+///     shared name (`escaping-*`).
+///
+/// The second is why the isolation could not simply be added: 277621a landed it
+/// alone and turned the escaping shape into a DOUBLE body, so it was reverted
+/// and the leak left in place as load-bearing.
+///
+/// It was never as load-bearing as it looked. It held only while the caller
+/// SPELLED its binding the same as the callee's param — rename the caller's
+/// binding and the double body was already there, on all three backends'
+/// oracle, before any of this landed. `escaping-caller-renamed` is that case,
+/// and it is why the fix is not "restore the leak".
+///
+/// What replaces the leak is a rule the method path was missing outright:
+/// `owned_param_frame_is_method` already declares that a method frame OWNS its
+/// arguments (B-2026-08-29-10), so the CALLER must stop walking every by-value
+/// arg it passes — not merely the passthrough subset `eval_call` marks for free
+/// fns, which follow the opposite caller-retains convention. Codegen has had
+/// the method-side twin since B-2026-08-09-15.
+///
+/// Every case is pinned to the three compiled backends, which agree with each
+/// other throughout and were the oracle for all of it.
+#[test]
+fn test_method_frame_marks_do_not_leak_across_frames() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        // THE ROW'S REPRO. `add`'s `r` is LEGITIMATELY marked — it moves into
+        // `self.xs` — and that mark used to outlive the frame and silence
+        // `eat`'s unrelated `r`, which dies inside `eat` and needs its body.
+        (
+            "missed-body-shared-param-name",
+            "struct Box3 { xs: Vec[R] }\n\
+             impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }\n\
+             struct G2 { n: i64 }\n\
+             impl G2 { fn eat(ref self, r: R) -> i64 { 3 } }\n\
+             fn main() { let mut bx = Box3 { xs: Vec.new() }; \
+             bx.add(R { id: 11 }); println(\"added\"); \
+             let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f\"{v}\") }\n",
+            "drop 11\nadded\ndrop 12\n3\n",
+        ),
+        // The same program with the SECOND param renamed. Renaming it was how
+        // the name-keying was identified rather than inferred, and it passed
+        // before the fix — so it is the control that the fix closed the gap
+        // instead of moving it: both spellings must now print the same thing.
+        (
+            "missed-body-distinct-param-name",
+            "struct Box3 { xs: Vec[R] }\n\
+             impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }\n\
+             struct G2 { n: i64 }\n\
+             impl G2 { fn eat(ref self, q: R) -> i64 { 3 } }\n\
+             fn main() { let mut bx = Box3 { xs: Vec.new() }; \
+             bx.add(R { id: 11 }); println(\"added\"); \
+             let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f\"{v}\") }\n",
+            "drop 11\nadded\ndrop 12\n3\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+
+    // The ESCAPING half — a method that hands back a payload bound out of its
+    // owned enum param. One value is constructed and one reaches the caller's
+    // binding, so ONE body is correct.
+    const RES: &str = "struct Res { id: i64, name: String }\n\
+         impl Drop for Res { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+    for (label, body, want) in [
+        // The caller's binding SPELLED like the param — the one spelling the
+        // old leak happened to cover, kept as a fixed point.
+        (
+            "escaping-caller-same-name",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> Res \
+             { match b { Box2.Full(r) => { return r; } \
+             Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = t.take(b); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+        // THE CASE THAT SHOWS THE LEAK WAS NOT PROTECTING THE SHAPE. Identical
+        // but for the caller's binding name, and it ran the body TWICE against
+        // once on every compiled backend, before and after 277621a alike.
+        (
+            "escaping-caller-renamed",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> Res \
+             { match b { Box2.Full(r) => { return r; } \
+             Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let qq: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = t.take(qq); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+        // The TAIL spelling of the same escape, renamed caller binding. The two
+        // exits must not disagree — the split `return` / tail is exactly the
+        // shape B-2026-08-29-21 had to close once already on this channel.
+        (
+            "escaping-tail-spelling",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> Res \
+             { match b { Box2.Full(r) => { r } \
+             Box2.Empty => { Res { id: 0, name: f\"z\" } } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let qq: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = t.take(qq); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+        // BOUNDARY, and the one the caller-side stand-down could most easily
+        // break: the payload DIES inside the method (`r.id` is a field read, so
+        // nothing escapes). The frame's arm stash owns the body and the caller
+        // must stay silent — one body, not zero. This is B-2026-08-29-10's
+        // shape, and disarming the caller for ALL by-value args rather than the
+        // passthrough subset is what keeps it at one.
+        (
+            "payload-dies-inside-method",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> i64 \
+             { match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let v: i64 = t.take(b); println(f\"v={v}\") }\n",
+            "drop 7 e7\nv=7\n",
+        ),
+        // FREE-FN ORACLES — correct before and after, on all four surfaces.
+        // They follow the opposite convention (the CALLER retains and fires),
+        // so a change that "fixed" methods by moving free functions onto the
+        // method rule would fail here. Both spellings, because the free-fn path
+        // has been name-independent all along and must stay so.
+        (
+            "free-fn-oracle-same-name",
+            "enum Box2 { Full(Res), Empty }\n\
+             fn takef(b: Box2) -> Res \
+             { match b { Box2.Full(r) => { return r; } \
+             Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } }\n\
+             fn main() { let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = takef(b); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+        (
+            "free-fn-oracle-renamed",
+            "enum Box2 { Full(Res), Empty }\n\
+             fn takef(b: Box2) -> Res \
+             { match b { Box2.Full(r) => { return r; } \
+             Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } }\n\
+             fn main() { let qq: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = takef(qq); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{RES}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-9 — a METHOD that RETURNS a payload bound out of its owned
 /// enum / `Option` param runs that payload's `Drop` body ONCE.
 ///
@@ -33130,11 +33298,19 @@ fn test_method_owned_enum_param_payload_body_runs_once() {
 /// argument leaking into the callee under the shared name. Isolating the frame
 /// removed that leak and with it the only suppression this shape had.
 ///
-/// So the leak is currently load-bearing. Removing it is still the right end
-/// state — it also lets one method's mark suppress an unrelated later method's
-/// identically-named param, which is a real missed body tracked on its own row
-/// — but only once the callee marks an escaping payload itself. A missed body
-/// is the lesser defect, so the leak stays until then.
+/// RESOLVED by B-2026-08-29-11, and the account above is worth keeping because
+/// its conclusion was wrong in an instructive way. The leak was called
+/// load-bearing on the strength of this fixture, and this fixture spells the
+/// caller's binding `b` — the same as the param. Rename it and the double body
+/// was already there, with the leak fully intact. So the leak was not holding
+/// the shape up, it was holding up one SPELLING of it.
+///
+/// What actually owns the suppression now is a rule the method path never had:
+/// a method frame owns its arguments (`owned_param_frame_is_method`), so the
+/// CALLER stands down on every by-value arg it hands over, whatever either side
+/// calls it. With that in place the frame isolation removes a genuine leak, and
+/// both cases below hold at one body — as does the renamed spelling, in
+/// `test_method_frame_marks_do_not_leak_across_frames`.
 ///
 /// Isolated by disabling each half of 277621a's interpreter change
 /// independently: with the param registration off the double body REMAINED,

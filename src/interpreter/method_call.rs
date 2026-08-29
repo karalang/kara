@@ -538,11 +538,39 @@ impl<'a> super::Interpreter<'a> {
                 // caller's pre-existing mark on one of these names is preserved
                 // here exactly, so that shape is untouched. What is undone is
                 // only a mark this frame itself introduced.
-                let param_drop_marks: Vec<(String, bool)> = param_drop_names
-                    .iter()
-                    .map(|n| (n.clone(), self.moved_out_user_drop_bindings.contains(n)))
-                    .collect();
                 self.pending_param_drop_bindings = param_drop_names;
+                // The callee frame's moved-out sets ARE isolated, exactly as
+                // `eval_call` isolates a free fn's and for the same reason: they
+                // are keyed by BINDING NAME with no frame qualifier, so without
+                // this a mark one frame makes outlives it and silences an
+                // unrelated later frame that happens to reuse the name.
+                //
+                // 277621a landed this first and had to be reverted, because the
+                // shape above depended on the leak: nothing inside the callee
+                // marked an escaping payload, so the ONLY suppression it had was
+                // the caller's mark arriving under a shared name. The loop just
+                // above supplies that mark from inside the frame, which is what
+                // the revert was waiting on — so the isolation now removes a
+                // genuine leak rather than a load-bearing one.
+                //
+                // That dependency was never as sound as it looked: it held only
+                // while the caller SPELLED its binding the same as the param.
+                // Renaming the caller's binding — nothing else — already ran the
+                // payload's `Drop` body twice on this path before any of this
+                // landed. So the leak was not protecting the shape, it was
+                // protecting one spelling of it.
+                //
+                // Subsumes 64e3e90's narrow save/restore of
+                // `method_param_drop_names`' membership: restoring the whole set
+                // undoes every mark this frame made, that one included.
+                let saved_moved_out = (
+                    std::mem::take(&mut self.moved_out_user_drop_bindings),
+                    std::mem::take(&mut self.moved_out_enum_payload_bindings),
+                    std::mem::take(&mut self.moved_out_drop_field_bindings),
+                    std::mem::take(&mut self.moved_out_container_bodies_bindings),
+                    std::mem::take(&mut self.moved_out_tuple_elem_bodies),
+                    std::mem::take(&mut self.moved_out_struct_field_bodies),
+                );
                 // B-2026-08-29-9 — the callee frame's moved-out sets are
                 // deliberately NOT isolated here, though `eval_call` isolates a
                 // free fn's. They are keyed by BINDING NAME with no frame
@@ -576,13 +604,18 @@ impl<'a> super::Interpreter<'a> {
                 } else {
                     self.eval_body_growing(&body)
                 };
-                for (name, was_marked) in param_drop_marks {
-                    if was_marked {
-                        self.moved_out_user_drop_bindings.insert(name);
-                    } else {
-                        self.moved_out_user_drop_bindings.remove(&name);
-                    }
-                }
+                (
+                    self.moved_out_user_drop_bindings,
+                    self.moved_out_enum_payload_bindings,
+                    self.moved_out_drop_field_bindings,
+                    self.moved_out_container_bodies_bindings,
+                    self.moved_out_tuple_elem_bodies,
+                    self.moved_out_struct_field_bodies,
+                ) = saved_moved_out;
+                // CALLER leg, after the restore so the mark lands in the
+                // CALLER's set: a by-value identifier arg is no longer the
+                // caller's to walk. See `record_method_arg_moves`.
+                self.record_method_arg_moves(&type_name, method, args);
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if pushed_self_mode {

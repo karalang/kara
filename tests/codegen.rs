@@ -120770,6 +120770,112 @@ fn main() {
     /// takes over leaks rather than aborting, which no exit code would show —
     /// the ASAN twin (`asan_field_rooted_container_element_read_is_cloned`)
     /// carries that half under LSan.
+    /// B-2026-08-29-11, compiled twin — the ORACLE half of the interpreter
+    /// fixture of the same name.
+    ///
+    /// Every case here was already correct on all three compiled backends and
+    /// is pinned so it stays that way: the whole defect was interpreter-side
+    /// (frame-shared moved-out marks), so this file's job is to keep the target
+    /// from moving while that is repaired. `escaping-caller-renamed` is the one
+    /// worth reading — the compiled answer is one body regardless of what the
+    /// caller spells its binding, which is what made the interpreter's
+    /// name-dependent answer a divergence rather than a convention.
+    #[test]
+    fn e2e_method_frame_marks_do_not_leak_across_frames() {
+        const DROPPER: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "missed-body-shared-param-name",
+                "struct Box3 { xs: Vec[R] }\n\
+                 impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }\n\
+                 struct G2 { n: i64 }\n\
+                 impl G2 { fn eat(ref self, r: R) -> i64 { 3 } }\n\
+                 fn main() { let mut bx = Box3 { xs: Vec.new() }; \
+                 bx.add(R { id: 11 }); println(\"added\"); \
+                 let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f\"{v}\") }\n",
+                "drop 11\nadded\ndrop 12\n3\n",
+            ),
+            (
+                "missed-body-distinct-param-name",
+                "struct Box3 { xs: Vec[R] }\n\
+                 impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }\n\
+                 struct G2 { n: i64 }\n\
+                 impl G2 { fn eat(ref self, q: R) -> i64 { 3 } }\n\
+                 fn main() { let mut bx = Box3 { xs: Vec.new() }; \
+                 bx.add(R { id: 11 }); println(\"added\"); \
+                 let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f\"{v}\") }\n",
+                "drop 11\nadded\ndrop 12\n3\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            assert_eq!(
+                run_program(&format!("{DROPPER}{body}")).as_deref(),
+                Some(*want),
+                "[{label}]"
+            );
+        }
+
+        const RES: &str = "struct Res { id: i64, name: String }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        let res_cases: &[(&str, &str, &str)] = &[
+            (
+                "escaping-caller-same-name",
+                "enum Box2 { Full(Res), Empty }\n\
+                 struct T { n: i64 }\n\
+                 impl T { fn take(ref self, b: Box2) -> Res \
+                 { match b { Box2.Full(r) => { return r; } \
+                 Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+                 fn main() { let t = T { n: 1 }; \
+                 let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+                 let r: Res = t.take(b); println(f\"got {r.id}\") }\n",
+                "got 7\ndrop 7 e7\n",
+            ),
+            (
+                "escaping-caller-renamed",
+                "enum Box2 { Full(Res), Empty }\n\
+                 struct T { n: i64 }\n\
+                 impl T { fn take(ref self, b: Box2) -> Res \
+                 { match b { Box2.Full(r) => { return r; } \
+                 Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+                 fn main() { let t = T { n: 1 }; \
+                 let qq: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+                 let r: Res = t.take(qq); println(f\"got {r.id}\") }\n",
+                "got 7\ndrop 7 e7\n",
+            ),
+            (
+                "escaping-tail-spelling",
+                "enum Box2 { Full(Res), Empty }\n\
+                 struct T { n: i64 }\n\
+                 impl T { fn take(ref self, b: Box2) -> Res \
+                 { match b { Box2.Full(r) => { r } \
+                 Box2.Empty => { Res { id: 0, name: f\"z\" } } } } }\n\
+                 fn main() { let t = T { n: 1 }; \
+                 let qq: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+                 let r: Res = t.take(qq); println(f\"got {r.id}\") }\n",
+                "got 7\ndrop 7 e7\n",
+            ),
+            (
+                "payload-dies-inside-method",
+                "enum Box2 { Full(Res), Empty }\n\
+                 struct T { n: i64 }\n\
+                 impl T { fn take(ref self, b: Box2) -> i64 \
+                 { match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } } }\n\
+                 fn main() { let t = T { n: 1 }; \
+                 let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+                 let v: i64 = t.take(b); println(f\"v={v}\") }\n",
+                "drop 7 e7\nv=7\n",
+            ),
+        ];
+        for (label, body, want) in res_cases {
+            assert_eq!(
+                run_program(&format!("{RES}{body}")).as_deref(),
+                Some(*want),
+                "[{label}]"
+            );
+        }
+    }
+
     #[test]
     fn e2e_field_rooted_container_element_heap_read_is_cloned() {
         const DECL: &str = "struct R { id: i64, name: String }\n";
