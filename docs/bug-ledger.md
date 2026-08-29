@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
+| leak | 228 | 1 |
 | run-vs-build | 228 | 9 |
-| leak | 227 | 1 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 148 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1207 | 8 |
+| codegen | 1208 | 8 |
 | typecheck | 278 | 0 |
 | interp | 238 | 6 |
 | other | 70 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1774 surfaced · 10 open · 1738 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1775 surfaced · 10 open · 1739 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-28-67 | 2026-08-28 | interp+codegen | low | A `match` OVER A BARE USER ENUM RUNS THE PAYLOAD'S `Drop` BODY AND THE ENUM'S OWN IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `match e { E.A(r) => .. }` is interp `dR5 dE` vs compiled `dE dR5`; same count, different sequence | — |
-| B-2026-08-29-5 | 2026-08-29 | codegen | medium | A DISCARDED `match` / `if let` WHOSE ARM HANDS THE BOUND PAYLOAD OUT AS THE CONSTRUCT'S VALUE LEAKS IT -- `if let Some(s) = vv { s };` in statement position strands the whole 38 B buffer with NO reassignment anywhere in the program; binding the payload and USING it without handing it out is clean, so it is the hand-out-into-nothing that leaks, and it reproduces for `match`, for `if let`, and for a struct payload alike | — |
 | B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned `Option[T]` param has its payload bound out and NOT returned MISSES the payload's `Drop` body under CODEGEN -- interp `drop 7`/`v=7` vs compiled `v=7`. The USER-ENUM half of this row is FIXED (a method frame's owned-param scrutinee is now consuming); what remains is codegen arming the payload-bodies walk only for a tracked VALUE enum, so an `Option` argument never gets one | — |
 | B-2026-08-29-11 | 2026-08-29 | interp | medium | The interpreter's method frames SHARE one moved-out name space, so one method's legitimately-marked param suppresses an unrelated LATER method's identically-named param and loses its `Drop` body -- the accidental leak cannot simply be closed, because it is currently the ONLY thing suppressing a payload bound out of an owned enum param and returned (B-2026-08-29-9) | — |
 | B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | A NAMED struct binding passed by value to a function that returns it runs the `Drop` body TWICE on all four surfaces -- for a FREE FUNCTION as well as a method, and for a block tail as well as `return r;`. NOTE: the row's free-function oracle and its `return`-vs-tail framing are both REFUTED, and the second body tracks a second real allocation (the callee's entry copy), so 'one body is due' is a design question rather than a measured defect -- see the CORRECTION | — |
@@ -140,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1774 surfaced
 | B-2026-08-29-24 | 2026-08-29 | interp+codegen | medium | A param VIEW wrapped into a MIXED-payload enum, or into a STRUCT / TUPLE / VEC / `Some`, still runs its `Drop` body TWICE -- `let w = W2.Two(r, R { id: 2 })` prints `dR1 dR2 dR1` where `dR1 dR2` is due, and `let s = S { r: r }` prints `dR1 dR1`; B-2026-08-29-19 fixed only the SINGLE-payload enum wrap, because the shared walker cannot be withheld per slot and `Option`'s generic payload has no walker at all | — |
 | B-2026-08-29-25 | 2026-08-29 | interp+codegen | medium | A DISCARDED `if` RUNS NO `Drop` BODY IN EITHER STATEMENT FORM -- `if c { R { .. } } else { .. };` and `let _ = if c { .. };` are both silent on all three backends where one body is due, because `discarded_match_value_tail` is `Match`-only and has no `If` sibling at either discard site; the same gate also misses a BLOCK-WRAPPED match (`let _ = { match .. };`) that its two sibling gates would have recursed into | — |
 | B-2026-08-29-26 | 2026-08-29 | interp | medium | A METHOD whose owned param is conditionally returned via a `match` ARM loses the param's `Drop` body in the INTERPRETER on the DYING path -- interp `got 9`/`drop z` vs all three compiled backends `drop h`/`got 9`/`drop z`; identical for the generic and non-generic spelling, and the free-function twin is correct everywhere | — |
+| B-2026-08-29-27 | 2026-08-29 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL MINTS A FRESH OWNED TEMP LEAKS IT WHEN THE CONSUMER IS A METHOD RECEIVER OR A CALL ARGUMENT -- `if c { mk(n) } else { mk(n+1) }.contains("x")` strands 36 B, and so do the `match` spelling, a BARE BLOCK `{ mk(n) }.contains("x")` with no branch in it at all, and `use_it(if c { mk(n) } else { mk(n+1) })`; the same call unwrapped is clean, so it is the block/arm hand-out into a non-registering consumer that leaks | — |
 
 ### Relocated (2)
 
@@ -171,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1774 surfaced
 
 </details>
 
-### Fixed (1738)
+### Fixed (1739)
 
-<details><summary>1738 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1739 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1902,6 +1902,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1774 surfaced
 | B-2026-08-29-2 | codegen | medium | A DOUBLY-NESTED `Option` OVER A HEAP PAYLOAD LEAKS THAT PAYLOAD ON PLAIN SCOPE EXIT -- `let vv: Option[Option[String]] = Some(Some(s));` and nothing… | c876e64 |
 | B-2026-08-29-3 | codegen | medium | A GENERIC method that UNCONDITIONALLY returns its owned param still runs the param's `Drop` body TWICE on all three compiled backends against once in… | 7f5d6f9 |
 | B-2026-08-29-4 | codegen | high | A METHOD that hands an inline `Option`/`Result` argument back DOUBLE-FREES the payload on all three compiled backends (glibc abort, valgrind `Invalid… | 8d8d1b4 |
+| B-2026-08-29-5 | codegen | medium | A DISCARDED BRANCH CONSTRUCT STRANDS WHATEVER ITS TAKEN ARM HANDS OUT -- `if let Some(s) = vv { s };` in statement position leaks the whole 38 B buff… | a86e5d1 |
 | B-2026-08-29-6 | codegen | high | A passthrough call used DIRECTLY AS A MATCH SCRUTINEE (`match take(s) { . | d1db93d |
 | B-2026-08-29-7 | codegen | high | An `Option` MATCH ARM THAT REBINDS ITS HEAP PAYLOAD TO A LOCAL AND RETURNS IT IS A DOUBLE FREE ON BOTH COMPILED BACKENDS -- `match b { Some(r) => { l… | 905d73f |
 | B-2026-08-29-8 | codegen | medium | A MATCH ARM THAT REBINDS ITS PAYLOAD TO A LOCAL AND YIELDS IT AS THE ARM'S BLOCK TAIL RUNS THE `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `Box2.F… | 077a6bd |
