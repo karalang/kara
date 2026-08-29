@@ -6855,6 +6855,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_source_vec_cleanup_for_arg(value);
                     }
                 }
+                // B-2026-08-29-7 — a whole-value REBIND of a boxed payload
+                // view (`match b { Some(r) => { let k = r; k } }` over an
+                // `Option[Res]` whose payload is heap-BOXED) has to carry the
+                // box pointer to the destination slot.
+                //
+                // `deboxed_payload_box_ptrs` is keyed by SLOT, and it is what
+                // B-2026-08-06-10's whole-payload mirror looks up before
+                // zeroing the box's interior alongside the moved-from copy.
+                // That mirror is what stops the CALLER's
+                // `__karac_drop_struct_<T>(box)` from freeing a buffer the
+                // return value carried away. `let k = r;` gives the escaping
+                // value a NEW slot, which the map has never heard of, so the
+                // mirror silently skipped the box and only the alias's own
+                // copy was neutralized -- leaving the box's `{ptr,len,cap}`
+                // live for the caller to free a second time. Measured as
+                // `free(): double free detected in tcache 2` at both opt
+                // levels on a program `--interp` runs correctly, with the
+                // identical arm spelled `Some(r) => { return r; }` clean
+                // because there the escaping value IS the registered slot.
+                //
+                // Propagate rather than move the entry: `r` may still be read
+                // after the rebind, and a second zero of the same box is a
+                // repeated store of 0, not a double free. Same reason the
+                // mirror at its own site can run beside the copy's zeroing.
+                if let (PatternKind::Binding(dst), ExprKind::Identifier(src)) =
+                    (&pattern.kind, &value.kind)
+                {
+                    if let Some(box_ptr) = self
+                        .variables
+                        .get(src.as_str())
+                        .map(|s| s.ptr)
+                        .and_then(|p| self.payload_vars.deboxed_payload_box_ptrs.get(&p).copied())
+                    {
+                        if let Some(dst_ptr) = self.variables.get(dst.as_str()).map(|s| s.ptr) {
+                            self.payload_vars
+                                .deboxed_payload_box_ptrs
+                                .insert(dst_ptr, box_ptr);
+                        }
+                    }
+                }
                 // Track Vec variables for scope cleanup.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     // A whole-Vec re-borrow (`let ps = params`, B-2026-07-18-4)

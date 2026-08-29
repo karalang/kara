@@ -36531,6 +36531,92 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-7 — a `match` arm over an owned `Option[T]` param that
+    /// REBINDS its payload to a local and lets that local escape is a DOUBLE
+    /// FREE on both compiled backends, on a program `--interp` runs correctly.
+    ///
+    /// The payload here is 4 words against `Option`'s 3-word area, so it is
+    /// heap-BOXED, and the box's owner is the CALLER. B-2026-08-06-10's mirror
+    /// zeroes the box's interior alongside the escaping value's own copy, which
+    /// is what stops the caller's `__karac_drop_struct_Res(box)` from freeing a
+    /// buffer the return value carried away. That mirror is keyed by SLOT, and
+    /// `let k = r;` gives the escaping value a NEW slot the map had never heard
+    /// of — so the box kept a live `{ptr,len,cap}` and was freed twice.
+    ///
+    /// The ASAN fixture
+    /// `asan_rebound_boxed_option_payload_returned_is_owned_once` is the memory
+    /// half; this is the OUTPUT half, and it is not redundant with it. A
+    /// double free aborts the process, so `run_program` returns `None` and a
+    /// `.as_deref()` comparison against `Some(..)` fails loudly — but the
+    /// BODY-COUNT question (exactly one `drop 7 e7`) is only visible here.
+    #[test]
+    fn test_e2e_rebound_boxed_option_payload_returned_drops_once() {
+        let hdr = "struct Res { id: i64, name: String }\n\
+                   impl Drop for Res {\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+                   }\n";
+        // `return` out of the rebind.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Some(r) => {{ let k: Res = r; return k; }}\n\
+                 \x20       None => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+        // TWO levels of rebind — the propagation has to survive a chain, since
+        // each `let` re-keys the box pointer onto the next slot.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Some(r) => {{ let k: Res = r; let m: Res = k; return m; }}\n\
+                 \x20       None => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+        // GUARD RAIL — the same arm WITHOUT the rebind was always correct, and
+        // has to stay that way: the propagation must not disturb the shape
+        // whose escaping value already IS the registered slot.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Some(r) => {{ return r; }}\n\
+                 \x20       None => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+    }
+
     /// B-2026-08-28-72's guard rail — the `Option` shapes whose payload does
     /// NOT escape the callee must keep firing caller-side exactly once.
     ///

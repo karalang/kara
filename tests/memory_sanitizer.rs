@@ -16536,6 +16536,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_rebound_boxed_option_payload_returned_is_owned_once() {
+        // B-2026-08-29-7 — a `match` arm over an owned `Option[T]` param that
+        // REBINDS its payload to a local and lets that local escape
+        // (`Some(r) => { let k = r; return k; }`) double-freed the payload's
+        // interior buffer on both compiled backends, on a program `--interp`
+        // runs correctly: `free(): double free detected in tcache 2`, abort 134.
+        //
+        // `Res` is 4 words, one past `Option`'s 3-word payload area, so the
+        // payload is heap-BOXED — which is the whole mechanism. The arm's
+        // move-neutralizer zeroes the escaping value's `{ptr,len,cap}` AND, when
+        // the box's owner is another frame, mirrors that zero into the box so
+        // the caller's `__karac_drop_struct_Res(box)` skips the buffer the
+        // return value carried away. That mirror is keyed by SLOT, and the
+        // rebind gives the escaping value a NEW slot the map had never heard
+        // of, so it was silently skipped and the caller freed the buffer a
+        // second time.
+        //
+        // The same arm WITHOUT the intermediate `let` was always clean, because
+        // there the escaping value is the registered slot — which is what made
+        // this look like an alias-following gap in a predicate rather than a
+        // missing data write. Three controls pinned it as neither: `Result`,
+        // a user value enum, and a SCALAR payload all stayed clean through the
+        // identical rebind, and only the scalar case says why (no box).
+        //
+        // The `Drop` body reads `name` so the buffer is genuinely live: printing
+        // the id alone lets LLVM delete the allocation together with both frees,
+        // which is exactly how a double free hides behind a green -O2 run.
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, name: String }
+impl Drop for Res {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+fn take(b: Option[Res]) -> Res {
+    match b {
+        Some(r) => { let k: Res = r; return k; }
+        None => { return Res { id: 0, name: f"z" }; }
+    }
+}
+fn main() {
+    let b: Option[Res] = Some(Res { id: 7, name: f"e7" });
+    let r: Res = take(b);
+    println(f"got {r.id}");
+}
+"#,
+            &["got 7", "drop 7 e7"],
+            "asan_rebound_boxed_option_payload_returned_is_owned_once",
+        );
+    }
+
+    #[test]
     fn asan_consuming_arm_boxed_enum_payload_handed_out_is_owned_once() {
         let expected: Vec<&str> = vec!["dGtrue"; 8];
         assert_clean_asan_run_min_allocs(
