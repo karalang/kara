@@ -45647,6 +45647,62 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
     }
 }
 
+/// B-2026-08-29-30 — the INTERPRETER twin of
+/// `e2e_discarded_literal_statement_and_no_else_if`, landed in the same commit.
+///
+/// The LEAK half: the bare-statement dispatch had no LITERAL arm, so `R { .. };` ran
+/// nothing while `let _ = R { .. };` ran one body. B-2026-08-01-8's
+/// moved-place retraction is widened to the bare spelling with it, since
+/// admitting the tuple without retracting doubles a body rather than supplying
+/// one — which is what the two controls hold.
+///
+/// The no-`else` half: row 3 is a REGRESSION GUARD, not a wish. fd4e80f's statement-site `If`
+/// arm gated on liveness alone, and a no-`else` `if` hands out no live binding,
+/// so this backend fired a body both compiled surfaces cannot emit — the
+/// divergence that commit's own message warns against, one arm over. It is
+/// declined here until codegen can own the value from inside the arm
+/// (B-2026-08-29-30); an agreed gap beats a divergence, the same call this file
+/// makes for `v.remove(i);`.
+#[test]
+fn test_discarded_literal_statement_and_no_else_if() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+    let rows: [(&str, &str, &str); 3] = [
+        (
+            "R { id: 7 };\nprintln(\"end\");",
+            "dR7\nend",
+            "FIXED: bare struct-literal statement",
+        ),
+        (
+            "{ R { id: 7 } };\nprintln(\"end\");",
+            "dR7\nend",
+            "FIXED: block-wrapped struct literal, bare statement",
+        ),
+        (
+            "let n = 1;\nif n == 1 { R { id: 7 } };\nprintln(\"end\");",
+            "end",
+            "AGREED-SILENT (remainder): a no-`else` `if` hands this site no value",
+        ),
+    ];
+    for (body, expected, label) in rows {
+        let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+        assert_eq!(run(&src).trim(), expected, "[{label}]");
+    }
+    for (body, label) in [
+        (
+            "let r = R { id: 1 };\n(r, 20);\nprintln(\"end\");",
+            "control: bare tuple statement moving a place element",
+        ),
+        (
+            "let r = R { id: 1 };\nlet _ = (r, 20);\nprintln(\"end\");",
+            "control: wildcard-let tuple moving a place element",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+        assert_eq!(run(&src).trim(), "dR1\nend", "[{label}]");
+    }
+}
+
 /// The two controls that localize the fix above: a discarded CALL result and a
 /// read-only arm both already ran exactly one body on every backend, and must
 /// keep doing so — they are what prove the change did not widen into

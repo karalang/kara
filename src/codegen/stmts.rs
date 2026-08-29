@@ -9170,7 +9170,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 let tail = Self::discarded_owned_temp_tail(expr)
                     .or_else(|| self.discarded_unit_variant_tail(expr))
                     .or_else(|| self.discarded_match_value_tail(expr));
-                if tail.is_some() {
+                // B-2026-08-29-30 — the LITERAL leg, and the mirror image of
+                // what B-2026-08-29-20 fixed one site over: that row found the
+                // branch gate present on the bare statement and missing from
+                // `let _ =`; this one is present on `let _ =` (its own
+                // `StmtKind::Let` arm below) and was missing here. So
+                // `R { .. };` and `(a, b);` in statement position reached no
+                // gate at all.
+                //
+                // Not merely a missing `Drop` body: measured 36 B / 1 object
+                // LEAKED for `H { s: payload() };` against a clean
+                // `let _ = H { s: payload() };`, since the aggregate registrar
+                // carries the memory side as well as the bodies.
+                let literal_tail = if tail.is_none() {
+                    self.discarded_owned_literal_tail(expr)
+                } else {
+                    None
+                };
+                // B-2026-08-01-8's retraction, as the `let _ =` arm performs
+                // it and for the same reason: a PLACE element the tuple moves
+                // has no owning destination, so the source's UserDrop must
+                // retract or its wrapper fires over a moved-from slot. Before
+                // the frame push and the compile, as there.
+                if let Some(ExprKind::Tuple(elems)) = literal_tail.map(|t| &t.kind) {
+                    let moved: Vec<String> = elems
+                        .iter()
+                        .filter(|e| self.tuple_elem_is_movable_drop_struct_place(e))
+                        .filter_map(|e| match &e.kind {
+                            ExprKind::Identifier(n) => Some(n.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    for n in moved {
+                        self.suppress_user_drop_for_var(&n);
+                    }
+                }
+                if tail.is_some() || literal_tail.is_some() {
                     self.drop_rc.scope_cleanup_actions.push(Vec::new());
                 }
                 let val = self.compile_expr(expr)?;
@@ -9230,6 +9265,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     // bare statement silently skipped the payload body both
                     // arms otherwise share.
                     self.track_discarded_optres_payload_bodies(tail, val);
+                    self.drain_discard_frame_args_first(b53_arg_mark);
+                } else if let Some(lt) = literal_tail {
+                    // B-2026-08-29-30 — the `let _ =` literal arm's battery,
+                    // verbatim: the registrar carries the struct wrapper /
+                    // field bodies AND the memory registration, and its
+                    // internal bodies leg is gated all-fresh, so a MIXED tuple
+                    // registers its element bodies here instead (the moved
+                    // place element's source was retracted above, making this
+                    // walk its single owner).
+                    self.track_inline_owned_aggregate_arg(val, lt, false);
+                    if let ExprKind::Tuple(elems) = &lt.kind {
+                        let any_place = elems
+                            .iter()
+                            .any(|e| self.tuple_elem_is_movable_drop_struct_place(e));
+                        if any_place {
+                            let elems = elems.clone();
+                            self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
+                        }
+                    }
                     self.drain_discard_frame_args_first(b53_arg_mark);
                 }
                 Ok(())

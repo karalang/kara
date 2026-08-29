@@ -2429,12 +2429,20 @@ impl<'a> super::Interpreter<'a> {
         stmt: &Stmt,
         cleanup: &mut Vec<CleanupAction>,
     ) {
-        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
-            return;
+        // B-2026-08-29-30 — BOTH discard spellings. This was `let _ =` only,
+        // matching a discard walk that was also `let _ =` only; now that the
+        // bare statement admits a literal tail, its moved place elements need
+        // the same retraction or the source's wrapper fires over a moved-from
+        // slot. Wrapper-peeled, since `{ (r, 20) };` is the same discard.
+        let value = match &stmt.kind {
+            StmtKind::Let { pattern, value, .. }
+                if matches!(pattern.kind, PatternKind::Wildcard) =>
+            {
+                Self::arm_tail_expr(value)
+            }
+            StmtKind::Expr(e) => Self::arm_tail_expr(e),
+            _ => return,
         };
-        if !matches!(pattern.kind, PatternKind::Wildcard) {
-            return;
-        }
         let ExprKind::Tuple(elems) = &value.kind else {
             return;
         };
@@ -4457,17 +4465,35 @@ impl<'a> super::Interpreter<'a> {
                         else_branch,
                         ..
                     } => {
-                        let hands_out_live_binding = then_block
-                            .final_expr
-                            .as_deref()
-                            .into_iter()
-                            .chain(else_branch.as_deref())
-                            .map(Self::arm_tail_expr)
-                            .any(|tail| {
-                                matches!(&tail.kind,
-                                    ExprKind::Identifier(n) if self.env.get(n).is_some())
-                            });
-                        if !hands_out_live_binding {
+                        // B-2026-08-29-30 (no-`else` half) — an `if` WITHOUT an `else` must be
+                        // declined here, and this arm's liveness gate does not
+                        // decline it: `if n == 1 { R { .. } };` hands out no
+                        // live binding, so it fired on this backend while BOTH
+                        // compiled surfaces stayed silent — a run-vs-build
+                        // divergence, and the exact trade
+                        // `discarded_match_value_tail`'s `If` leg avoids by
+                        // requiring both tails.
+                        //
+                        // Codegen cannot follow: `compile_if`'s merge yields a
+                        // const-0 placeholder when there is no `else`, so the
+                        // value the arm built never reaches its discard site
+                        // at all. Making it FIRE needs a registration INSIDE
+                        // the arm (B-2026-08-29-5's second mechanism), which is
+                        // the half of this row still open. Until then an agreed
+                        // gap beats a divergence — the same call this file's
+                        // `bare_removal` note makes for `v.remove(i);`.
+                        let owns = match (then_block.final_expr.as_deref(), else_branch.as_deref())
+                        {
+                            (Some(then_tail), Some(else_tail)) => [then_tail, else_tail]
+                                .into_iter()
+                                .map(Self::arm_tail_expr)
+                                .all(|tail| {
+                                    !matches!(&tail.kind,
+                                        ExprKind::Identifier(n) if self.env.get(n).is_some())
+                                }),
+                            _ => false,
+                        };
+                        if owns {
                             self.run_discarded_value_user_drops(discarded);
                         }
                     }
@@ -4577,6 +4603,18 @@ impl<'a> super::Interpreter<'a> {
                             && self
                                 .qualified_enum_variant_is_unit(&segments[0], &segments[1])
                                 .unwrap_or(false) =>
+                    {
+                        self.run_discarded_value_user_drops(discarded);
+                    }
+                    // B-2026-08-29-30 — the LITERAL arm, twin of codegen's
+                    // `discarded_owned_literal_tail` leg at this same site.
+                    // `R { .. };` and `(a, b);` in statement position reached
+                    // no arm here at all, so no body ran — while
+                    // `let _ = R { .. };` ran one through the wildcard gate.
+                    // Judged by the same predicate that gate uses, so the two
+                    // spellings cannot answer differently.
+                    ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)
+                        if self.discard_rhs_produces_owned_value(expr, &discarded) =>
                     {
                         self.run_discarded_value_user_drops(discarded);
                     }

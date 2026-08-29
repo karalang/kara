@@ -12424,6 +12424,88 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-30 — a bare LITERAL statement discard owns its heap.
+    ///
+    /// The rest of the discard-gate family is missing `Drop` BODIES, which no
+    /// sanitizer can see. This cell is different: the bare-statement arm
+    /// chained no `discarded_owned_literal_tail` leg, so `H { s: payload() };`
+    /// reached no gate at all and its field buffer had no owner — while
+    /// `let _ = H { s: payload() };`, one spelling over, was clean through the
+    /// wildcard-let arm's own literal leg. The registrar the fix routes it
+    /// through carries memory as well as bodies, so both halves land together.
+    ///
+    /// The tuple rows are the hazard: an element that MOVES A PLACE has its
+    /// source retracted so this walk becomes the single owner, which is a
+    /// double free if the retraction is missed and a leak if the walk is. The
+    /// `let _ =` spelling has carried that pairing since B-2026-08-01-8; the
+    /// bare statement needed the retraction widened to reach it.
+    ///
+    /// DELIBERATELY NOT HERE, and measured rather than assumed: a discarded
+    /// branch or match whose arms are literals of a struct with heap fields
+    /// but NO `impl Drop` of its own still leaks them — 38 B, unchanged by
+    /// this fix, for both `if c { P { a: payload() } } else { .. };` and
+    /// `let _ = match .. { P { a: payload() } .. };`. The bodies half of those
+    /// is fixed; the memory half returns early in
+    /// `try_track_discarded_user_drop_temp` because `type_runs_user_drop` is
+    /// false for such a type. That is B-2026-08-29-32 — a row here would only
+    /// make this test red.
+    #[test]
+    fn asan_bare_literal_statement_discard_owns_its_heap() {
+        const H: &str = "struct H { s: String }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn slen(s: String) -> i64 { if s.contains(\"payload\") { s.len() } else { 0 } }\n\
+             fn main() { println(go()); }\n";
+        for (label, body, want) in [
+            (
+                "bare-struct-literal-statement",
+                "fn go() -> i64 { H { s: payload() };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "block-wrapped-struct-literal-statement",
+                "fn go() -> i64 { { H { s: payload() } };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "bare-tuple-literal-statement",
+                "fn go() -> i64 { (payload(), 20);\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "bare-tuple-statement-moving-a-place",
+                "fn go() -> i64 { let h = H { s: payload() };\n\
+                 \x20  (h, 20);\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "wildcard-let-tuple-moving-a-place",
+                "fn go() -> i64 { let h = H { s: payload() };\n\
+                 \x20  let _ = (h, 20);\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "wildcard-let-struct-literal",
+                "fn go() -> i64 { let _ = H { s: payload() };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "bound-literal-still-owns-itself",
+                "fn go() -> i64 { let h = H { s: payload() };\n\
+                 \x20  slen(h.s) }\n",
+                "38",
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &[want], label);
+        }
+    }
+
     /// B-2026-08-29-5 — a branch construct whose VALUE IS DISCARDED strands
     /// whatever its taken arm hands out.
     ///

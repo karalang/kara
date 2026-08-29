@@ -19256,6 +19256,72 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-30 — the two halves of the row fd4e80f filed against itself,
+    /// left, found by filling in its matrix in both directions.
+    ///
+    ///   * the LEAK half: a bare LITERAL statement reached NO gate. That commit chained
+    ///     `discarded_match_value_tail` at both discard sites, but the
+    ///     bare-statement arm still chained no `discarded_owned_literal_tail`
+    ///     leg — the mirror of what B-2026-08-29-20 fixed one site over, and
+    ///     refuted by the same argument its comment makes. The only cell of
+    ///     this family that is also a LEAK: `H { s: payload() };` stranded
+    ///     36 B where `let _ = H { s: payload() };` was clean
+    ///     (`asan_bare_literal_statement_discard_owns_its_heap`).
+    ///
+    ///   * the no-`else` half: a no-`else` `if` was a live run-vs-build DIVERGENCE — the
+    ///     interpreter's statement-site arm gated on liveness alone, which such
+    ///     an `if` passes, so it fired a body both compiled backends cannot.
+    ///     `compile_if`'s merge yields a placeholder with no `else`, so the
+    ///     value never reaches this site; row 3 pins the agreed silence that
+    ///     restores, and B-2026-08-29-30 owns making it fire on all three.
+    #[test]
+    fn e2e_discarded_literal_statement_and_no_else_if() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        let rows: [(&str, &str, &str); 3] = [
+            (
+                "R { id: 7 };\nprintln(\"end\");",
+                "dR7\nend\n",
+                "FIXED: bare struct-literal statement",
+            ),
+            (
+                "{ R { id: 7 } };\nprintln(\"end\");",
+                "dR7\nend\n",
+                "FIXED: block-wrapped struct literal, bare statement",
+            ),
+            (
+                "let n = 1;\nif n == 1 { R { id: 7 } };\nprintln(\"end\");",
+                "end\n",
+                "AGREED-SILENT (remainder): a no-`else` `if` hands this site no value",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(expected), "[{label}]");
+        }
+        // A place-moving tuple is the hazard the literal leg brings with it:
+        // the source's own cleanup is retracted so this walk is the single
+        // owner, which is a DOUBLED body if the retraction is missed. Both
+        // spellings must sit at exactly one.
+        for (body, label) in [
+            (
+                "let r = R { id: 1 };\n(r, 20);\nprintln(\"end\");",
+                "control: bare tuple statement moving a place element",
+            ),
+            (
+                "let r = R { id: 1 };\nlet _ = (r, 20);\nprintln(\"end\");",
+                "control: wildcard-let tuple moving a place element",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("dR1\nend\n"),
+                "[{label}]"
+            );
+        }
+    }
+
     #[test]
     fn e2e_owned_self_enum_receiver_single_fire() {
         let Some(out) = run_program(
