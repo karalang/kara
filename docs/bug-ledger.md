@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 224 | 3 |
+| leak | 226 | 4 |
 | run-vs-build | 217 | 6 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1194 | 9 |
+| codegen | 1196 | 10 |
 | typecheck | 278 | 0 |
 | interp | 230 | 3 |
 | other | 70 | 0 |
@@ -124,22 +124,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1759 surfaced · 10 open · 1723 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1761 surfaced · 11 open · 1724 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-28-67 | 2026-08-28 | interp+codegen | low | A `match` OVER A BARE USER ENUM RUNS THE PAYLOAD'S `Drop` BODY AND THE ENUM'S OWN IN OPPOSITE ORDERS ON THE TWO BACKENDS -- `match e { E.A(r) => .. }` is interp `dR5 dE` vs compiled `dE dR5`; same count, different sequence | — |
 | B-2026-08-28-69 | 2026-08-28 | interp+codegen | medium | A DISCARDED `match` WHOSE ARM YIELDS ITS BOUND PAYLOAD RUNS NO `Drop` BODY IN THE INTERPRETER while both compiled backends run exactly one -- `match o { Some(r) => { r } .. };` in statement position is interp `dropped` vs compiled `dR1 dropped`; a discarded CALL result and a read-only arm both run it, so the loss is specific to the arm handing the binding on | — |
 | B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
-| B-2026-08-28-74 | 2026-08-28 | codegen | medium | THREE REAL LEAKS THE DEFAULT LSan CONFIGURATION HIDES: a `shared` ENUM broken out of a `loop` (32 B x 3 fixtures, `pick`) and a tensor ref-return (72 B), reported only under `LSAN_OPTIONS=use_stacks=0` -- the fixtures assert cleanliness by name and pass today; the rest of the suite is clean, with -O2 showing ZERO real leaks across 1289 fixtures | — |
 | B-2026-08-29-2 | 2026-08-29 | codegen | medium | EVERY DOUBLY-NESTED `Option`/`Result` OVER A HEAP PAYLOAD LEAKS THAT PAYLOAD ON PLAIN SCOPE EXIT -- 18 shapes measured, and NONE of them needs the reassignment the row was filed for: `let vv: Option[Option[String]] = Some(Some(s));` and nothing else leaks 38 B, `Option[Option[Vec[i64]]]` 80 B, `Option[Result[Wide, i64]]` 94 B in 2; the envelope boxes are all freed and only the innermost payload's own heap is stranded, because a boxed `Option`/`Result` contents resolves NO interior drop (`inner_drop_fn` is keyed on a user struct/enum NAME) and the envelope-chain walk frees boxes only | — |
 | B-2026-08-29-3 | 2026-08-29 | codegen | medium | A GENERIC method that UNCONDITIONALLY returns its owned param still runs the param's `Drop` body TWICE on all three compiled backends against once in the interpreter -- the monomorph path does not reach the method-argument stand-down that B-2026-08-28-70 added | — |
 | B-2026-08-29-5 | 2026-08-29 | codegen | medium | A DISCARDED `match` / `if let` WHOSE ARM HANDS THE BOUND PAYLOAD OUT AS THE CONSTRUCT'S VALUE LEAKS IT -- `if let Some(s) = vv { s };` in statement position strands the whole 38 B buffer with NO reassignment anywhere in the program; binding the payload and USING it without handing it out is clean, so it is the hand-out-into-nothing that leaks, and it reproduces for `match`, for `if let`, and for a struct payload alike | — |
 | B-2026-08-29-8 | 2026-08-29 | codegen | medium | A MATCH ARM THAT REBINDS ITS PAYLOAD TO A LOCAL AND YIELDS IT AS THE ARM'S BLOCK TAIL RUNS THE `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `Box2.Full(r) => { let m = r; m }` is interp `dR1` vs compiled `dR1 dR1`, the extra fire at the ARM BLOCK's exit for a value that escapes; the `return` spelling of the same arm is correct, and value enums and `Option` carry it alike | — |
 | B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned `Option[T]` param has its payload bound out and NOT returned MISSES the payload's `Drop` body under codegen -- interp `drop 7 / v=7` vs compiled `v=7`; the VALUE-ENUM twin of the identical program is correct on both, and codegen's miss is PRE-EXISTING (277621a fixed the interpreter half of an agreed silence, which is what made this visible) | — |
 | B-2026-08-29-11 | 2026-08-29 | interp | medium | The interpreter's method frames SHARE one moved-out name space, so one method's legitimately-marked param suppresses an unrelated LATER method's identically-named param and loses its `Drop` body -- the accidental leak cannot simply be closed, because it is currently the ONLY thing suppressing a payload bound out of an owned enum param and returned (B-2026-08-29-9) | — |
+| B-2026-08-29-12 | 2026-08-29 | codegen | medium | A `Tensor` FIELD OF A STRUCT IS NEVER FREED -- 72 B per struct, with no ref return, no method and no read of the field anywhere; the parent row's "tensor ref-return" framing is wrong, and a one-line classifier arm would convert the leak into a DOUBLE FREE because there is no tensor deep-copy peer (measured: 9 allocs on a by-value pass vs a `Vec` field's 10) | — |
+| B-2026-08-29-13 | 2026-08-29 | codegen | medium | A `match` ARM THAT YIELDS A SHARED CHILD INTO A BINDING LEAKS THAT CHILD'S BOX -- `let keep = match t { Bin(l, r) => l };` over a recursive `shared enum` is 11 allocs / 10 frees, 32 B lost, IDENTICALLY for a bound and a fresh-temp scrutinee, so it is not a freshness bug; returning the child instead of binding it is clean | — |
 
 ### Relocated (2)
 
@@ -171,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1759 surfaced
 
 </details>
 
-### Fixed (1723)
+### Fixed (1724)
 
-<details><summary>1723 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1724 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1894,6 +1895,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1759 surfaced
 | B-2026-08-28-70 | interp+codegen | medium | A CONDITIONALLY-RETURNED owned param of a METHOD loses its `Drop` body IN THE INTERPRETER while all three compiled backends run it -- and the callee-… | 277621a |
 | B-2026-08-28-72 | codegen | medium | A `match` THAT IS A FUNCTION'S RETURNED VALUE RUNS THE YIELDED PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `fn take(o: Option[R]) -> R {… | 5746b82 |
 | B-2026-08-28-73 | codegen | high | REGRESSION from 77729f2 (NOT f862656, as first filed): A CONSUMING ARM THAT HANDS ITS BOUND BOXED ENUM PAYLOAD OUT AS THE MATCH'S VALUE DOUBLE-FREES… | 1caf601 |
+| B-2026-08-28-74 | codegen | medium | THREE REAL LEAKS THE DEFAULT LSan CONFIGURATION HIDES: a `shared` ENUM broken out of a `loop` (32 B x 3 fixtures, `pick`) and a tensor ref-return (72… | 0ba1f22 |
 | B-2026-08-28-75 | codegen | medium | REASSIGNING AN `Option`/`Result` BINDING WHOSE BOXED PAYLOAD ARRIVED BY A WHOLE-VALUE MOVE FROM ANOTHER BINDING ORPHANS THE PAYLOAD BOX ON EVERY STOR… | d5c4606 |
 | B-2026-08-29-1 | codegen | medium | A BARE `String` / `Vec` PAYLOAD INSIDE AN `Option` OR `Result` NEVER HAS ITS BUFFER FREED WHEN THE BINDING IS REASSIGNED -- `let mut vv: Option[Strin… | 98bddee |
 | B-2026-08-29-4 | codegen | high | A METHOD that hands an inline `Option`/`Result` argument back DOUBLE-FREES the payload on all three compiled backends (glibc abort, valgrind `Invalid… | 8d8d1b4 |
