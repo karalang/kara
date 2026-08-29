@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 224 | 3 |
 | run-vs-build | 213 | 5 |
 | missing-feature | 187 | 0 |
-| double-free | 153 | 1 |
+| double-free | 154 | 1 |
 | codegen-gap | 148 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1190 | 10 |
+| codegen | 1191 | 10 |
 | typecheck | 278 | 0 |
 | interp | 228 | 3 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1753 surfaced · 10 open · 1717 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1754 surfaced · 10 open · 1718 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -138,8 +138,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1753 surfaced
 | B-2026-08-28-74 | 2026-08-28 | codegen | medium | THREE REAL LEAKS THE DEFAULT LSan CONFIGURATION HIDES: a `shared` ENUM broken out of a `loop` (32 B x 3 fixtures, `pick`) and a tensor ref-return (72 B), reported only under `LSAN_OPTIONS=use_stacks=0` -- the fixtures assert cleanliness by name and pass today; the rest of the suite is clean, with -O2 showing ZERO real leaks across 1289 fixtures | — |
 | B-2026-08-29-2 | 2026-08-29 | codegen | low | A NESTED-BOX `Result[Option[Wide], i64]` LOSES ITS INNER `String` ON REASSIGNMENT -- 38 B per store, in BOTH the moved-in and the directly-initialized spelling, so the `nested_boxed_payload_vars` population frees its ENVELOPE but never walks the box's interior | — |
 | B-2026-08-29-3 | 2026-08-29 | codegen | medium | A GENERIC method that UNCONDITIONALLY returns its owned param still runs the param's `Drop` body TWICE on all three compiled backends against once in the interpreter -- the monomorph path does not reach the method-argument stand-down that B-2026-08-28-70 added | — |
-| B-2026-08-29-4 | 2026-08-29 | codegen | high | A METHOD taking an inline `Option[String]` BY VALUE and returning it DOUBLE-FREES the payload on all three compiled backends (glibc abort, valgrind `Invalid free()`), because the method argument loop asks `fn_returns_param` with a RECEIVER-INCLUSIVE index against an AST whose params EXCLUDE the receiver -- an off-by-one | — |
 | B-2026-08-29-5 | 2026-08-29 | codegen | medium | A DISCARDED `match` / `if let` WHOSE ARM HANDS THE BOUND PAYLOAD OUT AS THE CONSTRUCT'S VALUE LEAKS IT -- `if let Some(s) = vv { s };` in statement position strands the whole 38 B buffer with NO reassignment anywhere in the program; binding the payload and USING it without handing it out is clean, so it is the hand-out-into-nothing that leaks, and it reproduces for `match`, for `if let`, and for a struct payload alike | — |
+| B-2026-08-29-6 | 2026-08-29 | codegen | high | A passthrough call used DIRECTLY AS A MATCH SCRUTINEE (`match take(s) { .. }`, the result never bound) DOUBLE-FREES the inline `Option`/`Result` payload on all three compiled backends -- for a FREE FUNCTION as well as a method, so it is not the method-path gap B-2026-08-29-4 closed | — |
 
 ### Relocated (2)
 
@@ -171,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1753 surfaced
 
 </details>
 
-### Fixed (1717)
+### Fixed (1718)
 
-<details><summary>1717 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1718 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1894,6 +1894,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1753 surfaced
 | B-2026-08-28-73 | codegen | high | REGRESSION from 77729f2 (NOT f862656, as first filed): A CONSUMING ARM THAT HANDS ITS BOUND BOXED ENUM PAYLOAD OUT AS THE MATCH'S VALUE DOUBLE-FREES… | 1caf601 |
 | B-2026-08-28-75 | codegen | medium | REASSIGNING AN `Option`/`Result` BINDING WHOSE BOXED PAYLOAD ARRIVED BY A WHOLE-VALUE MOVE FROM ANOTHER BINDING ORPHANS THE PAYLOAD BOX ON EVERY STOR… | d5c4606 |
 | B-2026-08-29-1 | codegen | medium | A BARE `String` / `Vec` PAYLOAD INSIDE AN `Option` OR `Result` NEVER HAS ITS BUFFER FREED WHEN THE BINDING IS REASSIGNED -- `let mut vv: Option[Strin… | 98bddee |
+| B-2026-08-29-4 | codegen | high | A METHOD that hands an inline `Option`/`Result` argument back DOUBLE-FREES the payload on all three compiled backends (glibc abort, valgrind `Invalid… | 8d8d1b4 |
 
 </details>
 
