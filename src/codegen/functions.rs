@@ -2629,19 +2629,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // real argument). Both were verified by instrumentation rather
                 // than assumed, since two comments in `method_call.rs`
                 // disagreed about which convention that lookup follows.
-                // NON-GENERIC ONLY, alongside free-functions-only. A generic
-                // callee is compiled through `compile_mono_function`, which has
-                // its own param loop; registering there passed the body-count
-                // tests but printed a CORRUPTED name for a heap-carrying param
-                // — measured `drop dr` where `drop i1` was due, on all three
-                // compiled backends, for `fn genf[T](r: R, k: bool, t: T) -> R`
-                // with `struct R { id: i64, name: String }`. The mono param
-                // slot does not hold what this walker expects (the value
-                // appears to arrive indirectly there), so the bodies-only fn
-                // reads a pointer as a struct. Declining on BOTH backends
-                // keeps the four surfaces identical on today's behaviour
-                // rather than trading a missed body for garbage output;
-                // filed as B-2026-08-28-71.
+                // The `generic_params.is_none()` test is a no-op belt, not a
+                // policy: both top-level compile loops (`codegen.rs`, free fns
+                // and impl methods alike) skip a generic item, so this fn is
+                // never called with one. A generic callee is compiled through
+                // `compile_mono_function`, whose own param loop carries the
+                // matching registration since B-2026-08-28-71 — see that site
+                // for what the mono leg additionally needs (the flag isolation
+                // and the body-tail escaping site `compile_function` seeds
+                // above and the mono prologue did not).
+                //
+                // That row predicted the mono param slot holds a POINTER rather
+                // than the struct, and it is REFUTED: instrumentation there
+                // prints the struct by value, `{ i64, { ptr, i64, i64 } }`,
+                // exactly what this site sees. The `drop dr` garbage it measured
+                // was the unseeded escaping site letting the body fire on the
+                // path that RETURNED the value.
                 if func.generic_params.is_none()
                     && !self.is_coroutine_compiled(&func.name)
                     && crate::ast::fn_conditionally_returns_param_bare(func, i)

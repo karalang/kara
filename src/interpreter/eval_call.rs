@@ -2527,13 +2527,12 @@ impl<'a> super::Interpreter<'a> {
         }) else {
             return Vec::new();
         };
-        // Generics decline on both backends — see the codegen twin's comment
-        // (B-2026-08-28-71). Applying it here alone would fix the interpreter
-        // and leave codegen on the old behaviour, converting a shared bug into
-        // a run-vs-build divergence.
-        if f.generic_params.is_some() {
-            return Vec::new();
-        }
+        // Generics are claimed like any other shape since B-2026-08-28-71.
+        // They were excluded because codegen's mono leg could not hand the body
+        // to the callee, and fixing the interpreter alone would have converted a
+        // shared gap into a run-vs-build divergence. `compile_mono_function` now
+        // carries the same registration (and the escaping-site seeding the
+        // guard needs), so both backends admit the same set again.
         let mut out = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
             let Some(name) = p.name() else { continue };
@@ -2586,14 +2585,13 @@ impl<'a> super::Interpreter<'a> {
     /// today's behaviour on every backend rather than gaining a new
     /// interpreter-only fire. That is the same line the free-fn sibling draws.
     ///
-    /// Generics are claimed like any other shape EXCEPT the
-    /// conditionally-returned one, which codegen cannot hand to the callee
-    /// (B-2026-08-28-71) — see the gate's own comment.
+    /// Generics are claimed like any other shape, the conditionally-returned
+    /// one included since B-2026-08-28-71 gave codegen's mono leg the matching
+    /// registration.
     pub(crate) fn method_param_drop_names(&self, type_name: &str, method: &str) -> Vec<String> {
         let Some(f) = self.impl_method_ast(type_name, method) else {
             return Vec::new();
         };
-        let generic = f.generic_params.is_some();
         let mut out = Vec::new();
         // `f.params` is the RAW AST method, whose params EXCLUDE the receiver
         // (`self` lives in `self_param`), so `i` indexes the predicates
@@ -2623,18 +2621,13 @@ impl<'a> super::Interpreter<'a> {
             if crate::ast::fn_always_returns_param(f, i) {
                 continue;
             }
-            // A GENERIC method's conditionally-returned param is the one shape
-            // this frame must NOT claim. Codegen cannot hand it to the callee
-            // there — `compile_function`'s flip declines generics for
-            // B-2026-08-28-71's corrupted mono param slot — so its caller keeps
-            // firing; claiming it here would fix the interpreter alone and turn
-            // a shared gap into a run-vs-build divergence. Every OTHER generic
-            // shape is claimed exactly like a non-generic one, which is what
-            // brings `fn gm[T](ref self, r: R, t: T) -> i64 { 3 }` from zero
-            // bodies to one.
-            if generic && crate::ast::fn_conditionally_returns_param_bare(f, i) {
-                continue;
-            }
+            // A GENERIC method's conditionally-returned param used to be the
+            // one shape this frame could not claim: codegen's mono leg had no
+            // registration for it, so claiming here would have fixed the
+            // interpreter alone and turned a shared gap into a run-vs-build
+            // divergence. `compile_mono_function` carries it since
+            // B-2026-08-28-71, so the exclusion is gone and every generic shape
+            // is claimed exactly like a non-generic one.
             // Plain user-`Drop` structs only, the same narrowing the free-fn
             // sibling applies: a `shared` struct drops through the RC path and
             // never this drain, and the enum-payload channel is a different

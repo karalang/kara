@@ -7428,18 +7428,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         .as_deref()
                         .and_then(|p| super::declarations::find_function_ast(p, &qualified))
                         .is_some_and(|f| {
-                            // The always-returns leg needs no callee
-                            // cooperation — the result binding owns it — so it
-                            // holds for a GENERIC method too. The conditional
-                            // leg does: it hands ownership to the callee-side
-                            // flip, which `compile_function` declines for
-                            // generics (B-2026-08-28-71, the corrupted mono
-                            // param slot). Standing the caller down there would
-                            // leave nobody owning the body, so generics keep
-                            // today's always-fire on that leg alone.
+                            // Both legs hold for a GENERIC method too. The
+                            // always-returns leg never needed callee
+                            // cooperation — the result binding owns it. The
+                            // conditional leg hands ownership to the callee-side
+                            // flip, which used to exist only in
+                            // `compile_function` and so was withheld from
+                            // generics (B-2026-08-28-71); the mono param loop
+                            // carries it now, so standing down here leaves the
+                            // callee as the owner exactly as on the non-generic
+                            // path. Measured with this still gated on
+                            // `generic_params.is_none()` and the mono
+                            // registration in place: two bodies for one object
+                            // on all three compiled backends, against one in the
+                            // interpreter.
                             crate::ast::fn_always_returns_param(f, i)
-                                || (f.generic_params.is_none()
-                                    && crate::ast::fn_conditionally_returns_param_bare(f, i))
+                                || crate::ast::fn_conditionally_returns_param_bare(f, i)
                         });
                     let escapes_frame = handed_off
                         || self.call_arg_moves_into_outliving_place(&qualified, i, false);

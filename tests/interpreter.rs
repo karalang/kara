@@ -32808,19 +32808,47 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
              fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\") }\n",
             "99\ndrop 99\n",
         ),
-        // BOUNDARY — a GENERIC callee, declined on BOTH backends. A monomorph is
-        // compiled through `compile_mono_function`, which has its own param
-        // loop; registering there passed every body-count case but printed a
-        // CORRUPTED name for a heap-carrying param (`drop dr` where `drop i1`
-        // was due, all three compiled backends), because the mono param slot
-        // does not hold what the bodies-only walker expects. Declining on both
-        // keeps the four surfaces identical on today's behaviour instead of
-        // trading a missed body for garbage; filed as B-2026-08-28-71.
+        // A GENERIC callee, admitted since B-2026-08-28-71. Both backends had
+        // declined it: the monomorph is compiled through
+        // `compile_mono_function`, whose own param loop had no registration, and
+        // fixing this backend alone would have turned a shared gap into a
+        // run-vs-build divergence. Keep these four in step with the codegen twin
+        // verbatim — that is the whole point of the pairing.
         (
-            "generic-callee-declined",
+            "generic-callee-dying-path",
             "fn take[T](r: R, k: bool, t: T) -> R { if k { r } else { R { id: 99 } } }\n\
              fn main() { let x = take(R { id: 41 }, false, 7); println(f\"{x.id}\") }\n",
-            "99\ndrop 99\n",
+            "drop 41\n99\ndrop 99\n",
+        ),
+        // Control on this backend and pre-fix on both — the escaping path was
+        // already right here. It earns its place as the interpreter half of the
+        // codegen case that the intermediate, unseeded-escaping-site version of
+        // the fix broke.
+        (
+            "generic-callee-escaping-path",
+            "fn take[T](r: R, k: bool, t: T) -> R { if k { r } else { R { id: 99 } } }\n\
+             fn main() { let x = take(R { id: 41 }, true, 7); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The heap-carrying generic pair — the shape B-2026-08-28-71 was filed
+        // on. This backend was already free of the corruption the row measured
+        // (it resolves a generic by its declared name), so what these pin is the
+        // TARGET the compiled backends now meet.
+        (
+            "generic-heap-payload-dying-path",
+            "fn take[T](h: H, k: bool, t: T) -> H { if k { h } \
+             else { H { id: 99, name: f\"n99\" } } }\n\
+             fn main() { let x = take(H { id: 41, name: f\"n41\" }, false, 7); \
+             println(f\"{x.id}\") }\n",
+            "drop n41\n99\ndrop n99\n",
+        ),
+        (
+            "generic-heap-payload-escaping-path",
+            "fn take[T](h: H, k: bool, t: T) -> H { if k { h } \
+             else { H { id: 99, name: f\"n99\" } } }\n\
+             fn main() { let x = take(H { id: 41, name: f\"n41\" }, true, 7); \
+             println(f\"{x.id}\") }\n",
+            "41\ndrop n41\n",
         ),
         // BOUNDARY — the callee never returns the param, so the caller already
         // owned the drop and nothing changes.

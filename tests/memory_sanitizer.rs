@@ -61300,6 +61300,72 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-71 — the MEMORY half of the GENERIC leg of the same fix.
+    ///
+    /// The monomorph is compiled through `compile_mono_function`, which has its
+    /// own param loop, so a generic callee kept B-2026-08-28-22's original
+    /// defect (a MISSED body) until that loop gained the same registration. The
+    /// registration is BODIES-ONLY there for exactly the reason the non-generic
+    /// twin above states, and the mono adds one hazard of its own:
+    /// `make_aggregate_param_callee_owned_inst` gives a mono's owned aggregate
+    /// param an ENTRY DEEP-COPY, so callee and caller hold independent buffers
+    /// and a wrapper that freed fields here would be freeing the copy while the
+    /// body ran on it. Every struct carries a `String` so that any such
+    /// mismatch is a real double free rather than a silent no-op.
+    ///
+    /// Both directions of every branch, on all three callee shapes the mono
+    /// path can take: a generic free function (`gcond`), a generic function
+    /// whose branch is a `match` (`gmatch`, additionally instantiated at
+    /// `U = String` so the type argument itself is heap-carrying), and a
+    /// GENERIC METHOD (`T.pick`) — the one whose caller stands down through
+    /// `compile_generic_call` rather than `call_arg_flows_into_return`, since
+    /// that union scan is `Item::Function`-only and answers `false` for a
+    /// `Type.method` key.
+    ///
+    /// Param names are DISTINCT across the three callees (`ra`/`rb`/`rc`) for
+    /// the B-2026-08-29-11 reason the `return`-spelling fixture below records:
+    /// the interpreter shares one moved-out name space across frames, so a
+    /// reused name lets an earlier callee's move-out suppress a later one's
+    /// body. That is a different row's defect and naming around it keeps this
+    /// fixture measuring this one.
+    #[test]
+    fn asan_generic_conditionally_returned_param_bodies_are_memory_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T { n: i64 }
+impl T {
+    fn pick[U](ref self, ra: R, k: bool, u: U) -> R { if k { ra } else { R { id: 99, name: f"n99" } } }
+}
+fn gcond[U](rb: R, k: bool, u: U) -> R { if k { rb } else { R { id: 98, name: f"n98" } } }
+fn gmatch[U](rc: R, k: i64, u: U) -> R { match k { 1 => { rc } _ => { R { id: 97, name: f"n97" } } } }
+fn main() {
+    let base: i64 = env.args().len();
+    let a = gcond(R { id: base, name: f"a{base}" }, false, 7);
+    println(f"{a.id}");
+    let b = gcond(R { id: base, name: f"b{base}" }, true, 7);
+    println(f"{b.id}");
+    let c = gmatch(R { id: base, name: f"c{base}" }, 2, f"s");
+    println(f"{c.id}");
+    let d = gmatch(R { id: base, name: f"d{base}" }, 1, f"s");
+    println(f"{d.id}");
+    let t = T { n: 1 };
+    let e = t.pick(R { id: base, name: f"e{base}" }, false, 7);
+    println(f"{e.id}");
+    let g = t.pick(R { id: base, name: f"g{base}" }, true, 7);
+    println(f"{g.id}");
+    println("end");
+}
+"#,
+            &[
+                "drop a1", "98", "drop n98", "1", "drop b1", "drop c1", "97", "drop n97", "1",
+                "drop d1", "drop e1", "99", "drop n99", "1", "drop g1", "end",
+            ],
+            "generic-conditionally-returned-param-bodies",
+        );
+    }
+
     /// B-2026-08-29-14 — a METHOD that hands its owned param back with
     /// `return r;` rather than as a BLOCK TAIL is memory-balanced.
     ///

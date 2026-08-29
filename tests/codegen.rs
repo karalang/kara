@@ -13387,19 +13387,62 @@ fn main() {
                  fn main() { let x = take(R { id: 41 }, false); println(f\"{x.id}\"); }\n",
                 "99\ndrop 99\n",
             ),
-            // BOUNDARY — a GENERIC callee, declined on BOTH backends. A monomorph is
+            // A GENERIC callee, admitted since B-2026-08-28-71. A monomorph is
             // compiled through `compile_mono_function`, which has its own param
-            // loop; registering there passed every body-count case but printed a
-            // CORRUPTED name for a heap-carrying param (`drop dr` where `drop i1`
-            // was due, all three compiled backends), because the mono param slot
-            // does not hold what the bodies-only walker expects. Declining on both
-            // keeps the four surfaces identical on today's behaviour instead of
-            // trading a missed body for garbage; filed as B-2026-08-28-71.
+            // loop, so this shape kept the pre-B-2026-08-28-22 defect (a MISSED
+            // body) until that loop gained the same registration. The row filed
+            // for it blamed the mono param slot for holding a pointer rather than
+            // the struct; instrumentation refuted that — the slot is the struct by
+            // value, exactly as in `compile_function`. What the mono prologue
+            // actually lacked was B-2026-08-28-51's flag isolation and the
+            // body-TAIL escaping site (`compile_function` seeds it per function;
+            // `let` initializers and `return` operands are seeded per statement in
+            // shared code). Without the seeding the guard never cleared, so the
+            // body ALSO fired on the path that returned the value — which is what
+            // the row measured as a corrupted name.
             (
-                "generic-callee-declined",
+                "generic-callee-dying-path",
                 "fn take[T](r: R, k: bool, t: T) -> R { if k { r } else { R { id: 99 } } }\n\
                  fn main() { let x = take(R { id: 41 }, false, 7); println(f\"{x.id}\"); }\n",
-                "99\ndrop 99\n",
+                "drop 41\n99\ndrop 99\n",
+            ),
+            // The ESCAPING half of the same generic callee. A CONTROL against the
+            // pre-fix compiler — it already printed this — and the case that
+            // fails against the INTERMEDIATE version of the fix: with the mono
+            // registration in place but the escaping site unseeded, the guard
+            // never cleared and this ran the body a second time inside the
+            // callee (measured `drop ` / `1` / `drop i1` on all three compiled
+            // backends). Both halves of a branch, as the family requires.
+            (
+                "generic-callee-escaping-path",
+                "fn take[T](r: R, k: bool, t: T) -> R { if k { r } else { R { id: 99 } } }\n\
+                 fn main() { let x = take(R { id: 41 }, true, 7); println(f\"{x.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            // The generic twin of `heap-payload-not-moved`, and THE case
+            // B-2026-08-28-71 was filed on: a `String` field is what made the
+            // unguarded second body visible (it printed `drop dr` — the format
+            // literal's own bytes — where `drop n41` was due). An `i64`-only
+            // payload prints a plausible number instead, which is why the first
+            // pass of probes missed it. `asan_generic_conditionally_returned_-
+            // param_bodies_are_memory_balanced` pins the memory side.
+            (
+                "generic-heap-payload-dying-path",
+                "fn take[T](h: H, k: bool, t: T) -> H { if k { h } \
+                 else { H { id: 99, name: f\"n99\" } } }\n\
+                 fn main() { let x = take(H { id: 41, name: f\"n41\" }, false, 7); \
+                 println(f\"{x.id}\"); }\n",
+                "drop n41\n99\ndrop n99\n",
+            ),
+            // Control, like `generic-callee-escaping-path`: correct pre-fix, and
+            // the case the unseeded-escaping-site version got wrong.
+            (
+                "generic-heap-payload-escaping-path",
+                "fn take[T](h: H, k: bool, t: T) -> H { if k { h } \
+                 else { H { id: 99, name: f\"n99\" } } }\n\
+                 fn main() { let x = take(H { id: 41, name: f\"n41\" }, true, 7); \
+                 println(f\"{x.id}\"); }\n",
+                "41\ndrop n41\n",
             ),
             // BOUNDARY — the callee never returns the param, so the caller already
             // owned the drop and nothing changes.

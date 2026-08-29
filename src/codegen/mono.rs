@@ -2105,12 +2105,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // for both the non-generic and free-function twins.
             //
             // The same two predicates the non-generic method-argument site asks
-            // (`method_call.rs`), with the same split: `fn_always_returns_param`
-            // needs no callee cooperation, so it holds for a generic callee too,
-            // while the conditional leg hands ownership to a callee-side flip
-            // that `compile_mono_function` declines for generics
-            // (B-2026-08-28-71) — standing down on that leg would leave nobody
-            // owning the body.
+            // (`method_call.rs`). Both legs hold for a generic callee since
+            // B-2026-08-28-71: `fn_always_returns_param` never needed callee
+            // cooperation, and the conditional leg's callee-side flip now exists
+            // in `compile_mono_function` too. THIS is the site that decides the
+            // generic METHOD case — a generic FREE function stands down one line
+            // below through `call_arg_flows_into_return`'s union, which is
+            // `Item::Function`-only and so answers `false` for a `Type.method`
+            // key. Measured with this leg still gated on `generic_params
+            // .is_none()` and every other half of that row's fix in place:
+            // `impl T { fn pick[U](ref self, r: R, k: bool, u: U) -> R }` ran
+            // R's body TWICE on all three compiled backends, against once in the
+            // interpreter, while the free-function twin was already correct.
             //
             // THE INDEX HERE IS RECEIVER-INCLUSIVE, the opposite of the sibling
             // site: this loop's `args` carry the receiver, so a two-parameter
@@ -2133,8 +2139,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         i
                     };
                     crate::ast::fn_always_returns_param(f, ast_i)
-                        || (f.generic_params.is_none()
-                            && crate::ast::fn_conditionally_returns_param_bare(f, ast_i))
+                        || crate::ast::fn_conditionally_returns_param_bare(f, ast_i)
                 });
             let flows_into_return = self.call_arg_flows_into_return(name, i) || handed_off;
             // B-2026-08-26-9 — the monomorphized leg of the same union the
@@ -2297,6 +2302,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_entry_slot_ref_vars =
                 std::mem::take(&mut self.borrow_vars.entry_slot_ref_vars);
             let saved_soa_return_locals = std::mem::take(&mut self.accel.soa_return_locals);
+            // B-2026-08-28-71 — the mono's conditional-move flags are allocas in
+            // the mono's own function, so they must not be visible to (or
+            // survive into) the enclosing body. Mirrors `saved_cleanup`.
+            let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -2317,6 +2326,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_state_machine_helpers_for_mono(name, &mangled);
 
             // Restore state.
+            self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
             self.accel.soa_return_locals = saved_soa_return_locals;
             self.var_types.binding_layouts = saved_binding_layouts;
             self.borrow_vars.ref_params = saved_ref_params;
@@ -2970,11 +2980,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // it from this mono's body. Save/restore so it can't leak across the
         // nested compile (mirrors `binding_layouts`).
         let saved_soa_return_locals = std::mem::take(&mut self.accel.soa_return_locals);
+        // B-2026-08-28-71 — see the twin in `compile_generic_call`.
+        let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
 
         let result = self
             .declare_mono_function(func, mangled)
             .and_then(|_| self.compile_mono_function(func, mangled));
 
+        self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
         self.accel.soa_return_locals = saved_soa_return_locals;
         self.var_types.binding_layouts = saved_binding_layouts;
         self.borrow_vars.ref_params = saved_ref_params;
@@ -3158,6 +3171,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // dominate all uses").
         self.drop_rc.scope_cleanup_actions.clear();
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
+        // B-2026-08-28-71 — the two halves of B-2026-08-28-51's per-path
+        // conditional-move machinery that `compile_function` sets up and this
+        // prologue omitted. Both are needed before a mono body can own a
+        // conditionally-returned param's `Drop` body (the param-loop
+        // registration below).
+        //
+        //  * The FLAGS are ALLOCAS, so they are function-scoped exactly as the
+        //    `compile_function` comment says. A mono is compiled NESTED inside
+        //    its caller's body, so without this the mono's guard would load the
+        //    CALLER's stack slot for a same-named binding. Both call sites
+        //    (`compile_generic_call`, the layout-mono path) save and restore the
+        //    caller's map around the nested compile, mirroring
+        //    `scope_cleanup_actions`.
+        //  * The BODY TAIL is the first of the three escaping sites, and the
+        //    only one seeded per FUNCTION rather than per statement (`let`
+        //    initializers and `return` operands are seeded in `compile_stmt`,
+        //    which a mono body shares). A generic function's body is never
+        //    compiled by `compile_function`, so nothing had ever seeded it —
+        //    `arm_conditional_move_tail_flag` then early-returns on the
+        //    returning arm and the guard never clears. Measured, with the
+        //    param registration in place but this line absent: the escaping
+        //    call `genf(R { id: 1, name: f"i1" }, true, 7)` ran the body TWICE,
+        //    once inside the callee on the path that returned the value.
+        //    `cond_move_escaping_sites` is span-keyed and shared across
+        //    monomorphizations, so re-seeding per mono is idempotent.
+        self.drop_rc.cond_move_drop_flags.clear();
+        if let Some(tail) = func.body.final_expr.as_deref() {
+            self.note_escaping_site(tail);
+        }
         // Slice 10: reseed module-binding side-tables in monomorphised
         // bodies too (same reason as the `compile_function` path —
         // `var_type_names` is cleared per function).
@@ -3478,6 +3520,59 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.closure_state
                     .closure_fn_types
                     .insert(param_name.clone(), fn_type);
+            }
+            // B-2026-08-28-22's conditionally-returned owned param, MONO leg
+            // (B-2026-08-28-71). `compile_function`'s sibling registration
+            // never runs for a mono body — mono has its own param loop — so a
+            // GENERIC callee kept that row's original defect: the caller stands
+            // down over the UNION of return sites while only one path returns
+            // the value, and whichever value died inside the call lost its user
+            // `Drop` body. Measured before this: `genf(R { id: 1, name: f"i1" },
+            // false, 7)` printed `96` / `drop n96` with `drop i1` missing.
+            //
+            // Every safety property is the non-generic site's, unchanged —
+            // BODIES ONLY (the caller still owns the memory, so the binding's
+            // own wrapper would double-free a heap field) and GUARDED PER PATH
+            // by the flag whose two missing halves the prologue above now sets
+            // up. See `compile_function` for the full argument.
+            //
+            // The row this closes predicted the mono param slot holds a POINTER
+            // rather than the struct, and that is REFUTED: instrumentation at
+            // this site prints `param_val_ty = { i64, { ptr, i64, i64 } }` — the
+            // struct by value, the same shape `compile_function` sees — with the
+            // alloca an ordinary opaque `ptr`. The corruption the row measured
+            // came from the unseeded escaping site, not from the slot.
+            if !self.is_coroutine_compiled(&func.name)
+                && crate::ast::fn_conditionally_returns_param_bare(func, i)
+                && !crate::ast::fn_moves_param_into_outliving_place(func, i)
+            {
+                if let TypeKind::Path(path) = &param.ty.kind {
+                    if let Some(struct_name) = path.segments.first() {
+                        let has_user_drop = self
+                            .program_snapshot
+                            .as_deref()
+                            .map(|p| p.drop_method_keys.contains_key(struct_name))
+                            .unwrap_or(false);
+                        if has_user_drop
+                            && !self
+                                .type_decls
+                                .shared_types
+                                .contains_key(struct_name.as_str())
+                        {
+                            if let Some(bodies) =
+                                self.emit_struct_user_drop_bodies_only_fn(struct_name)
+                            {
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    &param_name,
+                                    alloca,
+                                    bodies,
+                                    crate::codegen::state::UserDropKind::StructFieldBodies,
+                                );
+                            }
+                        }
+                    }
+                }
             }
             self.variables.insert(
                 param_name,
