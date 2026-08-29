@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 311 | 0 |
-| run-vs-build | 240 | 13 |
+| miscompile | 313 | 2 |
+| run-vs-build | 240 | 12 |
 | leak | 231 | 4 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1225 | 15 |
+| codegen | 1227 | 16 |
 | typecheck | 278 | 0 |
-| interp | 250 | 11 |
+| interp | 253 | 13 |
 | other | 70 | 0 |
 | ownership | 66 | 1 |
 | cli | 64 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1795 surfaced · 18 open · 1750 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1797 surfaced · 19 open · 1751 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (18)
+### Open (19)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned `Option[T]` param has its payload bound out and NOT returned MISSES the payload's `Drop` body under CODEGEN -- interp `drop 7`/`v=7` vs compiled `v=7`. The USER-ENUM half of this row is FIXED (a method frame's owned-param scrutinee is now consuming); what remains is codegen arming the payload-bodies walk only for a tracked VALUE enum, so an `Option` argument never gets one | — |
 | B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | A NAMED struct binding passed by value to a function that returns it runs the `Drop` body TWICE on all four surfaces -- for a FREE FUNCTION as well as a method, and for a block tail as well as `return r;`. NOTE: the row's free-function oracle and its `return`-vs-tail framing are both REFUTED, and the second body tracks a second real allocation (the callee's entry copy), so 'one body is due' is a design question rather than a measured defect -- see the CORRECTION | — |
 | B-2026-08-29-27 | 2026-08-29 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL MINTS A FRESH OWNED TEMP LEAKS IT WHEN THE CONSUMER IS A METHOD RECEIVER OR A CALL ARGUMENT -- `if c { mk(n) } else { mk(n+1) }.contains("x")` strands 36 B, and so do the `match` spelling, a BARE BLOCK `{ mk(n) }.contains("x")` with no branch in it at all, and `use_it(if c { mk(n) } else { mk(n+1) })`; the same call unwrapped is clean, so it is the block/arm hand-out into a non-registering consumer that leaks | — |
 | B-2026-08-29-28 | 2026-08-29 | interp+codegen | low | A FRESH-TEMP ENUM SCRUTINEE'S OWN `Drop` BODY RUNS AT THE MATCH ON THE INTERPRETER AND AT THE END OF THE ENCLOSING SCOPE ON BOTH COMPILED BACKENDS -- `match mk() { E.A(r) => .. }` is interp `v7 dR7 dE s1 s2 s3` vs compiled `v7 dR7 s1 s2 s3 dE`; same count, different place | — |
@@ -148,6 +147,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1795 surfaced
 | B-2026-08-29-45 | 2026-08-29 | interp+codegen | medium | A BINDING MOVED INTO A `Vec` LITERAL RUNS ITS `Drop` BODY TWICE -- both `let v = [r]` (param) and `let m = R { .. }; let v = [m]` (plain local) print two bodies where one is due, while `let v = [R { .. }]` with a FRESH element is correct; the element walk arms without the source's ownership being taken over | none |
 | B-2026-08-29-46 | 2026-08-29 | interp+codegen | medium | TWO OWNED PARAMS' `Drop` BODIES RUN IN OPPOSITE ORDER ON THE TWO BACKENDS -- `fn take(r: R, q: R) -> i64 { 7 }` called with two fresh temps prints `dR1 dR2` under `--interp` and `dR2 dR1` under JIT and AOT; the COUNT is right on both, so only an output-order comparison sees it | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
+| B-2026-08-29-48 | 2026-08-29 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B gate sees it. The direct `return r` spelling of the same method is correct at one | — |
+| B-2026-08-29-49 | 2026-08-29 | interp+codegen | medium | A METHOD arm that moves an owned enum param's payload into a `mut ref` param runs the payload's `Drop` body ONE TIME TOO MANY -- unanimous on all four surfaces, so A/B-invisible | — |
 
 ### Relocated (2)
 
@@ -179,9 +180,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1795 surfaced
 
 </details>
 
-### Fixed (1750)
+### Fixed (1751)
 
-<details><summary>1750 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1751 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1916,6 +1917,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1795 surfaced
 | B-2026-08-29-7 | codegen | high | An `Option` MATCH ARM THAT REBINDS ITS HEAP PAYLOAD TO A LOCAL AND RETURNS IT IS A DOUBLE FREE ON BOTH COMPILED BACKENDS -- `match b { Some(r) => { l… | 905d73f |
 | B-2026-08-29-8 | codegen | medium | A MATCH ARM THAT REBINDS ITS PAYLOAD TO A LOCAL AND YIELDS IT AS THE ARM'S BLOCK TAIL RUNS THE `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `Box2.F… | 077a6bd |
 | B-2026-08-29-9 | interp | high | REGRESSION (277621a): A METHOD that RETURNS a payload bound out of its owned enum / `Option` param now runs that payload's `Drop` BODY TWICE IN THE I… | 1167db7 |
+| B-2026-08-29-10 | interp+codegen | medium | A METHOD whose owned `Option[T]` param has its payload bound out and NOT returned MISSES the payload's `Drop` body under CODEGEN -- interp `drop 7`/`… | 28ab271 |
 | B-2026-08-29-11 | interp | medium | The interpreter's method frames SHARE one moved-out name space, so one method's legitimately-marked param suppresses an unrelated LATER method's iden… | b04cf10 |
 | B-2026-08-29-12 | codegen | medium | A `Tensor` FIELD OF A STRUCT IS NEVER FREED -- 72 B per struct, with no ref return, no method and no read of the field anywhere; the parent row's "te… | 4b0a560 |
 | B-2026-08-29-13 | codegen | medium | A `match` ARM THAT YIELDS A SHARED CHILD INTO A BINDING LEAKS THAT CHILD'S BOX -- `let keep = match t { Bin(l, r) => l };` over a recursive `shared e… | 9e337a9 |
