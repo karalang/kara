@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 231 | 4 |
-| run-vs-build | 230 | 7 |
+| run-vs-build | 230 | 6 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
-| codegen-gap | 148 | 0 |
+| codegen-gap | 149 | 1 |
 | diagnostics | 111 | 0 |
 | false-positive | 99 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1214 | 10 |
+| codegen | 1215 | 10 |
 | typecheck | 278 | 0 |
 | interp | 243 | 7 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1781 surfaced · 11 open · 1743 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1782 surfaced · 11 open · 1744 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -133,7 +133,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1781 surfaced
 | B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned `Option[T]` param has its payload bound out and NOT returned MISSES the payload's `Drop` body under CODEGEN -- interp `drop 7`/`v=7` vs compiled `v=7`. The USER-ENUM half of this row is FIXED (a method frame's owned-param scrutinee is now consuming); what remains is codegen arming the payload-bodies walk only for a tracked VALUE enum, so an `Option` argument never gets one | — |
 | B-2026-08-29-11 | 2026-08-29 | interp | medium | The interpreter's method frames SHARE one moved-out name space, so one method's legitimately-marked param suppresses an unrelated LATER method's identically-named param and loses its `Drop` body -- the accidental leak cannot simply be closed, because it is currently the ONLY thing suppressing a payload bound out of an owned enum param and returned (B-2026-08-29-9) | — |
 | B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | A NAMED struct binding passed by value to a function that returns it runs the `Drop` body TWICE on all four surfaces -- for a FREE FUNCTION as well as a method, and for a block tail as well as `return r;`. NOTE: the row's free-function oracle and its `return`-vs-tail framing are both REFUTED, and the second body tracks a second real allocation (the callee's entry copy), so 'one body is due' is a design question rather than a measured defect -- see the CORRECTION | — |
-| B-2026-08-29-23 | 2026-08-29 | codegen | medium | A `bf16` COMPARISON ABORTS THE LLJIT ON arm64 -- `LLVM ERROR: Cannot select: setcc ... setoeq` in `karac_eq_bf16`, exit 134 with NO program output -- while the SAME source compiled AOT prints the right six lines and exits 0. A run-vs-build split on the half-precision comparator. | — |
 | B-2026-08-29-24 | 2026-08-29 | interp+codegen | medium | A param VIEW wrapped into a MIXED-payload enum, or into a STRUCT / TUPLE / VEC / `Some`, still runs its `Drop` body TWICE -- `let w = W2.Two(r, R { id: 2 })` prints `dR1 dR2 dR1` where `dR1 dR2` is due, and `let s = S { r: r }` prints `dR1 dR1`; B-2026-08-29-19 fixed only the SINGLE-payload enum wrap, because the shared walker cannot be withheld per slot and `Option`'s generic payload has no walker at all | — |
 | B-2026-08-29-27 | 2026-08-29 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL MINTS A FRESH OWNED TEMP LEAKS IT WHEN THE CONSUMER IS A METHOD RECEIVER OR A CALL ARGUMENT -- `if c { mk(n) } else { mk(n+1) }.contains("x")` strands 36 B, and so do the `match` spelling, a BARE BLOCK `{ mk(n) }.contains("x")` with no branch in it at all, and `use_it(if c { mk(n) } else { mk(n+1) })`; the same call unwrapped is clean, so it is the block/arm hand-out into a non-registering consumer that leaks | — |
 | B-2026-08-29-28 | 2026-08-29 | interp+codegen | low | A FRESH-TEMP ENUM SCRUTINEE'S OWN `Drop` BODY RUNS AT THE MATCH ON THE INTERPRETER AND AT THE END OF THE ENCLOSING SCOPE ON BOTH COMPILED BACKENDS -- `match mk() { E.A(r) => .. }` is interp `v7 dR7 dE s1 s2 s3` vs compiled `v7 dR7 s1 s2 s3 dE`; same count, different place | — |
@@ -141,6 +140,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1781 surfaced
 | B-2026-08-29-31 | 2026-08-29 | interp+codegen | medium | THE `let _ =` SPELLING OF A DISCARDED BRANCH STILL STRANDS WHATEVER ITS ARM HANDS OUT -- B-2026-08-29-5 fixed the BARE-STATEMENT form, and the wildcard-let form of the same `if` / `match` leaks 9 B (enclosing local) or 3 B (bound payload) at KARAC_OPT_LEVEL=0 and runs NO `Drop` body on any backend; one row of the population is additionally a live run-vs-build divergence | — |
 | B-2026-08-29-32 | 2026-08-29 | codegen | medium | A DISCARDED BRANCH OR MATCH WHOSE ARMS ARE LITERALS OF A STRUCT WITH HEAP FIELDS BUT NO `impl Drop` LEAKS THEM -- `if c { P { a: payload(), b: 1 } } else { .. };` and `let _ = match .. { P { a: payload() } .. }` each strand 38 B, because the discard battery answers the BODIES question correctly (there is no body) and then returns before the memory one is ever asked | — |
 | B-2026-08-29-33 | 2026-08-29 | interp+codegen | medium | A MATERIALIZING ARM OVER A PROJECTION-PLACE ENUM SCRUTINEE RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY BACKEND -- `match s.e { E.A(r) => { let m = r; .. } }` is interp `m8 dR8 dE dR8` vs compiled `m8 dR8 dE dR0`, where the identifier spelling gives `m8 dR8 dE` | — |
+| B-2026-08-29-34 | 2026-08-29 | codegen | medium | A `Vector[bf16, N]` LANE OP ABORTS ISel ON arm64 AND wasm32 -- the vector legalizer SCALARIZES `<4 x bfloat> fadd` back into the unselectable scalar `bf16 fadd`, so the SIMD path keeps the disease B-2026-08-29-23 fixed for scalars. Non-monotonic: a one-op probe selects, a three-op one does not. | — |
 
 ### Relocated (2)
 
@@ -172,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1781 surfaced
 
 </details>
 
-### Fixed (1743)
+### Fixed (1744)
 
-<details><summary>1743 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1744 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1919,6 +1919,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1781 surfaced
 | B-2026-08-29-20 | interp+codegen | medium | THE `let _ = match …` SPELLING OF A DISCARDED MATCH RUNS NO `Drop` BODY IN THREE CELLS while its call twin (`let _ = mk();`) is correct on both backe… | e88b7bf |
 | B-2026-08-29-21 | codegen | medium | A NON-GENERIC method whose owned param is returned CONDITIONALLY, with BOTH exits spelled as `return` statements, runs the param's `Drop` body TWICE… | 64e3e90 |
 | B-2026-08-29-22 | runtime | high | EVERY COMPILED macOS BINARY THAT RECORDS AN ERROR-RETURN-TRACE FRAME ABORTS AT EXIT -- SIGABRT / exit 134 and a raw Rust panic (`use of std::thread::… | 7a8107c2 |
+| B-2026-08-29-23 | codegen | medium | EVERY SCALAR `bf16` OPERATION ABORTED ISel ON arm64 AND wasm32 -- `LLVM ERROR: Cannot select`, exit 134, no program output | 7ba9c46 |
 | B-2026-08-29-25 | interp+codegen | medium | A DISCARDED `if` RUNS NO `Drop` BODY IN EITHER STATEMENT FORM -- `if c { R { . | fd4e80f |
 | B-2026-08-29-29 | interp+codegen | medium | A PROJECTION-PLACE ENUM SCRUTINEE RUNS ITS PAYLOAD'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS, THE SECOND TIME ON THE ZEROED SLOT -- `match s.e {… | af86dfd |
 
