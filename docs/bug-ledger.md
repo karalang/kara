@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 317 | 5 |
+| miscompile | 317 | 4 |
 | run-vs-build | 245 | 13 |
 | leak | 232 | 5 |
 | missing-feature | 187 | 0 |
@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 149 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 100 | 0 |
-| perf | 85 | 1 |
+| perf | 86 | 2 |
 | soundness | 80 | 0 |
 | other | 64 | 1 |
 | crash | 61 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1237 | 23 |
+| codegen | 1238 | 23 |
 | typecheck | 278 | 0 |
-| interp | 257 | 12 |
+| interp | 257 | 11 |
 | other | 70 | 0 |
 | ownership | 66 | 0 |
 | cli | 65 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1810 surfaced · 26 open · 1757 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1811 surfaced · 26 open · 1758 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (26)
 
@@ -143,7 +143,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1810 surfaced
 | B-2026-08-29-45 | 2026-08-29 | interp+codegen | medium | A BINDING MOVED INTO A `Vec` LITERAL RUNS ITS `Drop` BODY TWICE -- both `let v = [r]` (param) and `let m = R { .. }; let v = [m]` (plain local) print two bodies where one is due, while `let v = [R { .. }]` with a FRESH element is correct; the element walk arms without the source's ownership being taken over | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
 | B-2026-08-29-49 | 2026-08-29 | interp+codegen | medium | A METHOD arm that moves an owned enum param's payload into a `mut ref` param runs the payload's `Drop` body ONE TIME TOO MANY -- unanimous on all four surfaces, so A/B-invisible | — |
-| B-2026-08-29-50 | 2026-08-29 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run the user `Drop` body TWICE for one object -- the two shapes B-2026-08-29-15's bare hand-back fix deliberately declined. Both AGREE across interp/JIT/AOT, so no A/B gate can see either | — |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
 | B-2026-08-29-52 | 2026-08-29 | codegen | high | Printing a `Vector[T, N]` gives THREE DIFFERENT ANSWERS -- the interpreter renders the lanes, the JIT prints a raw POINTER (the same one for two different vectors), and AOT prints one stray lane. `karac check` accepts it with no diagnostic. | — |
 | B-2026-08-29-53 | 2026-08-29 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range. The SCALAR `x.tanh()` on the same value in the SAME binary returns the correct 1. | — |
@@ -156,6 +155,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1810 surfaced
 | B-2026-08-29-60 | 2026-08-29 | interp+codegen | low | `asinh` / `acosh` / `atanh` at f32 match the interpreter under NEITHER width rule -- Rust std implements the inverse hyperbolics as formulas rather than libm calls, so its f32 impl, its f64 impl and the `asinhf` codegen calls are three different algorithms and no interpreter-side choice reproduces the third. | — |
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
+| B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 
 ### Relocated (2)
 
@@ -187,9 +187,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1810 surfaced
 
 </details>
 
-### Fixed (1757)
+### Fixed (1758)
 
-<details><summary>1757 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1758 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1950,6 +1950,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1810 surfaced
 | B-2026-08-29-41 | interp | low | The INTERPRETER computes `to_degrees` / `to_radians` / `cosh` at f64 and returns an f64-precision value whatever the receiver's width, so all three d… | 7c552c7 |
 | B-2026-08-29-46 | interp+codegen | medium | TWO OWNED PARAMS' `Drop` BODIES RUN IN OPPOSITE ORDER ON THE TWO BACKENDS -- `fn take(r: R, q: R) -> i64 { 7 }` called with two fresh temps prints `d… | 33f8781 |
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
+| B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
 
 </details>
 
