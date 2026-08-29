@@ -2211,22 +2211,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(var_name) = &a.value.kind {
                     let var_name = var_name.clone();
                     self.suppress_container_elem_bodies_for_var(&var_name);
-                    // B-2026-08-29-15 — and the binding's OWN wrapper too, but
-                    // ONLY where the callee hands this argument back as itself.
-                    // The paragraph above reasons that an own-`Drop` struct
-                    // param is entry-copied so "two entry-copied values
-                    // genuinely exist"; measurement refutes that — with a
-                    // 256-element `Vec[i64]` field the named and fresh-temp
-                    // spellings allocate `11 allocs, 11 frees, 10,269 bytes`
-                    // alike, byte-for-byte. One object ran two bodies, on all
-                    // four surfaces, so no A/B gate could see it.
+                    // B-2026-08-29-15 / -50 — and the binding's OWN body too,
+                    // wherever some other frame is guaranteed to run it.
                     //
-                    // The 3-byte leak that paragraph measured is real and is
-                    // what the STRICT predicate preserves: `fn mk(r: Res) -> Bx
-                    // { Bx { r: r } }` moves the param into a NEW owner, so the
-                    // caller is still the only owner of the original and keeps
-                    // its wrapper.
-                    if self.callee_always_returns_arg_bare(&name, i) {
+                    // The paragraph above concludes from the entry copy that
+                    // "the own-wrapper case keeping two bodies is consistent
+                    // with its two frees". The COPY is real — measured with a
+                    // 256-element `Vec[i64]` field, any by-value call adds
+                    // exactly one 2,048-byte allocation over the same program
+                    // with no call at all (10 allocs / 8,218 bytes → 11 /
+                    // 10,266), whether the callee returns the param, wraps it,
+                    // or just reads a field and drops it. What does NOT follow
+                    // is the second body. The FRESH-TEMP spelling entry-copies
+                    // identically and has always run ONE body, and nobody has
+                    // ever called that wrong — so the copy is a lowering
+                    // artifact of a move, not a second user-visible object for
+                    // `Drop` to observe. Correcting the inference, not the
+                    // measurement.
+                    //
+                    // The 3-byte leak that paragraph records is also real, and
+                    // is why this retracts the BODY while leaving the memory:
+                    // the caller's slot owns that copy's buffer and is the only
+                    // thing that will ever free it.
+                    if self.callee_takes_over_arg_drop_body(&name, i) {
                         self.suppress_user_drop_body_keeping_memory(&var_name);
                     }
                 }
@@ -3075,22 +3082,35 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
-    /// B-2026-08-29-15 — does the callee hand argument `arg_index` back AS
-    /// ITSELF on every exit?
+    /// B-2026-08-29-15, widened by B-2026-08-29-50 — is SOME OTHER FRAME
+    /// guaranteed to run argument `arg_index`'s user `Drop` body on EVERY path
+    /// out of the callee?
     ///
-    /// The gate for retracting the caller's own `karac_drop_<T>` wrapper, which
-    /// is a strictly stronger act than the container-element retraction it sits
-    /// beside: that wrapper is body + fields + MEMORY, so retracting it where
-    /// the caller is still the only owner orphans a buffer. Only a BARE
-    /// hand-back makes the result binding an equivalent owner — see
-    /// [`crate::ast::fn_always_returns_param_bare`], which carries the
-    /// measurement in both directions.
+    /// The gate for standing the caller's own `karac_drop_<T>` action down, and
+    /// two predicates answer it:
+    ///
+    ///  * [`crate::ast::fn_always_returns_param`] — every exit hands the
+    ///    argument back, so the caller's RESULT BINDING owns it. Bare or
+    ///    wrapped in a returned aggregate alike: the aggregate was excluded
+    ///    while the stand-down RETRACTED the wrapper (body + fields + memory),
+    ///    which orphaned the caller's buffer, but it now DOWNGRADES to
+    ///    field-cleanup-only and the free survives.
+    ///  * [`crate::ast::fn_conditionally_returns_param_bare`] — some exits hand
+    ///    it back and the rest let it die inside, where the CALLEE FRAME owns
+    ///    it (`compile_function`'s registration, gated on the same predicate).
+    ///    Standing the caller down on exactly this set is what keeps the
+    ///    dies-inside path from LOSING its body, the regression
+    ///    B-2026-08-28-22 measured for an unconditional stand-down.
+    ///
+    /// What is deliberately NOT in the union is an argument that merely escapes
+    /// somewhere — into `self`, into a `ref` param. There the caller's binding
+    /// is still an owner and must keep firing.
     ///
     /// Resolves through [`super::declarations::find_function_ast`] rather than
     /// the free-function scan its sibling uses, so the same helper answers for
     /// the method arg loop. That lookup returns a `Function` whose `params`
     /// EXCLUDE the receiver, so both call sites pass the non-self index.
-    pub(super) fn callee_always_returns_arg_bare(
+    pub(super) fn callee_takes_over_arg_drop_body(
         &self,
         callee_name: &str,
         arg_index: usize,
@@ -3098,7 +3118,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.program_snapshot
             .as_deref()
             .and_then(|p| super::declarations::find_function_ast(p, callee_name))
-            .is_some_and(|f| crate::ast::fn_always_returns_param_bare(f, arg_index))
+            .is_some_and(|f| {
+                crate::ast::fn_always_returns_param(f, arg_index)
+                    || crate::ast::fn_conditionally_returns_param_bare(f, arg_index)
+            })
     }
 
     /// B-2026-08-26-9 — the ESCAPE-THROUGH-A-BORROW sibling of

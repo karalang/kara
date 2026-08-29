@@ -3409,11 +3409,14 @@ impl<'a> super::Interpreter<'a> {
     /// `let a = Res { .. }; let r = take(a);` ran the body twice for one
     /// object, agreeing on all four surfaces and so invisible to any A/B gate.
     ///
-    /// Gated by the caller on [`crate::ast::fn_always_returns_param_bare`], not
-    /// the looser sibling, because this retracts the WHOLE-VALUE channel and
-    /// only a bare hand-back replaces the retracted owner with an equivalent
-    /// one. A param moved into a returned aggregate (`Bx { r: r }`) has a NEW
-    /// owner and must keep firing — see that predicate for both measurements.
+    /// Gated by the caller on the union of
+    /// [`crate::ast::fn_always_returns_param`] and
+    /// [`crate::ast::fn_conditionally_returns_param_bare`] — the two shapes in
+    /// which some other frame is guaranteed to run the body on every path.
+    /// This retracts the WHOLE-VALUE channel, so an argument that merely
+    /// escapes SOMEWHERE is not enough: `fn_returns_param` alone would stand
+    /// the caller down on a path where nobody else fires, the LOST body
+    /// B-2026-08-28-22 measured.
     ///
     /// Same shape as the own-`Drop` widening
     /// [`Self::record_container_move_sources_in_aggregate_arg`] applies for
@@ -3467,20 +3470,36 @@ impl<'a> super::Interpreter<'a> {
                 if !is_passthrough {
                     return None;
                 }
-                // B-2026-08-29-15 — asked separately and STRICTLY: the
-                // whole-value disarm below is licensed only where the callee
-                // hands this argument back as ITSELF on every exit.
-                let returns_bare = self.program.items.iter().any(|item| {
+                // B-2026-08-29-15 / -50 — asked separately from the
+                // passthrough gate above: the whole-value disarm below is
+                // licensed only where SOME OTHER frame is guaranteed to run
+                // the body on EVERY path. Two predicates give that guarantee,
+                // and the union is the rule:
+                //
+                //  * `fn_always_returns_param` — every exit hands the argument
+                //    back, so the caller's result binding owns it. This admits
+                //    the returned AGGREGATE (`Hh { r: r }`) as well as the bare
+                //    hand-back; see the predicate for why the aggregate's
+                //    separate owner is parallel rather than nested.
+                //  * `fn_conditionally_returns_param_bare` — each exit either
+                //    hands it back (result binding owns it) or lets it die
+                //    inside, where the CALLEE frame owns it via
+                //    `cond_returned_param_drop_names`. Exactly one owner
+                //    either way, which is why standing the caller down here is
+                //    not the unconditional stand-down B-2026-08-28-22 measured
+                //    a LOST body for.
+                let callee_owns_body = self.program.items.iter().any(|item| {
                     matches!(item, crate::ast::Item::Function(f)
                         if f.name == fn_name
-                            && crate::ast::fn_always_returns_param_bare(f, i))
+                            && (crate::ast::fn_always_returns_param(f, i)
+                                || crate::ast::fn_conditionally_returns_param_bare(f, i)))
                 });
-                Some((n.clone(), returns_bare))
+                Some((n.clone(), callee_owns_body))
             })
             .collect();
-        for (n, returns_bare) in passthrough {
+        for (n, callee_owns_body) in passthrough {
             self.record_container_move_source_name(&n);
-            if returns_bare {
+            if callee_owns_body {
                 self.record_returned_arg_user_drop_move(&n);
             }
         }

@@ -34495,25 +34495,28 @@ fn test_return_spelling_method_returned_param_body_runs_once() {
 ///
 /// One object is not an assumption here, it is a measurement. With a
 /// 256-element `Vec[i64]` field the named and fresh-temp spellings allocate
-/// `11 allocs, 11 frees, 10,269 bytes` — byte-for-byte identical — so there is
-/// no entry copy and the second body had no second buffer behind it. That
-/// matters because the opposite belief ("a by-value struct param is
-/// ENTRY-COPIED, so two values genuinely exist") was written into three places
-/// in the tree and is what held this row open.
+/// `11 allocs, 11 frees, 10,269 bytes` — byte-for-byte identical — so the entry
+/// copy the compiled backends do make cannot be what makes their body counts
+/// differ, and `fresh-temp-control` below has always run ONE body with that
+/// copy present. That matters because the opposite inference ("a by-value
+/// struct param is ENTRY-COPIED, so two values genuinely exist and two bodies
+/// are consistent") was written into three places in the tree and is what held
+/// this row open.
 ///
 /// `caller-renamed` is the case that keeps a name-coincidence fix honest: the
 /// caller spells its binding `qq` while the param is `r`. The interpreter's
 /// moved-out sets are keyed by bare binding name (B-2026-08-29-11), so a fix
 /// that worked only when the two names matched would pass every other row here.
 ///
-/// DELIBERATELY NOT PINNED: the AGGREGATE shape (`fn wrapf(r: R) -> Hh { Hh { r:
-/// r } }`) still runs two bodies, and this fixture asserts nothing about that
-/// count because it is still wrong. It is excluded rather than blessed —
-/// `fn_always_returns_param_bare` declines it on purpose, since retracting the
-/// caller's owner there orphans the buffer (measured as a 3-byte definite leak
-/// in `call_dispatch`'s own note). Its LEAK-freedom, which is correct, is
-/// pinned in `tests/memory_sanitizer.rs`'s
-/// `asan_named_arg_returned_bare_is_memory_balanced` instead.
+/// B-2026-08-29-50 added the last four rows. The AGGREGATE shape
+/// (`fn wrapf(r: R) -> Hh { Hh { r: r } }`) and the CONDITIONAL callee were
+/// both excluded here while they still ran two bodies; both now run one, and
+/// the gate that admits them is the union of `fn_always_returns_param` and
+/// `fn_conditionally_returns_param_bare` — the two shapes where some other
+/// frame is guaranteed to own the body on every path. The conditional rows
+/// exercise BOTH of its paths in one program, because pre-fix each doubled
+/// against a different second owner (the callee's own registration when the
+/// param dies inside, the result binding when it is handed back).
 ///
 /// Twin: `tests/codegen.rs`'s
 /// `e2e_named_arg_returned_bare_user_drop_body_runs_once`, sharing these
@@ -34579,6 +34582,55 @@ fn test_named_arg_returned_bare_user_drop_body_runs_once() {
             "fn eatf(r: R) -> i64 { println(f\"saw {r.id}\"); return 0; }\n\
              fn main() { let a = R { id: 41 }; let n = eatf(a); println(f\"{n}\") }\n",
             "saw 41\ndrop 41\n0\n",
+        ),
+        // B-2026-08-29-50 — the param moved into a RETURNED AGGREGATE, in
+        // struct, method and tuple spellings. The returned value owns it, so
+        // the caller's body is a duplicate exactly as in the bare rows above.
+        (
+            "aggregate-return-free",
+            "struct Hh { r: R }\n\
+             fn wrapf(r: R) -> Hh { return Hh { r: r }; }\n\
+             fn main() { let a = R { id: 41 }; let h = wrapf(a); println(f\"{h.r.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "aggregate-tail-method",
+            "struct Hh { r: R }\n\
+             impl B6 { fn wrap(ref self, r: R) -> Hh { Hh { r: r } } }\n\
+             fn main() { let b = B6 { n: 1 }; let a = R { id: 21 }; let h = b.wrap(a); \
+             println(f\"{h.r.id}\") }\n",
+            "21\ndrop 21\n",
+        ),
+        // The TUPLE spelling — `yields` recurses into tuple literals as well as
+        // struct ones, so a fix handling only `StructLiteral` passes the two
+        // rows above and fails this one.
+        (
+            "aggregate-tuple-free",
+            "fn tupf(r: R) -> (R, i64) { (r, 9) }\n\
+             fn main() { let a = R { id: 17 }; let t = tupf(a); println(f\"{t.1}\") }\n",
+            "9\ndrop 17\n",
+        ),
+        // B-2026-08-29-50 — the CONDITIONAL callee on BOTH paths in one
+        // program. `k = true` lets the param die inside, where the callee frame
+        // owns the body; `k = false` hands it back, where the result binding
+        // does. Pre-fix both doubled, against those two different owners, which
+        // is why neither standing the caller down alone nor stopping the callee
+        // registering alone would have fixed this shape.
+        (
+            "conditional-both-paths-free",
+            "fn pick(r: R, k: bool) -> R { if k { return R { id: 98 }; } r }\n\
+             fn main() { let a = R { id: 7 }; let x = pick(a, true); println(f\"{x.id}\"); \
+             let b = R { id: 5 }; let y = pick(b, false); println(f\"{y.id}\") }\n",
+            "drop 7\n98\ndrop 98\n5\ndrop 5\n",
+        ),
+        (
+            "conditional-both-paths-method",
+            "impl B6 { fn pick(ref self, r: R, k: bool) -> R \
+             { if k { return R { id: 98 }; } r } }\n\
+             fn main() { let t = B6 { n: 1 }; let a = R { id: 7 }; let x = t.pick(a, true); \
+             println(f\"{x.id}\"); let b = R { id: 5 }; let y = t.pick(b, false); \
+             println(f\"{y.id}\") }\n",
+            "drop 7\n98\ndrop 98\n5\ndrop 5\n",
         ),
     ] {
         assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");

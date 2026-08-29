@@ -62021,29 +62021,34 @@ fn main() {
         );
     }
 
-    /// B-2026-08-29-15 — a NAMED binding passed by value to a callee that hands
-    /// it straight back is memory-balanced, and so is the AGGREGATE shape the
-    /// fix deliberately declines.
+    /// B-2026-08-29-15, extended by B-2026-08-29-50 — a NAMED binding passed
+    /// by value to a callee that hands it back, AS ITSELF or wrapped in a
+    /// returned aggregate, runs one body and is memory-balanced.
     ///
     /// The behaviour twin is `e2e_named_arg_returned_bare_user_drop_body_runs_once`.
-    /// This side pins the two claims that made removing a body safe rather than
-    /// a new leak, and they pull in opposite directions:
+    /// This side pins the claim that made removing a body safe rather than a
+    /// new leak, for both spellings:
     ///
-    ///  * `take`/`keep`/`takef` — the param handed back AS ITSELF. The caller's
-    ///    `karac_drop_<T>` wrapper is retracted here, and that is only sound
-    ///    because the result binding owns the very same object: with a
-    ///    256-element `Vec[i64]` field the named and fresh-temp spellings
-    ///    allocate `11 allocs, 11 frees, 10,269 bytes` byte-for-byte, so there
-    ///    was never a second buffer for the second body to belong to.
-    ///  * `wrap` — the param moved into a RETURNED AGGREGATE. Here the value
-    ///    gets a NEW owner and the caller is still the only owner of the
-    ///    original, so `fn_always_returns_param_bare` declines and the wrapper
-    ///    stays. Loosen that predicate back to `fn_always_returns_param` and
-    ///    this case orphans its buffer — the 3-byte definite leak
-    ///    `call_dispatch`'s container-only note already records. This is the
-    ///    row that catches such a loosening, since the behaviour twins
-    ///    deliberately assert nothing about the aggregate's (still wrong) body
-    ///    count.
+    ///  * `take`/`keep`/`takef` — the param handed back AS ITSELF. The result
+    ///    binding owns the very same object, so the caller's own body is a
+    ///    duplicate.
+    ///  * `wrap` — the param moved into a RETURNED AGGREGATE. This case
+    ///    asserted TWO bodies until B-2026-08-29-50, on the reasoning that the
+    ///    aggregate is a NEW owner while the caller still owns the original, so
+    ///    retracting the caller's `karac_drop_<T>` wrapper would orphan a
+    ///    buffer — a 3-byte definite leak that had actually been measured.
+    ///    What that reasoning missed is that the stand-down no longer retracts
+    ///    the wrapper: `suppress_user_drop_body_keeping_memory` DOWNGRADES it
+    ///    to the field-cleanup-only `__karac_drop_struct_<T>`, so the body goes
+    ///    and the free stays. Re-measured with the downgrade in place, this
+    ///    file's own ASAN+LSan gate passes and valgrind reports `13 allocs / 13
+    ///    frees, 0 errors` — identical to the bare spelling. The two owners are
+    ///    PARALLEL, not nested: an own-heap struct passed by value is already
+    ///    deep-copied, so the caller's slot has a distinct buffer to free.
+    ///
+    /// The pin still runs in the leak direction: if the stand-down is ever
+    /// widened back to the REMOVING form, `wrap` orphans its buffer and LSan
+    /// fails this test rather than the output comparison.
     ///
     /// Every param is named DISTINCTLY (`ra`..`rf`) for the reason the
     /// `return`-spelling sibling above gives: the interpreter shares one
@@ -62090,10 +62095,73 @@ fn main() {
 }
 "#,
             &[
-                "1", "drop a1", "1", "drop b1", "drop c1", "1", "drop c1", "saw d1", "drop d1",
-                "0", "1", "drop e1", "1", "drop g1", "end",
+                "1", "drop a1", "1", "drop b1", "1", "drop c1", "saw d1", "drop d1", "0", "1",
+                "drop e1", "1", "drop g1", "end",
             ],
             "named-arg-returned-bare",
+        );
+    }
+
+    /// B-2026-08-29-50 — a named binding passed to a CONDITIONAL callee, one
+    /// that hands the argument back on some paths and lets it die inside on the
+    /// rest, is memory-balanced with exactly one body per object on both paths.
+    ///
+    /// This is the shape where getting the gate wrong fails in BOTH directions,
+    /// which is why it earns a memory pin of its own rather than a row in the
+    /// fixture above. Pre-fix the caller fired on every path, so `k = true`
+    /// doubled against the CALLEE's own registration
+    /// (`cond_returned_param_drop_names`) and `k = false` doubled against the
+    /// RESULT BINDING — two different second owners, so neither "stand the
+    /// caller down" nor "stop the callee registering" fixes it alone. Stand the
+    /// caller down UNCONDITIONALLY instead and `k = true` loses its body
+    /// entirely, the regression B-2026-08-28-22 measured. The gate that works
+    /// is `fn_conditionally_returns_param_bare`, the same predicate that hands
+    /// the body to the callee — so the caller stands down exactly when someone
+    /// else has picked the body up.
+    ///
+    /// `T4.pick`'s non-param exit interpolates `self.n` deliberately. That made
+    /// `may_mention` answer conservatively `true` and the predicate decline, and
+    /// the two backends then reached different answers by different routes: the
+    /// interpreter ran two bodies for `a1` where the compiled backends ran one,
+    /// a RUN-VS-BUILD divergence that predates this row (measured on the
+    /// pre-fix compiler, where the free-function rows below still doubled on
+    /// both backends alike). Teaching `may_mention` that a method's receiver is
+    /// never one of its `params` closes it, so this row pins that too — drop
+    /// the `SelfValue` arm and the interpreter and AOT legs disagree again.
+    #[test]
+    fn asan_conditionally_returned_arg_is_memory_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T4 { n: i64 }
+impl T4 {
+    fn pick(ref self, ra: R, k: bool) -> R { if k { return R { id: 98, name: f"z{self.n}" }; } ra }
+}
+fn pickf(rb: R, k: bool) -> R { if k { return R { id: 98, name: f"yy" }; } rb }
+fn main() {
+    let base: i64 = env.args().len();
+    let t = T4 { n: 1 };
+    let a1 = R { id: base, name: f"a{base}" };
+    let x = t.pick(a1, true);
+    println(f"{x.id}");
+    let b1 = R { id: base, name: f"b{base}" };
+    let y = t.pick(b1, false);
+    println(f"{y.id}");
+    let c1 = R { id: base, name: f"c{base}" };
+    let z = pickf(c1, true);
+    println(f"{z.id}");
+    let d1 = R { id: base, name: f"d{base}" };
+    let w = pickf(d1, false);
+    println(f"{w.id}");
+    println("end");
+}
+"#,
+            &[
+                "drop a1", "98", "drop z1", "1", "drop b1", "drop c1", "98", "drop yy", "1",
+                "drop d1", "end",
+            ],
+            "conditionally-returned-arg",
         );
     }
 

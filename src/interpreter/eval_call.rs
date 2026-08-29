@@ -2685,11 +2685,15 @@ impl<'a> super::Interpreter<'a> {
     ///
     /// This paragraph previously read that an own-`Drop` struct stays armed
     /// "because a by-value struct param is ENTRY-COPIED and the two frames
-    /// genuinely hold distinct values". That is false, and it was the belief
-    /// holding B-2026-08-29-15 open: with a 256-element `Vec[i64]` field the
-    /// named and fresh-temp spellings allocate identically — `11 allocs, 11
-    /// frees, 10,269 bytes`, byte-for-byte — so no copy is made and the second
-    /// body has no second buffer behind it.
+    /// genuinely hold distinct values". The copy is real — the compiled
+    /// backends allocate one extra 2,048-byte buffer for a 256-element
+    /// `Vec[i64]` field on ANY by-value call — but the INFERENCE from it was
+    /// what held B-2026-08-29-15 open. Two measurements retire it: the named
+    /// and fresh-temp spellings allocate identically (`11 allocs, 11 frees,
+    /// 10,269 bytes`, byte-for-byte), so the copy cannot be what makes their
+    /// body counts differ; and the fresh-temp spelling has always run ONE body
+    /// with that copy present, which nobody has called wrong. The copy is a
+    /// lowering artifact of a move, not a second value for `Drop` to see.
     pub(crate) fn record_method_arg_moves(
         &mut self,
         type_name: &str,
@@ -2747,18 +2751,28 @@ impl<'a> super::Interpreter<'a> {
                 if !escapes {
                     return None;
                 }
-                // B-2026-08-29-15 — among the args that DO escape, only a
-                // BARE hand-back also disarms the binding's own `Drop`
-                // body: a param moved into a returned aggregate, or into
-                // an outliving place, escapes into a NEW owner, so the
-                // argument binding must keep firing. The two rules compose
-                // — this one is asked only of what the escape gate admits.
-                Some((n.clone(), crate::ast::fn_always_returns_param_bare(f, i)))
+                // B-2026-08-29-15 / -50 — among the args that DO escape,
+                // the binding's own `Drop` body is disarmed only where some
+                // other frame is guaranteed to run it on EVERY path: the
+                // callee hands it back at every exit
+                // (`fn_always_returns_param`, bare or wrapped in a returned
+                // aggregate), or hands it back on some paths and lets it die
+                // inside on the rest (`fn_conditionally_returns_param_bare`),
+                // where the callee frame owns it. Escaping into an OUTLIVING
+                // PLACE is deliberately not in the union — there the argument
+                // binding is still an owner and must keep firing. The two
+                // rules compose: this one is asked only of what the escape
+                // gate admits.
+                Some((
+                    n.clone(),
+                    crate::ast::fn_always_returns_param(f, i)
+                        || crate::ast::fn_conditionally_returns_param_bare(f, i),
+                ))
             })
             .collect();
-        for (n, returns_bare) in moved {
+        for (n, callee_owns_body) in moved {
             self.record_container_move_source_name(&n);
-            if returns_bare {
+            if callee_owns_body {
                 self.record_returned_arg_user_drop_move(&n);
             }
         }

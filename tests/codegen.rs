@@ -13783,18 +13783,28 @@ fn main() {
     /// What licenses removing a body rather than it being a preference: the
     /// named and fresh-temp spellings of this program allocate identically —
     /// with a 256-element `Vec[i64]` field, `11 allocs, 11 frees, 10,269 bytes`
-    /// byte-for-byte under valgrind at `KARAC_OPT_LEVEL=0`. There is no entry
-    /// copy, so the second body had no second buffer, and the fresh-temp
-    /// control below is the oracle for the count.
+    /// byte-for-byte under valgrind at `KARAC_OPT_LEVEL=0` — so whatever the
+    /// two spellings differ in, it is not the number of buffers. An entry copy
+    /// IS made (any by-value call adds one 2,048-byte allocation over the same
+    /// program with no call), but it is made for BOTH spellings, and the
+    /// `fresh-temp-control` row below has always run one body with it present.
+    /// That row is the oracle for the count.
     ///
-    /// The stand-down is gated on `fn_always_returns_param_bare`, NOT the looser
-    /// `fn_always_returns_param`, because this retracts the binding's whole
-    /// `karac_drop_<T>` wrapper — body + fields + MEMORY. Only a BARE hand-back
-    /// replaces the retracted owner with an equivalent one; a param moved into a
-    /// returned aggregate gets a NEW owner and its caller must keep the wrapper.
-    /// That aggregate shape is deliberately absent from this table: it still
-    /// runs two bodies and pinning that count would bless it. Its leak-freedom
-    /// is pinned in `asan_named_arg_returned_bare_is_memory_balanced`.
+    /// B-2026-08-29-50 widened the gate to the union of
+    /// `fn_always_returns_param` and `fn_conditionally_returns_param_bare` —
+    /// every shape where SOME OTHER frame runs the body on EVERY path — and
+    /// the last four rows are the shapes that union added. The stand-down
+    /// survives the widening because it DOWNGRADES the binding's
+    /// `karac_drop_<T>` wrapper to field-cleanup-only rather than retracting
+    /// it, so the aggregate's caller still frees the buffer it owns. All four
+    /// were RED on all three backends before that change, and all four agreed
+    /// across the backends while wrong, so no A/B gate could have caught them.
+    ///
+    /// The conditional rows are the ones that fail in BOTH directions if the
+    /// gate is got wrong: standing the caller down where the callee does NOT
+    /// take over loses a body (the regression B-2026-08-28-22 measured), while
+    /// leaving it armed doubles on both paths — on `k = true` against the
+    /// callee's own registration, on `k = false` against the result binding.
     #[test]
     fn e2e_named_arg_returned_bare_user_drop_body_runs_once() {
         const DROPPER: &str = "struct R { id: i64, tag: String }\n\
@@ -13853,6 +13863,62 @@ fn main() {
                  fn main() { let a = R { id: 32, tag: f\"h\" }; let n = eatf(a); \
                  println(f\"{n}\"); }\n",
                 "saw 32\ndrop 32\n0\n",
+            ),
+            // B-2026-08-29-50 — the param moved into a RETURNED AGGREGATE.
+            // The returned `Hh` owns it, so the caller is a duplicate exactly
+            // as in the bare rows; what differs is only that the caller's slot
+            // holds its own copy's buffer, which the DOWNGRADED action still
+            // frees.
+            (
+                "aggregate-return-free",
+                "struct Hh { r: R }\n\
+                 fn wrapf(r: R) -> Hh { return Hh { r: r }; }\n\
+                 fn main() { let a = R { id: 41, tag: f\"h\" }; let h = wrapf(a); \
+                 println(f\"{h.r.id}\"); }\n",
+                "41\ndrop 41\n",
+            ),
+            (
+                "aggregate-tail-method",
+                "struct Hh { r: R }\n\
+                 impl T2 { fn wrap(ref self, r: R) -> Hh { Hh { r: r } } }\n\
+                 fn main() { let t = T2 { n: 1 }; let a = R { id: 21, tag: f\"h\" }; \
+                 let h = t.wrap(a); println(f\"{h.r.id}\"); }\n",
+                "21\ndrop 21\n",
+            ),
+            // The TUPLE spelling of the same aggregate route — `yields`
+            // recurses into tuple literals as well as struct ones, and a fix
+            // that only handled `StructLiteral` would pass the two rows above
+            // and fail this one.
+            (
+                "aggregate-tuple-free",
+                "fn tupf(r: R) -> (R, i64) { (r, 9) }\n\
+                 fn main() { let a = R { id: 17, tag: f\"h\" }; let t = tupf(a); \
+                 println(f\"{t.1}\"); }\n",
+                "9\ndrop 17\n",
+            ),
+            // B-2026-08-29-50 — the CONDITIONAL callee, exercised on BOTH
+            // paths in one program. `k = true` lets the param die inside (the
+            // callee frame owns the body); `k = false` hands it back (the
+            // result binding owns it). Pre-fix both doubled, against two
+            // DIFFERENT second owners, which is why neither half alone fixes
+            // this shape.
+            (
+                "conditional-both-paths-free",
+                "fn pick(r: R, k: bool) -> R { if k { return R { id: 98, tag: f\"z\" }; } r }\n\
+                 fn main() { let a = R { id: 7, tag: f\"h\" }; let x = pick(a, true); \
+                 println(f\"{x.id}\"); let b = R { id: 5, tag: f\"h\" }; \
+                 let y = pick(b, false); println(f\"{y.id}\"); }\n",
+                "drop 7\n98\ndrop 98\n5\ndrop 5\n",
+            ),
+            (
+                "conditional-both-paths-method",
+                "impl T2 { fn pick(ref self, r: R, k: bool) -> R \
+                 { if k { return R { id: 98, tag: f\"z\" }; } r } }\n\
+                 fn main() { let t = T2 { n: 1 }; let a = R { id: 7, tag: f\"h\" }; \
+                 let x = t.pick(a, true); println(f\"{x.id}\"); \
+                 let b = R { id: 5, tag: f\"h\" }; let y = t.pick(b, false); \
+                 println(f\"{y.id}\"); }\n",
+                "drop 7\n98\ndrop 98\n5\ndrop 5\n",
             ),
         ] {
             assert_eq!(

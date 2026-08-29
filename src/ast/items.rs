@@ -1485,45 +1485,24 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
 /// aggregate around it, so admitted bodies are structurally narrow. Every
 /// decline is the pre-existing behaviour, so the failure direction of a miss is
 /// a body that keeps firing where it always did, never a new silent loss.
+///
+/// B-2026-08-29-50 — this predicate was briefly SPLIT, with a strict
+/// `fn_always_returns_param_bare` sibling that dropped the aggregate-literal
+/// recursion from `yields`, so that only a BARE hand-back could stand the
+/// caller's own `Drop` body down. That split has been removed: it rested on a
+/// measurement that no longer describes the code. The 3-byte definite leak it
+/// cited was produced by RETRACTING the caller's whole `karac_drop_<T>` action,
+/// and the stand-down now DOWNGRADES that action instead
+/// (`suppress_user_drop_body_keeping_memory`), which keeps the free. Re-measured
+/// with the downgrade in place, `fn wrapf(r: Res) -> Hh { Hh { r: r } }` over a
+/// named argument is `13 allocs / 13 frees, 0 errors` under valgrind and clean
+/// under ASAN+LSan — identical to the bare spelling's `13 / 13` — while the
+/// second `Drop` body disappears. The aggregate's two owners turned out to be
+/// PARALLEL, not nested as feared: passing an own-heap struct by value already
+/// deep-copies it (`10,277` vs `8,229` bytes against an inline-construction
+/// oracle, with and without a `Drop` impl alike), so the caller's slot holds a
+/// distinct buffer that its downgraded field cleanup still frees.
 pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
-    fn_always_returns_param_impl(f, arg_index, false)
-}
-
-/// B-2026-08-29-15 — the STRICT sibling of [`fn_always_returns_param`]: every
-/// exit hands the param back **as the bare parameter itself**, never wrapped in
-/// an aggregate.
-///
-/// The distinction the looser predicate cannot draw is one of IDENTITY. Both
-/// `fn take(r: Res) -> Res { r }` and `fn mk(r: Res) -> Bx { Bx { r: r } }`
-/// let the value cross the frame boundary, which is all
-/// [`fn_returns_param`]'s notion of "yields" asks. But in the first the
-/// caller's result binding IS the argument — one object, one owner — while in
-/// the second the value has a NEW owner (`Bx`) that the result binding merely
-/// contains. Only the first licenses retracting the caller's own
-/// `karac_drop_<T>` wrapper / `moved_out_user_drop_bindings` entry, because
-/// only there is the retracted owner replaced by an equivalent one.
-///
-/// That line is drawn from measurement in both directions. Admitting the bare
-/// shape: `let a = Res { .. }; let r = take(a);` ran the user `Drop` body TWICE
-/// on all four surfaces for ONE object — 256-element `Vec[i64]` field, named
-/// and fresh-temp spellings both `11 allocs, 11 frees, 10,269 bytes`,
-/// byte-identical, so no entry copy exists and the second body has no second
-/// buffer behind it. Declining the aggregate shape: retracting the wrapper for
-/// `fn mk(r: Res) -> Bx { Bx { r: r } }` took it from valgrind-clean to a
-/// 3-byte definite leak, the measurement `call_dispatch`'s container-only
-/// narrowing already records.
-///
-/// Sharing one walker with the looser predicate is deliberate — `7df22de`
-/// folded this family's two mirrored traversals into one for exactly the reason
-/// that two kept in lockstep can drift apart.
-pub fn fn_always_returns_param_bare(f: &Function, arg_index: usize) -> bool {
-    fn_always_returns_param_impl(f, arg_index, true)
-}
-
-/// Shared walker for [`fn_always_returns_param`] and
-/// [`fn_always_returns_param_bare`]. `bare_only` drops the aggregate-literal
-/// recursion from the "yields" test and changes nothing else.
-fn fn_always_returns_param_impl(f: &Function, arg_index: usize, bare_only: bool) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;
     };
@@ -1532,19 +1511,13 @@ fn fn_always_returns_param_impl(f: &Function, arg_index: usize, bare_only: bool)
     };
     let name = name.as_str();
 
-    /// The same test [`fn_returns_param`] applies at a return site — except
-    /// under `bare_only`, where an aggregate that merely CONTAINS the param
-    /// does not count: the aggregate becomes the value's new owner, so the
-    /// caller's result binding is not the argument itself.
-    fn yields(e: &Expr, name: &str, bare_only: bool) -> bool {
+    /// The same test [`fn_returns_param`] applies at a return site: the bare
+    /// identifier, or an aggregate literal that moves the param into itself.
+    fn yields(e: &Expr, name: &str) -> bool {
         match &e.kind {
             ExprKind::Identifier(n) => n == name,
-            ExprKind::StructLiteral { fields, .. } if !bare_only => {
-                fields.iter().any(|f| yields(&f.value, name, bare_only))
-            }
-            ExprKind::Tuple(elems) if !bare_only => {
-                elems.iter().any(|el| yields(el, name, bare_only))
-            }
+            ExprKind::StructLiteral { fields, .. } => fields.iter().any(|f| yields(&f.value, name)),
+            ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name)),
             _ => false,
         }
     }
@@ -1675,9 +1648,7 @@ fn fn_always_returns_param_impl(f: &Function, arg_index: usize, bare_only: bool)
     return_operands_block(&f.body, &mut returns);
     // Is there a `return` that does NOT hand the param back? A bare `return;`
     // counts: it exits without yielding, so the param dies on that path.
-    let any_bad_return = returns
-        .iter()
-        .any(|o| !o.is_some_and(|x| yields(x, name, bare_only)));
+    let any_bad_return = returns.iter().any(|o| !o.is_some_and(|x| yields(x, name)));
 
     let Some(tail) = f.body.final_expr.as_deref() else {
         // NO TAIL EXPRESSION AT ALL — every exit is a `return` (B-2026-08-29-14).
@@ -1702,14 +1673,12 @@ fn fn_always_returns_param_impl(f: &Function, arg_index: usize, bare_only: bool)
         // A function with no declared return type is excluded outright: it has
         // nothing to hand the param back THROUGH, so its param dies inside and
         // the caller must keep firing.
-        let any_good_return = returns
-            .iter()
-            .any(|o| o.is_some_and(|x| yields(x, name, bare_only)));
+        let any_good_return = returns.iter().any(|o| o.is_some_and(|x| yields(x, name)));
         return f.return_type.is_some() && any_good_return && !any_bad_return;
     };
     let mut tails = Vec::new();
     leaf_tails(tail, &mut tails);
-    if tails.is_empty() || !tails.iter().all(|t| yields(t, name, bare_only)) {
+    if tails.is_empty() || !tails.iter().all(|t| yields(t, name)) {
         return false;
     }
     !any_bad_return
@@ -1793,6 +1762,16 @@ pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bo
                 crate::ast::ParsedInterpolationPart::Text(_) => false,
                 crate::ast::ParsedInterpolationPart::Expr(e, _) => may_mention(e, name),
             }),
+            // B-2026-08-29-50 — the RECEIVER is never one of `f.params`, so
+            // `self` cannot be the parameter this is asking about. Without
+            // this the catch-all below answered `true` and a method whose
+            // non-param exit merely INTERPOLATES a field of self
+            // (`return R { name: f"z{self.n}" }`) was declined, which left it
+            // running two bodies on the hand-back path and — because codegen
+            // reaches its own stand-down by a different route — one body
+            // compiled against two interpreted on the dies-inside path. That
+            // run-vs-build split predates this row and is measured on it.
+            ExprKind::SelfValue => false,
             ExprKind::StructLiteral { fields, .. } => {
                 fields.iter().any(|f| may_mention(&f.value, name))
             }

@@ -7280,7 +7280,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `find_function_ast` hands back the raw AST method
                         // whose `params` exclude the receiver, the same key the
                         // `fn_always_returns_param` call below uses.
-                        if self.callee_always_returns_arg_bare(&qualified, i) {
+                        if self.callee_takes_over_arg_drop_body(&qualified, i) {
                             if let ExprKind::Identifier(var_name) = &a.value.kind {
                                 let var_name = var_name.clone();
                                 self.suppress_user_drop_body_keeping_memory(&var_name);
