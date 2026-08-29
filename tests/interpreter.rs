@@ -35507,6 +35507,138 @@ fn materializing_arm_over_a_projection_owns_the_payload_once() {
     }
 }
 
+/// B-2026-08-29-10, interpreter leg — a method's owned `Option[T]` /
+/// value-enum argument runs its payload's `Drop` body ONCE, in the caller,
+/// exactly where the free-function spelling runs it.
+///
+/// This is the retraction of 57bfb26, which made a method frame's owned-param
+/// scrutinee "consuming" so the ARM would fire the body. Its premise was that a
+/// method frame's arguments reach no caller-side fire. They do — a method whose
+/// owned enum param is never matched has always run its body in the caller, on
+/// every surface. What made the fire look absent is that the callee frame's
+/// moved-out mark on its own parameter leaked out and disarmed a caller binding
+/// sharing that name; the probe spelled both `b`, so the two defects cancelled
+/// and the shape read as "zero bodies".
+///
+/// Firing at the arm as well was therefore a DOUBLE body the moment the names
+/// differ, which is what `*-distinct-name` pins: `t.opt_bind(carg)` ran `dR8`
+/// twice here against once on all three compiled backends. Every shape appears
+/// in both namings because, before this, a rename was a semantic change.
+///
+/// `mid9` / `dR9` is a callee LOCAL. It is what makes the assertions pin the
+/// PLACE rather than the count — an arm fire lands before `mid9`, a callee
+/// scope-exit fire between `mid9` and `dR9`, the caller-side fire after `dR9`.
+/// 57bfb26 had no such marker, which is how it moved the fire into the callee
+/// and still measured "correct".
+///
+/// `*-returns-payload` keeps B-2026-08-29-9 pinned: when the arm hands the
+/// payload back, the caller's result binding owns it and one body is due. That
+/// held at HEAD only in the same-name spelling; the method peer of
+/// `record_passthrough_arg_moves` now records the suppression against the
+/// ARGUMENT, so both namings answer alike.
+#[test]
+fn method_owned_optres_arg_runs_its_payload_body_like_a_free_fn() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct T { n: i64 }\n\
+         impl T {\n\
+         \x20   fn opt_bind(ref self, b: Option[R]) -> i64 {\n\
+         \x20       let mut out: i64 = 0;\n\
+         \x20       match b { Some(r) => { out = r.id; } None => { out = 0; } }\n\
+         \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+         \x20   fn enum_bind(ref self, b: E) -> i64 {\n\
+         \x20       let mut out: i64 = 0;\n\
+         \x20       match b { E.A(r) => { out = r.id; } E.B => { out = 0; } }\n\
+         \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+         \x20   fn opt_ret(ref self, b: Option[R]) -> R {\n\
+         \x20       match b { Some(r) => { return r } None => { return R { id: 0, tag: f\"t0\" } } } }\n\
+         \x20   fn enum_ret(ref self, b: E) -> R {\n\
+         \x20       match b { E.A(r) => { return r } E.B => { return R { id: 0, tag: f\"t0\" } } } } }\n\
+         fn f_opt_bind(b: Option[R]) -> i64 {\n\
+         \x20   let mut out: i64 = 0;\n\
+         \x20   match b { Some(r) => { out = r.id; } None => { out = 0; } }\n\
+         \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out }\n\
+         fn f_enum_bind(b: E) -> i64 {\n\
+         \x20   let mut out: i64 = 0;\n\
+         \x20   match b { E.A(r) => { out = r.id; } E.B => { out = 0; } }\n\
+         \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out }\n";
+    for (label, body, want) in [
+        // The interpreter fired these at the ARM (before `mid9`) after 57bfb26.
+        (
+            "method-option-bindout-distinct-name",
+            "let t = T { n: 1 }; let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: i64 = t.opt_bind(carg); println(f\"v{v}\");\n",
+            "mid9\ndR9\ndR8\nv8\npost\n",
+        ),
+        (
+            "free-option-bindout-oracle",
+            "let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: i64 = f_opt_bind(carg); println(f\"v{v}\");\n",
+            "mid9\ndR9\ndR8\nv8\npost\n",
+        ),
+        (
+            "method-enum-bindout-distinct-name",
+            "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: i64 = t.enum_bind(carg); println(f\"v{v}\");\n",
+            "mid9\ndR9\ndE\ndR8\nv8\npost\n",
+        ),
+        (
+            "free-enum-bindout-oracle",
+            "let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: i64 = f_enum_bind(carg); println(f\"v{v}\");\n",
+            "mid9\ndR9\ndE\ndR8\nv8\npost\n",
+        ),
+        // Same shapes with the caller's binding spelled as the callee's
+        // parameter — the spelling that used to cancel the two defects.
+        (
+            "method-option-bindout-shadowed-name",
+            "let t = T { n: 1 }; let b: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: i64 = t.opt_bind(b); println(f\"v{v}\");\n",
+            "mid9\ndR9\ndR8\nv8\npost\n",
+        ),
+        (
+            "method-enum-bindout-shadowed-name",
+            "let t = T { n: 1 }; let b: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: i64 = t.enum_bind(b); println(f\"v{v}\");\n",
+            "mid9\ndR9\ndE\ndR8\nv8\npost\n",
+        ),
+        // B-2026-08-29-9's boundary, both namings.
+        (
+            "method-option-returns-payload-distinct-name",
+            "let t = T { n: 1 }; let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.opt_ret(carg); println(f\"v{v.id}\");\n",
+            "v8\ndR8\npost\n",
+        ),
+        (
+            "method-option-returns-payload-shadowed-name",
+            "let t = T { n: 1 }; let b: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.opt_ret(b); println(f\"v{v.id}\");\n",
+            "v8\ndR8\npost\n",
+        ),
+        (
+            "method-enum-returns-payload-distinct-name",
+            "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.enum_ret(carg); println(f\"v{v.id}\");\n",
+            "dE\nv8\ndR8\npost\n",
+        ),
+        // Two calls through one method, the first escaping and the second
+        // dying: the escaping call's marks must not silence the next call's
+        // argument (B-2026-08-29-11's shape, one channel over).
+        (
+            "two-calls-second-must-still-fire",
+            "let t = T { n: 1 }; let c1: E = E.A(R { id: 1, tag: f\"t1\" }); let c2: E = E.A(R { id: 2, tag: f\"t2\" });\n\
+             \x20 let a: i64 = t.enum_bind(c1); println(f\"a{a}\");\n\
+             \x20 let d: i64 = t.enum_bind(c2); println(f\"b{d}\");\n",
+            "mid9\ndR9\ndE\ndR1\na1\nmid9\ndR9\ndE\ndR2\nb2\npost\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-57, interpreter leg — the PARITY PIN for the compiled fix.
 ///
 /// Unlike its siblings this one was green before the fix and after it: the

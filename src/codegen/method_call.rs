@@ -7608,7 +7608,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the payload — which is how this shape's fixture failed
                     // while every free-fn fixture passed.
                     let entry_copied = self.callee_optres_param_entry_copied(&qualified, pidx);
-                    if !arg_flows_into_return && entry_copied.is_none() {
+                    // B-2026-08-29-10 — B-2026-08-06-31's carve-out, which
+                    // landed on the free-fn site (`call_dispatch.rs`) and never
+                    // on this one. A binding whose box carries a user STRUCT
+                    // interior (`let b: Option[Res]` with `impl Drop for Res`)
+                    // keeps its cleanup across a by-value call: the zero below
+                    // is a MOVE, and it only balances when some other frame
+                    // takes the box over, which for this payload class nobody
+                    // does.
+                    //
+                    // On the method path the zero landed BEFORE the caller's
+                    // NLL fire of `b`'s `ContainerElemBodies` walk, so the
+                    // walker read an already-cleared tag and ran nothing —
+                    // measured with the frame trace: the action is armed, it is
+                    // due at the call statement, and the slot is zeroed in
+                    // between. That is the whole of this row: `t.take(b)` over
+                    // `fn take(ref self, b: Option[Res]) -> i64` printed no
+                    // body while every free-function spelling printed one on
+                    // all four surfaces.
+                    let boxed_struct_binding = matches!(
+                        &a.value.kind,
+                        ExprKind::Identifier(n)
+                            if self.payload_vars.boxed_struct_payload_vars.contains(n.as_str())
+                    );
+                    if !arg_flows_into_return && entry_copied.is_none() && !boxed_struct_binding {
                         self.suppress_inline_option_result_binding_move(&a.value);
                     }
                     if let Some(param_te) = entry_copied {

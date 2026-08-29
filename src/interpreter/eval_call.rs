@@ -2708,6 +2708,36 @@ impl<'a> super::Interpreter<'a> {
                 ) {
                     return None;
                 }
+                // B-2026-08-29-10 — stand down only where the value LEAVES the
+                // callee, not on every by-value argument.
+                //
+                // The wider rule this narrows was paired with 57bfb26's arm
+                // fire, and rested on it: "if the payload dies inside, the
+                // frame's arm stash fires it". That holds only when there IS an
+                // arm. A method that never matches its owned enum parameter has
+                // none, so standing the caller down there left NOBODY to run the
+                // body — `fn take(ref self, b: E) -> i64 { println("mid");
+                // return 1 }` went from one body to zero, against one on all
+                // three compiled backends. Narrowing to the escape predicates
+                // was tried before and did double-fire, but only because the arm
+                // was still firing too; with that reverted (see
+                // `scrutinee_expr_is_consuming`) the caller is the single owner
+                // for the dies-inside case, which is what every free-function
+                // spelling has always done and what codegen does for a method
+                // today — measured with a callee LOCAL between the two candidate
+                // placements, so the order is pinned and not just the count.
+                //
+                // The three escape routes, all of which keep the stand-down:
+                // the callee returns the parameter, returns a payload bound out
+                // of it, or stores it somewhere that outlives the frame (`self`,
+                // a `ref` parameter) — B-2026-08-29-11's own repro, `add(r)`
+                // pushing into `self.xs`, is the third.
+                let escapes = crate::ast::fn_returns_param(f, i)
+                    || crate::ast::fn_returns_param_payload(f, i)
+                    || crate::ast::fn_moves_param_into_outliving_place(f, i);
+                if !escapes {
+                    return None;
+                }
                 Some(n.clone())
             })
             .collect();

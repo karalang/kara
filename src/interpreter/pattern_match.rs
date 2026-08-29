@@ -512,24 +512,29 @@ impl<'a> super::Interpreter<'a> {
     /// here doubled the payload body against the caller's fire (identifier
     /// args) and orphaned the ownership story for fresh ctor args.
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
-        // B-2026-08-29-10 — the caller-retains carve-out below is a HAND-OFF,
-        // and a METHOD frame's arguments reach no caller-side fire to hand to
-        // (the same asymmetry `owned_param_frame_is_method` records for the
-        // `let`-destructure gates). So in a method frame an owned-param
-        // scrutinee IS consuming and the arm stash must fire: without this a
-        // method whose owned enum / `Option` param has its payload bound out
-        // and not returned ran ZERO bodies here, against one on every compiled
-        // backend for the value-enum spelling and one for both free-function
-        // oracles.
-        let method_frame_owns = self.owned_param_frame_is_method.last().copied() == Some(true);
+        // B-2026-08-29-10 — a method frame's owned-param scrutinee is NOT
+        // consuming, and this is the RETRACTION of 57bfb26, which made it so on
+        // a premise the measurement refutes. That commit reasoned that the
+        // caller-retains carve-out below is a hand-off and "a METHOD frame's
+        // arguments reach no caller-side fire to hand to", so the arm had to
+        // fire instead. The caller-side fire does exist — `m_enum_nomatch`, a
+        // method whose owned enum param is never matched, runs its body in the
+        // caller on every surface. What made it look absent is that a callee's
+        // moved-out mark on its own parameter leaked out of the frame and
+        // disarmed the caller's identically-named binding; the probe spelled
+        // both `b`, so the two cancelled.
+        //
+        // Firing here as well as in the caller is therefore a DOUBLE body the
+        // moment the two names differ: `t.take(carg)` printed `drop 7` twice on
+        // this backend against once on all three compiled ones. The leak is
+        // fixed at its source (the restore in `method_call.rs`), so the arm goes
+        // back to deferring — the same answer a free function has always given,
+        // which is what makes it the oracle rather than a preference.
         match &e.kind {
-            ExprKind::Identifier(n) => {
-                method_frame_owns
-                    || !self
-                        .owned_param_names_stack
-                        .last()
-                        .is_some_and(|params| params.contains(n.as_str()))
-            }
+            ExprKind::Identifier(n) => !self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|params| params.contains(n.as_str())),
             ExprKind::Call { .. } => true,
             ExprKind::SelfValue => matches!(
                 self.self_param_stack.last(),
