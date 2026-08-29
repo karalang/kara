@@ -13512,6 +13512,146 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-14 — a METHOD that hands its owned param back with
+    /// `return r;` rather than as a BLOCK TAIL stands its caller down, exactly
+    /// as the block-tail spelling does.
+    ///
+    /// The caller's stand-down asks two predicates, and a `return`-only callee
+    /// was admitted by NEITHER: `fn_conditionally_returns_param_bare` declines
+    /// `return` statements outright, and `fn_always_returns_param` declined any
+    /// body with no tail expression, on the reasoning that such a body was
+    /// "left to the `return` channel" — a channel that does not accept it. So
+    /// the caller kept firing alongside the result binding: two `Drop` bodies
+    /// for one object on all three compiled backends, against one in the
+    /// interpreter and one for the BLOCK-TAIL spelling of the identical method,
+    /// which are the oracles here.
+    ///
+    /// Two bodies, ONE object: the second body ran on the same struct, and the
+    /// heap payload was still freed exactly once, so the pre-fix defect was a
+    /// spurious body rather than a leak or a double free. That is what makes
+    /// removing one body safe. The memory twin
+    /// `asan_return_spelling_method_param_is_memory_balanced` pins it.
+    #[test]
+    fn e2e_return_spelling_method_returned_param_body_runs_once() {
+        const DROPPER: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct T1 { n: i64 }\n";
+        for (label, body, want) in [
+            // The row's program. Pre-fix `drop 32` / `32` / `drop 32` on every
+            // compiled backend — two bodies for one object.
+            (
+                "method-return-spelling",
+                "impl T1 { fn take(ref self, r: R) -> R { return r; } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 let b = t.take(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // CONTROL — the BLOCK-TAIL spelling of the identical method. Correct
+            // before this fix (B-2026-08-28-70 landed it) and the oracle that
+            // makes one body the right answer rather than a preference.
+            (
+                "method-block-tail-control",
+                "impl T1 { fn keep(ref self, r: R) -> R { r } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 let b = t.keep(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // CONTROL — the FREE-FUNCTION twin of the `return` spelling,
+            // unanimous before and after. The whole family's recurring shape is
+            // a mechanism free functions reach and methods do not, so the
+            // free-fn twin is the reference for every method row.
+            (
+                "free-fn-return-oracle",
+                "fn idf(r: R) -> R { return r; }\n\
+                 fn main() { let b = idf(R { id: 32, tag: f\"h\" }); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // An AGGREGATE `return`. `yields` counts a literal that moves the
+            // param into itself, so this is admitted too — it went from an
+            // AGREED DOUBLE on both backends to one body, matching its free-fn
+            // oracle.
+            (
+                "aggregate-return",
+                "struct Hh { r: R }\n\
+                 impl T1 { fn wrap(ref self, r: R) -> Hh { return Hh { r: r }; } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 let h = t.wrap(R { id: 32, tag: f\"h\" }); println(f\"{h.r.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // The GENERIC method with the `return` spelling, which was a
+            // run-vs-build divergence (interp 1 / compiled 2) and now agrees.
+            (
+                "generic-method-return-spelling",
+                "impl T1 { fn gtake[X](ref self, r: R, x: X) -> R { return r; } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 let b = t.gtake(R { id: 32, tag: f\"h\" }, 5); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // BOUNDARY — a UNIT-returning method whose bare `return;` hands
+            // nothing back. The param dies inside, so the caller must keep
+            // firing. A function with no declared return type is excluded
+            // outright for exactly this reason: there is nothing to hand the
+            // param back THROUGH.
+            (
+                "unit-method-bare-return-keeps-caller-fire",
+                "impl T1 { fn eat(ref self, r: R, k: bool) { if k { return; } \
+                 println(f\"kept {r.id}\"); } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 t.eat(R { id: 31, tag: f\"g\" }, true); println(\"after\"); }\n",
+                "drop 31\nafter\n",
+            ),
+            // BOUNDARY — a `let ... else { return .. }` hides the language's
+            // most common bare `return` behind a statement kind the old walk
+            // never visited. It is a return that does NOT yield the param, so
+            // the caller must keep firing; a walk that missed it would stand the
+            // caller down and LOSE this body.
+            (
+                "let-else-return-keeps-caller-fire",
+                "impl T1 { fn take(ref self, r: R, o: Option[i64]) -> R {\n\
+                 let Some(v) = o else { return R { id: 98, tag: f\"z\" }; };\n\
+                 println(f\"v {v}\"); return r; } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 let b = t.take(R { id: 31, tag: f\"g\" }, None); println(f\"{b.id}\"); }\n",
+                "drop 31\n98\ndrop 98\n",
+            ),
+            // BOUNDARY — a body with NO return that yields the param is not
+            // "always returns the param" merely for lacking a counter-example.
+            // Here the param dies inside and a different value is returned.
+            (
+                "returns-other-value-keeps-caller-fire",
+                "impl T1 { fn swapout(ref self, r: R) -> R { println(f\"saw {r.id}\"); \
+                 return R { id: 99, tag: f\"z\" }; } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 let b = t.swapout(R { id: 31, tag: f\"g\" }); println(f\"{b.id}\"); }\n",
+                "saw 31\ndrop 31\n99\ndrop 99\n",
+            ),
+            // BOUNDARY, AND THE ONLY CASE HERE THAT THE NO-TAIL ARM'S OWN GUARDS
+            // DECIDE. The three cases above are declined by `any_bad_return`
+            // alone — each has a visible `return` that hands something else
+            // back — so they pass even with the guards deleted. This one has NO
+            // `return` at all and NO tail, which is the exact shape
+            // `f.return_type.is_some() && any_good_return` exists to reject:
+            // without both, "no counter-example" would be mistaken for "always
+            // returns the param", the caller would stand down, and nothing
+            // would own the body. Verified by deleting the guards: this case
+            // drops to `saw 31` / `after` on every compiled backend while the
+            // rest stay green.
+            (
+                "no-return-unit-method-keeps-caller-fire",
+                "impl T1 { fn eat2(ref self, r: R) { println(f\"saw {r.id}\"); } }\n\
+                 fn main() { let t = T1 { n: 1 }; \
+                 t.eat2(R { id: 31, tag: f\"g\" }); println(\"after\"); }\n",
+                "saw 31\ndrop 31\nafter\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{DROPPER}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-29-6 — a PASSTHROUGH CALL used DIRECTLY AS A MATCH SCRUTINEE,
     /// with the result never bound, leaves the payload owned by the named
     /// source alone.

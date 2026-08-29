@@ -61248,6 +61248,71 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-14 — a METHOD that hands its owned param back with
+    /// `return r;` rather than as a BLOCK TAIL is memory-balanced.
+    ///
+    /// The behaviour twin is
+    /// `e2e_return_spelling_method_returned_param_body_runs_once`. This side
+    /// pins the claim that made removing a body safe: pre-fix the `return`
+    /// spelling ran the user `Drop` body TWICE on ONE object while the heap
+    /// payload was still freed exactly once, so the defect was a spurious body
+    /// and not a double free. Measured under valgrind at `KARAC_OPT_LEVEL=0`,
+    /// the `return` spelling went from 13 allocs / 13 frees to 12 / 12 — the
+    /// SAME count as the block-tail and free-function forms of the identical
+    /// program, which is the shape of a removed body rather than a new leak.
+    ///
+    /// EVERY param here is named DISTINCTLY (`ra`, `rb`, ... `rg`) on purpose.
+    /// The interpreter shares one moved-out name space across method frames
+    /// (B-2026-08-29-11), so reusing `r` across these methods makes an EARLIER
+    /// method's legitimate move-out suppress a LATER frame's body — measured as
+    /// a lost `drop` under `--interp` that renaming one param alone restores.
+    /// That is a different row's defect, and naming around it keeps this
+    /// fixture measuring this one.
+    #[test]
+    fn asan_return_spelling_method_param_is_memory_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T1 { n: i64 }
+struct Hh { r: R }
+impl T1 {
+    fn take(ref self, ra: R) -> R { return ra; }
+    fn keep(ref self, rb: R) -> R { rb }
+    fn wrap(ref self, rc: R) -> Hh { return Hh { r: rc }; }
+    fn gtake[X](ref self, rd: R, x: X) -> R { return rd; }
+    fn swapout(ref self, re: R) -> R { println(f"saw {re.name}"); return R { id: 99, name: f"z9" }; }
+    fn eat(ref self, rf: R, k: bool) { if k { return; } println(f"kept {rf.name}"); }
+}
+fn take_free(rg: R) -> R { return rg; }
+fn main() {
+    let base: i64 = env.args().len();
+    let t = T1 { n: 1 };
+    let a = t.take(R { id: base, name: f"a{base}" });
+    println(f"{a.id}");
+    let b = t.keep(R { id: base, name: f"b{base}" });
+    println(f"{b.id}");
+    let c = t.wrap(R { id: base, name: f"c{base}" });
+    println(f"{c.r.id}");
+    let d = t.gtake(R { id: base, name: f"d{base}" }, 5);
+    println(f"{d.id}");
+    let e = t.swapout(R { id: base, name: f"e{base}" });
+    println(f"{e.id}");
+    t.eat(R { id: base, name: f"f{base}" }, true);
+    let g = take_free(R { id: base, name: f"g{base}" });
+    println(f"{g.id}");
+    t.take(R { id: base, name: f"h{base}" });
+    println("end");
+}
+"#,
+            &[
+                "1", "drop a1", "1", "drop b1", "1", "drop c1", "1", "drop d1", "saw e1",
+                "drop e1", "99", "drop z9", "drop f1", "1", "drop g1", "drop h1", "end",
+            ],
+            "return-spelling-method-param",
+        );
+    }
+
     /// B-2026-08-29-6 — a PASSTHROUGH CALL used DIRECTLY AS A MATCH SCRUTINEE,
     /// with the result never bound, leaves the payload owned by the named
     /// source alone.

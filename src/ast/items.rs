@@ -1459,10 +1459,18 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
 /// pre-existing behaviour had it right. "Escapes somewhere" is not "someone
 /// else owns it".
 ///
-/// Two conditions, both required:
+/// A body WITH a tail expression is admitted on two conditions, both required:
 ///
 ///  1. every LEAF TAIL of the body yields the param, and
 ///  2. every `return` the walker can see yields it too.
+///
+/// A body with NO tail expression exits only through `return`, so condition 1
+/// has nothing to range over. It is admitted instead when the function declares
+/// a return type, at least one `return` yields the param, and condition 2 still
+/// holds. That arm is B-2026-08-29-14: it previously declined, and since the
+/// `return` channel (`fn_conditionally_returns_param_bare`) declines `return`
+/// statements outright, a `return`-only callee was claimed by neither predicate
+/// and ran its param's `Drop` body twice under codegen.
 ///
 /// "Yields" matches [`fn_returns_param`]'s own notion — the bare identifier, or
 /// an aggregate literal that moves the param into itself (`H { r: r }`,
@@ -1528,17 +1536,29 @@ pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
             _ => out.push(e),
         }
     }
-    /// Is there a `return` that does NOT hand the param back? A bare `return;`
-    /// counts: it exits without yielding, so the param dies on that path.
-    fn bad_return_expr(e: &Expr, name: &str) -> bool {
+    /// Collect the operand of every `return` the walker can see. `None` marks a
+    /// bare `return;`, which yields nothing.
+    ///
+    /// One collector rather than a pair of mirrored predicates, because the
+    /// no-tail arm below needs BOTH facts about the same set ("is any return
+    /// bad" and "is any return good") and two traversals that must stay in
+    /// lockstep are two traversals that can drift apart.
+    ///
+    /// Deliberately does NOT descend into a closure body: a `return` there
+    /// returns from the closure, not from `f`.
+    fn return_operands<'a>(e: &'a Expr, out: &mut Vec<Option<&'a Expr>>) {
         match &e.kind {
-            ExprKind::Return(Some(inner)) => !yields(inner, name) || bad_return_expr(inner, name),
-            ExprKind::Return(None) => true,
+            ExprKind::Return(inner) => {
+                out.push(inner.as_deref());
+                if let Some(x) = inner.as_deref() {
+                    return_operands(x, out);
+                }
+            }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => bad_return_block(b, name),
+            | ExprKind::Par(b) => return_operands_block(b, out),
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -1549,43 +1569,101 @@ pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
                 else_branch,
                 ..
             } => {
-                bad_return_block(then_block, name)
-                    || else_branch
-                        .as_deref()
-                        .is_some_and(|x| bad_return_expr(x, name))
+                return_operands_block(then_block, out);
+                if let Some(x) = else_branch.as_deref() {
+                    return_operands(x, out);
+                }
             }
-            ExprKind::Match { arms, .. } => arms.iter().any(|a| bad_return_expr(&a.body, name)),
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    return_operands(&a.body, out);
+                }
+            }
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => bad_return_block(body, name),
-            _ => false,
+            | ExprKind::LabeledBlock { body, .. } => return_operands_block(body, out),
+            _ => {}
         }
     }
-    fn bad_return_block(b: &Block, name: &str) -> bool {
-        b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Expr(e) => bad_return_expr(e, name),
-            StmtKind::Let { value, .. } => bad_return_expr(value, name),
-            _ => false,
-        }) || b
-            .final_expr
-            .as_deref()
-            .is_some_and(|fe| bad_return_expr(fe, name))
+    fn return_operands_block<'a>(b: &'a Block, out: &mut Vec<Option<&'a Expr>>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => return_operands(e, out),
+                // A `let ... else { return; }` hides the most common bare
+                // `return` in the language behind a statement kind the older
+                // walk did not visit. So do the assignment forms and the
+                // deferred blocks: each can carry a `return` that decides
+                // whether the param still belongs to this frame.
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    return_operands(value, out);
+                    return_operands_block(else_block, out);
+                }
+                StmtKind::Assign { target, value } => {
+                    return_operands(target, out);
+                    return_operands(value, out);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    return_operands(target, out);
+                    return_operands(value, out);
+                }
+                StmtKind::MultiAssign { targets, values } => {
+                    for e in targets.iter().chain(values.iter()) {
+                        return_operands(e, out);
+                    }
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    return_operands_block(body, out)
+                }
+                StmtKind::LetUninit { .. } => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            return_operands(fe, out);
+        }
     }
 
+    let mut returns = Vec::new();
+    return_operands_block(&f.body, &mut returns);
+    // Is there a `return` that does NOT hand the param back? A bare `return;`
+    // counts: it exits without yielding, so the param dies on that path.
+    let any_bad_return = returns.iter().any(|o| !o.is_some_and(|x| yields(x, name)));
+
     let Some(tail) = f.body.final_expr.as_deref() else {
-        // No tail expression at all: every exit is a `return`, and a body whose
-        // only exits are returns is left to the `return` channel rather than
-        // claimed here.
-        return false;
+        // NO TAIL EXPRESSION AT ALL — every exit is a `return` (B-2026-08-29-14).
+        //
+        // This arm used to decline, on the reasoning that such a body was "left
+        // to the `return` channel". It is not: that channel is
+        // `fn_conditionally_returns_param_bare`, which declines `return`
+        // statements outright, so a `return`-only callee was admitted by
+        // NEITHER predicate and its caller kept firing alongside the result
+        // binding. Measured on `fn take(ref self, r: Res) -> Res { return r; }`
+        // with a fresh-temp argument: two `Drop` bodies under all three
+        // compiled backends against one interpreter body, while the BLOCK-TAIL
+        // spelling of the identical method and both free-function twins ran one.
+        //
+        // Safe to claim here for the same reason condition 2 is safe on the tail
+        // path: `any_bad_return` has already ruled out every visible exit that
+        // does not hand the param back. The extra requirement is a return that
+        // DOES hand it back — without it a body that never returns at all (a
+        // bare `loop {}`) would be claimed as "always returns the param" on the
+        // strength of having no counter-example.
+        //
+        // A function with no declared return type is excluded outright: it has
+        // nothing to hand the param back THROUGH, so its param dies inside and
+        // the caller must keep firing.
+        let any_good_return = returns.iter().any(|o| o.is_some_and(|x| yields(x, name)));
+        return f.return_type.is_some() && any_good_return && !any_bad_return;
     };
     let mut tails = Vec::new();
     leaf_tails(tail, &mut tails);
     if tails.is_empty() || !tails.iter().all(|t| yields(t, name)) {
         return false;
     }
-    !bad_return_block(&f.body, name)
+    !any_bad_return
 }
 
 /// B-2026-08-28-22 — is `f`'s positional parameter `arg_index` returned on SOME

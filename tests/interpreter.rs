@@ -33425,6 +33425,120 @@ fn test_method_owned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-14, interpreter leg — a METHOD that hands its owned param back
+/// with `return r;` rather than as a BLOCK TAIL runs the body exactly once.
+///
+/// The interpreter twin of
+/// `e2e_return_spelling_method_returned_param_body_runs_once`. This backend was
+/// already CORRECT for the row's headline program — it was the compiled ones
+/// that doubled — so these cases are here to keep it correct: the fix widened
+/// `fn_always_returns_param`, which this backend also consults (to decide
+/// whether a method frame claims an owned param), so the risk it introduces
+/// here is the OPPOSITE failure, a frame that stops claiming a param nothing
+/// else owns and drops the body entirely.
+///
+/// That is what the `keeps-frame-claim` cases pin: each names a shape the
+/// widened predicate must still DECLINE. Three of them — a unit-returning
+/// method with a bare `return;`, a `let ... else { return .. }`, and a `return`
+/// of some other value — are declined by the "no bad return" test alone, since
+/// each has a visible `return` handing something else back.
+///
+/// The LAST one is different and is the case that pins the no-tail arm's own
+/// guards. It has no `return` at all and no tail, so nothing contradicts
+/// "always returns the param" except `f.return_type.is_some() && any_good_return`.
+/// Verified by deleting those two conditions: that case alone drops its body
+/// (`saw 41` / `after`) while every other case here stays green.
+#[test]
+fn test_return_spelling_method_returned_param_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct B5 { n: i64 }\n";
+    for (label, body, want) in [
+        // The row's headline program. Correct here before the fix; pinned so a
+        // later widening cannot quietly take the body away.
+        (
+            "method-return-spelling",
+            "impl B5 { fn take(ref self, r: R) -> R { return r; } }\n\
+             fn main() { let b = B5 { n: 1 }; let x = b.take(R { id: 41 }); \
+             println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The aggregate `return`, which the compiled backends doubled and this
+        // one got right.
+        (
+            "aggregate-return",
+            "struct Hh { r: R }\n\
+             impl B5 { fn wrap(ref self, r: R) -> Hh { return Hh { r: r }; } }\n\
+             fn main() { let b = B5 { n: 1 }; let h = b.wrap(R { id: 41 }); \
+             println(f\"{h.r.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // KEEPS FRAME CLAIM — a unit-returning method has nothing to hand the
+        // param back THROUGH, so the frame must still own it. Over-admit and
+        // this prints `after` alone.
+        (
+            "unit-bare-return-keeps-frame-claim",
+            "impl B5 { fn eat(ref self, r: R, k: bool) { if k { return; } \
+             println(f\"kept {r.id}\") } }\n\
+             fn main() { let b = B5 { n: 1 }; b.eat(R { id: 41 }, true); \
+             println(\"after\") }\n",
+            "drop 41\nafter\n",
+        ),
+        // KEEPS FRAME CLAIM — `let ... else { return .. }` is the language's
+        // most common bare `return`, behind a statement kind the predicate's
+        // walk did not visit until this fix taught it to.
+        (
+            "let-else-return-keeps-frame-claim",
+            "impl B5 { fn take(ref self, r: R, o: Option[i64]) -> R {\n\
+             let Some(v) = o else { return R { id: 98 }; };\n\
+             println(f\"v {v}\"); return r; } }\n\
+             fn main() { let b = B5 { n: 1 }; let x = b.take(R { id: 41 }, None); \
+             println(f\"{x.id}\") }\n",
+            "drop 41\n98\ndrop 98\n",
+        ),
+        // KEEPS FRAME CLAIM — a `return` of a DIFFERENT value. Having no
+        // counter-example is not the same as always handing the param back,
+        // which is why the no-tail arm also requires a return that yields it.
+        (
+            "returns-other-value-keeps-frame-claim",
+            "impl B5 { fn swapout(ref self, r: R) -> R { println(f\"saw {r.id}\"); \
+             return R { id: 99 }; } }\n\
+             fn main() { let b = B5 { n: 1 }; let x = b.swapout(R { id: 41 }); \
+             println(f\"{x.id}\") }\n",
+            "saw 41\ndrop 41\n99\ndrop 99\n",
+        ),
+        // KEEPS FRAME CLAIM, and the ONLY case here the no-tail arm's own
+        // guards decide — see this test's doc. No `return` anywhere and no
+        // tail: without `f.return_type.is_some() && any_good_return` the
+        // predicate would read "nothing contradicts it" as "always returns the
+        // param", the frame would stop claiming, and this body would vanish.
+        (
+            "no-return-unit-method-keeps-frame-claim",
+            "impl B5 { fn eat2(ref self, r: R) { println(f\"saw {r.id}\"); } }\n\
+             fn main() { let b = B5 { n: 1 }; b.eat2(R { id: 41 }); \
+             println(\"after\") }\n",
+            "saw 41\ndrop 41\nafter\n",
+        ),
+        // CONTROL — the free-function UNIT twin of the case above, which is the
+        // oracle that makes one body the right answer there.
+        (
+            "free-fn-unit-oracle",
+            "fn eatf(r: R) { println(f\"saw {r.id}\"); }\n\
+             fn main() { eatf(R { id: 41 }); println(\"after\") }\n",
+            "saw 41\ndrop 41\nafter\n",
+        ),
+        // CONTROL — the free-function twin, correct throughout.
+        (
+            "free-fn-return-oracle",
+            "fn idf(r: R) -> R { return r; }\n\
+             fn main() { let x = idf(R { id: 41 }); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-17, interpreter leg — one user `Drop` body per object when the
 /// callee returns a FIELD pulled out of an owned struct param. The struct twin
 /// of `test_returned_tuple_param_element_user_drop_body_runs_once`.
