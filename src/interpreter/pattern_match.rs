@@ -391,11 +391,24 @@ impl<'a> super::Interpreter<'a> {
     /// here doubled the payload body against the caller's fire (identifier
     /// args) and orphaned the ownership story for fresh ctor args.
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
+        // B-2026-08-29-10 — the caller-retains carve-out below is a HAND-OFF,
+        // and a METHOD frame's arguments reach no caller-side fire to hand to
+        // (the same asymmetry `owned_param_frame_is_method` records for the
+        // `let`-destructure gates). So in a method frame an owned-param
+        // scrutinee IS consuming and the arm stash must fire: without this a
+        // method whose owned enum / `Option` param has its payload bound out
+        // and not returned ran ZERO bodies here, against one on every compiled
+        // backend for the value-enum spelling and one for both free-function
+        // oracles.
+        let method_frame_owns = self.owned_param_frame_is_method.last().copied() == Some(true);
         match &e.kind {
-            ExprKind::Identifier(n) => !self
-                .owned_param_names_stack
-                .last()
-                .is_some_and(|params| params.contains(n.as_str())),
+            ExprKind::Identifier(n) => {
+                method_frame_owns
+                    || !self
+                        .owned_param_names_stack
+                        .last()
+                        .is_some_and(|params| params.contains(n.as_str()))
+            }
             ExprKind::Call { .. } => true,
             ExprKind::SelfValue => matches!(
                 self.self_param_stack.last(),

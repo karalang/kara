@@ -32913,6 +32913,86 @@ fn test_generic_method_returned_param_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-10, interpreter leg — a METHOD whose owned enum param has its
+/// payload bound out and NOT returned runs that payload's `Drop` body once.
+///
+/// The arm-stash gate `scrutinee_expr_is_consuming` declines an owned-param
+/// scrutinee because the payload's observability "belongs to the CALLER
+/// (caller-retains)". That hand-off is real for a FREE FUNCTION and vacuous for
+/// a METHOD, whose arguments reach no caller-side fire — the same asymmetry
+/// `owned_param_frame_is_method` already records for the `let`-destructure
+/// gates. So a method frame's owned-param scrutinee IS consuming.
+///
+/// Pre-fix the user-enum case printed `v=7` alone here against `drop 7` / `v=7`
+/// on all three compiled backends — a run-vs-build divergence — while both
+/// free-function oracles printed one body on all four surfaces, which is what
+/// makes one the right answer.
+///
+/// SCOPE: the `Option` spelling is NOT fixed by this. Its body is missed on the
+/// CODEGEN side too (the caller arms the payload-bodies walk only for a tracked
+/// VALUE enum, and `Option`/`Result` carry their own machinery), so before this
+/// change it was an agreed silence on both backends and after it the
+/// interpreter is correct while codegen still misses. That is the remaining
+/// half of the row and is deliberately not pinned here to either answer.
+#[test]
+fn test_method_owned_enum_param_payload_body_runs_once() {
+    const DROPPER: &str = "struct Res { id: i64, name: String }\n\
+         impl Drop for Res { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n";
+    for (label, body, want) in [
+        // The shape this fixes: a METHOD taking an owned user enum, binding the
+        // payload out and returning something else.
+        (
+            "method-user-enum-param",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> i64 \
+             { match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let v: i64 = t.take(b); println(f\"v={v}\") }\n",
+            "drop 7\nv=7\n",
+        ),
+        // CONTROLS — the free-function twins, correct before and after on all
+        // four surfaces. They are the oracles the method case is measured
+        // against, so a change that "fixed" methods by moving free functions
+        // would fail here.
+        (
+            "free-fn-oracle-user-enum",
+            "enum Box2 { Full(Res), Empty }\n\
+             fn takef(b: Box2) -> i64 \
+             { match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } }\n\
+             fn main() { let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let v: i64 = takef(b); println(f\"v={v}\") }\n",
+            "drop 7\nv=7\n",
+        ),
+        (
+            "free-fn-oracle-option",
+            "fn takef(b: Option[Res]) -> i64 \
+             { match b { Option.Some(r) => { return r.id; } Option.None => { return 0; } } }\n\
+             fn main() { let b: Option[Res] = Option.Some(Res { id: 7, name: f\"e7\" }); \
+             let v: i64 = takef(b); println(f\"v={v}\") }\n",
+            "drop 7\nv=7\n",
+        ),
+        // BOUNDARY — the payload IS returned, so the caller's binding owns it
+        // and the arm stash must stay silent. This is B-2026-08-29-9's shape:
+        // making the scrutinee consuming must not resurrect that double body.
+        (
+            "payload-returned-stays-single",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> Res \
+             { match b { Box2.Full(r) => { return r; } \
+             Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = t.take(b); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-9 — a METHOD that RETURNS a payload bound out of its owned
 /// enum / `Option` param runs that payload's `Drop` body ONCE.
 ///
