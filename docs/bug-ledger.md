@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 149 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 100 | 0 |
-| perf | 84 | 0 |
+| perf | 85 | 1 |
 | soundness | 80 | 0 |
 | other | 64 | 1 |
 | crash | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1236 | 22 |
+| codegen | 1237 | 23 |
 | typecheck | 278 | 0 |
 | interp | 257 | 12 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1809 surfaced · 25 open · 1757 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1810 surfaced · 26 open · 1757 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (25)
+### Open (26)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -155,6 +155,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1809 surfaced
 | B-2026-08-29-59 | 2026-08-29 | cli | high | `karac run` does NOT reach the JIT lane -- it runs the tree-walk interpreter, despite the JIT being the documented default since LLJIT slice 6c. Measured two ways: hiding `karac_jit_runner` entirely changes nothing (the lane would abort with 'karac_jit_runner not found'), and a 20M-iteration loop that a JIT finishes instantly did not complete in 10 MINUTES. Every ledger row whose evidence cites `karac run` as a 'JIT surface' has therefore been reading the interpreter twice | — |
 | B-2026-08-29-60 | 2026-08-29 | interp+codegen | low | `asinh` / `acosh` / `atanh` at f32 match the interpreter under NEITHER width rule -- Rust std implements the inverse hyperbolics as formulas rather than libm calls, so its f32 impl, its f64 impl and the `asinhf` codegen calls are three different algorithms and no interpreter-side choice reproduces the third. | — |
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
+| B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 
 ### Relocated (2)
 
