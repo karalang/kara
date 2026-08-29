@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 226 | 4 |
-| run-vs-build | 217 | 6 |
+| run-vs-build | 219 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 148 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1196 | 10 |
+| codegen | 1198 | 12 |
 | typecheck | 278 | 0 |
-| interp | 230 | 3 |
+| interp | 231 | 4 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1761 surfaced · 11 open · 1724 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1763 surfaced · 13 open · 1724 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,6 +141,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1761 surfaced
 | B-2026-08-29-11 | 2026-08-29 | interp | medium | The interpreter's method frames SHARE one moved-out name space, so one method's legitimately-marked param suppresses an unrelated LATER method's identically-named param and loses its `Drop` body -- the accidental leak cannot simply be closed, because it is currently the ONLY thing suppressing a payload bound out of an owned enum param and returned (B-2026-08-29-9) | — |
 | B-2026-08-29-12 | 2026-08-29 | codegen | medium | A `Tensor` FIELD OF A STRUCT IS NEVER FREED -- 72 B per struct, with no ref return, no method and no read of the field anywhere; the parent row's "tensor ref-return" framing is wrong, and a one-line classifier arm would convert the leak into a DOUBLE FREE because there is no tensor deep-copy peer (measured: 9 allocs on a by-value pass vs a `Vec` field's 10) | — |
 | B-2026-08-29-13 | 2026-08-29 | codegen | medium | A `match` ARM THAT YIELDS A SHARED CHILD INTO A BINDING LEAKS THAT CHILD'S BOX -- `let keep = match t { Bin(l, r) => l };` over a recursive `shared enum` is 11 allocs / 10 frees, 32 B lost, IDENTICALLY for a bound and a fresh-temp scrutinee, so it is not a freshness bug; returning the child instead of binding it is clean | — |
+| B-2026-08-29-14 | 2026-08-29 | codegen | medium | A METHOD that returns its owned param with `return r;` (rather than as a BLOCK TAIL) runs the param's `Drop` body TWICE under codegen for a FRESH-TEMP argument -- interp `got 7 / drop 7 e7` vs aot `drop 7 e7 / got 7 / drop 7 e7`; the block-tail spelling of the identical method is correct on both (277621a fixed that cell and left this one), and both free-function twins are correct | — |
+| B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | BOTH BACKENDS run a method's owned param `Drop` body TWICE when the argument is a NAMED BINDING and the method returns the param with `return r;` -- `drop 7 e7 / got 7 / drop 7 e7` on interp AND aot, so the backends AGREE and no A/B gate can see it; the FRESH-TEMP spelling of the same call diverges instead, and the free-function twin is correct on both | — |
 
 ### Relocated (2)
 
