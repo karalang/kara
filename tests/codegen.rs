@@ -100772,6 +100772,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vector_unary_math_lane_width_matches_the_interpreter() {
+        // The COMPILED half of the oracle pair for B-2026-08-29-40. The bug was
+        // the interpreter's (it kept f64 bits in a bf16 lane); codegen was right
+        // all along, computing each lane at the element width. So this does not
+        // fail without that fix — its job is to nail the compiled values down so
+        // the two halves cannot drift apart again, and it is character-identical
+        // to `tests/interpreter.rs::test_vector_unary_math_rounds_lanes_to_element_width`.
+        //
+        // Read that test for why all five non-integral methods are pinned rather
+        // than `sqrt` alone, and why an f32 and an f64 line bracket them.
+        // Verified byte-identical under `karac run --interp`, `karac run`,
+        // `karac build`, and `KARAC_AUTO_PAR=0 karac build`.
+        assert_eq!(
+            run_program(
+                r#"
+fn main() {
+    let v: Vector[bf16, 4] = Vector[bf16, 4](1.0bf16, 2.0bf16, 3.0bf16, 7.0bf16);
+    println(v.sqrt()[1]);
+    println(v.sqrt().reduce_sum());
+    println(v.exp()[1]);
+    println(v.ln()[2]);
+    println(v.tanh()[0]);
+    println(v.sigmoid()[1]);
+    let f: Vector[f32, 4] = Vector[f32, 4](2.0f32, 3.0f32, 5.0f32, 7.0f32);
+    println(f.sqrt()[0]);
+    let d: Vector[f64, 2] = Vector[f64, 2](2.0, 3.0);
+    println(d.sqrt()[0]);
+}
+"#,
+            ),
+            Some(
+                "1.4140625\n6.75\n7.375\n1.1015625\n0.76171875\n0.87890625\n\
+                 1.4142135381698608\n1.4142135623730951\n"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
     fn test_ir_vector_exp_uses_polynomial_not_intrinsic() {
         // `v.exp()` on an f32 vector is the hand-written Cephes polynomial
         // (guaranteed SIMD — see compile_vector_exp), NOT `@llvm.exp` (which

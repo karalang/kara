@@ -2151,9 +2151,9 @@ impl<'a> super::Interpreter<'a> {
             // element-wise `sqrt` / `exp` / `ln` / `tanh` / `sigmoid` and
             // `floor` / `ceil` / `round` / `trunc` on a float-lane vector.
             // Computed per lane at f64 precision (the tree-walk is untyped — all
-            // floats are f64); the compiled backends compute at the vector's
-            // element width, so an `f32` vector's low-order bits can differ, as
-            // for the other float ops. `round` is half-away-from-zero (Rust
+            // floats are f64) and then ROUNDED BACK to the receiver's element
+            // width, so a narrow-lane vector does not keep bits its own element
+            // type cannot represent. `round` is half-away-from-zero (Rust
             // `f64::round` ≡ `llvm.round`, matching the scalar `x.round()`).
             // NOTE on `exp` / `ln` / `sigmoid` / `tanh`: `karac build` lowers
             // `exp` and `ln` to hand-written Cephes approximations — a minimax
@@ -2166,20 +2166,65 @@ impl<'a> super::Interpreter<'a> {
             // wider than the low-order-bit rounding of the intrinsic-lowered
             // ops `sqrt` / the rounding family).
             "sqrt" | "exp" | "ln" | "tanh" | "sigmoid" | "floor" | "ceil" | "round" | "trunc" => {
+                // Round each lane back to the receiver's ELEMENT width, exactly
+                // as the scalar path does (`round_float_to_span_width` at the
+                // `sqrt` / `float_math` arms in `method_call.rs`). `Value::Float`
+                // is an f64 and carries no width tag, so a lane left unrounded
+                // holds bits the vector's own element type cannot represent:
+                // every compiled backend evaluates `Vector[bf16, 4].sqrt()` at
+                // bf16 and returns 1.4140625 for a lane of 2, where the
+                // unrounded f64 1.4142135623730951 came back here, and the
+                // interpreter thereby disagreed with ITSELF — its scalar
+                // `two.sqrt()` rounds (B-2026-08-29-40).
+                //
+                // This is the FOURTH site of one pattern: B-2026-07-22-4
+                // (narrowing casts), B-2026-08-05-31 (`round_tensor_elems`, the
+                // tensor element-wise twin) and B-2026-08-14-7 (scalar
+                // arithmetic, scalar `sqrt` / `float_math`) took the first
+                // three. The vector element-wise path was the one left holding
+                // f64 bits in a narrower slot.
+                //
+                // The width is read ONCE from the collision-proof
+                // `vector_method_receivers` (keyed by the call span) rather than
+                // per lane — the same channel the `to_bits` arm below uses, and
+                // for the same reason: the method-call node has already
+                // overwritten this span in `expr_types` with the call's RESULT
+                // type. A non-float element (or a span the typechecker recorded
+                // nothing at) leaves the lane untouched.
+                //
+                // f64 is the identity here, so this does NOT touch the residual
+                // f64 disagreement on `exp` / `ln` / `sigmoid` / `tanh` — that
+                // one is codegen's Cephes approximation against this arm's exact
+                // libm (see the note above), a different question from carrying
+                // the wrong width, and it stays open in both directions.
+                let elem_size = self
+                    .typecheck_result
+                    .vector_method_receivers
+                    .get(&crate::resolver::SpanKey::from_span(span))
+                    .and_then(|(elem, _)| match elem {
+                        crate::typechecker::Type::Float(size) => Some(*size),
+                        _ => None,
+                    });
                 let out: Vec<Value> = lanes
                     .into_iter()
                     .map(|lane| match lane {
-                        Value::Float(x) => Value::Float(match method {
-                            "sqrt" => x.sqrt(),
-                            "exp" => x.exp(),
-                            "ln" => x.ln(),
-                            "tanh" => x.tanh(),
-                            "floor" => x.floor(),
-                            "ceil" => x.ceil(),
-                            "round" => x.round(),
-                            "trunc" => x.trunc(),
-                            _ => 1.0 / (1.0 + (-x).exp()), // sigmoid
-                        }),
+                        Value::Float(x) => {
+                            let r = match method {
+                                "sqrt" => x.sqrt(),
+                                "exp" => x.exp(),
+                                "ln" => x.ln(),
+                                "tanh" => x.tanh(),
+                                "floor" => x.floor(),
+                                "ceil" => x.ceil(),
+                                "round" => x.round(),
+                                "trunc" => x.trunc(),
+                                _ => 1.0 / (1.0 + (-x).exp()), // sigmoid
+                            };
+                            match elem_size {
+                                Some(size) => super::round_float_to_declared_size(r, size),
+                                None => Value::Float(r),
+                            }
+                        }
                         other => other,
                     })
                     .collect();

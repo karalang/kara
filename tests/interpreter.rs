@@ -24379,6 +24379,52 @@ fn test_bitwise_not_on_vector_lanes_uses_lane_width() {
     );
 }
 
+// A `Vector[T, N]` unary math lane must be ROUNDED BACK to the element width,
+// exactly as the scalar `x.sqrt()` / `x.exp()` path is. The tree-walk computes
+// every lane in f64, so before B-2026-08-29-40 a narrow-lane vector kept bits
+// its own element type cannot hold: `Vector[bf16, 4].sqrt()` returned the f64
+// 1.4142135623730951 for a lane of 2, where all three compiled backends return
+// the bf16 1.4140625 — and the interpreter disagreed with ITSELF, since its own
+// scalar `two.sqrt()` already rounded.
+//
+// The row that filed this said only `sqrt` diverged and that the other eight
+// methods "agree by luck of the inputs". Measured: `exp`, `ln`, `tanh` and
+// `sigmoid` diverge too, on inputs as ordinary as 1..7 — only the four rounding
+// methods (`floor`/`ceil`/`round`/`trunc`) agreed, and those agree
+// STRUCTURALLY, because an integral result already sits on the narrow grid. So
+// all five non-integral methods are pinned here, not just `sqrt`.
+//
+// The f32 and f64 lines are the two boundaries: f32 must round (to the f32
+// sqrt(2)), and f64 must NOT — it is the identity, and a fix that over-rounded
+// would show up as an f64 lane losing digits. Every value below is the output
+// of `karac build`, byte-identical under `karac run` and `KARAC_AUTO_PAR=0`.
+#[test]
+fn test_vector_unary_math_rounds_lanes_to_element_width() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let v: Vector[bf16, 4] = Vector[bf16, 4](1.0bf16, 2.0bf16, 3.0bf16, 7.0bf16);\n\
+             \x20   println(v.sqrt()[1]);\n\
+             \x20   println(v.sqrt().reduce_sum());\n\
+             \x20   println(v.exp()[1]);\n\
+             \x20   println(v.ln()[2]);\n\
+             \x20   println(v.tanh()[0]);\n\
+             \x20   println(v.sigmoid()[1]);\n\
+             \x20   let f: Vector[f32, 4] = Vector[f32, 4](2.0f32, 3.0f32, 5.0f32, 7.0f32);\n\
+             \x20   println(f.sqrt()[0]);\n\
+             \x20   let d: Vector[f64, 2] = Vector[f64, 2](2.0, 3.0);\n\
+             \x20   println(d.sqrt()[0]);\n\
+             }\n"),
+        "1.4140625\n\
+         6.75\n\
+         7.375\n\
+         1.1015625\n\
+         0.76171875\n\
+         0.87890625\n\
+         1.4142135381698608\n\
+         1.4142135623730951\n"
+    );
+}
+
 #[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
