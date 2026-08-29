@@ -258,6 +258,15 @@ impl<'a> super::Interpreter<'a> {
             // now). Mirrors codegen's
             // `disarm_user_drop_fields_for_moved_field`.
             self.suppress_moved_out_drop_field(stmt);
+            // B-2026-08-29-24 — `let s = S { r: r };` wraps a param VIEW into a
+            // fresh local; the caller runs that field's body, so mask it out of
+            // this binding's field walk. Same channel as the move-out above.
+            self.mask_param_view_struct_literal_fields(stmt);
+            // B-2026-08-29-24 — the enum sibling: `let w = W2.Two(r, …)` moves
+            // a param view into ONE payload slot; mask that slot alone.
+            self.mask_param_view_enum_ctor_slots(stmt);
+            // B-2026-08-29-24 — and the tuple sibling: `let t = (r, 5);`.
+            self.mask_param_view_tuple_literal_elems(stmt);
             // Move-suppression for `forget(x);` — the FFI ownership-handoff
             // primitive removes the source binding's Drop slot so the
             // destructor never fires (Slice 4).
@@ -1186,6 +1195,40 @@ impl<'a> super::Interpreter<'a> {
             self.run_optres_payload_user_drops(name, &variant, &data);
             return;
         }
+        // B-2026-08-29-24 — blank out the payload slots whose body belongs to
+        // somebody else (a constructor moved a param VIEW in). Masking the
+        // VALUE rather than threading a gate through the walk is the struct
+        // mask's idiom one container over: the walk skips a slot that is not a
+        // `Value::Struct`, and blanking preserves index alignment with the
+        // declared payload list, which removing an item would not.
+        let masked: Vec<usize> = self
+            .moved_out_enum_payload_slots
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, i)| *i)
+            .collect();
+        if !masked.is_empty() {
+            if let Value::EnumVariant {
+                enum_name,
+                variant,
+                data: EnumData::Tuple(items),
+            } = value
+            {
+                let mut items = items.clone();
+                for i in masked {
+                    if let Some(slot) = items.get_mut(i) {
+                        *slot = Value::Unit;
+                    }
+                }
+                let masked_value = Value::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant: variant.clone(),
+                    data: EnumData::Tuple(items),
+                };
+                self.run_enum_payload_user_drops_value(&masked_value);
+                return;
+            }
+        }
         self.run_enum_payload_user_drops_value(value);
     }
 
@@ -1343,6 +1386,230 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-29-24 — interpreter twin of codegen's
+    /// `mask_param_view_struct_literal_fields`. `let s = S { r: r };` stores a
+    /// param VIEW into a fresh local, and under caller-retains the caller runs
+    /// that value's `Drop` body, so this binding's field walk ran it a second
+    /// time. B-2026-08-29-19 covered the variant-constructor spelling of the
+    /// same move; the struct literal is the same move through a different
+    /// constructor.
+    ///
+    /// Routed through `moved_out_struct_field_bodies` — the per-field mask
+    /// B-2026-08-03-8 built for a field moved OUT of a binding — because the
+    /// destination is the same: a body this binding must stop running because
+    /// something else runs it. That keeps the mask PER FIELD, so a mixed
+    /// literal (`S3 { a: r, b: R { id: 2 } }`) loses only the view's body,
+    /// matching codegen's masked walker slot for slot.
+    ///
+    /// The per-field admission test is `value_runs_user_drop` over the BOUND
+    /// field value, because that is exactly what
+    /// `drop_user_drop_fields_of_binding` will visit — each backend asking the
+    /// question its OWN walker asks, the pairing B-2026-08-29-19 established.
+    fn mask_param_view_struct_literal_fields(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(bname) = &pattern.kind else {
+            return;
+        };
+        let ExprKind::StructLiteral { fields, spread, .. } = &value.kind else {
+            return;
+        };
+        // A spread fills fields from a base value this walk has not examined;
+        // masking a subset against an unexamined base is how a body goes
+        // missing. Codegen's twin bails on the same shape.
+        if spread.is_some() {
+            return;
+        }
+        // B-2026-08-27-48 — a method frame's arguments reach no caller-side
+        // fire, so there is no other owner to hand the body to. Same guard
+        // `let_destructures_owned_param` takes, for the same reason.
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return;
+        }
+        let Some(Value::Struct {
+            name: sname,
+            fields: bound,
+        }) = self.env.get(bname)
+        else {
+            return;
+        };
+        let mut views: Vec<String> = Vec::new();
+        let mut visited = 0usize;
+        for init in fields {
+            let Some(fv) = bound.get(&init.name) else {
+                return;
+            };
+            if !self.value_runs_user_drop(fv) {
+                continue;
+            }
+            visited += 1;
+            let is_view = matches!(&init.value.kind, ExprKind::Identifier(src)
+                if self.owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(src.as_str())));
+            if is_view {
+                views.push(init.name.clone());
+            }
+        }
+        if views.is_empty() {
+            return;
+        }
+        let all_views = views.len() == visited;
+        // A struct with its own `impl Drop` has no per-binding field walker on
+        // codegen's side — those bodies run inside the type-level
+        // `karac_drop_<T>` wrapper, which can only be swapped for a variant
+        // that drops ALL of them. That swap is sound only when every visited
+        // field was a view, so a MIXED literal over a Drop-bearing struct stays
+        // at its double there. Decline it here too: this backend could mask it
+        // per field, and doing so alone would turn an agreed defect into a
+        // run-vs-build divergence — the worse of the two, and the trade
+        // B-2026-08-29-19 already had to back out once for `Option`.
+        if !all_views && self.program.drop_method_keys.contains_key(&sname) {
+            return;
+        }
+        let bname = bname.clone();
+        for f in views {
+            self.moved_out_struct_field_bodies
+                .insert((bname.clone(), f));
+        }
+        // Every visited field was a view, so the binding hands out nothing of
+        // its own: propagate view-ness the way B-2026-08-01-15's rebind does,
+        // or `let s2 = s;` re-arms a full walk over the fields just masked.
+        // Gated on the struct having no `impl Drop` of its own — that body IS
+        // the binding's own and no caller runs it, so a view mark there would
+        // silence it. Codegen's twin gets the gate for free: its arm is
+        // `has_field_user_drop`, which is `!has_user_drop`.
+        if all_views && !self.program.drop_method_keys.contains_key(&sname) {
+            if let Some(top) = self.owned_param_names_stack.last_mut() {
+                top.insert(bname);
+            }
+        }
+    }
+
+    /// B-2026-08-29-24 — the enum sibling of
+    /// [`Self::mask_param_view_struct_literal_fields`], and the half
+    /// B-2026-08-29-19 had to leave wrong. That fix withheld the payload walk
+    /// WHOLE when every slot the constructor filled was a param view, and could
+    /// not act at all on a MIXED wrap (`W2.Two(r, R { id: 2 })`): one walk
+    /// covered both slots, so suppressing it would have traded the view's
+    /// doubled body for the fresh payload's missing one. Recording the view
+    /// SLOT lets the walk skip it and keep the rest.
+    ///
+    /// Runs only where the all-views predicate declined, since that path
+    /// suppresses the binding's Drop registration outright and there is then no
+    /// walk left to mask.
+    fn mask_param_view_enum_ctor_slots(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(bname) = &pattern.kind else {
+            return;
+        };
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return;
+        };
+        // B-2026-08-27-48 — a method frame's arguments reach no caller-side
+        // fire; same guard the sibling and `let_destructures_owned_param` take.
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return;
+        }
+        let variant = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } => match segments.last() {
+                Some(v) => v.clone(),
+                None => return,
+            },
+            _ => return,
+        };
+        let Some(Value::EnumVariant {
+            enum_name,
+            variant: bound_variant,
+            data: EnumData::Tuple(payloads),
+        }) = self.env.get(bname)
+        else {
+            return;
+        };
+        // `Option` / `Result` payloads ride the `optres_*` machinery, which has
+        // no walker to mask — the same exclusion, for the same reason, that
+        // `let_ctor_payloads_are_param_views` carries.
+        if enum_name == "Option" || enum_name == "Result" {
+            return;
+        }
+        if bound_variant != variant {
+            return;
+        }
+        let mut views: Vec<usize> = Vec::new();
+        for (i, payload) in payloads.iter().enumerate() {
+            if !self.value_runs_user_drop(payload) {
+                continue;
+            }
+            let Some(arg) = args.get(i) else {
+                return;
+            };
+            let is_view = matches!(&arg.value.kind, ExprKind::Identifier(src)
+                if self.owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(src.as_str())));
+            if is_view {
+                views.push(i);
+            }
+        }
+        let bname = bname.clone();
+        for i in views {
+            self.moved_out_enum_payload_slots.insert((bname.clone(), i));
+        }
+    }
+
+    /// B-2026-08-29-24 — the tuple sibling of
+    /// [`Self::mask_param_view_struct_literal_fields`]. `let t = (r, 5);` moves
+    /// a param VIEW into an element; the caller runs that value's body, so this
+    /// binding's element walk must skip it.
+    ///
+    /// Routed through `moved_out_tuple_elem_bodies`, the per-element mask
+    /// B-2026-08-03-3 built for an element moved OUT of a tuple — the same
+    /// destination for the same reason, and per element, so a mixed literal
+    /// keeps the fresh element's body. Codegen's twin masks the same index out
+    /// of `emit_tuple_elem_user_drop_bodies_fn_skipping`.
+    fn mask_param_view_tuple_literal_elems(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(bname) = &pattern.kind else {
+            return;
+        };
+        let ExprKind::Tuple(elems) = &value.kind else {
+            return;
+        };
+        // B-2026-08-27-48 — same method-frame guard as the siblings.
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return;
+        }
+        let Some(Value::Tuple(bound)) = self.env.get(bname) else {
+            return;
+        };
+        let mut views: Vec<usize> = Vec::new();
+        for (i, e) in elems.iter().enumerate() {
+            let Some(ev) = bound.get(i) else {
+                return;
+            };
+            if !self.value_runs_user_drop(ev) {
+                continue;
+            }
+            let is_view = matches!(&e.kind, ExprKind::Identifier(src)
+                if self.owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(src.as_str())));
+            if is_view {
+                views.push(i);
+            }
+        }
+        let bname = bname.clone();
+        for i in views {
+            self.moved_out_tuple_elem_bodies.insert((bname.clone(), i));
+        }
+    }
+
     /// The head type name of a field's DECLARED type (`r: Res` -> `Res`),
     /// or `None` for a non-path type. A bare generic param yields its own
     /// letter (`T`), which never matches a runtime struct name — which is how
@@ -1407,25 +1674,22 @@ impl<'a> super::Interpreter<'a> {
             _ => return false,
         };
         let Some(Value::EnumVariant {
-            enum_name,
             variant: bound_variant,
             data: EnumData::Tuple(payloads),
+            ..
         }) = self.env.get(bname)
         else {
             return false;
         };
-        // `Option` / `Result` are excluded to MATCH CODEGEN, not because the
-        // shape is correct there. Their payload TypeExpr is the enum's own
-        // generic parameter, which `emit_enum_payload_user_drop_bodies_fn`
-        // skips, so no walker exists for codegen's twin to withhold and
-        // `let q = Some(r);` still doubles on both compiled backends. Fixing
-        // only this side turned an agreed defect into a run-vs-build
-        // divergence — measured, which is how the exclusion got written — and
-        // an agreed defect is the better of the two until the `optres_*` leg
-        // that owns those payloads is fixed alongside (B-2026-08-29-24).
-        if enum_name == "Option" || enum_name == "Result" {
-            return false;
-        }
+        // B-2026-08-29-24 — `Option` / `Result` USED to be excluded here to
+        // match codegen: their payload TypeExpr is the enum's own generic
+        // parameter, which `emit_enum_payload_user_drop_bodies_fn` skips, so
+        // there was no codegen walker to withhold and fixing this side alone
+        // turned an agreed defect into a run-vs-build divergence. The exclusion
+        // is gone because the other half landed with it: codegen's `optres_*`
+        // let-site now withholds through `optres_ctor_payloads_are_all_param_views`.
+        // The two must keep moving together — a change to one of these gates
+        // without the other re-opens exactly that divergence.
         // A struct-VARIANT constructor is not an `ExprKind::Call`, so only the
         // tuple form reaches here; requiring the bound variant to be the one
         // the syntax names keeps a shadowed constructor from being read as one.

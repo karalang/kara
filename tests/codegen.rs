@@ -37945,9 +37945,12 @@ fn main() {
             .as_deref(),
             Some("dR1\nv=7\n")
         );
-        // 7. GUARD — MIXED payloads keep the shared walker and stay at the
-        //    defect's three bodies. Pinned as observed, not as preferred; see
-        //    the doc above and B-2026-08-29-24.
+        // 7. MIXED payloads. One walker covered both slots, so this fix could
+        //    only arm or withhold it whole and left the row at three bodies;
+        //    B-2026-08-29-24's per-slot mask
+        //    (`emit_enum_payload_user_drop_bodies_fn_skipping`) masks the view
+        //    slot alone, so the fresh payload keeps its body (`dR2`) and the
+        //    view's returns to the caller (`dR1`). Was `dR1 dR2 dR1`.
         assert_eq!(
             run_program(
                 "struct R { id: i64 }\n\
@@ -37959,7 +37962,7 @@ fn main() {
                  fn main() { let v = take(R { id: 1 }); println(f\"v={v}\"); }"
             )
             .as_deref(),
-            Some("dR1\ndR2\ndR1\nv=7\n")
+            Some("dR2\ndR1\nv=7\n")
         );
         // 8. GUARD — the wrap ESCAPES, so the callee owns nothing to withhold.
         assert_eq!(
@@ -37976,6 +37979,281 @@ fn main() {
             ))
             .as_deref(),
             Some("dR1\nmid\n")
+        );
+    }
+
+    /// B-2026-08-29-24 — the OTHER wrap kinds, and the MIXED wraps that a
+    /// whole-walker suppression could not touch.
+    ///
+    /// B-2026-08-29-19 fixed the variant constructor and nothing else: a struct
+    /// literal, a tuple literal and `Some(..)` doubled a param view's `Drop`
+    /// body exactly the same way, and a mixed wrap of any kind doubled it while
+    /// the fresh payload beside it needed to keep its own. Three mechanisms
+    /// close that, each the maskable form of a walker that used to be
+    /// all-or-nothing: `emit_enum_payload_user_drop_bodies_fn_skipping` (new
+    /// here), `emit_user_drop_field_bodies_fn_skipping` and
+    /// `emit_tuple_elem_user_drop_bodies_fn_skipping` (both already existed for
+    /// move-outs).
+    ///
+    /// Every case is a body COUNT, not a memory fact — ASAN/LSan were clean on
+    /// these shapes before the fix as well as after
+    /// (`asan_wrapped_param_view_payload_frees_once`) — and every one agreed
+    /// across all three backends while wrong, so nothing but an absolute
+    /// expectation could have caught them.
+    #[test]
+    fn e2e_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R {\n\
+                   \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                   }\n\
+                   enum W2 { Two(R, R), None3 }\n\
+                   struct S { r: R }\n\
+                   struct S2 { r: R, k: i64 }\n\
+                   struct S3 { a: R, b: R }\n\
+                   struct Sd { r: R }\n\
+                   impl Drop for Sd {\n\
+                   \x20   fn drop(mut ref self) { println(\"dSd\") }\n\
+                   }\n";
+        // (label, body of `take`, expected output)
+        for (label, body, want) in [
+            // ── the wrap kinds B-2026-08-29-19 left doubling ───────────────
+            ("struct-literal", "let s = S { r: r };", "dR1\nv=7\n"),
+            // An inert sibling field must not change the answer: the mask is
+            // keyed on the walker's visited indices, and `k` is not one.
+            (
+                "struct-literal-inert-field",
+                "let s = S2 { r: r, k: 9 };",
+                "dR1\nv=7\n",
+            ),
+            ("tuple-literal", "let t = (r, 5);", "dR1\nv=7\n"),
+            ("option-wrap", "let q = Some(r);", "dR1\nv=7\n"),
+            // A struct with its OWN `impl Drop` has no per-binding field
+            // walker — the bodies run inside the type-level `karac_drop_<T>`
+            // wrapper — so this goes through the wholesale wrapper swap
+            // instead. Its own body still fires; only the view's is withheld.
+            (
+                "owndrop-struct-all-views",
+                "let s = Sd { r: r };",
+                "dSd\ndR1\nv=7\n",
+            ),
+            // ── MIXED wraps: one view, one fresh, one walker ───────────────
+            // The fresh payload keeps its body, the view's returns to the
+            // caller. Getting this wrong in the other direction — dropping the
+            // walker wholesale — is the reason B-2026-08-29-19 declined these.
+            (
+                "mixed-enum",
+                "let w = W2.Two(r, R { id: 2 });",
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "mixed-struct",
+                "let s = S3 { a: r, b: R { id: 2 } };",
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "mixed-tuple",
+                "let t = (r, R { id: 2 });",
+                "dR2\ndR1\nv=7\n",
+            ),
+            // ── view-ness propagates THROUGH the wrap ──────────────────────
+            // Or the rebind re-arms a full walk over the fields just masked —
+            // the same propagation B-2026-08-01-15 does for a plain rebind,
+            // reached through a literal.
+            (
+                "struct-then-rebind",
+                "let s = S { r: r }; let s2 = s;",
+                "dR1\nv=7\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!(
+                    "{hdr}\
+                     fn take(r: R) -> i64 {{ {body} 7 }}\n\
+                     fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
+                ))
+                .as_deref(),
+                Some(want),
+                "case {label}"
+            );
+        }
+        // GUARD — a payload constructed FRESH in each wrap kind: no caller owns
+        // it, so the callee's walk is the ONLY fire and must stay armed. An
+        // over-broad mask silences all of these, and a lost body reads as a
+        // passing test unless something pins the output.
+        for (label, body, want) in [
+            (
+                "guard-fresh-struct",
+                "let s = S { r: R { id: 3 } };",
+                "dR3\nv=7\n",
+            ),
+            (
+                "guard-fresh-tuple",
+                "let t = (R { id: 3 }, 5);",
+                "dR3\nv=7\n",
+            ),
+            (
+                "guard-fresh-option",
+                "let q = Some(R { id: 3 });",
+                "dR3\nv=7\n",
+            ),
+            (
+                "guard-fresh-owndrop",
+                "let s = Sd { r: R { id: 3 } };",
+                "dSd\ndR3\nv=7\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!(
+                    "{hdr}\
+                     fn take(k: i64) -> i64 {{ {body} 7 }}\n\
+                     fn main() {{ let v = take(3); println(f\"v={{v}}\"); }}"
+                ))
+                .as_deref(),
+                Some(want),
+                "case {label}"
+            );
+        }
+        // GUARD — a genuine LOCAL wrapped. The rule keys on the source being an
+        // owned param, which is exactly when some caller fires instead; a local
+        // fails that condition in every wrap kind and keeps its body here.
+        for (label, body, want) in [
+            ("guard-local-struct", "let s = S { r: m };", "dR4\nv=7\n"),
+            ("guard-local-tuple", "let t = (m, 5);", "dR4\nv=7\n"),
+            ("guard-local-option", "let q = Some(m);", "dR4\nv=7\n"),
+        ] {
+            assert_eq!(
+                run_program(&format!(
+                    "{hdr}\
+                     fn take() -> i64 {{ let m = R {{ id: 4 }}; {body} 7 }}\n\
+                     fn main() {{ let v = take(); println(f\"v={{v}}\"); }}"
+                ))
+                .as_deref(),
+                Some(want),
+                "case {label}"
+            );
+        }
+        // GUARD — the wrap ESCAPES, so the callee owns nothing to withhold and
+        // the caller's own fire is the single body.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R) -> S {{ S {{ r: r }} }}\n\
+                 fn main() {{ let s = take(R {{ id: 5 }}); println(\"mid\"); }}"
+            ))
+            .as_deref(),
+            Some("dR5\nmid\n")
+        );
+        // ── PINNED AT THE DEFECT, both agreed across all three backends ─────
+        // A MIXED literal of a struct that has its own `impl Drop`. Its field
+        // bodies run inside the type-level `karac_drop_<T>` wrapper, which can
+        // only be swapped for a variant that drops ALL of them — so masking one
+        // slot would cost the fresh field's body, the exact trade this row
+        // exists to avoid. Left doubling, and the interpreter declines the same
+        // shape so the two stay agreed. UNFIXED (B-2026-08-29-40).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 struct Sd3 {{ a: R, b: R }}\n\
+                 impl Drop for Sd3 {{\n\
+                 \x20   fn drop(mut ref self) {{ println(\"dSd3\") }}\n\
+                 }}\n\
+                 fn take(r: R) -> i64 {{ let s = Sd3 {{ a: r, b: R {{ id: 2 }} }}; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dSd3\ndR2\ndR1\ndR1\nv=7\n")
+        );
+        // A whole-value REBIND after a MIXED wrap re-arms the full walk: the
+        // per-slot mask is keyed on the binding, and the destination gets a
+        // fresh registration with no mask. The all-views case propagates
+        // view-ness instead, which is why `struct-then-rebind` above is fixed
+        // and this is not. UNFIXED (B-2026-08-29-41).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R) -> i64 {{ let w = W2.Two(r, R {{ id: 2 }}); let w2 = w; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR1\ndR2\ndR1\nv=7\n")
+        );
+        // A `Vec` literal doubles as well, and the row that prompted this fix
+        // listed it beside the others — but it is NOT the same defect: a plain
+        // LOCAL moved into one doubles identically, with no param anywhere, so
+        // the cause is a move-suppression hole rather than caller-retains.
+        // Both spellings pinned, because it is the pair that shows which bug it
+        // is. UNFIXED (B-2026-08-29-42).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R) -> i64 {{ let v2 = [r]; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR1\ndR1\nv=7\n")
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take() -> i64 {{ let m = R {{ id: 4 }}; let v2 = [m]; 7 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR4\ndR4\nv=7\n")
+        );
+        // ...and the same Vec literal with a FRESH element is correct, which is
+        // what makes the two above a move-suppression hole and not a walker
+        // that fires twice unconditionally.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take() -> i64 {{ let v2 = [R {{ id: 4 }}]; 7 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR4\nv=7\n")
+        );
+        // Moving a param view back OUT of the struct it was just wrapped into:
+        // the move-out hands the field's body to `x`, correctly, but `x`
+        // inherits nothing about the field having been a VIEW, so it registers
+        // a body the caller also runs. Pre-existing — measured identical on a
+        // pre-fix build — and the LOCAL-source twin below is correct, which is
+        // what isolates the cause. UNFIXED (B-2026-08-29-44).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R) -> i64 {{ let s = S {{ r: r }}; let x = s.r; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR1\ndR1\nv=7\n")
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take() -> i64 {{ let s = S {{ r: R {{ id: 1 }} }}; let x = s.r; 7 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\"); }}"
+            ))
+            .as_deref(),
+            Some("dR1\nv=7\n")
+        );
+        // TWO owned params, no wrap at all: the compiled backends drop the
+        // caller's fresh temps in REVERSE argument order and `--interp` drops
+        // them forward. Counts agree, order does not — a run-vs-build
+        // divergence with no wrap involved, pre-existing, and pinned on both
+        // sides so a fix to either has to touch both. The interpreter twin
+        // pins `dR1 dR2`. UNFIXED (B-2026-08-29-43).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("dR2\ndR1\nv=7\n")
         );
     }
 

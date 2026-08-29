@@ -6470,16 +6470,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// stores the view into a fresh local — and it was never covered, so the
     /// binding's `__karac_dropelems_enum_<E>` walk fired on top of the caller's
     /// and the body ran TWICE. Every wrap kind measured the same way (enum,
-    /// struct literal, tuple, Vec, `Some`), on all three backends, which is why
-    /// no A/B parity gate could see it.
+    /// struct literal, tuple, `Some`), on all three backends, which is why no
+    /// A/B parity gate could see it; B-2026-08-29-24 covered the other three.
+    /// (A `Vec` literal doubles too but is NOT one of these — see
+    /// `optres_ctor_payloads_are_all_param_views` for the measurement that
+    /// separates it.)
     ///
-    /// EVERY walker-visited payload must be a view, not merely one. A mixed
-    /// `W2.Two(r, R { id: 2 })` shares a single walker between both slots, so
-    /// dropping it wholesale would silently lose the FRESH payload's body —
-    /// trading this double for a miss of exactly the same severity. The mixed
-    /// case therefore keeps its walker and stays wrong; correcting it needs a
-    /// per-slot masked walker, the enum sibling of
-    /// `emit_user_drop_field_bodies_fn_skipping` (B-2026-08-29-24).
+    /// EVERY walker-visited payload must be a view for THIS predicate, not
+    /// merely one, because withholding is all-or-nothing: a mixed
+    /// `W2.Two(r, R { id: 2 })` would lose the FRESH payload's body. That is
+    /// still exactly what this answers — but it is no longer the end of the
+    /// story, since B-2026-08-29-24 added the per-slot
+    /// `enum_ctor_param_view_payload_slots` below and the masked walker it
+    /// feeds. A mixed wrap now masks the view slot rather than staying wrong,
+    /// and this predicate covers only the case where nothing survives the mask
+    /// and the binding becomes a view outright.
     ///
     /// The per-field admission test is character-for-character the walker's own
     /// in `emit_enum_payload_user_drop_bodies_fn`: a non-generic, non-shared
@@ -6492,8 +6497,28 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         value: &Expr,
     ) -> bool {
+        self.enum_ctor_param_view_payload_slots(enum_name, value)
+            .is_some_and(|(_, views, visited)| visited > 0 && views.len() == visited)
+    }
+
+    /// B-2026-08-29-24 — the per-slot form of
+    /// [`Self::enum_ctor_payload_bodies_are_caller_owned`]: which of the
+    /// walker-visited payload slots of the variant `value` constructs were
+    /// moved in from a param VIEW.
+    ///
+    /// Returns `(variant, view slot indices, visited slot count)`. The all-or-
+    /// nothing predicate above is the `views == visited` case of it, and the
+    /// let-site uses the rest — a MIXED wrap masks only the view slots out of
+    /// `emit_enum_payload_user_drop_bodies_fn_skipping` and keeps the fresh
+    /// payload's body, which is the trade B-2026-08-29-19 had to decline while
+    /// one walker still covered both slots.
+    pub(super) fn enum_ctor_param_view_payload_slots(
+        &self,
+        enum_name: &str,
+        value: &Expr,
+    ) -> Option<(String, Vec<usize>, usize)> {
         let ExprKind::Call { callee, args } = &value.kind else {
-            return false;
+            return None;
         };
         // `E.V(..)` (Path) and bare `V(..)` (Identifier) are the two
         // constructor spellings `enum_name_for_binding` resolves; take the
@@ -6503,19 +6528,17 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.clone(),
             ExprKind::Path { segments, .. } => match segments.last() {
                 Some(v) => v.clone(),
-                None => return false,
+                None => return None,
             },
-            _ => return false,
+            _ => return None,
         };
         let generic_params = self.enum_generic_param_names(enum_name);
-        let Some((_, _, tes)) = self
+        let (_, _, tes) = self
             .enum_variant_field_type_exprs(enum_name)
             .into_iter()
-            .find(|(_, v, _)| *v == variant)
-        else {
-            return false;
-        };
-        let mut visited_any = false;
+            .find(|(_, v, _)| *v == variant)?;
+        let mut views: Vec<usize> = Vec::new();
+        let mut visited = 0usize;
         for (fi, te) in tes.iter().enumerate() {
             let TypeKind::Path(p) = &te.kind else {
                 continue;
@@ -6534,18 +6557,186 @@ impl<'ctx> super::Codegen<'ctx> {
             if !self.type_runs_user_drop(&name, &mut Vec::new()) {
                 continue;
             }
-            // A payload the walker WOULD visit. It must be a view, and the
-            // argument must actually be there — a variant applied to fewer
-            // arguments than it declares is not a shape to reason about.
-            let Some(arg) = args.get(fi) else {
-                return false;
-            };
-            if !self.expr_is_param_view(&arg.value) {
-                return false;
+            // A payload the walker WOULD visit. The argument must actually be
+            // there — a variant applied to fewer arguments than it declares is
+            // not a shape to reason about.
+            let arg = args.get(fi)?;
+            visited += 1;
+            if self.expr_is_param_view(&arg.value) {
+                views.push(fi);
             }
-            visited_any = true;
         }
-        visited_any
+        Some((variant, views, visited))
+    }
+
+    /// B-2026-08-29-24 — a STRUCT LITERAL is B-2026-08-29-19's variant
+    /// constructor one wrap kind over: `let s = S { r: r };` stores a param
+    /// VIEW into a fresh local whose `Drop` body the CALLER still runs, so this
+    /// binding's `__karac_dropbodies_<S>` walk doubled it. Measured identical
+    /// on all three backends, which is why no A/B parity gate could see it.
+    ///
+    /// PER FIELD, not all-or-nothing, and that is the difference from the enum
+    /// leg as it stood. The struct walker is already maskable
+    /// (`emit_user_drop_field_bodies_fn_skipping`), so a MIXED literal
+    /// (`S3 { a: r, b: R { id: 2 } }`) masks only the view's slot and keeps the
+    /// fresh payload's body — the trade B-2026-08-29-19 had to decline for
+    /// enums because one walker covered both slots.
+    ///
+    /// When EVERY Drop-bearing field was a view, the binding is itself a view
+    /// and is marked one, so a later `let s2 = s;` inherits the withholding
+    /// instead of re-arming a full walk over the same fields (B-2026-08-01-15's
+    /// propagation, reached through a literal). That marking is sound HERE and
+    /// not in general: this arm is `has_field_user_drop`, which is
+    /// `!has_user_drop` — a struct with its own `impl Drop` never reaches it, so
+    /// there is no body of the binding's own for the view mark to silence.
+    pub(super) fn mask_param_view_struct_literal_fields(&mut self, var_name: &str, value: &Expr) {
+        let ExprKind::StructLiteral { fields, spread, .. } = &value.kind else {
+            return;
+        };
+        // A spread (`S { r: r, ..base }`) fills the unnamed fields from a value
+        // whose ownership nothing here has looked at. Masking a subset while
+        // the base stays unexamined is how a missing body gets introduced, so
+        // leave the whole literal armed.
+        if spread.is_some() {
+            return;
+        }
+        let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
+            return;
+        };
+        if self.type_decls.shared_types.contains_key(&struct_name) {
+            return;
+        }
+        let Some(field_names) = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        // Exactly the index set the walker visits, so a field it would skip
+        // cannot disqualify the mark below either — the same correspondence
+        // `enum_ctor_payload_bodies_are_caller_owned` keeps with its walker.
+        let drop_idxs = self.user_drop_field_indices_mono(&struct_name, &subst);
+        if drop_idxs.is_empty() {
+            return;
+        }
+        let mut views: Vec<usize> = Vec::new();
+        for &idx in &drop_idxs {
+            let Some(init) = field_names
+                .get(idx)
+                .and_then(|fname| fields.iter().find(|f| &f.name == fname))
+            else {
+                // A visited field the literal does not name: the value came
+                // from somewhere this walk cannot see. Same reasoning as the
+                // spread bail.
+                return;
+            };
+            if self.expr_is_param_view(&init.value) {
+                views.push(idx);
+            }
+        }
+        if views.is_empty() {
+            return;
+        }
+        let all_views = views.len() == drop_idxs.len();
+        // A struct with its own `impl Drop` runs its field bodies from INSIDE
+        // `karac_drop_<T>`, a type-level wrapper shared by every binding of the
+        // type, so there is no per-binding walker to mask — only the whole-
+        // wrapper swap `disarm_user_drop_fields_for_moved_field` already uses
+        // for a field moved out of such a struct. That swap drops ALL field
+        // bodies, so it is correct here exactly when every visited field was a
+        // view; a MIXED literal over a Drop-bearing struct would lose the fresh
+        // field's body, the trade this whole row exists to avoid, so it keeps
+        // its double and stays agreed across backends (the interpreter twin
+        // declines the same shape).
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(&struct_name));
+        if owns_body {
+            let Some(first_view) = all_views.then(|| views.first().copied()).flatten() else {
+                return;
+            };
+            let (Some(fname), Some(slot)) = (
+                field_names.get(first_view).cloned(),
+                self.variables.get(var_name).copied(),
+            ) else {
+                return;
+            };
+            self.disarm_user_drop_fields_for_moved_field(slot.ptr, &struct_name, &fname);
+            return;
+        }
+        for idx in views {
+            self.disarm_struct_field_bodies_at(var_name, idx);
+        }
+        if all_views {
+            self.payload_vars
+                .param_view_locals
+                .insert(var_name.to_string());
+        }
+    }
+
+    /// B-2026-08-29-24 — does `value` construct an `Option` / `Result` whose
+    /// EVERY payload was moved in from a param VIEW?
+    ///
+    /// The all-or-nothing form, for `Some`/`Ok`/`Err` (`let q = Some(r);`),
+    /// whose payload rides the `optres_*` machinery: B-2026-08-29-19 recorded
+    /// that `Option`'s payload TypeExpr is the enum's own generic parameter, so
+    /// the enum walker skips it and there is no per-slot walker to withhold
+    /// from. Whole-walker withholding is what that fix does for an enum
+    /// constructor, and it is sound on the same condition — EVERY payload must
+    /// be a view, or suppressing would lose a fresh payload's body. A mixed
+    /// `Ok(r, ..)` keeps its walk and its double, the agreed direction.
+    ///
+    /// A `Vec` literal is NOT admitted, though the row that prompted this listed
+    /// `let v = [r];` beside the others. It doubles — but so does
+    /// `let m = R { .. }; let v = [m];`, with no param anywhere, so the Vec
+    /// double is a move-suppression hole one level away from this rule rather
+    /// than an instance of it. Measured both ways and filed separately; adding
+    /// an arm here would have fixed the half whose source happens to be a param
+    /// and left the identical local-source double in place.
+    pub(super) fn optres_ctor_payloads_are_all_param_views(&self, value: &Expr) -> bool {
+        let ExprKind::Call { callee, args } = &value.kind else {
+            return false;
+        };
+        let ExprKind::Identifier(n) = &callee.kind else {
+            return false;
+        };
+        matches!(n.as_str(), "Some" | "Ok" | "Err")
+            && !args.is_empty()
+            && args.iter().all(|a| self.expr_is_param_view(&a.value))
+    }
+
+    /// B-2026-08-29-24 — the element indices of a TUPLE LITERAL that were
+    /// moved in from a param VIEW. `let t = (r, 5);` is the same caller-retains
+    /// move as the struct literal and the variant constructor, through a third
+    /// constructor, and it doubled the body the same way.
+    ///
+    /// Returns the raw index set rather than a decision, because the tuple
+    /// walker is per-element maskable
+    /// (`emit_tuple_elem_user_drop_bodies_fn_skipping`) — a mixed literal masks
+    /// only the view's element. An empty set leaves the walk exactly as it was.
+    pub(super) fn tuple_literal_param_view_elems(
+        &self,
+        value: &Expr,
+    ) -> std::collections::HashSet<u32> {
+        let ExprKind::Tuple(elems) = &value.kind else {
+            return Default::default();
+        };
+        elems
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| self.expr_is_param_view(e))
+            .map(|(i, _)| i as u32)
+            .collect()
     }
 
     pub(super) fn enum_name_for_binding(

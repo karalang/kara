@@ -54071,9 +54071,67 @@ fn main() {
     println(f"v={v}");
 }
 "#,
-            &["dR1 heap-one", "dR2 fresh", "dR1 heap-one", "v=7"],
+            &["dR2 fresh", "dR1 heap-one", "v=7"],
             "wrapped_param_view_mixed_payloads",
         );
+        // B-2026-08-29-24 — the MIXED case above used to read
+        // `dR1 heap-one, dR2 fresh, dR1 heap-one`: one walker covered both
+        // slots, so B-2026-08-29-19 could only leave it armed. The per-slot
+        // mask fixed the count; what this case is here to prove is that it did
+        // not move a FREE. Both payloads carry heap, `r`'s buffer is shared
+        // between the caller's copy and the wrapped one, and masking a body has
+        // no business changing who frees it.
+        //
+        // The remaining wrap kinds, with heap on both sides of every mixed one.
+        // A struct literal and a tuple literal each register their memory
+        // separately from the body walk, so a mask that reached the wrong
+        // channel would surface here as a leak or a double free rather than as
+        // a body count.
+        for (label, body, want) in [
+            (
+                "wrapped_param_view_struct_literal",
+                "let s = S { r: r };",
+                vec!["dR1 heap-one", "v=7"],
+            ),
+            (
+                "wrapped_param_view_tuple_literal",
+                "let t = (r, 5);",
+                vec!["dR1 heap-one", "v=7"],
+            ),
+            (
+                "wrapped_param_view_option",
+                "let q = Some(r);",
+                vec!["dR1 heap-one", "v=7"],
+            ),
+            (
+                "wrapped_param_view_mixed_struct",
+                "let s = S3 { a: r, b: R { id: 2, name: f\"fresh\" } };",
+                vec!["dR2 fresh", "dR1 heap-one", "v=7"],
+            ),
+            (
+                "wrapped_param_view_mixed_tuple",
+                "let t = (r, R { id: 2, name: f\"fresh\" });",
+                vec!["dR2 fresh", "dR1 heap-one", "v=7"],
+            ),
+        ] {
+            assert_clean_asan_run(
+                &format!(
+                    r#"
+struct R {{ id: i64, name: String }}
+impl Drop for R {{ fn drop(mut ref self) {{ println(f"dR{{self.id}} {{self.name}}") }} }}
+struct S {{ r: R }}
+struct S3 {{ a: R, b: R }}
+fn take(r: R) -> i64 {{ {body} 7 }}
+fn main() {{
+    let v = take(R {{ id: 1, name: f"heap-one" }});
+    println(f"v={{v}}");
+}}
+"#
+                ),
+                &want,
+                label,
+            );
+        }
     }
 
     /// B-2026-08-09-16 — a `let` that moves an arm payload taken off an OWNED

@@ -526,6 +526,15 @@ pub struct Interpreter<'a> {
     /// mask applies to exactly one level and the walker's recursion into nested
     /// struct fields cannot inherit it by name collision.
     pub(crate) pending_payload_masked_fields: Option<HashSet<String>>,
+    /// B-2026-08-29-24 — the enum-PAYLOAD peer of the two sets above: `(enum
+    /// binding, declared payload index)` slots whose body belongs to somebody
+    /// else, today because a variant constructor moved a param VIEW into that
+    /// slot (`let w = W2.Two(r, R { id: 2 })`). The binding-level payload walk
+    /// blanks those slots out of the value before walking it, which is exactly
+    /// how the struct-field mask above works. Codegen's twin is
+    /// `emit_enum_payload_user_drop_bodies_fn_skipping`, keyed on the same
+    /// (variant, index) pair.
+    pub(crate) moved_out_enum_payload_slots: HashSet<(String, usize)>,
     /// B-2026-07-30-11 (Option/Result leg) — the resolved `Option[P]` /
     /// `Result[O, E]` instantiation per let-bound variable, recorded by the
     /// Let arm through the SAME static resolution chain codegen's
@@ -967,6 +976,7 @@ impl<'a> Interpreter<'a> {
             moved_out_struct_field_payload_bodies: HashSet::new(),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
+            moved_out_enum_payload_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),

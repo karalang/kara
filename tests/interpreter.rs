@@ -33805,25 +33805,250 @@ fn test_wrapped_owned_param_payload_drop_body_runs_once() {
              fn main() { let v = take(1); println(f\"v={v}\") }\n",
             "dR1\nv=7\n",
         ),
-        // GUARD RAIL — MIXED payloads share one walk, so the suppression must
-        // decline; pinned at the defect rather than at the preferred answer.
+        // MIXED payloads shared one walk, so this row could only be armed or
+        // withheld whole and stayed at three bodies. B-2026-08-29-24 masks the
+        // view SLOT out of the walk, so the fresh payload keeps its body and the
+        // view's goes back to the caller: `dR2` from the walk, `dR1` from the
+        // caller's fire. Was `dR1 dR2 dR1`.
         (
-            "guard-mixed-payloads",
+            "mixed-payloads",
             "enum W2 { Two(R, R), None3 }\n\
              fn take(r: R) -> i64 { let w = W2.Two(r, R { id: 2 }); 7 }\n\
              fn main() { let v = take(R { id: 1 }); println(f\"v={v}\") }\n",
-            "dR1\ndR2\ndR1\nv=7\n",
+            "dR2\ndR1\nv=7\n",
         ),
-        // GUARD RAIL — `Some(r)` is excluded to hold parity with codegen, whose
-        // generic payload has no walker to withhold. Pinned at the defect.
+        // `Some(r)` was excluded HERE to hold parity with codegen, which had no
+        // `optres_*` withholding of its own; B-2026-08-29-24 landed that leg and
+        // deleted the exclusion in the same commit. Was `dR1 dR1`.
         (
-            "guard-option-wrap",
+            "option-wrap",
             "fn take(r: R) -> i64 { let q = Some(r); 7 }\n\
              fn main() { let v = take(R { id: 1 }); println(f\"v={v}\") }\n",
-            "dR1\ndR1\nv=7\n",
+            "dR1\nv=7\n",
         ),
     ] {
         let src = format!("{DROPPER}{body}");
+        assert_eq!(run(&src), want, "case {label}");
+    }
+}
+
+/// B-2026-08-29-24, interpreter leg — the wrap kinds and MIXED wraps that
+/// B-2026-08-29-19 could not reach.
+///
+/// That fix covered the variant constructor only; a struct literal, a tuple
+/// literal and `Some(..)` doubled a param view's `Drop` body identically, and a
+/// MIXED wrap of any kind doubled it while the fresh payload beside it still
+/// needed its own body. This backend masks each case through the same per-slot
+/// sets a MOVE-OUT already used — `moved_out_struct_field_bodies`,
+/// `moved_out_tuple_elem_bodies`, and the new `moved_out_enum_payload_slots` —
+/// because the destination is the same: a body this binding must stop running
+/// because something else runs it.
+///
+/// Every case here has a codegen twin in
+/// `e2e_wrapped_param_view_nonenum_and_mixed_wraps_drop_once` with the same
+/// expected output. That is the whole point: while wrong, all of these AGREED
+/// across the three backends, so no A/B parity gate could see any of it and
+/// only an absolute expectation catches a regression.
+#[test]
+fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
+    const HDR: &str = "struct R { id: i64 }\n\
+                       impl Drop for R {\n\
+                       \x20   fn drop(mut ref self) { println(f\"dR{self.id}\") }\n\
+                       }\n\
+                       enum W2 { Two(R, R), None3 }\n\
+                       struct S { r: R }\n\
+                       struct S2 { r: R, k: i64 }\n\
+                       struct S3 { a: R, b: R }\n\
+                       struct Sd { r: R }\n\
+                       impl Drop for Sd {\n\
+                       \x20   fn drop(mut ref self) { println(\"dSd\") }\n\
+                       }\n";
+    for (label, body, want) in [
+        // The wrap kinds B-2026-08-29-19 left doubling.
+        ("struct-literal", "let s = S { r: r };", "dR1\nv=7\n"),
+        (
+            "struct-literal-inert-field",
+            "let s = S2 { r: r, k: 9 };",
+            "dR1\nv=7\n",
+        ),
+        ("tuple-literal", "let t = (r, 5);", "dR1\nv=7\n"),
+        // The `Option` exclusion this backend carried to hold parity is gone,
+        // because codegen's `optres_*` leg landed in the same commit.
+        ("option-wrap", "let q = Some(r);", "dR1\nv=7\n"),
+        (
+            "owndrop-struct-all-views",
+            "let s = Sd { r: r };",
+            "dSd\ndR1\nv=7\n",
+        ),
+        // MIXED: the fresh payload keeps its body, the view's goes back to the
+        // caller. Suppressing wholesale here is the failure in the OTHER
+        // direction, and is what B-2026-08-29-19 declined to risk.
+        (
+            "mixed-enum",
+            "let w = W2.Two(r, R { id: 2 });",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "mixed-struct",
+            "let s = S3 { a: r, b: R { id: 2 } };",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "mixed-tuple",
+            "let t = (r, R { id: 2 });",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "struct-then-rebind",
+            "let s = S { r: r }; let s2 = s;",
+            "dR1\nv=7\n",
+        ),
+    ] {
+        let src = format!(
+            "{HDR}fn take(r: R) -> i64 {{ {body} 7 }}\n\
+             fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
+        );
+        assert_eq!(run(&src), want, "case {label}");
+    }
+    // GUARD RAILS — a FRESH payload in each wrap kind. No caller owns it, so
+    // the callee's walk is the only fire; an over-broad mask silences these.
+    for (label, body, want) in [
+        (
+            "guard-fresh-struct",
+            "let s = S { r: R { id: 3 } };",
+            "dR3\nv=7\n",
+        ),
+        (
+            "guard-fresh-tuple",
+            "let t = (R { id: 3 }, 5);",
+            "dR3\nv=7\n",
+        ),
+        (
+            "guard-fresh-option",
+            "let q = Some(R { id: 3 });",
+            "dR3\nv=7\n",
+        ),
+        (
+            "guard-fresh-owndrop",
+            "let s = Sd { r: R { id: 3 } };",
+            "dSd\ndR3\nv=7\n",
+        ),
+    ] {
+        let src = format!(
+            "{HDR}fn take(k: i64) -> i64 {{ {body} 7 }}\n\
+             fn main() {{ let v = take(3); println(f\"v={{v}}\") }}\n"
+        );
+        assert_eq!(run(&src), want, "case {label}");
+    }
+    // GUARD RAILS — a genuine LOCAL wrapped: the rule keys on an owned-param
+    // source, which is exactly when a caller fires instead.
+    for (label, body, want) in [
+        ("guard-local-struct", "let s = S { r: m };", "dR4\nv=7\n"),
+        ("guard-local-tuple", "let t = (m, 5);", "dR4\nv=7\n"),
+        ("guard-local-option", "let q = Some(m);", "dR4\nv=7\n"),
+    ] {
+        let src = format!(
+            "{HDR}fn take() -> i64 {{ let m = R {{ id: 4 }}; {body} 7 }}\n\
+             fn main() {{ let v = take(); println(f\"v={{v}}\") }}\n"
+        );
+        assert_eq!(run(&src), want, "case {label}");
+    }
+    // PINNED AT THE DEFECT, each agreed with both compiled backends.
+    for (label, src, want) in [
+        // A MIXED literal of a struct with its OWN `impl Drop`: codegen can only
+        // swap that wrapper for one that drops ALL field bodies, so masking one
+        // slot there would cost the fresh field's body. This backend COULD mask
+        // it per field — and declines deliberately, because doing so alone
+        // turns an agreed defect into a run-vs-build divergence, the trade
+        // B-2026-08-29-19 already had to back out once for `Option`.
+        // UNFIXED (B-2026-08-29-40).
+        (
+            "pin-owndrop-mixed",
+            format!(
+                "{HDR}struct Sd3 {{ a: R, b: R }}\n\
+                 impl Drop for Sd3 {{ fn drop(mut ref self) {{ println(\"dSd3\") }} }}\n\
+                 fn take(r: R) -> i64 {{ let s = Sd3 {{ a: r, b: R {{ id: 2 }} }}; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
+            ),
+            "dSd3\ndR2\ndR1\ndR1\nv=7\n",
+        ),
+        // A whole-value rebind after a MIXED wrap re-arms the full walk — the
+        // mask is keyed on the binding and the destination registers afresh.
+        // UNFIXED (B-2026-08-29-41).
+        (
+            "pin-mixed-then-rebind",
+            format!(
+                "{HDR}fn take(r: R) -> i64 {{ let w = W2.Two(r, R {{ id: 2 }}); let w2 = w; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR1\ndR2\ndR1\nv=7\n",
+        ),
+        // A `Vec` literal doubles too, but a plain LOCAL moved into one doubles
+        // identically — so it is a move-suppression hole, not this rule. Both
+        // spellings pinned, plus the FRESH-element case that is correct, since
+        // the three together are what identify the defect.
+        // UNFIXED (B-2026-08-29-42).
+        (
+            "pin-vec-param-view",
+            format!(
+                "{HDR}fn take(r: R) -> i64 {{ let v2 = [r]; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR1\ndR1\nv=7\n",
+        ),
+        (
+            "pin-vec-local",
+            format!(
+                "{HDR}fn take() -> i64 {{ let m = R {{ id: 4 }}; let v2 = [m]; 7 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR4\ndR4\nv=7\n",
+        ),
+        (
+            "vec-fresh-elem-is-correct",
+            format!(
+                "{HDR}fn take() -> i64 {{ let v2 = [R {{ id: 4 }}]; 7 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR4\nv=7\n",
+        ),
+        // Moving a param view back OUT of the struct it was wrapped into: the
+        // destination registers a body the caller also runs. Pre-existing, and
+        // the local-source twin beside it is correct, which isolates the cause.
+        // UNFIXED (B-2026-08-29-44).
+        (
+            "pin-view-field-moved-out",
+            format!(
+                "{HDR}fn take(r: R) -> i64 {{ let s = S {{ r: r }}; let x = s.r; 7 }}\n\
+                 fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR1\ndR1\nv=7\n",
+        ),
+        (
+            "local-field-moved-out-is-correct",
+            format!(
+                "{HDR}fn take() -> i64 {{ let s = S {{ r: R {{ id: 1 }} }}; let x = s.r; 7 }}\n\
+                 fn main() {{ let v = take(); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR1\nv=7\n",
+        ),
+        // TWO owned params, no wrap: this backend drops the caller's fresh
+        // temps in FORWARD argument order, both compiled backends in REVERSE.
+        // Counts agree, order does not. The codegen twin pins `dR2 dR1` for
+        // this same program, so the pair records the divergence explicitly.
+        // UNFIXED (B-2026-08-29-43).
+        (
+            "pin-two-owned-params-drop-order",
+            format!(
+                "{HDR}fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }});\n\
+                 \x20   println(f\"v={{v}}\")\n\
+                 }}\n"
+            ),
+            "dR1\ndR2\nv=7\n",
+        ),
+    ] {
         assert_eq!(run(&src), want, "case {label}");
     }
 }

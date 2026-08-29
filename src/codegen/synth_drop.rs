@@ -8015,6 +8015,33 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         enum_name: &str,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_enum_payload_user_drop_bodies_fn_skipping(enum_name, &Default::default())
+    }
+
+    /// [`Self::emit_enum_payload_user_drop_bodies_fn`] with a set of
+    /// `(variant, declared payload index)` slots MASKED OUT — the enum sibling
+    /// of `emit_user_drop_field_bodies_fn_skipping` and
+    /// `emit_tuple_elem_user_drop_bodies_fn_skipping`, with the same contract:
+    /// the symbol name folds in the mask so a masked walker never aliases the
+    /// full one in the module-level memo, and `None` means nothing survives and
+    /// the caller should leave the action retracted.
+    ///
+    /// B-2026-08-29-24 — what B-2026-08-29-19 could not do. That fix withheld
+    /// the walker WHOLE when every payload the constructor moved in was a param
+    /// view, and had to decline a MIXED wrap (`W2.Two(r, R { id: 2 })`) because
+    /// one walker covered both slots: suppressing it would have traded the
+    /// view's doubled body for the fresh payload's missing one, the same
+    /// severity in the other direction. Per-slot masking removes the trade.
+    ///
+    /// The mask is keyed on (variant, index) rather than index alone because a
+    /// walker covers every variant of the enum at once, dispatching on the tag
+    /// — slot 0 of `Two` and slot 0 of `Three` are different payloads that must
+    /// be maskable independently.
+    pub(super) fn emit_enum_payload_user_drop_bodies_fn_skipping(
+        &mut self,
+        enum_name: &str,
+        skip: &std::collections::BTreeSet<(String, usize)>,
+    ) -> Option<FunctionValue<'ctx>> {
         let layout = self.type_decls.enum_layouts.get(enum_name)?.clone();
         if layout.is_shared {
             return None; // DP3 — shared enums drop through the RC machinery
@@ -8053,6 +8080,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     continue;
                 }
+                if skip.contains(&(vname.clone(), fi)) {
+                    continue;
+                }
                 if self.type_runs_user_drop(&name, &mut Vec::new()) {
                     fields.push(((start_word + 1) as u32, name));
                 }
@@ -8068,7 +8098,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // `layout.tags` is a HashMap and preserves no useful order.
         targets.sort_by_key(|(tag, _, _)| *tag);
 
-        let fn_name = format!("__karac_dropelems_enum_{enum_name}");
+        let skip_suffix: String = skip
+            .iter()
+            .map(|(v, i)| format!("$s{v}_{i}"))
+            .collect::<String>();
+        let fn_name = format!("__karac_dropelems_enum_{enum_name}{skip_suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }

@@ -7497,12 +7497,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             // in the way; codegen armed a second walker there
                             // while the interpreter did not, so that shape was
                             // additionally a run-vs-build divergence.
+                            // B-2026-08-29-24 — a MIXED wrap
+                            // (`W2.Two(r, R { id: 2 })`) shares one walker
+                            // between a view slot and a fresh one, so
+                            // B-2026-08-29-19 could only leave it armed and
+                            // doubling. Mask the view slots instead: the fresh
+                            // payload keeps its body, the view's goes back to
+                            // the caller, and nothing is traded either way.
+                            let view_slots: std::collections::BTreeSet<(String, usize)> = self
+                                .enum_ctor_param_view_payload_slots(&name, value)
+                                .filter(|(_, _, visited)| *visited > 0)
+                                .map(|(variant, views, _)| {
+                                    views.into_iter().map(|i| (variant.clone(), i)).collect()
+                                })
+                                .unwrap_or_default();
                             if self.enum_ctor_payload_bodies_are_caller_owned(&name, value)
                                 || self.expr_is_param_view(value)
                             {
                                 self.payload_vars.param_view_locals.insert(var_name.clone());
-                            } else if let Some(bodies) =
-                                self.emit_enum_payload_user_drop_bodies_fn(&name)
+                            } else if let Some(bodies) = self
+                                .emit_enum_payload_user_drop_bodies_fn_skipping(&name, &view_slots)
                             {
                                 self.track_user_drop_var_with_fn(
                                     "",
@@ -7790,8 +7804,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_types
                                         .tuple_var_elem_tes
                                         .insert(var_name.clone(), elem_tes.clone());
-                                    if let Some(bodies) =
-                                        self.emit_tuple_elem_user_drop_bodies_fn(agg_ty, &elem_tes)
+                                    // B-2026-08-29-24 — `let t = (r, 5);` moves
+                                    // a param VIEW into an element, whose body
+                                    // the caller runs; mask that element out.
+                                    // Per element, so `(r, R { id: 2 })` keeps
+                                    // the fresh one's body.
+                                    let view_elems: std::collections::HashSet<u32> =
+                                        self.tuple_literal_param_view_elems(value);
+                                    if let Some(bodies) = self
+                                        .emit_tuple_elem_user_drop_bodies_fn_skipping(
+                                            agg_ty,
+                                            &elem_tes,
+                                            &view_elems,
+                                        )
                                     {
                                         self.track_user_drop_var_with_fn(
                                             "",
@@ -8282,7 +8307,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                     _ => None,
                                 })
                         };
-                        if let Some(te) = opt_te {
+                        // B-2026-08-29-24 — `let q = Some(r);` is the same
+                        // caller-retains move as every other wrap kind, and the
+                        // one B-2026-08-29-19 measured and had to leave alone:
+                        // it fixed only the interpreter half at the time, which
+                        // turned an agreed defect into a run-vs-build split and
+                        // was backed out. This is that codegen leg, so the
+                        // interpreter's exclusion comes off in the same commit.
+                        let optres_is_param_view =
+                            self.optres_ctor_payloads_are_all_param_views(value);
+                        if optres_is_param_view {
+                            self.payload_vars.param_view_locals.insert(var_name.clone());
+                        }
+                        if let Some(te) = opt_te.filter(|_| !optres_is_param_view) {
                             if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                                 if let Some(bodies) =
                                     self.emit_optres_payload_user_drop_bodies_fn(&te)
@@ -8867,6 +8904,15 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.register_owner_copy_struct_heap_env_field_drops(
                                 value, alloca, var_name,
                             );
+                            // B-2026-08-29-24 — `let s = S { r: r };` wraps a
+                            // param VIEW, whose body the caller runs; mask that
+                            // field out of the walk registered just above.
+                            // Placed AFTER the registration deliberately: the
+                            // mask works by retract-and-re-emit
+                            // (`disarm_struct_field_bodies_at`), the same route
+                            // a field move-out takes, so there has to be an
+                            // action to retract.
+                            self.mask_param_view_struct_literal_fields(var_name, value);
                         }
                     }
                 }
