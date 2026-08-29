@@ -9904,6 +9904,35 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // B-2026-08-29-1 — the MEMORY sibling of the bodies
+                        // walk above, and the correction to its "bodies only"
+                        // rationale. That comment says a memory call here would
+                        // double-free because the displaced payload's heap "is
+                        // already reclaimed by the untouched
+                        // `FreeInlineOptionPayload` / `BoxedEnumDrop` action".
+                        // B-2026-08-07-4 already corrected that for a BOXED
+                        // payload; it is wrong for the inline one too, and for
+                        // the same reason — the scope-exit action reads the
+                        // slot AFTER the store, so it frees only the LAST
+                        // value. `let mut vv: Option[String] = Some(s);
+                        // vv = None;` leaked the whole buffer (38 B measured),
+                        // as did `Option[Vec[i64]]` (80 B) and
+                        // `Result[String, i64]` (38 B), in the direct and
+                        // moved-in spellings alike and once per store in a
+                        // loop.
+                        //
+                        // OUTSIDE the `optres_var_payload_tes` lookup above,
+                        // deliberately: that map is the BODIES channel's
+                        // registration (a payload type whose user `Drop` needs
+                        // walking), and a bare `String`/`Vec` payload has no
+                        // user `Drop` at all — which is exactly the population
+                        // that leaked. Keying the memory call on the bodies
+                        // map would skip every shape this row is about.
+                        //
+                        // Ordering is bodies-then-memory, matching the boxed
+                        // sibling and the Vec eager-free: the walk above reads
+                        // the payload this call frees.
+                        self.emit_inline_optres_payload_overwrite_free(name);
                     }
                     // B-2026-08-07-4 — reassigning a binding whose enum payload
                     // is heap-BOXED orphaned the OVERWRITTEN value's box. The

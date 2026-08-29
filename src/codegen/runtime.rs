@@ -2047,6 +2047,75 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Callers must emit this AFTER the RHS is compiled (its last read of the
     /// old value has happened) and BEFORE the store, and must skip a self-alias
     /// or any RHS that mentions the target — see the call site's guards.
+    /// The INLINE sibling of [`Self::emit_boxed_enum_overwrite_free`]
+    /// (B-2026-08-29-1): free the heap a displaced `Option`/`Result` payload
+    /// owns when the payload lives in the binding's own payload words rather
+    /// than in a box.
+    ///
+    /// `let mut vv: Option[String] = Some(s); vv = None;` leaked the whole
+    /// buffer, and so did `Option[Vec[T]]` and `Result[String, E]` — direct or
+    /// moved-in, to `None`/`Err` or to a fresh `Some`/`Ok`, once or once per
+    /// loop iteration. The scope-exit `FreeInlineOptionPayload` /
+    /// `FreeInlineResultPayload` reads the slot AFTER the store, so it only
+    /// ever frees the LAST value; every earlier one was orphaned.
+    ///
+    /// THE BODIES WERE NEVER THE PROBLEM. B-2026-08-02-25 added the displaced
+    /// payload's user-`Drop` BODIES walk at this same site and stated it was
+    /// bodies-only because "the displaced payload's memory is already
+    /// reclaimed by the untouched `FreeInlineOptionPayload` / `BoxedEnumDrop`
+    /// action — the pre-fix shape leaked nothing under LSan". B-2026-08-07-4
+    /// corrected the BOXED half of that claim; this corrects the inline half.
+    /// Verified separately that the bodies really are fine: a user `impl Drop`
+    /// on the payload fires exactly once, in the right place, on all three
+    /// backends, before and after this change. Only the memory was missing.
+    ///
+    /// Same mechanism as the boxed sibling, for the same three reasons: the
+    /// action's tag guard comes along (a `None` slot frees nothing, and a
+    /// `Result` frees only the live side), the `Option` and `Result` variants
+    /// share one walk, and THE QUEUE IS THE ARMED SET — an arm that took the
+    /// payload out has already zeroed the source's tag, and a binding whose
+    /// registration was retracted has no action to find, so a consumer that
+    /// owns the payload is never double-freed. Measured on the four shapes
+    /// that hand the payload out (`match` tail, `if let` tail, a consuming
+    /// `while let`, and the `Result` spelling): all four are clean before and
+    /// after, so this adds no free where an arm already took ownership.
+    ///
+    /// The action stays queued — it re-loads from the slot, so scope exit
+    /// still frees whatever the slot holds last. N stores ⇒ N frees.
+    ///
+    /// Callers must emit this AFTER the RHS is compiled and BEFORE the store,
+    /// after the bodies walk (which reads the payload this frees), and must
+    /// skip a self-alias or any RHS mentioning the target — see the call
+    /// site's guards.
+    pub(super) fn emit_inline_optres_payload_overwrite_free(&self, name: &str) {
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        // All live frames, not just the top — same rationale as the boxed
+        // sibling: at a mid-function store a transient RHS-evaluation frame can
+        // sit above the frame that owns the binding's action.
+        for action in self.drop_rc.scope_cleanup_actions.iter().flatten() {
+            let matches_slot = match action {
+                CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
+                    *option_slot == slot.ptr
+                }
+                CleanupAction::FreeInlineResultPayload { result_slot, .. } => {
+                    *result_slot == slot.ptr
+                }
+                _ => false,
+            };
+            if matches_slot {
+                self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+            }
+        }
+    }
+
     pub(super) fn emit_boxed_enum_overwrite_free(&self, name: &str) {
         let Some(slot) = self.variables.get(name).copied() else {
             return;

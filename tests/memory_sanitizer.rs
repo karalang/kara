@@ -11828,6 +11828,241 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-1 (FIXED): a bare `String` / `Vec` payload inside an
+    /// `Option` or `Result` never had its buffer freed when the binding was
+    /// reassigned. `let mut vv: Option[String] = Some(s); vv = None;` leaked
+    /// the whole 38-byte buffer; `Option[Vec[i64]]` leaked 80; and
+    /// `Result[String, i64]` leaked 38 — in the directly-initialized and
+    /// moved-in spellings alike, storing `None`/`Err` or a fresh `Some`/`Ok`,
+    /// once per store in a loop.
+    ///
+    /// THE BODIES WERE ALWAYS FINE; ONLY THE MEMORY WAS MISSING, and that split
+    /// is what hid this. B-2026-08-02-25 added the displaced payload's user
+    /// `Drop` BODIES walk at this exact site and recorded its reasoning for
+    /// stopping there: the memory "is already reclaimed by the untouched
+    /// `FreeInlineOptionPayload` / `BoxedEnumDrop` action — the pre-fix shape
+    /// leaked nothing under LSan — so a memory call here would double-free".
+    /// B-2026-08-07-4 corrected the BOXED half of that sentence. This is the
+    /// INLINE half, wrong for the same reason: the scope-exit action re-reads
+    /// the slot AFTER the store, so it frees only the LAST value and every
+    /// earlier one is orphaned. Verified separately that the bodies really are
+    /// correct — a user `impl Drop` on the payload fires exactly once, in the
+    /// right place, on interp, JIT and AOT, before and after the fix — so the
+    /// two channels are genuinely independent here.
+    ///
+    /// THE HAZARD ROWS ARE WHY THE FIX EMITS THE QUEUED ACTION RATHER THAN A
+    /// HAND-ROLLED FREE. `match-hands-out`, `iflet-hands-out`,
+    /// `whilelet-consumes` and `result-hands-out` each move the payload to a
+    /// destination that then owns it; they were CLEAN before this change and a
+    /// naive free would double-free all four. Re-emitting the binding's own
+    /// `FreeInlineOptionPayload` / `FreeInlineResultPayload` makes that
+    /// structural instead of predicated: the action carries its own tag guard
+    /// (a consuming arm has already zeroed the source's tag), and a binding
+    /// whose registration was retracted has no action to find.
+    ///
+    /// `struct-payload-control` is the axis, not a confirmation: an `Option`
+    /// whose payload is a heap-bearing STRUCT was already correct, as was a
+    /// plain `String` binding (`plain-string-control`, which has had a
+    /// displacement free via `lhs_is_tracked_vec` all along). It is
+    /// specifically the BARE `String`/`Vec` payload that had no arm.
+    ///
+    /// Payloads are runtime-derived through `env.args().len()` and read with
+    /// `contains` rather than `len`, both deliberately — see the
+    /// B-2026-08-28-75 fixture above for what each guards against. `len` reads
+    /// the header, so an f-string's length folds and `-O2` deletes the
+    /// allocation, leaving the fixture asserting nothing.
+    #[test]
+    fn asan_reassigning_an_inline_optres_payload_frees_the_displaced_buffer() {
+        const H: &str = "fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn slen(s: String) -> i64 { if s.contains(\"payload\") { s.len() } else { 0 } }\n";
+        for (label, body, want) in [
+            // ── the leaking family ──
+            (
+                "option-string-to-none",
+                "fn nn() -> Option[String] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload());\n\
+                 \x20  let n = match vv { Some(s) => slen(s), None => 0 };\n\
+                 \x20  vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "option-string-to-some",
+                "fn f() -> i64 { let mut vv: Option[String] = Some(payload());\n\
+                 \x20  let n = match vv { Some(s) => slen(s), None => 0 };\n\
+                 \x20  vv = Some(\"zz\".to_string());\n\
+                 \x20  n + (match vv { Some(s) => s.len(), None => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "40",
+            ),
+            (
+                "option-vec-i64",
+                "fn nn() -> Option[Vec[i64]] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[Vec[i64]] = Some([seed(), 2, 3, 4, 5, 6, 7, 8, 9, 10]);\n\
+                 \x20  let n = match vv { Some(v) => v[0] + v[9], None => 0 };\n\
+                 \x20  vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "11",
+            ),
+            // A `Vec[String]` payload: the outer buffer AND its elements.
+            (
+                "option-vec-string",
+                "fn nn() -> Option[Vec[String]] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[Vec[String]] = Some([payload(), payload()]);\n\
+                 \x20  let n = match vv { Some(v) => (if v[0].contains(\"payload\") { v[0].len() + v.len() } else { 0 }), None => 0 };\n\
+                 \x20  vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "40",
+            ),
+            (
+                "result-string-to-err",
+                "fn ee() -> Result[String, i64] { Err(7) }\n\
+                 fn f() -> i64 { let mut vv: Result[String, i64] = Ok(payload());\n\
+                 \x20  let n = match vv { Ok(s) => slen(s), Err(_) => 0 };\n\
+                 \x20  vv = ee(); n + (match vv { Ok(_) => 1, Err(_) => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "result-string-to-ok",
+                "fn f() -> i64 { let mut vv: Result[String, i64] = Ok(payload());\n\
+                 \x20  let n = match vv { Ok(s) => slen(s), Err(_) => 0 };\n\
+                 \x20  vv = Ok(\"zz\".to_string());\n\
+                 \x20  n + (match vv { Ok(s) => s.len(), Err(_) => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "40",
+            ),
+            // Moved in rather than directly initialized — the B-2026-08-28-75
+            // axis, which is orthogonal to this one.
+            (
+                "moved-in-alias",
+                "fn nn() -> Option[String] { Option.None }\n\
+                 fn f() -> i64 { let value: Option[String] = Some(payload()); let mut vv = value;\n\
+                 \x20  let n = match vv { Some(s) => slen(s), None => 0 };\n\
+                 \x20  vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // N stores orphaned N buffers, so the shape is linear.
+            (
+                "loop-reassign",
+                "fn fresh(i: i64) -> Option[String] { Some(f\"payload-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\") }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload()); let mut acc = 0; let mut i = 0;\n\
+                 \x20  while i < 6 { acc = acc + (match vv { Some(s) => slen(s), None => 0 }); vv = fresh(i); i = i + 1; }\n\
+                 \x20  acc + (match vv { Some(s) => slen(s), None => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "266",
+            ),
+            // No read of the payload at all — `-O0`-only, like its sibling in
+            // the B-2026-08-28-75 fixture and for the same reason.
+            (
+                "never-read",
+                "fn nn() -> Option[String] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload());\n\
+                 \x20  vv = nn(); if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "0",
+            ),
+            // ── hazards: the payload is TAKEN before the store ──
+            (
+                "match-hands-out",
+                "fn nn() -> Option[String] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload());\n\
+                 \x20  let k = match vv { Some(s) => s, None => \"zz\".to_string() };\n\
+                 \x20  vv = nn(); slen(k) + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "iflet-hands-out",
+                "fn nn() -> Option[String] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload());\n\
+                 \x20  let k = if let Some(s) = vv { s } else { \"zz\".to_string() };\n\
+                 \x20  vv = nn(); slen(k) + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "whilelet-consumes",
+                "fn nn() -> Option[String] { Option.None }\n\
+                 fn take(s: String) -> i64 { slen(s) }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload()); let mut acc = 0;\n\
+                 \x20  while let Some(s) = vv { acc = acc + take(s); vv = nn(); } acc }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "result-hands-out",
+                "fn ee() -> Result[String, i64] { Err(7) }\n\
+                 fn f() -> i64 { let mut vv: Result[String, i64] = Ok(payload());\n\
+                 \x20  let k = match vv { Ok(s) => s, Err(_) => \"zz\".to_string() };\n\
+                 \x20  vv = ee(); slen(k) + (match vv { Ok(_) => 1, Err(_) => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // ── boundaries and axes: clean before, clean after ──
+            (
+                "struct-payload-control",
+                "struct D { s: String }\n\
+                 fn dl(d: D) -> i64 { slen(d.s) }\n\
+                 fn nn() -> Option[D] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[D] = Some(D { s: payload() });\n\
+                 \x20  let n = match vv { Some(d) => dl(d), None => 0 };\n\
+                 \x20  vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "plain-string-control",
+                "fn f() -> i64 { let mut s: String = payload();\n\
+                 \x20  let n = if s.contains(\"payload\") { s.len() } else { 0 };\n\
+                 \x20  s = \"zz\".to_string(); n + s.len() }\n\
+                 fn main() { println(f()); }\n",
+                "40",
+            ),
+            (
+                "shared-payload-control",
+                "shared struct N { s: String }\n\
+                 fn nn() -> Option[N] { Option.None }\n\
+                 fn f() -> i64 { let mut vv: Option[N] = Some(N { s: payload() });\n\
+                 \x20  let n = match vv { Some(x) => (if x.s.contains(\"payload\") { x.s.len() } else { 0 }), None => 0 };\n\
+                 \x20  vv = nn(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // `vv = vv` must not free the buffer it is about to store back.
+            (
+                "self-assign",
+                "fn f() -> i64 { let mut vv: Option[String] = Some(payload()); vv = vv;\n\
+                 \x20  match vv { Some(s) => slen(s), None => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // The RHS mentions the target, so the old value may have moved into
+            // the callee; the free declines, as its siblings do.
+            (
+                "roundtrip",
+                "fn pass(o: Option[String]) -> Option[String] { o }\n\
+                 fn f() -> i64 { let mut vv: Option[String] = Some(payload()); vv = pass(vv);\n\
+                 \x20  match vv { Some(s) => slen(s), None => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // No store at all: the scope-exit action is the only owner and was
+            // always correct.
+            (
+                "never-stored",
+                "fn f() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  match vv { Some(s) => slen(s), None => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &[want], label);
+        }
+    }
+
     /// B-2026-07-04-7 (FIXED): a `struct A { value: Option[<non-shared enum/struct>] }`
     /// field is now DROP-SUPPORTED. Before, `emit_struct_drop_synthesis(A)` emitted no
     /// drop for the `Option[<heap enum>]` field (the `OptionInline` pass was gated to
