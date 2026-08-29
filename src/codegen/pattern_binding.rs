@@ -1232,13 +1232,48 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .pattern_binding_scrutinee_is_option_result
                                 && !self.pattern_state.pattern_binding_scrutinee_is_shared_enum
                                 && !self.pattern_state.pattern_binding_is_borrow
-                                && self.type_decls.struct_types.contains_key(tn)
+                                // B-2026-08-28-73 — a boxed user ENUM payload is
+                                // a view of the box exactly as a wide struct is,
+                                // and this gate admitted `struct_types` alone.
+                                // B-2026-08-28-63 widened the BODIES branch below
+                                // to enums without widening this one, so a boxed
+                                // enum payload got a registration on that path
+                                // and none of the view bookkeeping that
+                                // neutralizes it: `boxed_optres_payload_view_vars`
+                                // is what `suppress_boxed_payload_view_move` reads
+                                // to clear the box's inner walk when the binding
+                                // moves on, so `let k = match o { Some(g) => { g } .. }`
+                                // left the source walk armed beside `k`'s own
+                                // drop and freed the payload's `String` twice —
+                                // `free(): double free detected in tcache 2` under
+                                // plain `karac run`, no sanitizer involved.
+                                //
+                                // Same admit and same word-count probe -63 wrote
+                                // for the bodies branch, so the two now agree on
+                                // which payloads are boxed.
+                                && (self.type_decls.struct_types.contains_key(tn)
+                                    || (!matches!(tn, "Option" | "Result")
+                                        && self
+                                            .type_decls
+                                            .enum_layouts
+                                            .get(tn)
+                                            .is_some_and(|l| !l.is_shared)))
                                 && !self.type_decls.shared_types.contains_key(tn)
                                 && self.pattern_state.pattern_binding_scrutinee_optres_area > 0
-                                && self.type_decls.struct_types.get(tn).is_some_and(|st| {
-                                    Self::llvm_type_word_count((*st).into())
-                                        > self.pattern_state.pattern_binding_scrutinee_optres_area
-                                })
+                                && self
+                                    .type_decls
+                                    .struct_types
+                                    .get(tn)
+                                    .map(|st| Self::llvm_type_word_count((*st).into()))
+                                    .or_else(|| {
+                                        self.type_decls
+                                            .enum_layouts
+                                            .get(tn)
+                                            .map(|l| Self::llvm_type_word_count(l.llvm_type.into()))
+                                    })
+                                    .is_some_and(|w| {
+                                        w > self.pattern_state.pattern_binding_scrutinee_optres_area
+                                    })
                                 && self
                                     .pattern_state
                                     .current_variant_payload_bindings

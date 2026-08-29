@@ -15905,6 +15905,66 @@ fn main() {
     /// seeded from the opaque `env.args().len()`, each scalar arm subtracts the
     /// seed back out to leave `i`, and each byte-read arm contributes 1 —
     /// `8i + 4` per iteration, so `8 * (0+…+39) + 40 * 4 = 6400`.
+    /// B-2026-08-28-73 shape 1 — a consuming arm that hands its bound BOXED
+    /// ENUM payload out as the match's value double-freed that payload.
+    ///
+    /// REGRESSION from B-2026-08-28-63 (f862656). That commit widened the
+    /// boxed-payload BODIES branch in `pattern_binding.rs` to admit a user enum
+    /// — `enum G { A(String), B }` is 4 words against `Option`'s 3, so it boxes
+    /// — but left the VIEW-recording gate a few lines above it keyed on
+    /// `struct_types` alone. `boxed_optres_payload_view_vars` is what
+    /// `suppress_boxed_payload_view_move` reads to clear the box's inner walk
+    /// when the binding moves on, so a boxed ENUM payload got the registration
+    /// without the bookkeeping that neutralizes it: the source walk stayed
+    /// armed beside the destination's own drop and the payload's `String` was
+    /// freed twice.
+    ///
+    /// NOT the braces hole B-2026-08-28-66 turned out to be — checked, because
+    /// the shapes look alike. Both `Some(g) => { g }` and `Some(g) => g` abort
+    /// identically here, so the arm-tail neutralizers are not involved.
+    ///
+    /// SHIPPED-BINARY SEVERITY, not a sanitizer finding: plain `karac run`
+    /// aborts with `free(): double free detected in tcache 2` on the original
+    /// spelling, with no sanitizer in the picture.
+    ///
+    /// COVERAGE — the `Drop` body READS the payload (`match self { G.A(s) => …`)
+    /// deliberately. With a body that prints a literal, nothing observes the
+    /// `String`, LLVM deletes the allocation at `-O2`, and the AOT binary passes
+    /// against the broken compiler; the row's own note calls that pass an
+    /// artifact. Reading the payload makes every compiled path abort at every
+    /// optimization level, so this fixture is red on the default leg as well as
+    /// under `KARAC_OPT_LEVEL=0`.
+    #[test]
+    fn asan_consuming_arm_boxed_enum_payload_handed_out_is_owned_once() {
+        let expected: Vec<&str> = vec!["dGtrue"; 8];
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum G { A(String), B }
+impl Drop for G {
+    fn drop(mut ref self) {
+        match self {
+            G.A(s) => { println(f"dG{s.contains("row")}") }
+            G.B => { println("dGB") }
+        }
+    }
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let mut i: i64 = 0;
+    while i < 8 {
+        let o: Option[G] = Option.Some(G.A("row-" + (n + i).to_string()));
+        let k = match o { Option.Some(g) => { g } Option.None => { G.B } };
+        i = i + 1;
+    }
+}
+"#,
+            &expected,
+            "consuming-arm-boxed-enum-payload-handed-out",
+            8,
+        );
+    }
+
     /// B-2026-08-28-68 — a `Result` with ONE side boxed lost the OTHER side's
     /// inline payload walk, and the obvious fix for that then leaked the box.
     ///
