@@ -45146,6 +45146,105 @@ fn test_discarded_match_arm_value_runs_its_drop_body_once() {
     }
 }
 
+/// B-2026-08-29-20 — the `let _ = <match>` SIBLING of
+/// `test_discarded_match_arm_value_runs_its_drop_body_once`, row for row.
+///
+/// `discard_rhs_produces_owned_value` had no `Match` arm, so this spelling ran
+/// NO `Drop` body here while the bare-statement spelling ran one; codegen's
+/// wildcard-let gate was missing the same leg, so the two backends agreed on
+/// the silence and only an absolute expectation could see it.
+///
+/// ROWS 3-5 ARE THE ONES THIS MOVED (0 bodies -> 1, on all three backends).
+/// Rows 1, 2 and 6 are pinned AS MEASURED and are all still wrong: each is an
+/// arm that HANDS OUT A BINDING rather than minting a value, which is
+/// B-2026-08-29-5's population reached through the `let _ =` spelling. Row 2 is
+/// additionally a live run-vs-build divergence — compiled prints `dR1` through
+/// the general match lowering, this backend prints nothing.
+///
+/// Row 2 is also exactly why the `Match` arm EXCLUDES a bare `Identifier` tail
+/// instead of recursing into `discard_rhs_produces_owned_value` whole: that
+/// predicate's `ExprKind::Identifier(_) => true` is far more permissive than
+/// codegen's freshness gate, so inheriting it would fire here on row 1 too,
+/// where compiled is silent — moving the divergence rather than removing it.
+/// An earlier interpreter-only attempt at the PARENT row was reverted for the
+/// same measurement, which is why the exclusion is spelled out rather than
+/// assumed.
+#[test]
+fn test_discarded_let_wildcard_match_runs_its_drop_body_once() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+    let rows: [(&str, &str, &str); 6] = [
+        (
+            "let o: Option[R] = Some(R { id: 1 });\n\
+             let _ = match o { Some(r) => { r } None => { R { id: 0 } } };\n\
+             println(\"dropped\");",
+            "dropped",
+            "UNFIXED (B-2026-08-29-5): braced arm hands out the bound payload",
+        ),
+        (
+            "let o: Option[R] = Some(R { id: 1 });\n\
+             let _ = match o { Some(r) => r, None => R { id: 0 } };\n\
+             println(\"dropped\");",
+            "dropped",
+            "UNFIXED, DIVERGENT (B-2026-08-29-5): bare arm hands out the bound payload",
+        ),
+        (
+            "let n = 1;\n\
+             let _ = match n { 1 => { R { id: 7 } } _ => { R { id: 0 } } };\n\
+             println(\"dropped\");",
+            "dR7\ndropped",
+            "FIXED: braced arm yields a fresh literal",
+        ),
+        (
+            "let n = 1;\n\
+             let _ = match n { 1 => R { id: 7 }, _ => R { id: 0 } };\n\
+             println(\"dropped\");",
+            "dR7\ndropped",
+            "FIXED: bare arm yields a fresh literal",
+        ),
+        (
+            "let n = 1;\n\
+             let _ = match n { 1 => mk(7), _ => mk(0) };\n\
+             println(\"dropped\");",
+            "dR7\ndropped",
+            "FIXED: arm yields a call result",
+        ),
+        (
+            "let r = R { id: 41 };\n\
+             let n = 0;\n\
+             let _ = match n { 0 => r, _ => R { id: 9 } };\n\
+             println(\"end\");",
+            "end",
+            "UNFIXED (B-2026-08-29-5): arm hands out an enclosing local",
+        ),
+    ];
+    for (body, expected, label) in rows {
+        let src = format!(
+            "{hdr}fn mk(i: i64) -> R {{ return R {{ id: i }}; }}\nfn main() {{\n{body}\n}}\n"
+        );
+        assert_eq!(run(&src).trim(), expected, "[{label}]");
+    }
+    // The control that localized the defect: the same discard site with a
+    // non-match RHS was correct throughout.
+    let call = format!(
+        "{hdr}fn mk() -> R {{ return R {{ id: 1 }}; }}\n\
+         fn main() {{ let _ = mk(); println(\"dropped\"); }}\n"
+    );
+    assert_eq!(run(&call).trim(), "dR1\ndropped", "[control: let _ = call]");
+    // A read-only arm yields unit, so the widened gate must stay a no-op there.
+    let read = format!(
+        "{hdr}fn main() {{\n\
+         let o: Option[R] = Some(R {{ id: 1 }});\n\
+         let _ = match o {{ Some(r) => {{ println(f\"saw{{r.id}}\") }} None => {{ println(\"none\") }} }};\n\
+         println(\"dropped\");\n}}\n"
+    );
+    assert_eq!(
+        run(&read).trim(),
+        "saw1\ndR1\ndropped",
+        "[control: read-only arm]"
+    );
+}
+
 /// The two controls that localize the fix above: a discarded CALL result and a
 /// read-only arm both already ran exactly one body on every backend, and must
 /// keep doing so — they are what prove the change did not widen into

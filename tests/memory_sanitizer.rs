@@ -53580,6 +53580,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-20 — the MEMORY side of widening the wildcard-let discard
+    /// gate to admit a `match`.
+    ///
+    /// Before the fix `let _ = match .. ;` registered no cleanup at all, so a
+    /// HEAP-carrying arm value was simply leaked; now the gate routes it
+    /// through the same discard battery the bare-statement spelling uses. That
+    /// battery frees as well as running bodies, so the widening is the kind of
+    /// change that turns a leak into a double free if the value is not really
+    /// the discard site's to own — which is why this pins both directions on a
+    /// String-carrying payload rather than trusting the body count alone.
+    ///
+    /// Case 2 is the boundary that keeps the widening honest: an arm handing
+    /// out an ENCLOSING LOCAL is NOT admitted (its tail is a bare identifier),
+    /// so the local's own owner is still the only one, and LSan proves the
+    /// value is not stranded by the gate declining. That cell still runs no
+    /// body — B-2026-08-29-5 — but a missing body and a leak are different
+    /// failures, and only this file can tell them apart.
+    ///
+    /// `name` is read byte-wise in the body for this file's usual reason.
+    #[test]
+    fn asan_discarded_let_wildcard_match_frees_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"heap-{i}" }; }
+fn main() {
+    let n = 1;
+    let _ = match n { 1 => { R { id: 7, name: f"lit-seven" } } _ => { mk(0) } };
+    let _ = match n { 1 => mk(3), _ => mk(0) };
+    println("dropped");
+}
+"#,
+            &["dR7 lit-seven", "dR3 heap-3", "dropped"],
+            "discarded_let_wildcard_match",
+        );
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn main() {
+    let r = R { id: 41, name: f"forty-one" };
+    let n = 0;
+    let _ = match n { 0 => r, _ => R { id: 9, name: f"nine" } };
+    println("end");
+}
+"#,
+            &["end"],
+            "discarded_let_wildcard_match_enclosing_local",
+        );
+    }
+
     /// B-2026-08-29-19 — the MEMORY half of the wrapped-param-view double body,
     /// with a HEAP-CARRYING payload.
     ///

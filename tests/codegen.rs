@@ -18773,6 +18773,125 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-20 — the `let _ = <match>` SIBLING of
+    /// `e2e_discarded_match_arm_value_runs_its_drop_body_once`, row for row.
+    ///
+    /// The bare-statement arm of `compile_stmt` has chained
+    /// `discarded_match_value_tail` since B-2026-08-28-69, and its comment says
+    /// the two discard spellings "cannot drift apart" because they share the
+    /// same `&self` siblings. They had: the WILDCARD-LET arm chained only
+    /// `discarded_owned_temp_tail` and `discarded_unit_variant_tail`, neither of
+    /// which admits a `Match`, so `let _ = match n { 1 => { R { .. } } .. };`
+    /// ran NO `Drop` body on any backend while `match n { .. };` ran one. The
+    /// fix is the missing `.or_else` leg plus its guard disjunct.
+    ///
+    /// ROWS 3-5 ARE THE ONES THIS MOVED (0 bodies -> 1, on all three backends).
+    /// Rows 1, 2 and 6 are pinned AS MEASURED, not as preferred, and every one
+    /// of them is still wrong:
+    ///
+    ///  * 1 and 6 are agreed-silent, and 2 is a live run-vs-build DIVERGENCE —
+    ///    compiled fires through the general match lowering (an arm-scope drop
+    ///    of the binding), the interpreter does not. All three are arms that
+    ///    HAND OUT A BINDING rather than mint a value, which is
+    ///    B-2026-08-29-5's population ("a discarded match/if let whose arm
+    ///    hands the bound payload out as the construct's value"), reached here
+    ///    through the `let _ =` spelling instead of the bare statement.
+    ///
+    /// Row 2 is why the interpreter twin EXCLUDES `Identifier` at an arm tail
+    /// rather than recursing whole: its predicate admits a bare identifier
+    /// unconditionally, so inheriting that would fire this backend on row 1 as
+    /// well — where compiled is silent — moving the divergence one row over
+    /// instead of removing it. Making rows 1 and 2 agree needs the arm-binding
+    /// ownership question answered for both backends at once, which is the
+    /// separate design decision B-2026-08-29-5 carries.
+    ///
+    /// Also still silent and NOT in this table, measured while bounding the
+    /// fix: the `if` spelling of the same discard (`let _ = if c { R { .. } }
+    /// else { .. };` AND the bare-statement `if c { R { .. } } else { .. };`,
+    /// so that gap predates this row and sits at the parent's site too), and a
+    /// block-WRAPPED match (`let _ = { match .. };`, which neither gate
+    /// recurses into). Both are B-2026-08-29-25.
+    ///
+    /// Memory is balanced in every cell, so no ASAN/LSan corpus reaches this
+    /// class — only an absolute output expectation can see it.
+    #[test]
+    fn e2e_discarded_let_wildcard_match_runs_its_drop_body_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mk(i: i64) -> R { return R { id: i }; }\n";
+        let rows: [(&str, &str, &str); 6] = [
+            (
+                "let o: Option[R] = Some(R { id: 1 });\n\
+                 let _ = match o { Some(r) => { r } None => { R { id: 0 } } };\n\
+                 println(\"dropped\");",
+                "dropped\n",
+                "UNFIXED (B-2026-08-29-5): braced arm hands out the bound payload",
+            ),
+            (
+                "let o: Option[R] = Some(R { id: 1 });\n\
+                 let _ = match o { Some(r) => r, None => R { id: 0 } };\n\
+                 println(\"dropped\");",
+                "dR1\ndropped\n",
+                "UNFIXED, DIVERGENT (B-2026-08-29-5): bare arm hands out the bound payload",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = match n { 1 => { R { id: 7 } } _ => { R { id: 0 } } };\n\
+                 println(\"dropped\");",
+                "dR7\ndropped\n",
+                "FIXED: braced arm yields a fresh literal",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = match n { 1 => R { id: 7 }, _ => R { id: 0 } };\n\
+                 println(\"dropped\");",
+                "dR7\ndropped\n",
+                "FIXED: bare arm yields a fresh literal",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = match n { 1 => mk(7), _ => mk(0) };\n\
+                 println(\"dropped\");",
+                "dR7\ndropped\n",
+                "FIXED: arm yields a call result",
+            ),
+            (
+                "let r = R { id: 41 };\n\
+                 let n = 0;\n\
+                 let _ = match n { 0 => r, _ => R { id: 9 } };\n\
+                 println(\"end\");",
+                "end\n",
+                "UNFIXED (B-2026-08-29-5): arm hands out an enclosing local",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(expected), "[{label}]");
+        }
+        // The control that localized the defect: the SAME discard site with a
+        // non-match RHS was correct throughout, which is what identifies this
+        // as a missing gate leg rather than anything about discards generally.
+        let call = format!("{hdr}fn main() {{ let _ = mk(1); println(\"dropped\"); }}\n");
+        assert_eq!(
+            run_program(&call).as_deref(),
+            Some("dR1\ndropped\n"),
+            "[control: let _ = call]"
+        );
+        // A read-only arm yields unit and must stay a no-op — the guard that
+        // the widened gate did not start firing on arms that own nothing.
+        let read = format!(
+            "{hdr}fn main() {{\n\
+             let o: Option[R] = Some(R {{ id: 1 }});\n\
+             let _ = match o {{ Some(r) => {{ println(f\"saw{{r.id}}\") }} None => {{ println(\"none\") }} }};\n\
+             println(\"dropped\");\n}}\n"
+        );
+        assert_eq!(
+            run_program(&read).as_deref(),
+            Some("saw1\ndR1\ndropped\n"),
+            "[control: read-only arm]"
+        );
+    }
+
     #[test]
     fn e2e_owned_self_enum_receiver_single_fire() {
         let Some(out) = run_program(

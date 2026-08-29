@@ -2622,6 +2622,34 @@ impl<'a> super::Interpreter<'a> {
                 }
                 _ => false,
             },
+            // B-2026-08-29-20 — a discarded `match` (`let _ = match n { 1 => {
+            // R { .. } } .. };`). This dispatch had no `Match` arm, so the
+            // wildcard-let spelling ran NO `Drop` body on this backend while
+            // the BARE-STATEMENT spelling (`match n { .. };`) ran one — and
+            // codegen was silent too, its own gate missing the same leg.
+            //
+            // Every arm's TAIL must qualify, peeled with `arm_tail_expr` (the
+            // twin of codegen's `block_tail_expr`), and `Identifier` is
+            // EXCLUDED rather than inherited from the arm above. That
+            // exclusion is the whole subtlety and the reason this could not
+            // simply recurse: `ExprKind::Identifier(_) => true` is far more
+            // permissive than codegen's freshness gate, so recursing whole
+            // would fire this backend on arm shapes
+            // `discarded_match_value_tail` rejects — trading an agreed silence
+            // for a run-vs-build divergence one spelling over. An arm that
+            // hands out a BINDING is a different population with a different
+            // answer (B-2026-08-29-5) and is deliberately left silent here.
+            //
+            // Empty `arms` yields `false` through `all`, matching codegen's
+            // explicit `arms.is_empty()` early return.
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms.iter().all(|a| {
+                        let tail = Self::arm_tail_expr(&a.body);
+                        !matches!(tail.kind, ExprKind::Identifier(_))
+                            && self.discard_rhs_produces_owned_value(tail, val)
+                    })
+            }
             ExprKind::MethodCall { method, .. } => {
                 matches!(
                     method.as_str(),

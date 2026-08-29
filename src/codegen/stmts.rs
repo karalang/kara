@@ -3331,10 +3331,20 @@ impl<'ctx> super::Codegen<'ctx> {
             StmtKind::Let { pattern, value, .. }
                 if matches!(&pattern.kind, PatternKind::Wildcard)
                     && (Self::discarded_owned_temp_tail(value).is_some()
-                        || self.discarded_unit_variant_tail(value).is_some()) =>
+                        || self.discarded_unit_variant_tail(value).is_some()
+                        || self.discarded_match_value_tail(value).is_some()) =>
             {
+                // B-2026-08-29-20 — the `discarded_match_value_tail` leg is the
+                // third of the trio, and it was missing HERE while the
+                // bare-statement arm has carried it since B-2026-08-28-69. The
+                // comment there says the two spellings "cannot drift apart"
+                // because they share the same `&self` siblings; they had, on
+                // exactly this one. `let _ = match n { 1 => { R { .. } } .. };`
+                // reached neither of the other two gates, so it ran NO `Drop`
+                // body on any backend while `match n { .. };` ran one.
                 let tail = Self::discarded_owned_temp_tail(value)
                     .or_else(|| self.discarded_unit_variant_tail(value))
+                    .or_else(|| self.discarded_match_value_tail(value))
                     .expect("guard guarantees a discarded tail");
                 // `let _ = m.insert(k, v)` over an owned-heap/shared-V map:
                 // the insert LOWERING reclaims the displaced value inline
