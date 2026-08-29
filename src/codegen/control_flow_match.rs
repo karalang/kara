@@ -977,7 +977,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // position, 11 allocs / 10 frees). Only the shared arm is gated
                 // — every other suppression this call performs still runs.
                 let owns_result = self.branch_value_is_owned(scrutinee);
-                self.suppress_source_vec_cleanup_for_arg_ex(&arm.body, owns_result);
+                // B-2026-08-29-5 — and the WHOLE call, not just the shared
+                // arm B-2026-08-29-13 gated. Suppression is a HANDOVER: it
+                // takes the tail's buffer away from whatever owns it so the
+                // branch's consumer can own it instead. A discarded branch has
+                // no consumer, so the handover strands the buffer — the same
+                // reasoning the row above records for the shared ref and the
+                // boxed-payload neutralizer records for its interior walk,
+                // applied to every channel this call touches rather than one.
+                //
+                // Leaving the source armed is the entire fix for the population
+                // whose tail NAMES something: a pattern binding, or a local in
+                // scope. The population whose tail MINTS its value has no
+                // source to leave armed and is handled separately, by giving
+                // the value an owner in the arm's own frame.
+                if owns_result {
+                    self.suppress_source_vec_cleanup_for_arg_ex(&arm.body, owns_result);
+                }
                 // B-2026-08-29-13 — the match-arm sibling of the block-tail
                 // record in `suppress_block_tail_cleanup`. An arm yielding a
                 // bare `shared` binding transfers the ref; without this the

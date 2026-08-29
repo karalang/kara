@@ -750,6 +750,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // env revert; the consuming `let`/arm re-derives its own metadata from
         // the typechecker's type, not from a block-local tail's name entry.
         let scope_snap = self.snapshot_var_env();
+        // B-2026-08-29-5 — read (and clear) `compile_if`'s one-shot signal
+        // BEFORE anything is compiled, so only this block sees it and a nested
+        // value-position block inside the arm gets the ordinary treatment.
+        let arm_value_discarded = std::mem::take(&mut self.branch_arm_value_discarded);
         // B-2026-08-26-12 — is the FUNCTION-TAIL `Option[shared]` compensator
         // already armed for this block's tail? Read it BEFORE `compile_block`
         // `take()`s it. When it is armed, `compile_tail_final_expr` incs the
@@ -786,7 +790,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 // per-binding `i1` in THIS arm's basic block instead, and let
                 // the drain read it.
                 self.arm_conditional_move_tail_flag(tail);
-                self.suppress_block_tail_cleanup(tail);
+                // B-2026-08-29-5 — the plain-`if` sibling of the arm-tail gate
+                // in `compile_match` / `compile_if_let`. Suppression hands the
+                // tail's buffer from its source to whatever consumes the
+                // branch's value; a DISCARDED branch has no consumer, so
+                // suppressing here strands the buffer with no owner at all.
+                // Leaving the source armed is the whole fix: `if n > 0 { vv }
+                // else { ww };` in statement position leaked whichever local
+                // the taken arm named.
+                if !arm_value_discarded {
+                    self.suppress_block_tail_cleanup(tail);
+                } else if self.expr_yields_fresh_owned_temp(tail) {
+                    // B-2026-08-29-5, second mechanism. A tail that MINTS its
+                    // value has no source to leave armed, so declining to
+                    // suppress buys nothing — nothing ever owned it. Give it
+                    // an owner in this arm's own frame, which drains a few
+                    // lines below, so it dies with the arm: `if c { mk(n) }
+                    // else { mk(n + 1) };` in statement position leaked
+                    // whichever call the taken arm made.
+                    //
+                    // Same freshness predicate the discarded-`match` STATEMENT
+                    // site (`discarded_match_value_tail`) gates on, and needed
+                    // here rather than there because a no-`else` branch never
+                    // yields its arm's value to the statement at all — the
+                    // merge hands back a placeholder, so the buffer is already
+                    // unreachable by the time that site sees it.
+                    if let Some(v) = result {
+                        self.materialize_owned_temp(v, (tail.span.offset, tail.span.length));
+                    }
+                }
                 // B-2026-08-26-12 — the `Option[shared T]` sibling of the
                 // plain-`shared` retain `suppress_block_tail_cleanup` reaches
                 // through `suppress_source_vec_cleanup_for_arg`.

@@ -12424,6 +12424,200 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-5 — a branch construct whose VALUE IS DISCARDED strands
+    /// whatever its taken arm hands out.
+    ///
+    /// TWO mechanisms, opposite in shape, which is why one fix would not have
+    /// covered the corpus:
+    ///
+    ///   * the arm tail names something that ALREADY HAS AN OWNER — a pattern
+    ///     binding, or a local in scope. Handing it out suppresses that owner's
+    ///     cleanup so the consumer can take over; with no consumer the buffer
+    ///     is orphaned. The fix is to STOP SUPPRESSING, at the three arm-tail
+    ///     sites (`compile_match`, `compile_if_let`, and — through
+    ///     `branch_arm_value_discarded` — `compile_block_with_frame`).
+    ///
+    ///   * the arm tail MINTS its value (a call). There is no owner to leave
+    ///     armed; nothing ever held it. The fix is to REGISTER one, in the
+    ///     arm's own frame, gated on `expr_yields_fresh_owned_temp` so an
+    ///     aliasing place-expr tail is never freed out from under its binding.
+    ///
+    /// The `match` STATEMENT site already covered the second mechanism for
+    /// `match` alone (`discarded_match_value_tail`); it cannot cover `if` /
+    /// `if let`, because a no-`else` branch hands its arm's value to the
+    /// statement not at all — the merge yields a placeholder, so the buffer is
+    /// unreachable by the time that site runs. Hence an owner inside the arm.
+    ///
+    /// The control rows are the real gate: every one of them was CLEAN before
+    /// the fix, and each is a shape where an over-eager free is a double free
+    /// rather than a leak.
+    #[test]
+    fn asan_discarded_branch_frees_the_value_its_arm_hands_out() {
+        // EVERY CASE RUNS IN `go()`, NOT IN `main`, and that is load-bearing
+        // rather than tidiness. LeakSanitizer scans the live stack
+        // conservatively, so a leaked buffer whose `{ptr,len,cap}` is still
+        // sitting in `main`'s frame reads as REACHABLE and is not reported —
+        // six of these rows passed against the unfixed compiler when written
+        // directly in `main`, while valgrind's `definitely lost` flagged every
+        // one of them. Calling through a helper puts the stale slot below the
+        // stack pointer by the time LSan looks, so the leak is a leak.
+        const H: &str = "struct D { s: String }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn other() -> String { f\"other-{seed()}-bbbbbbbbbbbbbbbbbbbbbbbbbbbb\" }\n\
+             fn slen(s: String) -> i64 { if s.contains(\"payload\") { s.len() } else { 0 } }\n\
+             fn pass(s: String) -> String { s }\n\
+             fn main() { println(go()); }\n";
+        for (label, body, want) in [
+            // ── mechanism 1: the tail hands out something already owned ──
+            (
+                "iflet-hands-payload-out",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  if let Some(s) = vv { s };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "match-hands-payload-out",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  match vv { Some(s) => s, None => other() };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // A STRUCT payload: the binding owns the struct's interior heap
+            // rather than a bare buffer, so it travels a different
+            // registration.
+            (
+                "iflet-hands-struct-payload-out",
+                "fn go() -> i64 { let vv: Option[D] = Some(D { s: payload() });\n\
+                 \x20  if let Some(d) = vv { d };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "iflet-with-else-hands-payload-out",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  if let Some(s) = vv { s } else { other() };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // A plain `if` reaches the suppressor through
+            // `compile_block_with_frame`, which holds no condition — hence the
+            // carried flag rather than a `branch_value_is_owned` call.
+            (
+                "if-hands-local-out",
+                "fn go() -> i64 { let a = payload(); let b = other();\n\
+                 \x20  if seed() > 0 { a } else { b };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "match-hands-local-out",
+                "fn go() -> i64 { let a = payload(); let b = other();\n\
+                 \x20  match seed() { 1 => a, _ => b };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // The if-let ELSE arm is its own site: it routes through
+            // `compile_block_with_frame` while the THEN arm hand-rolls a frame.
+            (
+                "iflet-else-hands-local-out",
+                "fn go() -> i64 { let vv: Option[String] = None; let b = other();\n\
+                 \x20  if let Some(s) = vv { s } else { b };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // The sharp row: leaving the source ARMED is the fix, so the
+            // source must still be readable afterwards AND freed exactly once.
+            // An orphaned buffer reads fine and leaks; a disarmed-and-freed one
+            // reads freed memory.
+            (
+                "source-survives-the-discard",
+                "fn go() -> i64 { let a = payload();\n\
+                 \x20  if seed() > 0 { a } else { other() };\n\
+                 \x20  slen(a) }\n",
+                "38",
+            ),
+            // ── mechanism 2: the tail mints its value ──
+            (
+                "if-fresh-in-both-arms",
+                "fn go() -> i64 { if seed() > 0 { payload() } else { other() };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "iflet-fresh-call-tail",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  if let Some(s) = vv { pass(s) };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // A loop body's trailing branch is one of the three discarding
+            // positions `compute_discarded_branch_spans` records; it leaks once
+            // per iteration, so it also proves the owner is per-arm.
+            (
+                "if-fresh-in-loop-body",
+                "fn go() -> i64 { for i in 0..3 { if seed() > 0 { payload() } else { other() }; }\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            (
+                "block-wrapped-discard",
+                "fn go() -> i64 { { if seed() > 0 { payload() } else { other() } };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // ── controls: an owner EXISTS, so a second free is a double free ──
+            (
+                "bound-and-used-not-handed-out",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  if let Some(s) = vv { slen(s) } else { 0 } }\n",
+                "38",
+            ),
+            (
+                "iflet-value-bound",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  let k = if let Some(s) = vv { s } else { other() };\n\
+                 \x20  slen(k) }\n",
+                "38",
+            ),
+            (
+                "if-fresh-value-bound",
+                "fn go() -> i64 { let k = if seed() > 0 { payload() } else { other() };\n\
+                 \x20  slen(k) }\n",
+                "38",
+            ),
+            // The aliasing place-expr branch WITH a consumer — the exact shape
+            // the pre-fix deferral in `test_ir_discarded_branching_tail_temp_*`
+            // was protecting. Here suppression is correct and must still run.
+            (
+                "if-local-value-bound",
+                "fn go() -> i64 { let a = payload(); let b = other();\n\
+                 \x20  let k = if seed() > 0 { a } else { b };\n\
+                 \x20  slen(k) }\n",
+                "38",
+            ),
+            (
+                "arm-rebinds-the-payload",
+                "fn go() -> i64 { let vv: Option[String] = Some(payload());\n\
+                 \x20  if let Some(s) = vv { let t = s; }\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+            // A discarded `match` whose arms are all fresh calls was already
+            // covered by `discarded_match_value_tail`; it must not now be owned
+            // twice.
+            (
+                "match-fresh-arms-already-covered",
+                "fn go() -> i64 { match seed() { 1 => payload(), _ => other() };\n\
+                 \x20  1 }\n",
+                "1",
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &[want], label);
+        }
+    }
+
     /// B-2026-07-04-7 (FIXED): a `struct A { value: Option[<non-shared enum/struct>] }`
     /// field is now DROP-SUPPORTED. Before, `emit_struct_drop_synthesis(A)` emitted no
     /// drop for the `Option[<heap enum>]` field (the `OptionInline` pass was gated to

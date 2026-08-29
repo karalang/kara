@@ -1482,6 +1482,20 @@ pub(super) struct Codegen<'ctx> {
     /// rather than a set: the question is only ever asked about the arm that
     /// was just compiled.
     pub(crate) branch_arm_clone_taken: Option<Option<inkwell::types::BasicTypeEnum<'ctx>>>,
+    /// B-2026-08-29-5 — one-shot signal from `compile_if` to
+    /// `compile_block_with_frame`: the block about to be compiled is an arm of
+    /// a branch whose VALUE IS DISCARDED, so its tail hands its value to
+    /// nobody.
+    ///
+    /// The `match` and `if let` arm tails ask `branch_value_is_owned` directly
+    /// — they hold the scrutinee, which is the span
+    /// `discarded_branch_spans` is keyed by. A plain `if`'s arms are compiled
+    /// by `compile_block_with_frame`, which is shared with value-position
+    /// blocks, `let` initializers and call arguments and holds no condition at
+    /// all, so the answer has to be carried in. `take`n at that function's
+    /// entry, before it compiles anything: only the block the flag was set for
+    /// may read it, never a nested one.
+    pub(crate) branch_arm_value_discarded: bool,
     /// B-2026-08-28-44 — merge-point owner slots, keyed by the branch
     /// EXPRESSION's span (not the condition/scrutinee's), so a consuming
     /// destination takes the merged value over through the usual funnel and
@@ -5786,6 +5800,7 @@ impl<'ctx> Codegen<'ctx> {
             vec_elem_field_clone_slots: std::collections::HashMap::new(),
             vec_elem_field_clone_elem_ty: std::collections::HashMap::new(),
             branch_arm_clone_taken: None,
+            branch_arm_value_discarded: false,
             branch_tail_owner_slots: std::collections::HashMap::new(),
             current_branch_expr_span: None,
             container_elem_struct_clone_slots: std::collections::HashMap::new(),

@@ -409,7 +409,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // nothing would ever spend it. Only the shared arm is gated;
                 // every other suppression this call performs still runs.
                 let owns_result = self.branch_value_is_owned(value);
-                self.suppress_source_vec_cleanup_for_arg_ex(fe, owns_result);
+                // B-2026-08-29-5 — and the WHOLE call, not just the shared
+                // arm B-2026-08-29-13 gated. Suppression is a HANDOVER: it
+                // takes the tail's buffer away from whatever owns it so the
+                // branch's consumer can own it instead. A discarded branch has
+                // no consumer, so the handover strands the buffer — the same
+                // reasoning the note above records for the shared ref and the
+                // boxed-payload neutralizer records for its interior walk,
+                // applied to every channel this call touches rather than one.
+                //
+                // Leaving the source armed is the entire fix for the population
+                // whose tail NAMES something: a pattern binding, or a local in
+                // scope. The population whose tail MINTS its value has no
+                // source to leave armed and is handled separately, by giving
+                // the value an owner in the arm's own frame.
+                if owns_result {
+                    self.suppress_source_vec_cleanup_for_arg_ex(fe, owns_result);
+                }
                 // B-2026-08-29-13 — the THIRD leaf hook for the bare-`shared`
                 // TRANSFER record, for exactly the reason the `Option[shared T]`
                 // note below gives: `compile_block_with_frame` covers plain `if`
@@ -451,6 +467,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     let nm = nm.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&nm);
                 }
+                // B-2026-08-29-5 — the then-arm sibling of the fresh-tail
+                // owner in `compile_block_with_frame`. This arm hand-rolls
+                // its frame against a plain `compile_block`, so it reaches
+                // neither that hook nor the discarded-`match` statement site,
+                // and `if let Some(s) = vv { f(s) };` stranded `f`'s result.
+                if !owns_result && self.expr_yields_fresh_owned_temp(fe) {
+                    if let Some(v) = then_val {
+                        self.materialize_owned_temp(v, (fe.span.offset, fe.span.length));
+                    }
+                }
             }
             self.drain_top_frame_with_emit();
             // Deep-copy an owned-param then-tail (caller retains the param's
@@ -475,6 +501,9 @@ impl<'ctx> super::Codegen<'ctx> {
             match &eb.kind {
                 ExprKind::Block(blk) => {
                     else_tail = blk.final_expr.as_deref();
+                    // B-2026-08-29-5 — an if-let's ELSE arm hands its tail out to
+                    // the same (absent) consumer the then-arm does.
+                    self.branch_arm_value_discarded = !own_value;
                     self.compile_block_with_frame(blk)?
                 }
                 _ => {
@@ -2084,6 +2113,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(then_bb);
         self.fn_ctx.tail_ret_inner = tail;
+        // B-2026-08-29-5 — see `branch_arm_value_discarded`: this arm's tail
+        // hands its value to nobody when the `if`'s own value is discarded.
+        self.branch_arm_value_discarded = !own_value;
         let mut then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
@@ -2118,6 +2150,7 @@ impl<'ctx> super::Codegen<'ctx> {
             match &else_expr.kind {
                 ExprKind::Block(blk) => {
                     else_tail = blk.final_expr.as_deref();
+                    self.branch_arm_value_discarded = !own_value;
                     self.compile_block_with_frame(blk)?
                 }
                 ExprKind::If {

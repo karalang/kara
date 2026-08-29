@@ -63740,13 +63740,20 @@ fn main() {
     }
 
     #[test]
-    fn test_ir_discarded_branching_tail_temp_not_tracked() {
-        // Negative / double-free guard: slice 5 peels only *single-tail* block
-        // wrappers. A branching tail (`if … { make() } else { other }`) in
-        // discard position is conservatively NOT routed through the chokepoint
-        // — an aliasing place-expr branch would be double-freed. Construction
-        // uses no other fresh-temp discard, so the absence of `__owned_tmp`
-        // proves the branching tail stayed untracked (a safe leak, deferred).
+    fn test_ir_discarded_branching_tail_temp_is_tracked() {
+        // B-2026-08-29-5 lifts slice 5's deferral. This test asserted the
+        // opposite until then — "a safe leak, deferred" — because slice 5
+        // peeled only SINGLE-TAIL block wrappers and a branching tail was
+        // routed nowhere. The deferral rested entirely on the risk it names:
+        // an ALIASING place-expr branch (`if c { v } else { w }`) would be
+        // double-freed against the sources' own cleanups.
+        //
+        // The owner is now registered inside the ARM, not at the statement,
+        // and only when the arm's tail MINTS its value
+        // (`expr_yields_fresh_owned_temp`) — which is exactly what excludes
+        // the aliasing branch the deferral was protecting. Its sibling below
+        // pins that half, so the guard the old assertion stood for is still
+        // gated, by a predicate rather than by declining the whole shape.
         let src = r#"
 fn make_vec() -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
@@ -63762,9 +63769,40 @@ fn main() {
 "#;
         let ir = ir_for(src);
         assert!(
+            ir.contains("__owned_tmp"),
+            "expected each discarded branch arm's fresh tail temp to be \
+             materialized and freed with the arm; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_discarded_branching_place_tail_not_tracked() {
+        // The other half of B-2026-08-29-5, and the guard the assertion above
+        // used to stand for: a discarded branch whose arms hand out EXISTING
+        // BINDINGS must register no owner of its own. Those buffers already
+        // have owners — the bindings themselves, whose cleanups this fix stops
+        // suppressing — so materializing here would free them twice.
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    let cond = true;
+    let a = make_vec();
+    let b = make_vec();
+    { if cond { a } else { b } }
+    println(0);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
             !ir.contains("__owned_tmp"),
-            "a branching discard tail must stay untracked in slice 5 \
-             (single-tail wrappers only); got:\n{}",
+            "an aliasing place-expr branch tail must register no owner of its \
+             own — the bindings keep theirs; got:\n{}",
             ir
         );
     }
