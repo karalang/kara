@@ -60799,4 +60799,57 @@ fn main() {
             assert_clean_asan_run(&format!("{DROPPER}{body}"), &want, label);
         }
     }
+    /// B-2026-08-28-53 — reordering a DISCARDED own-`Drop` parent temp's body
+    /// ahead of the returned field's stays memory-balanced.
+    ///
+    /// The behavioural twin
+    /// (`e2e_discarded_own_drop_parent_temp_orders_its_body_first`) proves the
+    /// ORDER; this proves the reorder did not buy it with a use-after-free,
+    /// which is the specific risk. The parent's drop wrapper frees its heap
+    /// fields, and the result is a field moved OUT of that parent — so putting
+    /// the parent's body (and its frees) first is exactly the sequence that
+    /// could hand the field's body freed memory.
+    ///
+    /// It cannot, and `bound` is why rather than an argument: that spelling
+    /// ALREADY ran in this order before the fix, over this same shape, and
+    /// measured clean. The moved-out field is masked out of the parent's
+    /// wrapper (`karac_dropnf_<T>`), so the parent never frees what it handed
+    /// on. `discarded` and `discarded-wildcard` are the two spellings the fix
+    /// moved into that same order.
+    ///
+    /// Both bodies READ their heap field, deliberately: a body printing a
+    /// literal would let LLVM delete the allocation at -O2 and assert nothing.
+    #[test]
+    fn asan_discarded_own_drop_parent_temp_order_is_memory_balanced() {
+        const D: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.name}\") } }\n\
+             struct W { r: R, tag: String }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.tag}\") } }\n\
+             fn take(w: W) -> R { let W { r, tag } = w; r }\n";
+        const MK: &str = "W { r: R { id: 47, name: f\"n{47}\" }, tag: f\"t{5}\" }";
+        for (label, body, want) in [
+            (
+                "discarded",
+                format!("{D}fn main() {{ take({MK}); println(\"end\"); }}\n"),
+                vec!["drop Wt5", "drop Rn47", "end"],
+            ),
+            (
+                "discarded-wildcard",
+                format!("{D}fn main() {{ let _ = take({MK}); println(\"end\"); }}\n"),
+                vec!["drop Wt5", "drop Rn47", "end"],
+            ),
+            // The spelling that already ran in this order before the fix — the
+            // proof that parent-frees-then-field-body is safe for this shape.
+            (
+                "bound",
+                format!(
+                    "{D}fn main() {{ let got = take({MK});\n\
+                     \x20            println(f\"got {{got.id}}\"); println(\"end\"); }}\n"
+                ),
+                vec!["drop Wt5", "got 47", "drop Rn47", "end"],
+            ),
+        ] {
+            assert_clean_asan_run(&body, &want, label);
+        }
+    }
 }

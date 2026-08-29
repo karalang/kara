@@ -3277,6 +3277,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let insert_reclaims_displaced = self.mapset.pending_map_insert_old_dec;
                 self.drop_rc.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
+                // B-2026-08-28-53 — the argument/result boundary on this discard
+                // frame: everything already pushed died at the call, everything
+                // the battery pushes below is the discarded result.
+                let b53_arg_mark = self
+                    .drop_rc
+                    .scope_cleanup_actions
+                    .last()
+                    .map_or(0, |f| f.len());
                 self.free_discarded_request_builder_temp(value, val);
                 if insert_reclaims_displaced {
                     self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
@@ -3335,7 +3343,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // AFTER the battery so the LIFO drain runs them before the
                 // battery's frees.
                 self.track_discarded_optres_payload_bodies(tail, val);
-                self.drain_top_frame_with_emit();
+                self.drain_discard_frame_args_first(b53_arg_mark);
                 Ok(())
             }
             // B-2026-07-30-11 (discarded-temp leg), literal tails: `let _ =
@@ -3378,6 +3386,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 self.drop_rc.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
+                // B-2026-08-28-53 — see the sibling discard site: argument
+                // temporaries below this mark, the discarded result above it.
+                let b53_arg_mark = self
+                    .drop_rc
+                    .scope_cleanup_actions
+                    .last()
+                    .map_or(0, |f| f.len());
                 // Struct-literal tails: the UserDrop wrapper / field-bodies
                 // + memory registration. Tuple tails: the memory drop AND
                 // the element bodies walk — the registrar's tuple arm
@@ -3402,7 +3417,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_discarded_tuple_elem_bodies(&elems, val, &[]);
                     }
                 }
-                self.drain_top_frame_with_emit();
+                self.drain_discard_frame_args_first(b53_arg_mark);
                 Ok(())
             }
             StmtKind::Let {
@@ -8874,6 +8889,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.drop_rc.scope_cleanup_actions.push(Vec::new());
                 }
                 let val = self.compile_expr(expr)?;
+                // B-2026-08-28-53 — the argument/result boundary on this
+                // discard frame. Everything pushed while `compile_expr` ran is
+                // an ARGUMENT temporary whose live range ended at the call;
+                // everything the battery pushes below is the discarded RESULT.
+                // See `drain_discard_frame_args_first`.
+                let b53_arg_mark = self
+                    .drop_rc
+                    .scope_cleanup_actions
+                    .last()
+                    .map_or(0, |f| f.len());
                 // Phase-8 line 39 follow-up — `c.request(url).header(...);`
                 // discards a live RequestBuilder temporary; free its
                 // abandoned HTTP_BUILDERS handle (no-op for non-builder /
@@ -8920,7 +8945,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // bare statement silently skipped the payload body both
                     // arms otherwise share.
                     self.track_discarded_optres_payload_bodies(tail, val);
-                    self.drain_top_frame_with_emit();
+                    self.drain_discard_frame_args_first(b53_arg_mark);
                 }
                 Ok(())
             }

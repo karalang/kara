@@ -32242,6 +32242,57 @@ fn test_returned_tuple_param_element_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-28-53, interpreter leg — the ORACLE order for a DISCARDED
+/// own-`Drop` parent temp whose returned field outlives it.
+///
+/// The interpreter was correct here throughout; this pins that so the compiled
+/// twin cannot drift back. `take(W { r: R { id: 47 }, n: 5 });` with the result
+/// thrown away printed `drop 47` / `drop W5` under LLJIT and AOT against this
+/// leg's `drop W5` / `drop 47` — counts right on every backend, ordering alone.
+///
+/// The rule is design.md § Drop ordering's LIVE-RANGE end, not parent-before-
+/// fields (the callee moves `r` OUT of `w`, so no parent/child relation
+/// survives into the caller) and not LIFO (which would put the later-created
+/// result first). The argument temporary's last use is the call, so it dies
+/// there, before the result exists.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `e2e_discarded_own_drop_parent_temp_orders_its_body_first`, whose
+/// expectations are these verbatim.
+#[test]
+fn test_discarded_own_drop_parent_temp_orders_its_body_first() {
+    const D: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct W { r: R, n: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.n}\") } }\n\
+         fn take(w: W) -> R { let W { r, n } = w; r }\n";
+    for (label, body, want) in [
+        (
+            "discarded",
+            format!("{D}fn main() {{ take(W {{ r: R {{ id: 47 }}, n: 5 }}); println(\"end\") }}\n"),
+            "drop W5\ndrop 47\nend\n",
+        ),
+        (
+            "discarded-wildcard",
+            format!(
+                "{D}fn main() {{ let _ = take(W {{ r: R {{ id: 47 }}, n: 5 }});\n\
+                 \x20            println(\"end\") }}\n"
+            ),
+            "drop W5\ndrop 47\nend\n",
+        ),
+        (
+            "bound",
+            format!(
+                "{D}fn main() {{ let got = take(W {{ r: R {{ id: 47 }}, n: 5 }});\n\
+                 \x20            println(f\"got {{got.id}}\"); println(\"end\") }}\n"
+            ),
+            "drop W5\ngot 47\ndrop 47\nend\n",
+        ),
+    ] {
+        assert_eq!(run(&body), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-65 — the UNDER-FIRE horn of B-2026-08-28-51's mechanism: a
 /// `return <local>` NESTED IN A BRANCH lost the local's `Drop` body on the
 /// path that never takes the `return`, on all three COMPILED backends while

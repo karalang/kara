@@ -9184,6 +9184,74 @@ impl<'ctx> super::Codegen<'ctx> {
     /// goes through `emit_scope_cleanup_for_error_path` instead. The skipped
     /// errdefers are dropped along with the frame on pop, so a block that
     /// registers an `errdefer` but exits normally never fires it.
+    /// B-2026-08-28-53 — [`Self::drain_top_frame_with_emit`] for a DISCARD
+    /// frame, with the statement's ARGUMENT temporaries retired ahead of the
+    /// discarded RESULT temp instead of behind it.
+    ///
+    /// `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away printed
+    /// `drop 47` / `drop W5` on both compiled backends against the
+    /// interpreter's `drop W5` / `drop 47`. Both temporaries live on the one
+    /// discard frame — the argument pushed while `compile_expr` ran, the result
+    /// pushed by the cleanup battery after it — and the plain drain runs the
+    /// whole frame in reverse index order, so the later-pushed RESULT fires
+    /// first.
+    ///
+    /// The applicable rule is design.md § Drop ordering's LIVE-RANGE end, not
+    /// LIFO: the argument temporary's last use is the call, so it dies there,
+    /// before the result exists. LIFO never gets to arbitrate because the two
+    /// live ranges do not overlap. `mark` is the frame length captured right
+    /// after `compile_expr`, which is exactly the argument/result boundary.
+    ///
+    /// CODEGEN ALREADY AGREES ONE SPELLING OVER, which is what makes this a
+    /// correction rather than a preference: `let got = take(..);` retires the
+    /// argument temp through `drain_statement_temp_user_drops` (measured: that
+    /// drain fires exactly `karac_dropnf_W` there, and nothing at all in the
+    /// discarded spelling) and so already prints `drop W5` first, agreeing with
+    /// the interpreter. This makes the discarded spelling match its own bound
+    /// twin.
+    ///
+    /// ORDER WITHIN each group is untouched — both halves stay LIFO — so the
+    /// "memory BEFORE bodies" frame discipline the registrars rely on still
+    /// holds for the battery's own registrations.
+    ///
+    /// THE ALIASING QUESTION this raises is whether freeing the argument temp
+    /// ahead of the result's body can hand that body freed memory, since the
+    /// result is frequently a field moved OUT of the argument. It cannot, and
+    /// the bound spelling is the proof rather than an argument: it already runs
+    /// in this order over exactly that shape — `fn take(w: W) -> R` returning a
+    /// `String`-carrying field — and measures 15 allocs / 15 frees, 0 errors
+    /// under valgrind. The moved-out field is masked out of the parent's
+    /// wrapper (`karac_dropnf_<T>` / the partial-mask sibling), so the parent
+    /// never frees what it handed on.
+    pub(super) fn drain_discard_frame_args_first(&mut self, mark: usize) {
+        if self.drop_rc.scope_cleanup_actions.is_empty() {
+            return;
+        }
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let top_idx = self.drop_rc.scope_cleanup_actions.len() - 1;
+        let n = self.drop_rc.scope_cleanup_actions[top_idx].len();
+        let split = mark.min(n);
+        // Argument temporaries first (they died at the call), then the
+        // battery's registrations — each LIFO within itself.
+        for range in [(0..split), (split..n)] {
+            for action_idx in range.rev() {
+                if matches!(
+                    &self.drop_rc.scope_cleanup_actions[top_idx][action_idx],
+                    CleanupAction::UserErrDefer { .. }
+                ) {
+                    continue;
+                }
+                self.emit_cleanup_action_at(top_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
+            }
+        }
+        self.drop_rc.scope_cleanup_actions.pop();
+    }
+
     pub(super) fn drain_top_frame_with_emit(&mut self) {
         if self.drop_rc.scope_cleanup_actions.is_empty() {
             return;

@@ -12678,6 +12678,112 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-53 — a DISCARDED own-`Drop` parent temp orders its own body
+    /// against the returned FIELD's the way the interpreter does.
+    ///
+    /// `take(W { r: R { id: 47 }, n: 5 });` with the result thrown away printed
+    /// `drop 47` / `drop W5` under LLJIT and AOT against `--interp`'s
+    /// `drop W5` / `drop 47`. Counts were right on every backend — one body per
+    /// object — so this was ordering alone, and no count-based assertion in the
+    /// suite could see it.
+    ///
+    /// THE APPLICABLE RULE IS LIVE-RANGE END, not "parent before fields" and not
+    /// LIFO. `fn take(w: W) -> R { let W { r, n } = w; r }` MOVES `r` out inside
+    /// the callee, so by the time either body runs in the CALLER there is no
+    /// parent/child relation left — they are two independent temporaries. Read
+    /// as LIFO-by-introduction the compiled order would be right. What settles
+    /// it is design.md § Drop ordering's other rule: destructors fire at each
+    /// binding's live-range end, and the ARGUMENT temporary's last use is the
+    /// call. It dies there, before the result exists, so the two live ranges do
+    /// not overlap and LIFO never gets to arbitrate.
+    ///
+    /// `bound` IS THE ORACLE, and it is why this is a correction rather than a
+    /// preference: codegen already produced the right order one spelling over.
+    /// A `let`-bound result retires the argument temp through
+    /// `drain_statement_temp_user_drops` — instrumented, that drain fires
+    /// exactly `karac_dropnf_W` in the bound spelling and NOTHING in the
+    /// discarded one — so the bound form printed `drop W5` first on all three
+    /// backends all along. The discarded form put both temporaries on one
+    /// discard frame, which drained in reverse index order and ran the
+    /// later-pushed RESULT first. This makes the discarded spelling agree with
+    /// its own bound twin.
+    ///
+    /// `discarded-wildcard` covers `let _ = take(..);`, the other discard
+    /// spelling: it routes through a different arm of `compile_stmt` and had the
+    /// same inversion, so the two must not drift apart.
+    ///
+    /// `no-own-drop-parent` and `scalar-parent` are the controls — a parent with
+    /// no `Drop` of its own, and one whose moved-out field is scalar. Both were
+    /// correct before and are byte-identical after, so a fix that reordered the
+    /// discard frame wholesale rather than at the argument/result boundary fails
+    /// them.
+    ///
+    /// The memory twin is
+    /// `asan_discarded_own_drop_parent_temp_order_is_memory_balanced`, which
+    /// exists because this reordering moves the parent's heap free AHEAD of the
+    /// returned field's body — the one thing that could turn an ordering fix
+    /// into a use-after-free.
+    #[test]
+    fn e2e_discarded_own_drop_parent_temp_orders_its_body_first() {
+        const D: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct W { r: R, n: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.n}\"); } }\n\
+             fn take(w: W) -> R { let W { r, n } = w; r }\n";
+        for (label, body, want) in [
+            (
+                "discarded",
+                format!(
+                    "{D}fn main() {{ take(W {{ r: R {{ id: 47 }}, n: 5 }}); println(\"end\"); }}\n"
+                ),
+                "drop W5\ndrop 47\nend\n",
+            ),
+            (
+                "discarded-wildcard",
+                format!(
+                    "{D}fn main() {{ let _ = take(W {{ r: R {{ id: 47 }}, n: 5 }});\n\
+                     \x20            println(\"end\"); }}\n"
+                ),
+                "drop W5\ndrop 47\nend\n",
+            ),
+            // THE ORACLE — correct on every backend before this row, and the
+            // behaviour the discarded spellings are matched to.
+            (
+                "bound",
+                format!(
+                    "{D}fn main() {{ let got = take(W {{ r: R {{ id: 47 }}, n: 5 }});\n\
+                     \x20            println(f\"got {{got.id}}\"); println(\"end\"); }}\n"
+                ),
+                "drop W5\ngot 47\ndrop 47\nend\n",
+            ),
+            // CONTROL — the parent declares no `Drop`, so only the field's body
+            // exists and there is no order to get wrong.
+            (
+                "no-own-drop-parent",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+                 struct W { r: R, n: i64 }\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                 fn main() { take(W { r: R { id: 47 }, n: 5 }); println(\"end\"); }\n"
+                    .to_string(),
+                "drop 47\nend\n",
+            ),
+            // CONTROL — a scalar moved-out field, so the parent's body is the
+            // only one.
+            (
+                "scalar-parent",
+                "struct W { a: i64, n: i64 }\n\
+                 impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.n}\"); } }\n\
+                 fn take(w: W) -> i64 { let W { a, n } = w; a }\n\
+                 fn main() { take(W { a: 47, n: 5 }); println(\"end\"); }\n"
+                    .to_string(),
+                "drop W5\nend\n",
+            ),
+        ] {
+            assert_eq!(run_program(&body).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-65 — the UNDER-FIRE horn of B-2026-08-28-51's mechanism: a
     /// `return <local>` NESTED IN A BRANCH lost the local's `Drop` body on the
     /// path that never takes the `return`, on all three COMPILED backends while
