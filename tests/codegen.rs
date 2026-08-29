@@ -13442,6 +13442,84 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-6 — a PASSTHROUGH CALL used DIRECTLY AS A MATCH SCRUTINEE,
+    /// with the result never bound, leaves the payload owned by the named
+    /// source alone.
+    ///
+    /// Pre-fix the arm binding registered its own free on top of the source's
+    /// and both released the same buffer, aborting the process on all three
+    /// compiled backends — for a FREE FUNCTION and a method alike — so
+    /// `run_program` returns `None` here rather than wrong bytes. The memory
+    /// twin is `asan_passthrough_match_scrutinee_leaves_the_source_sole_owner`,
+    /// which also pins that the fix's two halves are each independently
+    /// necessary.
+    #[test]
+    fn e2e_passthrough_match_scrutinee_leaves_the_source_sole_owner() {
+        const DECLS: &str = "struct Bx { n: i64 }\n\
+             impl Bx {\n\
+             fn take(ref self, o: Option[String]) -> Option[String] { o }\n\
+             fn take_res(ref self, o: Result[String, i64]) -> Result[String, i64] { o }\n\
+             fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f\"fresh{self.n}\") }\n\
+             }\n\
+             fn takef(o: Option[String]) -> Option[String] { o }\n";
+        for (label, body, want) in [
+            // FREE FUNCTION — the spelling that shows this is not the
+            // method-path gap B-2026-08-29-4 closed.
+            (
+                "free-fn-scrutinee-passthrough",
+                "fn main() { let n = 1; let s = Option.Some(f\"a{n}\"); \
+                 match takef(s) { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got a1\n",
+            ),
+            (
+                "method-scrutinee-passthrough",
+                "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"a{b.n}\"); \
+                 match b.take(s) { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got a1\n",
+            ),
+            // The `Result` payload, which needs the SECOND half of the fix (the
+            // fresh-temp inline-`Result` registrar declining); the `Option`
+            // cases above are fixed by the scrutinee classification alone.
+            (
+                "result-scrutinee-passthrough",
+                "fn main() { let b = Bx { n: 1 }; \
+                 let s: Result[String, i64] = Result.Ok(f\"c{b.n}\"); \
+                 match b.take_res(s) { Result.Ok(v) => { println(f\"got {v}\"); } \
+                 Result.Err(e) => { println(f\"err {e}\"); } } }\n",
+                "got c1\n",
+            ),
+            // CONTROL — no passthrough, so the scrutinee temp genuinely owns a
+            // freshly produced payload and must KEEP its registration. A fix
+            // that declined unconditionally would leak this one instead.
+            (
+                "no-passthrough-scrutinee-keeps-owner",
+                "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"h{b.n}\"); \
+                 match b.fresh(s) { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got fresh1\n",
+            ),
+            // CONTROL — the `let`-bound spelling, correct since B-2026-08-29-4.
+            // Both routes now classify the same call; if they disagreed the
+            // payload would end up with two owners again, or none.
+            (
+                "let-bound-spelling-still-correct",
+                "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"k{b.n}\"); \
+                 let o = b.take(s); \
+                 match o { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got k1\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{DECLS}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-29-4 — a METHOD that hands an inline `Option`/`Result`
     /// argument back ALIASES the source binding's payload, so the result must be
     /// recorded as an alias rather than tracked as a fresh owner.

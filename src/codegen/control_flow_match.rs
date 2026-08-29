@@ -262,8 +262,36 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_source_retains = self
             .pattern_state
             .pattern_binding_source_retains_inline_payload;
+        // B-2026-08-29-6 — a PASSTHROUGH CALL used directly as the scrutinee
+        // (`match take(s) { .. }`, the result never bound) is the same class:
+        // the callee handed back its argument, so the payload still belongs to
+        // the named source, which stays armed. Without this the arm binding
+        // registered its own free on top of the source's and both released the
+        // same buffer — `free(): double free detected in tcache 2` on all three
+        // compiled backends, for a FREE FUNCTION and a method alike, while the
+        // interpreter was correct.
+        //
+        // Classified here rather than at a scrutinee registrar because
+        // instrumentation showed none of the three claimed this scrutinee:
+        // `fresh_owned_temp=true` and `passthrough=Some("s")`, yet
+        // `freshtemp_enum`, `inline_res` and the shared-Option tracker all
+        // declined. The second owner is the ARM BINDING, which is what this flag
+        // governs.
+        //
+        // NARROWING the arm binding rather than zeroing the source, the
+        // direction this family already settled on: B-2026-08-06-21 tried the
+        // zeroing form and turned a clean program into a leak. Leaving the
+        // source sole owner cannot leak — it is still armed — and the arm reads
+        // the payload before the source's scope-exit free, so the borrow is live
+        // for exactly as long as the arm needs it.
+        //
+        // The `let`-BOUND spelling of the same call is already correct through a
+        // different route (B-2026-08-29-4 records a `passthrough_owner_alias` at
+        // the `let` site); a scrutinee temporary never passes through that site,
+        // which is why it needed its own classification here.
+        let passthrough_retains = self.call_passthrough_armed_any_source(scrutinee).is_some();
         let readonly_inline_optres =
-            self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms);
+            self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms) || passthrough_retains;
         // B-2026-08-08-25 leg 1 — the clone leg keeps the source's payload too,
         // so the suppressors must skip it for the same reason. It is held
         // SEPARATE from `readonly_inline_optres` because only the read-only
@@ -10772,6 +10800,25 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         if self.scrutinee_is_borrow_call(scrutinee) {
+            return None;
+        }
+        // B-2026-08-29-6 — a PASSTHROUGH call is a fresh temp only in shape: the
+        // callee handed its argument straight back, so the payload still belongs
+        // to the named source, which stays armed. Registering the temp's own
+        // free here put a second owner on that buffer and both released it
+        // (`free(): double free detected in tcache 2`). Excluded for exactly the
+        // reason a borrow-returning scrutinee is excluded two lines up — the
+        // discarded-temp registrars call these the same aliasing class, and a
+        // passthrough is its user-function form.
+        //
+        // `Result` needs this IN ADDITION to the source-retains classification
+        // at the match's scrutinee site: the `Option` spelling of the same
+        // program is fixed by that flag alone, because no scrutinee registrar
+        // claims an inline `Option` temp, while THIS registrar does claim a
+        // `Result` one. Both halves were established by bisecting the shapes
+        // individually after a combined fixture still aborted with the first
+        // half in place.
+        if self.call_passthrough_armed_any_source(scrutinee).is_some() {
             return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {

@@ -32859,6 +32859,69 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-6, interpreter leg — a passthrough call used directly as a
+/// MATCH SCRUTINEE yields the payload exactly once.
+///
+/// The twin of `e2e_passthrough_match_scrutinee_leaves_the_source_sole_owner`
+/// in `tests/codegen.rs`, carrying the same cases with the same expected
+/// output. Keep the two in step verbatim.
+///
+/// This backend was CORRECT before the fix, so every case is a control: the
+/// defect was a compiled-only double free (process abort) affecting free
+/// functions and methods alike, and what these pin is that codegen moved onto
+/// the interpreter's answer rather than both moving.
+#[test]
+fn test_passthrough_match_scrutinee_leaves_the_source_sole_owner() {
+    const DECLS: &str = "struct Bx { n: i64 }\n\
+         impl Bx {\n\
+         fn take(ref self, o: Option[String]) -> Option[String] { o }\n\
+         fn take_res(ref self, o: Result[String, i64]) -> Result[String, i64] { o }\n\
+         fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f\"fresh{self.n}\") }\n\
+         }\n\
+         fn takef(o: Option[String]) -> Option[String] { o }\n";
+    for (label, body, want) in [
+        (
+            "free-fn-scrutinee-passthrough",
+            "fn main() { let n = 1; let s = Option.Some(f\"a{n}\"); \
+             match takef(s) { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got a1\n",
+        ),
+        (
+            "method-scrutinee-passthrough",
+            "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"a{b.n}\"); \
+             match b.take(s) { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got a1\n",
+        ),
+        (
+            "result-scrutinee-passthrough",
+            "fn main() { let b = Bx { n: 1 }; \
+             let s: Result[String, i64] = Result.Ok(f\"c{b.n}\"); \
+             match b.take_res(s) { Result.Ok(v) => { println(f\"got {v}\") } \
+             Result.Err(e) => { println(f\"err {e}\") } } }\n",
+            "got c1\n",
+        ),
+        (
+            "no-passthrough-scrutinee-keeps-owner",
+            "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"h{b.n}\"); \
+             match b.fresh(s) { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got fresh1\n",
+        ),
+        (
+            "let-bound-spelling-still-correct",
+            "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"k{b.n}\"); \
+             let o = b.take(s); \
+             match o { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got k1\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DECLS}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-4, interpreter leg — a METHOD that hands an inline
 /// `Option`/`Result` argument back yields the payload exactly once.
 ///
