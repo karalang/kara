@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 317 | 4 |
-| run-vs-build | 245 | 13 |
+| miscompile | 318 | 4 |
+| run-vs-build | 246 | 13 |
 | leak | 232 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 156 | 1 |
@@ -104,15 +104,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 80 | 0 |
 | other | 64 | 1 |
 | crash | 61 | 0 |
-| use-after-free | 23 | 0 |
+| use-after-free | 24 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1238 | 23 |
+| codegen | 1241 | 25 |
 | typecheck | 278 | 0 |
-| interp | 257 | 11 |
+| interp | 258 | 10 |
 | other | 70 | 0 |
 | ownership | 67 | 1 |
 | cli | 65 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1812 surfaced · 27 open · 1758 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1815 surfaced · 28 open · 1760 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (27)
+### Open (28)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -149,7 +149,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1812 surfaced
 | B-2026-08-29-54 | 2026-08-29 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 } }` called as `H.s2(R { id: 1 }, R { id: 2 })` prints `v=7` alone under JIT and AOT against `dR2 dR1 v=7` under `--interp`; one argument is enough, moved locals work, and instance methods work, so it is the static-call arm specifically | none |
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
 | B-2026-08-29-56 | 2026-08-29 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(f"zz"); buf }` matched at the call site aborts with `free(): double free detected` on JIT and AOT while `--interp` is correct; the bare-tail spelling `{ Some(f"zz") }` is clean, so it is the named binding's cleanup that survives the move into the return slot. MAIN IS RED: this is what `selfhost_parser_matches_rust_parser_items` has been SIGSEGV-ing on since c793ad0 widened the spellings that reach it | none |
-| B-2026-08-29-57 | 2026-08-29 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at callee scope exit and again at the caller's binding. `return out;` as a STATEMENT and the bare tail `out` are both correct, on every backend. Compiled output is correct in all three spellings, so the semicolon alone is the whole difference | — |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
 | B-2026-08-29-59 | 2026-08-29 | cli | high | `karac run` does NOT reach the JIT lane -- it runs the tree-walk interpreter, despite the JIT being the documented default since LLJIT slice 6c. Measured two ways: hiding `karac_jit_runner` entirely changes nothing (the lane would abort with 'karac_jit_runner not found'), and a 20M-iteration loop that a JIT finishes instantly did not complete in 10 MINUTES. Every ledger row whose evidence cites `karac run` as a 'JIT surface' has therefore been reading the interpreter twice | — |
 | B-2026-08-29-60 | 2026-08-29 | interp+codegen | low | `asinh` / `acosh` / `atanh` at f32 match the interpreter under NEITHER width rule -- Rust std implements the inverse hyperbolics as formulas rather than libm calls, so its f32 impl, its f64 impl and the `asinhf` codegen calls are three different algorithms and no interpreter-side choice reproduces the third. | — |
@@ -157,6 +156,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1812 surfaced
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-29-64 | 2026-08-29 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E0500 as a NON-BLOCKING warning -- `karac check` prints `warning[ownership]` then `All checks passed`, and `karac build` produces a working binary and exits 0 | — |
+| B-2026-08-29-66 | 2026-08-29 | codegen | high | A struct WRAPPING a `Vec` of `Drop` elements, built in a callee and returned, runs the element's `Drop` body on FREED memory in the compiled backends -- printing a garbage id that differs between runs, with a valgrind `Invalid read of size 8`. The trigger is positional: it happens when the caller's `let` is NOT the first statement of its block, and disappears when it is. The interpreter is correct either way | — |
+| B-2026-08-29-67 | 2026-08-29 | codegen | medium | A `Vec[T]` of `Drop` elements returned from a callee runs the element's `Drop` body BEFORE the caller's first use of the vector on the compiled backends, and AFTER it on the interpreter -- `m3 dR3 v3` against `m3 v3 dR3`. Right count, wrong place, and the compiled read lands on an element whose body has already run | — |
 
 ### Relocated (2)
 
@@ -188,9 +189,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1812 surfaced
 
 </details>
 
-### Fixed (1758)
+### Fixed (1760)
 
-<details><summary>1758 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1760 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1952,6 +1953,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1812 surfaced
 | B-2026-08-29-46 | interp+codegen | medium | TWO OWNED PARAMS' `Drop` BODIES RUN IN OPPOSITE ORDER ON THE TWO BACKENDS -- `fn take(r: R, q: R) -> i64 { 7 }` called with two fresh temps prints `d… | 33f8781 |
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
+| B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
+| B-2026-08-29-65 | interp+codegen | medium | A PARAM returned by a TAIL `return r` -- no trailing semicolon -- runs its `Drop` body TWICE on EVERY backend, while the same function written `retur… | fc450fe |
 
 </details>
 
