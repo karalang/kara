@@ -1931,6 +1931,20 @@ impl<'ctx> super::Codegen<'ctx> {
             let layout = self.type_decls.enum_layouts.get("Option")?;
             Some((layout.llvm_type, layout.tags.get("Some").copied()?, elem))
         });
+        // B-2026-08-29-18 — everything the narrow arm above declines, resolved
+        // from the contents' TypeExpr instead of from its layout shape, and
+        // applied at the BOTTOM of the envelope chain. Gated on that arm
+        // returning `None` so the two can never both free one interior, and
+        // `None` for a heapless contents so a POD box registers what it did
+        // before.
+        let leaf_drop_fn = if inner_payload_free.is_some() {
+            None
+        } else {
+            box_contents.as_ref().and_then(|te| {
+                let leaf = self.nested_box_leaf_contents(te).clone();
+                self.vec_elem_agg_drop_for_type_expr(&leaf)
+            })
+        };
         // The outer payload area starts at field 1 and the inner enum is laid
         // there from its own field 0, so the inner TAG is outer field 1 —
         // shifted by any FIELDS AHEAD OF IT when the payload is a struct — and
@@ -1947,6 +1961,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_tag_field,
                 deeper_tags,
                 inner_payload_free,
+                leaf_drop_fn,
             });
         }
         // Armed for the passthrough rule only — deliberately NOT
@@ -11489,6 +11504,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 inner_tag_field,
                 deeper_tags,
                 inner_payload_free,
+                leaf_drop_fn,
             } => {
                 // Two tag guards, outer then inner. Both are load-bearing: the
                 // outer one keeps an `Err(3)` from having its Ok-side words
@@ -11622,11 +11638,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_unconditional_branch(ip_done).unwrap();
                     self.builder.position_at_end(ip_done);
                 }
-                // `None` leaf drop: this family stays box-only. Its DIRECT half
-                // passes `box_contents: None` at the let site, so there is
-                // nothing to resolve here anyway — see B-2026-08-29-2, which
-                // leaves the outer-`Result` shapes open for that reason.
-                self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, None, name);
+                // B-2026-08-29-18 — the leaf's own interior, for every contents
+                // shape `inner_payload_free` above cannot name. Mutually
+                // exclusive with it at the registration site, `None` for a
+                // heapless box, and stood down by
+                // `retract_boxed_leaf_drop_for_consuming_pattern` wherever an
+                // arm binds the value it would free.
+                self.emit_nested_box_chain_free(
+                    fn_val,
+                    box_ptr,
+                    deeper_tags,
+                    leaf_drop_fn.as_ref(),
+                    name,
+                );
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
             }

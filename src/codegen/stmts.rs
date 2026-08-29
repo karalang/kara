@@ -6406,17 +6406,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             let mut nested: Vec<_> = self
                                 .nested_boxed_enum_payload_variants(te)
                                 .into_iter()
-                                // `None` for the box contents, deliberately —
-                                // this half NEVER takes an interior free. The
-                                // inline payload IS the `Option`/`Result`, so
-                                // an arm can bind the interior out directly
-                                // (`Ok(Some(Some(t)))`) and owns it; adding one
-                                // here is the double free the comment below
-                                // records as measured. Only the struct-field
-                                // half, whose arm binds the STRUCT and hands
-                                // the whole box over by zeroing its word, has a
-                                // shape with no owner (B-2026-08-12-18).
-                                .map(|(oe, ov, ie, iv, d)| (oe, ov, 1u32, ie, iv, d, None))
+                                // B-2026-08-29-18 — the box CONTENTS type,
+                                // which this half used to pass as `None` on the
+                                // reasoning that it "NEVER takes an interior
+                                // free": the inline payload IS the
+                                // `Option`/`Result`, so an arm can bind the
+                                // interior out directly (`Ok(Some(Some(t)))`)
+                                // and owns it, and adding a drop was measured
+                                // as a double free.
+                                //
+                                // That is true of an arm that DOES bind it, and
+                                // says nothing about the programs that do not.
+                                // `let vv: Result[Option[Wide], i64] =
+                                // Ok(Some(Wide{..}));` with nothing else leaks
+                                // 38 B on plain scope exit, and so does the
+                                // `Result[Option[Option[String]], i64]` and
+                                // `Result[Result[String, i64], i64]` spelling.
+                                // What was missing was not the caution but the
+                                // instrument: `retract_boxed_leaf_drop_for_
+                                // consuming_pattern` stands the drop down for
+                                // exactly the arms that own the value, so the
+                                // contents can now be handed over.
+                                .map(|(oe, ov, ie, iv, d)| {
+                                    let contents = Self::path_generic_arg(te, 0).cloned();
+                                    (oe, ov, 1u32, ie, iv, d, contents)
+                                })
                                 .chain(struct_field_boxes)
                                 .collect();
                             // The RHS hands one of its arguments straight back
@@ -6721,12 +6735,32 @@ impl<'ctx> super::Codegen<'ctx> {
                                         // to bind, and
                                         // `retract_boxed_leaf_drop_for_consuming_pattern`
                                         // clears the drop when one does.
-                                        let leaf_drop = payload_te.as_ref().and_then(|p| {
+                                        //
+                                        // B-2026-08-29-18 — `payload_te` above
+                                        // comes from
+                                        // `option_generic_arg_type_expr`, which
+                                        // is `Option`-ONLY, so a `Result` whose
+                                        // boxed payload is itself heap-bearing
+                                        // (`Result[Result[String, i64], i64]`)
+                                        // arrived here with no payload type at
+                                        // all and could resolve nothing. Fall
+                                        // back to the generic arg the BOXED
+                                        // VARIANT names — `Ok` is arg 0, `Err`
+                                        // arg 1 — rather than widening that
+                                        // shared helper, whose other consumers
+                                        // in this block (the tuple drop, the
+                                        // shared-payload element drop) are
+                                        // deliberately `Option`-shaped.
+                                        let contents_te = payload_te.clone().or_else(|| {
+                                            let idx = usize::from(*variant == "Err");
+                                            Self::path_generic_arg(te, idx).cloned()
+                                        });
+                                        let leaf_drop = contents_te.as_ref().and_then(|p| {
                                             let leaf = self.nested_box_leaf_contents(p).clone();
                                             self.vec_elem_agg_drop_for_type_expr(&leaf)
                                         });
                                         if leaf_drop.is_some() {
-                                            if let Some(d) = payload_te.as_ref().and_then(|p| {
+                                            if let Some(d) = contents_te.as_ref().and_then(|p| {
                                                 self.boxed_leaf_owning_depth(p, deeper.len())
                                             }) {
                                                 self.payload_vars

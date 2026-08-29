@@ -1716,6 +1716,44 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.inline_heap_payload_elem(arg).is_some() {
             return None;
         }
+        // B-2026-08-29-18 — an `Option`/`Result` payload sitting INLINE in a
+        // `Result`'s 5-word area (`Result[Option[String], i64]`) owns heap that
+        // nothing was freeing. It cannot reach the code below, because
+        // `type_expr_has_drop_heap` answers a flat `false` for `Option` and
+        // `Result` — a predicate with 36 callers, so it is asked here rather
+        // than changed there.
+        //
+        // The shape is `Result`-only by arithmetic: `Option`'s payload area is
+        // 3 words and any `Option[..]`/`Result[..]` is at least 4, so one can
+        // only ever sit inline under a `Result`. Measured on
+        // `let vv: Result[Option[String], i64] = Ok(Some(s));` with nothing
+        // else in the program — 38 B, and no box anywhere in the emitted IR,
+        // which is what distinguishes it from the boxed half of the same row.
+        //
+        // `vec_elem_agg_drop_for_type_expr` is the memory-only resolver used
+        // everywhere else in this family: it routes `Option[..]` to
+        // `emit_option_drop_fn` and `Result[..]` to `emit_result_drop_fn`, and
+        // answers `None` for a heapless payload, so a POD one registers exactly
+        // what it did before. The fn it returns takes a pointer to the payload
+        // value, and the flattened payload area starts at the word this action
+        // already passes — so no layout arithmetic changes.
+        //
+        // GATED ON THE PAYLOAD NOT BOXING ITSELF, and that gate is measured
+        // rather than defensive: `Result[Option[Option[String]], i64]` puts an
+        // `Option[Option[String]]` inline (4 words in a 5-word area) whose OWN
+        // payload boxes, so word 1 holds a BOX POINTER, not a `{ptr,len,cap}`.
+        // `emit_option_drop_fn` reads the overlay directly — its doc says the
+        // caller must gate boxed payloads out — so admitting that shape freed a
+        // pointer as a buffer and turned this row's leak into an
+        // AddressSanitizer DOUBLE FREE. The box already has an owner in the
+        // `NestedBoxedEnumDrop` registered for the same binding; this action
+        // must leave it alone.
+        if matches!(&arg.kind, TypeKind::Path(p)
+            if p.segments.last().is_some_and(|n| n == "Option" || n == "Result"))
+            && self.boxed_enum_payload_variants(arg).is_empty()
+        {
+            return self.vec_elem_agg_drop_for_type_expr(arg);
+        }
         let drop_te = self
             .transparent_single_heap_field_te(arg)
             .unwrap_or_else(|| arg.clone());
@@ -4256,7 +4294,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Local to the nested-box walks below, which repeatedly need "the payload
     /// type of this `Option`" and would otherwise each re-open the same
     /// `TypeKind::Path` / `GenericArg::Type` match.
-    fn path_generic_arg(te: &TypeExpr, i: usize) -> Option<&TypeExpr> {
+    pub(super) fn path_generic_arg(te: &TypeExpr, i: usize) -> Option<&TypeExpr> {
         let TypeKind::Path(p) = &te.kind else {
             return None;
         };

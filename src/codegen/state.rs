@@ -1103,6 +1103,21 @@ pub(crate) enum CleanupAction<'ctx> {
         /// innermost envelope. A chain would put the interior below the last
         /// box rather than this one, and that shape was not measured.
         inner_payload_free: Option<(StructType<'ctx>, u64, BasicTypeEnum<'ctx>)>,
+        /// B-2026-08-29-18 — the MEMORY drop for whatever the innermost box
+        /// holds, for every contents shape
+        /// [`Self::NestedBoxedEnumDrop::inner_payload_free`] cannot name: a
+        /// user struct or enum, a `Result`, or an `Option` whose payload is not
+        /// a direct `{ptr,len,cap}` value.
+        ///
+        /// Mutually exclusive with `inner_payload_free` BY CONSTRUCTION — the
+        /// registration resolves this only when that one came back `None` — so
+        /// the two can never both free one interior.
+        ///
+        /// This family is box-only by default for a measured reason: an arm can
+        /// bind the interior out and own it. What makes the drop safe to add is
+        /// `retract_boxed_leaf_drop_for_consuming_pattern`, which stands it down
+        /// exactly when a pattern binds at the owning depth.
+        leaf_drop_fn: Option<FunctionValue<'ctx>>,
     },
     /// User-source `defer { ... }` block to compile at scope exit.
     /// Pushed in program order at the `defer` statement's site; drained

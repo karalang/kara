@@ -12250,6 +12250,180 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-18 (FIXED): the outer-`Result` spelling of the
+    /// nested-envelope leak. `let vv: Result[Option[String], i64] = Ok(Some(s));`
+    /// with nothing else in the program stranded the whole 38-byte buffer, and
+    /// so did `Result[Option[Wide], i64]`, `Result[Option[Option[String]], i64]`
+    /// and `Result[Result[String, i64], i64]`.
+    ///
+    /// IT IS TWO MECHANISMS, WHICH IS WHAT THE SPLIT ROW GOT WRONG. It was
+    /// filed as one boxed-payload gap; the emitted IR says otherwise, and the
+    /// difference is pure layout arithmetic. `Result`'s inline payload area is
+    /// 5 words:
+    ///
+    ///   * `Result[Option[String], i64]` — the `Option[String]` is 4 words, so
+    ///     it sits INLINE and nothing boxes anywhere. There is no box in the
+    ///     emitted function at all. The Ok payload simply had no drop, because
+    ///     `type_expr_has_drop_heap` answers a flat `false` for `Option` and
+    ///     `Result` — a predicate with 36 callers, so `inline_struct_payload_drop`
+    ///     asks the question itself rather than changing it there.
+    ///   * `Result[Option[Wide], i64]` — the `Wide` is 7 words, so the
+    ///     `Option[Wide]` still sits inline and only the `Wide` boxes. That is
+    ///     the `NestedBoxedEnumDrop` half the row described, whose DIRECT
+    ///     registration passed `box_contents: None`.
+    ///
+    /// Both now resolve their interior drop, and both are covered here.
+    ///
+    /// THE INLINE HALF NEEDS ITS OWN GATE, and skipping it turns this row's
+    /// leak into a double free rather than a fix.
+    /// `Result[Option[Option[String]], i64]` puts an `Option[Option[String]]`
+    /// inline whose OWN payload boxes, so word 1 holds a BOX POINTER, not a
+    /// `{ptr,len,cap}` — and `emit_option_drop_fn` reads the overlay directly.
+    /// Admitting it freed a pointer as a buffer: measured as an
+    /// AddressSanitizer double-free before the `boxed_enum_payload_variants`
+    /// gate was added. `result-opt-opt-string` is that row.
+    ///
+    /// THE NESTED HALF RETRACTS ON ANY BINDING, not at a measured depth, and
+    /// the asymmetry with B-2026-08-29-2's rule is a property of what the
+    /// source can name. For a DIRECT box the levels between binding and leaf
+    /// are envelopes the program cannot name, so only a binding at the owning
+    /// depth is an owner. Here the inline payload IS an `Option`/`Result` the
+    /// program names — `Ok(o)` binds it and carries the box pointer out — so
+    /// any binding takes the box and everything under it. `nested-arm-chain` is
+    /// the row that forced this: it is clean on an unmodified tree because the
+    /// arm chain owns and frees the `String`, and it double-freed until the
+    /// retraction covered this family.
+    ///
+    /// `-O0` only, for the reason
+    /// `asan_nested_option_envelope_frees_its_leaf_payload` states at length:
+    /// every leaking row builds a nested value and drops it, and at `-O2` the
+    /// local non-escaping structure is scalarized and the allocation removed.
+    #[test]
+    fn asan_nested_result_payload_frees_its_leaf() {
+        const H: &str = "struct Wide { a: String, b: i64, c: i64, d: i64, e: i64 }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn slen(s: String) -> i64 { if s.contains(\"payload\") { s.len() } else { 0 } }\n\
+             fn mkw() -> Wide { Wide { a: payload(), b: 1, c: 2, d: 3, e: 4 } }\n";
+        for (label, body, want) in [
+            // ── the INLINE half: no box anywhere in the emitted function ──
+            (
+                "result-option-string",
+                "fn f() -> i64 { let vv: Result[Option[String], i64] = Ok(Some(payload()));\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            (
+                "result-option-vec",
+                "fn f() -> i64 { let vv: Result[Option[Vec[i64]], i64] = Ok(Some([seed(), 2, 3, 4, 5, 6, 7, 8, 9, 10]));\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // Inline payload whose OWN payload boxes — the gate row. Freeing
+            // its box pointer as a buffer is a double free, not a leak fix.
+            (
+                "result-opt-opt-string",
+                "fn f() -> i64 { let vv: Result[Option[Option[String]], i64] = Ok(Some(Some(payload())));\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // ── the NESTED-BOX half ──
+            (
+                "result-option-wide",
+                "fn f() -> i64 { let vv: Result[Option[Wide], i64] = Ok(Some(mkw()));\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // A `Result` payload wide enough to box at the OUTER level, which
+            // reaches the direct box action through a payload type the
+            // `Option`-only helper could not name.
+            (
+                "result-result-string",
+                "fn f() -> i64 { let vv: Result[Result[String, i64], i64] = Ok(Ok(payload()));\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // ── hazards: an arm owns what the drop would free ──
+            (
+                "ok-binds-payload",
+                "fn f() -> i64 { let vv: Result[Option[String], i64] = Ok(Some(payload()));\n\
+                 \x20  match vv { Ok(o) => (match o { Some(s) => slen(s), None => 0 }), Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "ok-binds-leaf",
+                "fn f() -> i64 { let vv: Result[Option[String], i64] = Ok(Some(payload()));\n\
+                 \x20  match vv { Ok(Some(s)) => slen(s), _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // The row that forced the nested family's any-binding rule.
+            (
+                "nested-arm-chain",
+                "fn f() -> i64 { let vv: Result[Option[Option[String]], i64] = Ok(Some(Some(payload())));\n\
+                 \x20  match vv { Ok(o) => (match o { Some(i) => (match i { Some(s) => slen(s), None => 0 }), None => 0 }), Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "iflet-binds-leaf",
+                "fn f() -> i64 { let vv: Result[Option[String], i64] = Ok(Some(payload()));\n\
+                 \x20  if let Ok(Some(s)) = vv { slen(s) } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // A wildcard names no owner, so the drop must stay armed.
+            (
+                "inner-wildcard",
+                "fn f() -> i64 { let vv: Result[Option[String], i64] = Ok(Some(payload()));\n\
+                 \x20  match vv { Ok(Some(_)) => 1, _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // ── axes and boundaries ──
+            (
+                "flat-result-string",
+                "fn f() -> i64 { let vv: Result[String, i64] = Ok(payload());\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            (
+                "flat-result-wide",
+                "fn f() -> i64 { let vv: Result[Wide, i64] = Ok(mkw());\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // A POD payload owes nothing: the resolver answers `None` and the
+            // registration is what it was.
+            (
+                "result-option-pod",
+                "fn f() -> i64 { let vv: Result[Option[i64], i64] = Ok(Some(seed()));\n\
+                 \x20  match vv { Ok(Some(x)) => x, _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // The `Err` side carries the nested payload — both halves of the
+            // registration are gated per side, so this must work too.
+            (
+                "err-side-payload",
+                "fn f() -> i64 { let vv: Result[i64, Option[String]] = Err(Some(payload()));\n\
+                 \x20  match vv { Ok(_) => 1, Err(_) => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "0",
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &[want], label);
+        }
+    }
+
     /// B-2026-07-04-7 (FIXED): a `struct A { value: Option[<non-shared enum/struct>] }`
     /// field is now DROP-SUPPORTED. Before, `emit_struct_drop_synthesis(A)` emitted no
     /// drop for the `Option[<heap enum>]` field (the `OptionInline` pass was gated to

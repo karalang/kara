@@ -9443,15 +9443,43 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };
-        let Some(depth) = self
+        // B-2026-08-29-18 — the NESTED family retracts on ANY binding, not at a
+        // measured depth, and the asymmetry is a property of what the source
+        // can name rather than a loosening.
+        //
+        // For a DIRECT box the levels between the binding and the leaf are
+        // `coerce_to_payload_words` ENVELOPES: the program cannot name one, so
+        // an intermediate binding hands nothing over and only a binding at the
+        // owning depth is an owner. For a NESTED box the inline payload IS an
+        // `Option`/`Result` the program names directly — `match vv { Ok(o) =>
+        // .. }` binds it, and `o` carries the box POINTER with it, so that one
+        // binding takes over the box and everything under it.
+        //
+        // Measured: `Result[Option[Option[String]], i64]` matched
+        // `Ok(o) => match o { Some(i) => match i { Some(s) => .. } }` is clean
+        // today because the arm chain owns and frees the `String`; keeping the
+        // leaf drop armed there is an AddressSanitizer double free. Retracting
+        // on any binding is conservative in the only safe direction — it can
+        // leave the pre-existing leak, never add a free — and the shapes this
+        // row is about (`Ok(_)`, or no match at all) bind nothing.
+        let retract = if self
             .payload_vars
-            .boxed_leaf_owning_depth
-            .get(name.as_str())
-            .copied()
-        else {
-            return;
+            .nested_boxed_payload_vars
+            .contains(name.as_str())
+        {
+            Self::pattern_binds_any_name(pattern)
+        } else {
+            let Some(depth) = self
+                .payload_vars
+                .boxed_leaf_owning_depth
+                .get(name.as_str())
+                .copied()
+            else {
+                return;
+            };
+            Self::pattern_binds_name_at_depth(pattern, depth)
         };
-        if !Self::pattern_binds_name_at_depth(pattern, depth) {
+        if !retract {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
@@ -9465,6 +9493,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         inner_drop_fn,
                         ..
                     } if *enum_slot == slot.ptr => *inner_drop_fn = None,
+                    super::state::CleanupAction::NestedBoxedEnumDrop {
+                        enum_slot,
+                        leaf_drop_fn,
+                        ..
+                    } if *enum_slot == slot.ptr => *leaf_drop_fn = None,
                     _ => {}
                 }
             }
@@ -9478,6 +9511,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// armed — `Some(Some(_))` names no owner, so the box is still the only one.
     /// `Or` alternatives are searched independently: any alternative that binds
     /// the leaf makes the arm a potential owner.
+    /// Does `pattern` bind a NAME anywhere below its own head?
+    ///
+    /// The NESTED-box rule (see `retract_boxed_leaf_drop_for_consuming_pattern`):
+    /// there the inline payload is a type the program names, so any binding
+    /// inside the variant pattern carries the box pointer out with it.
+    fn pattern_binds_any_name(pattern: &Pattern) -> bool {
+        match &pattern.kind {
+            PatternKind::Binding(_) => true,
+            PatternKind::AtBinding { .. } => true,
+            PatternKind::Or(alts) => alts.iter().any(Self::pattern_binds_any_name),
+            PatternKind::TupleVariant { patterns, .. } => {
+                patterns.iter().any(Self::pattern_binds_any_name)
+            }
+            PatternKind::Tuple(elems) => elems.iter().any(Self::pattern_binds_any_name),
+            // A shorthand field (`Foo { x }`) carries no sub-pattern and binds
+            // the name directly, so `None` counts as a binding.
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .any(|f| f.pattern.as_ref().is_none_or(Self::pattern_binds_any_name)),
+            _ => false,
+        }
+    }
+
     fn pattern_binds_name_at_depth(pattern: &Pattern, depth: usize) -> bool {
         match &pattern.kind {
             PatternKind::Binding(_) => depth == 0,
