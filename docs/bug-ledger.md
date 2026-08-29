@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 316 | 5 |
-| run-vs-build | 242 | 11 |
+| miscompile | 316 | 4 |
+| run-vs-build | 244 | 13 |
 | leak | 232 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 156 | 1 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 100 | 0 |
 | perf | 84 | 0 |
 | soundness | 80 | 0 |
-| other | 63 | 0 |
+| other | 64 | 1 |
 | crash | 61 | 0 |
 | use-after-free | 23 | 0 |
 
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1234 | 21 |
+| codegen | 1234 | 20 |
 | typecheck | 278 | 0 |
-| interp | 254 | 11 |
+| interp | 256 | 12 |
 | other | 70 | 0 |
 | ownership | 66 | 0 |
-| cli | 64 | 0 |
+| cli | 65 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1804 surfaced · 22 open · 1755 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1807 surfaced · 24 open · 1756 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (22)
+### Open (24)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -143,7 +143,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1804 surfaced
 | B-2026-08-29-44 | 2026-08-29 | interp+codegen | medium | A WHOLE-VALUE REBIND AFTER A MIXED WRAP RE-ARMS THE WALK THE MASK JUST WITHHELD -- `let w = W2.Two(r, R { id: 2 }); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, because B-2026-08-29-24's per-slot mask is keyed on the BINDING and the destination registers afresh with no mask | none |
 | B-2026-08-29-45 | 2026-08-29 | interp+codegen | medium | A BINDING MOVED INTO A `Vec` LITERAL RUNS ITS `Drop` BODY TWICE -- both `let v = [r]` (param) and `let m = R { .. }; let v = [m]` (plain local) print two bodies where one is due, while `let v = [R { .. }]` with a FRESH element is correct; the element walk arms without the source's ownership being taken over | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
-| B-2026-08-29-48 | 2026-08-29 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B gate sees it. The direct `return r` spelling of the same method is correct at one | — |
 | B-2026-08-29-49 | 2026-08-29 | interp+codegen | medium | A METHOD arm that moves an owned enum param's payload into a `mut ref` param runs the payload's `Drop` body ONE TIME TOO MANY -- unanimous on all four surfaces, so A/B-invisible | — |
 | B-2026-08-29-50 | 2026-08-29 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run the user `Drop` body TWICE for one object -- the two shapes B-2026-08-29-15's bare hand-back fix deliberately declined. Both AGREE across interp/JIT/AOT, so no A/B gate can see either | — |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
@@ -152,6 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1804 surfaced
 | B-2026-08-29-54 | 2026-08-29 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 } }` called as `H.s2(R { id: 1 }, R { id: 2 })` prints `v=7` alone under JIT and AOT against `dR2 dR1 v=7` under `--interp`; one argument is enough, moved locals work, and instance methods work, so it is the static-call arm specifically | none |
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
 | B-2026-08-29-56 | 2026-08-29 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(f"zz"); buf }` matched at the call site aborts with `free(): double free detected` on JIT and AOT while `--interp` is correct; the bare-tail spelling `{ Some(f"zz") }` is clean, so it is the named binding's cleanup that survives the move into the return slot. MAIN IS RED: this is what `selfhost_parser_matches_rust_parser_items` has been SIGSEGV-ing on since c793ad0 widened the spellings that reach it | none |
+| B-2026-08-29-57 | 2026-08-29 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at callee scope exit and again at the caller's binding. `return out;` as a STATEMENT and the bare tail `out` are both correct, on every backend. Compiled output is correct in all three spellings, so the semicolon alone is the whole difference | — |
+| B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
+| B-2026-08-29-59 | 2026-08-29 | cli | high | `karac run` does NOT reach the JIT lane -- it runs the tree-walk interpreter, despite the JIT being the documented default since LLJIT slice 6c. Measured two ways: hiding `karac_jit_runner` entirely changes nothing (the lane would abort with 'karac_jit_runner not found'), and a 20M-iteration loop that a JIT finishes instantly did not complete in 10 MINUTES. Every ledger row whose evidence cites `karac run` as a 'JIT surface' has therefore been reading the interpreter twice | — |
 
 ### Relocated (2)
 
@@ -183,9 +185,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1804 surfaced
 
 </details>
 
-### Fixed (1755)
+### Fixed (1756)
 
-<details><summary>1755 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1756 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1944,6 +1946,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1804 surfaced
 | B-2026-08-29-42 | codegen | high | A REDUCED-PRECISION RECEIVER (`f16` / `bf16`) CALLED THE DOUBLE-PRECISION libm SYMBOL and got silent garbage -- `x.tan()` returned `x`, `x.hypot(y)`… | e860b90 |
 | B-2026-08-29-40 | interp | medium | The INTERPRETER's `Vector[bf16, N]` unary math never rounds lanes back to the element width -- it computes every lane in f64 and keeps the excess pre… | 5f226ed |
 | B-2026-08-29-46 | interp+codegen | medium | TWO OWNED PARAMS' `Drop` BODIES RUN IN OPPOSITE ORDER ON THE TWO BACKENDS -- `fn take(r: R, q: R) -> i64 { 7 }` called with two fresh temps prints `d… | 33f8781 |
+| B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 
 </details>
 
