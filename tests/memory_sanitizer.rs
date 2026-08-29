@@ -15934,6 +15934,121 @@ fn main() {
     /// artifact. Reading the payload makes every compiled path abort at every
     /// optimization level, so this fixture is red on the default leg as well as
     /// under `KARAC_OPT_LEVEL=0`.
+    /// B-2026-08-28-73 shape 1, the BOUNDARY matrix beside
+    /// [`Self::asan_consuming_arm_boxed_enum_payload_handed_out_is_owned_once`].
+    ///
+    /// That fixture carries the headline shape under a loop with an allocation
+    /// floor, which is what proves the payload is really being allocated. This
+    /// one carries the corners the fix sits between, because they fail in
+    /// OPPOSITE directions and a single shape cannot hold both still:
+    ///
+    ///   * `read-only-arm` — the arm only READS its binding, so the source keeps
+    ///     the box and its interior. Neutralizing here is a use-after-free.
+    ///   * `discarded` — the match result is thrown away, so nothing downstream
+    ///     owns the value and the box must stay armed. Neutralizing here trades
+    ///     the double free for a LEAK, which is exactly what
+    ///     `branch_value_is_owned` exists to prevent; without that guard this row
+    ///     is the one that goes red.
+    ///   * `struct-control` — the axis. The same program one type over was
+    ///     correct before the fix, through the neutralizer the enum spelling now
+    ///     also reaches.
+    ///
+    /// The rest are the other MOVE positions the same neutralizer serves — a
+    /// bare tail, a `Result` scrutinee, a by-value call argument from both
+    /// `match` and `if let`, and a rebind — so a future narrowing of the gate
+    /// fails on the position it narrowed rather than passing on the one shape
+    /// someone sampled.
+    ///
+    /// Every `Drop` body READS its payload for the reason the sibling states: a
+    /// literal-printing body lets LLVM delete the allocation at `-O2`, and the
+    /// fixture then passes against a compiler that double-frees everywhere else.
+    #[test]
+    fn asan_consuming_arm_boxed_enum_payload_move_positions_and_boundaries() {
+        const H: &str = "enum G { A(String), B }\n\
+             impl Drop for G { fn drop(mut ref self) {\n\
+             \x20   match self { G.A(s) => { println(f\"dG{s}\") } G.B => { println(\"dGB\") } } } }\n\
+             fn sink(g: G) -> i64 { println(\"sink\"); return 1; }\n";
+        // The BARE tail reaches the neutralizer by a different path from the
+        // braced one (`block_tail_expr` collapses to the identifier itself).
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            let k = match o {{ Some(g) => g, None => G.B }};\n\
+             \x20            println(\"kept\"); }}\n"
+            ),
+            &["dGz9", "kept"],
+            "bare-tail",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let r: Result[G, i64] = Ok(G.A(f\"z{{9}}\"));\n\
+             \x20            let k = match r {{ Ok(g) => {{ g }} Err(n) => {{ G.B }} }};\n\
+             \x20            println(\"kept\"); }}\n"
+            ),
+            &["dGz9", "kept"],
+            "result-twin",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            match o {{ Some(g) => {{ let n = sink(g); println(f\"n{{n}}\") }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+            ),
+            &["sink", "n1", "dGz9"],
+            "into-call",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            if let Some(g) = o {{ let n = sink(g); println(f\"n{{n}}\") }} }}\n"
+            ),
+            &["sink", "n1", "dGz9"],
+            "if-let-into-call",
+        );
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            match o {{ Some(g) => {{ let q = g; println(\"bound\") }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+            ),
+            &["dGz9", "bound"],
+            "rebind",
+        );
+        // BOUNDARY — the source keeps everything.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            match o {{ Some(g) => {{ println(\"saw\") }}\n\
+             \x20                       None => {{ println(\"none\") }} }} }}\n"
+            ),
+            &["saw", "dGz9"],
+            "read-only-arm",
+        );
+        // BOUNDARY — no destination, so the box stays armed. NO body runs here
+        // on any backend; that agreed silence predates this row and is filed
+        // separately. The claim asserted is the MEMORY.
+        assert_clean_asan_run(
+            &format!(
+                "{H}fn main() {{ let o: Option[G] = Some(G.A(f\"z{{9}}\"));\n\
+             \x20            match o {{ Some(g) => {{ g }} None => {{ G.B }} }};\n\
+             \x20            println(\"kept\"); }}\n"
+            ),
+            &["kept"],
+            "discarded",
+        );
+        // THE AXIS — the struct payload, correct before the fix and after it.
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.name}\") } }\n\
+             fn main() { let o: Option[R] = Some(R { id: 1, name: f\"z{9}\" });\n\
+             \x20            let k = match o { Some(r) => { r }\n\
+             \x20                              None => { R { id: 0, name: f\"e{0}\" } } };\n\
+             \x20            println(\"kept\"); }\n",
+            &["dRz9", "kept"],
+            "struct-control",
+        );
+    }
+
     #[test]
     fn asan_consuming_arm_boxed_enum_payload_handed_out_is_owned_once() {
         let expected: Vec<&str> = vec!["dGtrue"; 8];

@@ -14468,6 +14468,109 @@ fn main() {
         }
     }
 
+    /// B-2026-08-28-73 — the OUTPUT half of the double free: a consuming arm
+    /// that hands its boxed enum payload out runs the body once, in the same
+    /// place, on every backend.
+    ///
+    /// The memory claim lives in
+    /// `memory_sanitizer::asan_consuming_arm_handing_a_boxed_enum_payload_out_frees_it_once`;
+    /// this pins the observable side, because the two failure modes the fix sits
+    /// between print differently. Freeing twice aborts (so a row simply
+    /// disappears); neutralizing an arm whose result nobody takes leaks, and
+    /// leaks silently — `discarded` is here to hold that corner still.
+    ///
+    /// `struct-control` is the axis, correct before the fix: the enum spelling
+    /// is what lacked the box-view registration the neutralizer reads.
+    #[test]
+    fn e2e_consuming_arm_handing_a_boxed_enum_payload_out_runs_one_body() {
+        const H: &str = "enum G { A(String), B }\n\
+             impl Drop for G { fn drop(mut ref self) {\n\
+             \x20   match self { G.A(s) => { println(f\"dG{s}\") } G.B => { println(\"dGB\") } } } }\n\
+             fn sink(g: G) -> i64 { println(\"sink\"); return 1; }\n";
+        for (label, body, want) in [
+            (
+                "braced-tail",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            let k = match o { Some(g) => { g } None => { G.B } };\n\
+                 \x20            println(\"kept\"); }\n",
+                "dGz9\nkept\n",
+            ),
+            (
+                "bare-tail",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            let k = match o { Some(g) => g, None => G.B };\n\
+                 \x20            println(\"kept\"); }\n",
+                "dGz9\nkept\n",
+            ),
+            (
+                "result-twin",
+                "fn main() { let r: Result[G, i64] = Ok(G.A(f\"z{9}\"));\n\
+                 \x20            let k = match r { Ok(g) => { g } Err(n) => { G.B } };\n\
+                 \x20            println(\"kept\"); }\n",
+                "dGz9\nkept\n",
+            ),
+            (
+                "into-call",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            match o { Some(g) => { let n = sink(g); println(f\"n{n}\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "sink\nn1\ndGz9\n",
+            ),
+            (
+                "if-let-into-call",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            if let Some(g) = o { let n = sink(g); println(f\"n{n}\") } }\n",
+                "sink\nn1\ndGz9\n",
+            ),
+            (
+                "rebind",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            match o { Some(g) => { let q = g; println(\"bound\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "dGz9\nbound\n",
+            ),
+            (
+                "read-only-arm",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            match o { Some(g) => { println(\"saw\") }\n\
+                 \x20                      None => { println(\"none\") } } }\n",
+                "saw\ndGz9\n",
+            ),
+            // The match RESULT is discarded, so nothing owns the value and the
+            // box stays armed. NO body runs on any backend here — an agreed
+            // silence that predates this row (the enum spelling of the
+            // B-2026-08-28-69 neighbourhood) and is filed separately. Pinned as
+            // measured so a change in either direction surfaces.
+            (
+                "discarded",
+                "fn main() { let o: Option[G] = Some(G.A(f\"z{9}\"));\n\
+                 \x20            match o { Some(g) => { g } None => { G.B } };\n\
+                 \x20            println(\"kept\"); }\n",
+                "kept\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+        // THE AXIS — the struct payload, correct before the fix.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64, name: String }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.name}\") } }\n\
+                 fn main() { let o: Option[R] = Some(R { id: 1, name: f\"z{9}\" });\n\
+                 \x20            let k = match o { Some(r) => { r }\n\
+                 \x20                              None => { R { id: 0, name: f\"e{0}\" } } };\n\
+                 \x20            println(\"kept\"); }\n"
+            )
+            .as_deref(),
+            Some("dRz9\nkept\n"),
+            "struct-control"
+        );
+    }
+
     /// B-2026-08-28-63 — a consuming `match` / `if let` arm that binds an ENUM
     /// payload out runs that enum's `Drop` body, exactly as the same arm
     /// binding a STRUCT payload already did.
