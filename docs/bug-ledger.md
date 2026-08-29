@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 242 | 11 |
 | leak | 232 | 5 |
 | missing-feature | 187 | 0 |
-| double-free | 155 | 0 |
+| double-free | 156 | 1 |
 | codegen-gap | 149 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 100 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1233 | 20 |
+| codegen | 1234 | 21 |
 | typecheck | 278 | 0 |
 | interp | 254 | 11 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1803 surfaced · 21 open · 1755 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1804 surfaced · 22 open · 1755 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (21)
+### Open (22)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -151,6 +151,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1803 surfaced
 | B-2026-08-29-53 | 2026-08-29 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range. The SCALAR `x.tanh()` on the same value in the SAME binary returns the correct 1. | — |
 | B-2026-08-29-54 | 2026-08-29 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 } }` called as `H.s2(R { id: 1 }, R { id: 2 })` prints `v=7` alone under JIT and AOT against `dR2 dR1 v=7` under `--interp`; one argument is enough, moved locals work, and instance methods work, so it is the static-call arm specifically | none |
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
+| B-2026-08-29-56 | 2026-08-29 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(f"zz"); buf }` matched at the call site aborts with `free(): double free detected` on JIT and AOT while `--interp` is correct; the bare-tail spelling `{ Some(f"zz") }` is clean, so it is the named binding's cleanup that survives the move into the return slot. MAIN IS RED: this is what `selfhost_parser_matches_rust_parser_items` has been SIGSEGV-ing on since c793ad0 widened the spellings that reach it | none |
 
 ### Relocated (2)
 
