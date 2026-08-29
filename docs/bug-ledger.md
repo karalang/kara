@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 310 | 0 |
 | leak | 226 | 4 |
-| run-vs-build | 219 | 8 |
+| run-vs-build | 220 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
 | codegen-gap | 148 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1198 | 12 |
+| codegen | 1199 | 12 |
 | typecheck | 278 | 0 |
-| interp | 231 | 4 |
+| interp | 232 | 5 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1763 surfaced · 13 open · 1724 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1764 surfaced · 13 open · 1725 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (13)
 
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1763 surfaced
 | B-2026-08-28-69 | 2026-08-28 | interp+codegen | medium | A DISCARDED `match` WHOSE ARM YIELDS ITS BOUND PAYLOAD RUNS NO `Drop` BODY IN THE INTERPRETER while both compiled backends run exactly one -- `match o { Some(r) => { r } .. };` in statement position is interp `dropped` vs compiled `dR1 dropped`; a discarded CALL result and a read-only arm both run it, so the loss is specific to the arm handing the binding on | — |
 | B-2026-08-28-71 | 2026-08-28 | codegen | medium | A GENERIC callee's monomorph param slot does not hold what a bodies-only user-`Drop` walker expects: registering B-2026-08-28-22's conditionally-returned-param body walk in `compile_mono_function` printed a CORRUPTED field value (`drop dr` where `drop i1` was due) for a heap-carrying param, so the fix is declined on both backends for generics | — |
 | B-2026-08-29-2 | 2026-08-29 | codegen | medium | EVERY DOUBLY-NESTED `Option`/`Result` OVER A HEAP PAYLOAD LEAKS THAT PAYLOAD ON PLAIN SCOPE EXIT -- 18 shapes measured, and NONE of them needs the reassignment the row was filed for: `let vv: Option[Option[String]] = Some(Some(s));` and nothing else leaks 38 B, `Option[Option[Vec[i64]]]` 80 B, `Option[Result[Wide, i64]]` 94 B in 2; the envelope boxes are all freed and only the innermost payload's own heap is stranded, because a boxed `Option`/`Result` contents resolves NO interior drop (`inner_drop_fn` is keyed on a user struct/enum NAME) and the envelope-chain walk frees boxes only | — |
-| B-2026-08-29-3 | 2026-08-29 | codegen | medium | A GENERIC method that UNCONDITIONALLY returns its owned param still runs the param's `Drop` body TWICE on all three compiled backends against once in the interpreter -- the monomorph path does not reach the method-argument stand-down that B-2026-08-28-70 added | — |
 | B-2026-08-29-5 | 2026-08-29 | codegen | medium | A DISCARDED `match` / `if let` WHOSE ARM HANDS THE BOUND PAYLOAD OUT AS THE CONSTRUCT'S VALUE LEAKS IT -- `if let Some(s) = vv { s };` in statement position strands the whole 38 B buffer with NO reassignment anywhere in the program; binding the payload and USING it without handing it out is clean, so it is the hand-out-into-nothing that leaks, and it reproduces for `match`, for `if let`, and for a struct payload alike | — |
 | B-2026-08-29-8 | 2026-08-29 | codegen | medium | A MATCH ARM THAT REBINDS ITS PAYLOAD TO A LOCAL AND YIELDS IT AS THE ARM'S BLOCK TAIL RUNS THE `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `Box2.Full(r) => { let m = r; m }` is interp `dR1` vs compiled `dR1 dR1`, the extra fire at the ARM BLOCK's exit for a value that escapes; the `return` spelling of the same arm is correct, and value enums and `Option` carry it alike | — |
 | B-2026-08-29-10 | 2026-08-29 | codegen | medium | A METHOD whose owned enum / `Option` param has its payload bound out and NOT returned MISSES the payload's `Drop` body -- the `Option` leg on BOTH backends and the user-enum leg in the INTERPRETER only, against free-function oracles that run it once on all four surfaces. NOTE: this row's original measurements were taken while 277621a's since-reverted frame isolation was on main and do not reproduce -- see the CORRECTION | — |
@@ -143,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1763 surfaced
 | B-2026-08-29-13 | 2026-08-29 | codegen | medium | A `match` ARM THAT YIELDS A SHARED CHILD INTO A BINDING LEAKS THAT CHILD'S BOX -- `let keep = match t { Bin(l, r) => l };` over a recursive `shared enum` is 11 allocs / 10 frees, 32 B lost, IDENTICALLY for a bound and a fresh-temp scrutinee, so it is not a freshness bug; returning the child instead of binding it is clean | — |
 | B-2026-08-29-14 | 2026-08-29 | codegen | medium | A METHOD that returns its owned param with `return r;` (rather than as a BLOCK TAIL) runs the param's `Drop` body TWICE under codegen for a FRESH-TEMP argument -- interp `got 7 / drop 7 e7` vs aot `drop 7 e7 / got 7 / drop 7 e7`; the block-tail spelling of the identical method is correct on both (277621a fixed that cell and left this one), and both free-function twins are correct | — |
 | B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | BOTH BACKENDS run a method's owned param `Drop` body TWICE when the argument is a NAMED BINDING and the method returns the param with `return r;` -- `drop 7 e7 / got 7 / drop 7 e7` on interp AND aot, so the backends AGREE and no A/B gate can see it; the FRESH-TEMP spelling of the same call diverges instead, and the free-function twin is correct on both | — |
+| B-2026-08-29-16 | 2026-08-29 | interp+codegen | medium | A GENERIC method that returns its owned param CONDITIONALLY is wrong in BOTH directions and diverges both ways -- param dies: interp 0 bodies / compiled 1; param escapes: interp 1 / compiled 2 -- and neither side can be corrected alone, because the callee-side flip that would settle it is declined for generics (B-2026-08-28-71) | — |
 
 ### Relocated (2)
 
@@ -174,9 +174,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1763 surfaced
 
 </details>
 
-### Fixed (1724)
+### Fixed (1725)
 
-<details><summary>1724 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1725 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1900,6 +1900,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1763 surfaced
 | B-2026-08-28-74 | codegen | medium | THREE REAL LEAKS THE DEFAULT LSan CONFIGURATION HIDES: a `shared` ENUM broken out of a `loop` (32 B x 3 fixtures, `pick`) and a tensor ref-return (72… | 0ba1f22 |
 | B-2026-08-28-75 | codegen | medium | REASSIGNING AN `Option`/`Result` BINDING WHOSE BOXED PAYLOAD ARRIVED BY A WHOLE-VALUE MOVE FROM ANOTHER BINDING ORPHANS THE PAYLOAD BOX ON EVERY STOR… | d5c4606 |
 | B-2026-08-29-1 | codegen | medium | A BARE `String` / `Vec` PAYLOAD INSIDE AN `Option` OR `Result` NEVER HAS ITS BUFFER FREED WHEN THE BINDING IS REASSIGNED -- `let mut vv: Option[Strin… | 98bddee |
+| B-2026-08-29-3 | codegen | medium | A GENERIC method that UNCONDITIONALLY returns its owned param still runs the param's `Drop` body TWICE on all three compiled backends against once in… | 7f5d6f9 |
 | B-2026-08-29-4 | codegen | high | A METHOD that hands an inline `Option`/`Result` argument back DOUBLE-FREES the payload on all three compiled backends (glibc abort, valgrind `Invalid… | 8d8d1b4 |
 | B-2026-08-29-6 | codegen | high | A passthrough call used DIRECTLY AS A MATCH SCRUTINEE (`match take(s) { . | d1db93d |
 | B-2026-08-29-7 | codegen | high | An `Option` MATCH ARM THAT REBINDS ITS HEAP PAYLOAD TO A LOCAL AND RETURNS IT IS A DOUBLE FREE ON BOTH COMPILED BACKENDS -- `match b { Some(r) => { l… | 905d73f |
