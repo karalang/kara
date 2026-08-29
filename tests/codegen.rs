@@ -16034,11 +16034,11 @@ fn main() {
              fn f_opt_bind(b: Option[R]) -> i64 {\n\
              \x20   let mut out: i64 = 0;\n\
              \x20   match b { Some(r) => { out = r.id; } None => { out = 0; } }\n\
-             \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out }\n\
+             \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
              fn f_enum_bind(b: E) -> i64 {\n\
              \x20   let mut out: i64 = 0;\n\
              \x20   match b { E.A(r) => { out = r.id; } E.B => { out = 0; } }\n\
-             \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out }\n\
+             \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
              fn f_opt_ret(b: Option[R]) -> R {\n\
              \x20   match b { Some(r) => { return r } None => { return R { id: 0, tag: f\"t0\" } } } }\n";
         for (label, body, want) in [
@@ -16122,6 +16122,164 @@ fn main() {
                 "let t = T { n: 1 }; let b: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
                  \x20 let v: R = t.opt_ret(b); println(f\"v{v.id}\");\n",
                 "v8\ndR8\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
+    /// B-2026-08-29-48 — a `match` arm that ASSIGNS the param's payload to an
+    /// outer binding, which the callee then returns, hands the value to the
+    /// CALLER exactly as `return r` does. One `Drop` body is due, at the
+    /// caller's result binding, and the assign spelling must print what the
+    /// direct spelling prints.
+    ///
+    /// It ran the body TWICE: once caller-side at the argument's live-range end
+    /// and again at the result's. On all four surfaces, so no A/B gate could see
+    /// it — it was found by asking whether the COUNT was right rather than
+    /// whether the two backends agreed.
+    ///
+    /// The escape predicate is the whole story. `fn_returns_param_payload`
+    /// already follows a payload through a `let` (`let k = r; return k;`), and
+    /// could not follow one through an assignment: with `out = r` the
+    /// destination is declared outside the arm and the `return` that carries it
+    /// out sits outside the arm too, so both ends of the route are invisible
+    /// from inside the arm body — which is all its return-walk ever sees. The
+    /// arm's assignment targets now come back out and the FUNCTION body is
+    /// asked whether their roots leave.
+    ///
+    /// Both backends read that one predicate (codegen through
+    /// `callee_returns_enum_arg_payload`), which is why a single change moves
+    /// all four of method/free × user-enum/`Option` together.
+    ///
+    /// `*-into-field` pins the place-root walk: `h.inner = r` escapes when `h`
+    /// does. `*-iflet-*` pins the `if let` leg, which has the same shape as the
+    /// `match` one and would otherwise be left behind.
+    ///
+    /// `mid9` / `dR9` is a callee LOCAL, so the rows pin the PLACE and not just
+    /// the count — a body fired at the arm lands before `mid9`, one at callee
+    /// scope exit between `mid9` and `dR9`, and the caller-side fire after
+    /// `dR9`.
+    ///
+    /// `control-assigned-but-not-returned` is the boundary in the other
+    /// direction: the payload is assigned to an outer local the callee does NOT
+    /// return, so it dies inside and the callee's own scope drop is the single
+    /// body. The predicate must stay FALSE there, and compiled output is
+    /// correct today. It has no interpreter peer in `tests/interpreter.rs`
+    /// because the interpreter runs an extra body on that shape — a
+    /// pre-existing divergence this fix does not touch, filed separately rather
+    /// than pinned wrong here.
+    #[test]
+    fn e2e_arm_assigned_payload_that_is_returned_runs_one_drop_body() {
+        const H: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             struct Holder { inner: R }\n\
+             struct T { n: i64 }\n\
+             impl T {\n\
+             \x20   fn assign_enum(ref self, b: E) -> R {\n\
+             \x20       let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             \x20       match b { E.A(r) => { out = r; } E.B => { } }\n\
+             \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+             \x20   fn assign_opt(ref self, b: Option[R]) -> R {\n\
+             \x20       let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             \x20       match b { Some(r) => { out = r; } None => { } }\n\
+             \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+             \x20   fn direct_enum(ref self, b: E) -> R {\n\
+             \x20       match b { E.A(r) => { return r } E.B => { return R { id: 0, tag: f\"t0\" } } } }\n\
+             \x20   fn field_enum(ref self, b: E) -> Holder {\n\
+             \x20       let mut h: Holder = Holder { inner: R { id: 0, tag: f\"t0\" } };\n\
+             \x20       match b { E.A(r) => { h.inner = r; } E.B => { } }\n\
+             \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return h; }\n\
+             \x20   fn iflet_opt(ref self, b: Option[R]) -> R {\n\
+             \x20       let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             \x20       if let Some(r) = b { out = r; }\n\
+             \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; } }\n\
+             fn f_assign_enum(b: E) -> R {\n\
+             \x20   let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             \x20   match b { E.A(r) => { out = r; } E.B => { } }\n\
+             \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+             fn f_assign_opt(b: Option[R]) -> R {\n\
+             \x20   let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             \x20   match b { Some(r) => { out = r; } None => { } }\n\
+             \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+             fn f_direct_enum(b: E) -> R {\n\
+             \x20   match b { E.A(r) => { return r } E.B => { return R { id: 0, tag: f\"t0\" } } } }\n\
+             fn f_dies(b: E) -> i64 {\n\
+             \x20   let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             \x20   match b { E.A(r) => { out = r; } E.B => { } }\n\
+             \x20   println(\"mid\"); return out.id; }\n";
+        for (label, body, want) in [
+            // THE ROW. The second `dR8` — after `v8` and again before `post` —
+            // is what this fix removes.
+            (
+                "method-enum-assign",
+                "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = t.assign_enum(carg); println(f\"v{v.id}\");\n",
+                "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+            ),
+            (
+                "free-enum-assign",
+                "let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = f_assign_enum(carg); println(f\"v{v.id}\");\n",
+                "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+            ),
+            (
+                "method-option-assign",
+                "let t = T { n: 1 }; let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = t.assign_opt(carg); println(f\"v{v.id}\");\n",
+                "dR0\nmid9\ndR9\nv8\ndR8\npost\n",
+            ),
+            (
+                "free-option-assign",
+                "let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = f_assign_opt(carg); println(f\"v{v.id}\");\n",
+                "dR0\nmid9\ndR9\nv8\ndR8\npost\n",
+            ),
+            // The spelling that was already right, kept beside the four above:
+            // one body, at the caller's result binding, either way.
+            (
+                "method-enum-direct",
+                "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = t.direct_enum(carg); println(f\"v{v.id}\");\n",
+                "dE\nv8\ndR8\npost\n",
+            ),
+            (
+                "free-enum-direct",
+                "let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = f_direct_enum(carg); println(f\"v{v.id}\");\n",
+                "dE\nv8\ndR8\npost\n",
+            ),
+            (
+                "method-enum-assign-into-field",
+                "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: Holder = t.field_enum(carg); println(f\"v{v.inner.id}\");\n",
+                "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+            ),
+            (
+                "method-option-iflet-assign",
+                "let t = T { n: 1 }; let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = t.iflet_opt(carg); println(f\"v{v.id}\");\n",
+                "dR0\nmid9\ndR9\nv8\ndR8\npost\n",
+            ),
+            // The caller's binding spelled as the callee's parameter: a rename
+            // is not a semantic change.
+            (
+                "free-enum-assign-shadowed-name",
+                "let b: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: R = f_assign_enum(b); println(f\"v{v.id}\");\n",
+                "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+            ),
+            // The boundary: assigned to an outer local the callee does NOT
+            // return, so it dies inside and `dR8` lands between `mid` and the
+            // result. The predicate must stay false here.
+            (
+                "control-assigned-but-not-returned",
+                "let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 \x20 let v: i64 = f_dies(carg); println(f\"v{v}\");\n",
+                "dR0\nmid\ndE\ndR8\nv8\npost\n",
             ),
         ] {
             let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");

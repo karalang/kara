@@ -35920,7 +35920,7 @@ fn method_owned_optres_arg_runs_its_payload_body_like_a_free_fn() {
          fn f_opt_bind(b: Option[R]) -> i64 {\n\
          \x20   let mut out: i64 = 0;\n\
          \x20   match b { Some(r) => { out = r.id; } None => { out = 0; } }\n\
-         \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out }\n\
+         \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
          fn f_enum_bind(b: E) -> i64 {\n\
          \x20   let mut out: i64 = 0;\n\
          \x20   match b { E.A(r) => { out = r.id; } E.B => { out = 0; } }\n\
@@ -35993,6 +35993,126 @@ fn method_owned_optres_arg_runs_its_payload_body_like_a_free_fn() {
              \x20 let a: i64 = t.enum_bind(c1); println(f\"a{a}\");\n\
              \x20 let d: i64 = t.enum_bind(c2); println(f\"b{d}\");\n",
             "mid9\ndR9\ndE\ndR1\na1\nmid9\ndR9\ndE\ndR2\nb2\npost\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
+/// B-2026-08-29-48, interpreter leg — the twin of
+/// `codegen::e2e_arm_assigned_payload_that_is_returned_runs_one_drop_body`,
+/// asserting the same strings so a later one-sided edit cannot re-negotiate
+/// them.
+///
+/// An arm that assigns the param's payload to an outer binding the callee then
+/// returns hands the value out exactly as `return r` does, so one `Drop` body
+/// is due at the caller's result binding. Both surfaces ran it twice, agreeing,
+/// which is why only an absolute expectation catches it.
+///
+/// The `control-assigned-but-not-returned` row of the compiled fixture has no
+/// peer here on purpose: the interpreter runs an extra body on that shape, a
+/// pre-existing divergence outside this fix and filed on its own.
+#[test]
+fn arm_assigned_payload_that_is_returned_runs_one_drop_body() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct Holder { inner: R }\n\
+         struct T { n: i64 }\n\
+         impl T {\n\
+         \x20   fn assign_enum(ref self, b: E) -> R {\n\
+         \x20       let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+         \x20       match b { E.A(r) => { out = r; } E.B => { } }\n\
+         \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+         \x20   fn assign_opt(ref self, b: Option[R]) -> R {\n\
+         \x20       let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+         \x20       match b { Some(r) => { out = r; } None => { } }\n\
+         \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+         \x20   fn direct_enum(ref self, b: E) -> R {\n\
+         \x20       match b { E.A(r) => { return r } E.B => { return R { id: 0, tag: f\"t0\" } } } }\n\
+         \x20   fn field_enum(ref self, b: E) -> Holder {\n\
+         \x20       let mut h: Holder = Holder { inner: R { id: 0, tag: f\"t0\" } };\n\
+         \x20       match b { E.A(r) => { h.inner = r; } E.B => { } }\n\
+         \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return h; }\n\
+         \x20   fn iflet_opt(ref self, b: Option[R]) -> R {\n\
+         \x20       let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+         \x20       if let Some(r) = b { out = r; }\n\
+         \x20       let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; } }\n\
+         fn f_assign_enum(b: E) -> R {\n\
+         \x20   let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+         \x20   match b { E.A(r) => { out = r; } E.B => { } }\n\
+         \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+         fn f_assign_opt(b: Option[R]) -> R {\n\
+         \x20   let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+         \x20   match b { Some(r) => { out = r; } None => { } }\n\
+         \x20   let loc = R { id: 9, tag: f\"t9\" }; println(f\"mid{loc.id}\"); return out; }\n\
+         fn f_direct_enum(b: E) -> R {\n\
+         \x20   match b { E.A(r) => { return r } E.B => { return R { id: 0, tag: f\"t0\" } } } }\n";
+    for (label, body, want) in [
+        (
+            "method-enum-assign",
+            "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.assign_enum(carg); println(f\"v{v.id}\");\n",
+            "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+        ),
+        (
+            "free-enum-assign",
+            "let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = f_assign_enum(carg); println(f\"v{v.id}\");\n",
+            "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+        ),
+        (
+            "method-option-assign",
+            "let t = T { n: 1 }; let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.assign_opt(carg); println(f\"v{v.id}\");\n",
+            "dR0\nmid9\ndR9\nv8\ndR8\npost\n",
+        ),
+        (
+            "free-option-assign",
+            "let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = f_assign_opt(carg); println(f\"v{v.id}\");\n",
+            "dR0\nmid9\ndR9\nv8\ndR8\npost\n",
+        ),
+        (
+            "method-enum-direct",
+            "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.direct_enum(carg); println(f\"v{v.id}\");\n",
+            "dE\nv8\ndR8\npost\n",
+        ),
+        (
+            "free-enum-direct",
+            "let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = f_direct_enum(carg); println(f\"v{v.id}\");\n",
+            "dE\nv8\ndR8\npost\n",
+        ),
+        (
+            "method-enum-assign-into-field",
+            "let t = T { n: 1 }; let carg: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: Holder = t.field_enum(carg); println(f\"v{v.inner.id}\");\n",
+            "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+        ),
+        (
+            "method-option-iflet-assign",
+            "let t = T { n: 1 }; let carg: Option[R] = Some(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = t.iflet_opt(carg); println(f\"v{v.id}\");\n",
+            "dR0\nmid9\ndR9\nv8\ndR8\npost\n",
+        ),
+        (
+            "free-enum-assign-shadowed-name",
+            "let b: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             \x20 let v: R = f_assign_enum(b); println(f\"v{v.id}\");\n",
+            "dR0\nmid9\ndR9\ndE\nv8\ndR8\npost\n",
+        ),
+        // Two calls in one frame: the second must not be silenced by whatever
+        // the first recorded.
+        (
+            "two-calls-second-must-still-fire",
+            "let c1: E = E.A(R { id: 1, tag: f\"t1\" }); let c2: E = E.A(R { id: 2, tag: f\"t2\" });\n\
+             \x20 let a: R = f_assign_enum(c1); println(f\"a{a.id}\");\n\
+             \x20 let d: R = f_assign_enum(c2); println(f\"b{d.id}\");\n",
+            "dR0\nmid9\ndR9\ndE\na1\ndR1\ndR0\nmid9\ndR9\ndE\nb2\ndR2\npost\n",
         ),
     ] {
         let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");

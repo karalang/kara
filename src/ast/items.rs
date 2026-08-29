@@ -2508,9 +2508,104 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
             .as_deref()
             .is_some_and(|fe| names.iter().any(|n| yields(fe, n)) || returns_any(fe, &names))
     }
+    /// B-2026-08-29-48 — the ROOTS of assignment targets inside `e` that receive
+    /// one of `names`: `out = r`, `out.slot = r`, `outs[i] = r`.
+    ///
+    /// [`grow_aliases`] already follows a payload through a `let`
+    /// (`let k = r; return k;`). It cannot follow one through an ASSIGNMENT,
+    /// and the reason is scope rather than oversight: the destination is
+    /// declared outside the arm and the `return` that carries it out sits
+    /// outside the arm too, so both ends of the route are invisible from inside
+    /// the arm body — which is all [`returns_any`] ever sees. The roots
+    /// therefore come back out to the caller, which asks the whole FUNCTION
+    /// body whether they leave.
+    ///
+    /// `MultiAssign` is deliberately not handled: [`crate::desugar`] rewrites
+    /// every one into `let` temps plus single `Assign`s before any consumer of
+    /// this predicate observes the program.
+    fn place_root(e: &Expr) -> Option<&str> {
+        match &e.kind {
+            ExprKind::Identifier(n) => Some(n),
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => place_root(object),
+            _ => None,
+        }
+    }
+    fn assigned_roots(e: &Expr, names: &[String], out: &mut Vec<String>) {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => assigned_roots_block(b, names, out),
+            ExprKind::Return(Some(inner)) => assigned_roots(inner, names, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                assigned_roots_block(then_block, names, out);
+                if let Some(x) = else_branch.as_deref() {
+                    assigned_roots(x, names, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    assigned_roots(&a.body, names, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => assigned_roots_block(body, names, out),
+            _ => {}
+        }
+    }
+    fn assigned_roots_block(b: &Block, names: &[String], out: &mut Vec<String>) {
+        for st in &b.stmts {
+            match &st.kind {
+                StmtKind::Assign { target, value } => {
+                    if names.iter().any(|n| yields(value, n)) {
+                        if let Some(root) = place_root(target) {
+                            if !out.iter().any(|s| s == root) {
+                                out.push(root.to_string());
+                            }
+                        }
+                    }
+                }
+                StmtKind::Expr(e) => assigned_roots(e, names, out),
+                StmtKind::Let { value, .. } => assigned_roots(value, names, out),
+                _ => {}
+            }
+        }
+        if let Some(fe) = b.final_expr.as_deref() {
+            assigned_roots(fe, names, out);
+        }
+    }
+    /// Do any of `names` reach a return site by being ASSIGNED into a place
+    /// whose root the function then returns? `fn_body` is the whole body, not
+    /// the arm's, because that is where both the destination's declaration and
+    /// the `return` live.
+    fn escapes_by_assignment(body: &Expr, names: &[String], fn_body: &Block) -> bool {
+        let mut roots: Vec<String> = Vec::new();
+        assigned_roots(body, names, &mut roots);
+        !roots.is_empty() && returns_any_block(fn_body, &roots)
+    }
+    fn escapes_by_assignment_block(body: &Block, names: &[String], fn_body: &Block) -> bool {
+        let mut roots: Vec<String> = Vec::new();
+        assigned_roots_block(body, names, &mut roots);
+        !roots.is_empty() && returns_any_block(fn_body, &roots)
+    }
     /// Walk for a `match` / `if let` / `while let` whose SCRUTINEE is the param,
     /// and ask whether the bindings it introduces leave the frame.
-    fn walk(e: &Expr, param: &str) -> bool {
+    fn walk(e: &Expr, param: &str, fn_body: &Block) -> bool {
         let scrutinee_is_param =
             |s: &Expr| matches!(&s.kind, ExprKind::Identifier(n) if n == param);
         match &e.kind {
@@ -2519,7 +2614,8 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
                     let names: Vec<String> = a.pattern.binding_names();
                     !names.is_empty()
                         && (names.iter().any(|n| yields(&a.body, n))
-                            || returns_any(&a.body, &names))
+                            || returns_any(&a.body, &names)
+                            || escapes_by_assignment(&a.body, &names, fn_body))
                 })
             }
             ExprKind::IfLet {
@@ -2529,7 +2625,9 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
                 ..
             } if scrutinee_is_param(value) => {
                 let names: Vec<String> = pattern.binding_names();
-                !names.is_empty() && returns_any_block(then_block, &names)
+                !names.is_empty()
+                    && (returns_any_block(then_block, &names)
+                        || escapes_by_assignment_block(then_block, &names, fn_body))
             }
             ExprKind::WhileLet {
                 pattern,
@@ -2538,25 +2636,30 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
                 ..
             } if scrutinee_is_param(value) => {
                 let names: Vec<String> = pattern.binding_names();
-                !names.is_empty() && returns_any_block(body, &names)
+                !names.is_empty()
+                    && (returns_any_block(body, &names)
+                        || escapes_by_assignment_block(body, &names, fn_body))
             }
             ExprKind::Match { scrutinee, arms } => {
-                walk(scrutinee, param) || arms.iter().any(|a| walk(&a.body, param))
+                walk(scrutinee, param, fn_body)
+                    || arms.iter().any(|a| walk(&a.body, param, fn_body))
             }
             ExprKind::Block(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
-            | ExprKind::Par(b) => walk_block_for(b, param),
-            ExprKind::Return(Some(inner)) => walk(inner, param),
+            | ExprKind::Par(b) => walk_block_for(b, param, fn_body),
+            ExprKind::Return(Some(inner)) => walk(inner, param, fn_body),
             ExprKind::If {
                 condition,
                 then_block,
                 else_branch,
             } => {
-                walk(condition, param)
-                    || walk_block_for(then_block, param)
-                    || else_branch.as_deref().is_some_and(|x| walk(x, param))
+                walk(condition, param, fn_body)
+                    || walk_block_for(then_block, param, fn_body)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| walk(x, param, fn_body))
             }
             ExprKind::IfLet {
                 value,
@@ -2564,26 +2667,31 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
                 else_branch,
                 ..
             } => {
-                walk(value, param)
-                    || walk_block_for(then_block, param)
-                    || else_branch.as_deref().is_some_and(|x| walk(x, param))
+                walk(value, param, fn_body)
+                    || walk_block_for(then_block, param, fn_body)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| walk(x, param, fn_body))
             }
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }
             | ExprKind::For { body, .. }
             | ExprKind::Loop { body, .. }
-            | ExprKind::LabeledBlock { body, .. } => walk_block_for(body, param),
+            | ExprKind::LabeledBlock { body, .. } => walk_block_for(body, param, fn_body),
             _ => false,
         }
     }
-    fn walk_block_for(b: &Block, param: &str) -> bool {
+    fn walk_block_for(b: &Block, param: &str, fn_body: &Block) -> bool {
         b.stmts.iter().any(|st| match &st.kind {
-            StmtKind::Expr(e) => walk(e, param),
-            StmtKind::Let { value, .. } => walk(value, param),
+            StmtKind::Expr(e) => walk(e, param, fn_body),
+            StmtKind::Let { value, .. } => walk(value, param, fn_body),
             _ => false,
-        }) || b.final_expr.as_deref().is_some_and(|fe| walk(fe, param))
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| walk(fe, param, fn_body))
     }
-    walk_block_for(&f.body, param_name)
+    walk_block_for(&f.body, param_name, &f.body)
 }
 
 /// B-2026-08-26-9 — the third sibling of [`fn_returns_param`] and
