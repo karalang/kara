@@ -11577,6 +11577,257 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-75 (FIXED): reassigning an `Option`/`Result` binding whose
+    /// boxed payload arrived by a whole-value MOVE from another binding
+    /// (`let mut vv = value;`) orphaned the payload BOX on every store.
+    ///
+    /// The eager free that reclaims a displaced box (B-2026-08-07-4) declined
+    /// for exactly this population, gated on a `boxed_moved_in_vars` set
+    /// recorded at the let site whenever the RHS was an identifier. That gate
+    /// was PROVENANCE-based rather than ownership-based, and the population it
+    /// excluded is a large and ordinary one: every `let mut vv = value;`
+    /// followed by any store to `vv`.
+    ///
+    /// THE ROW WAS FILED MUCH NARROWER THAN THE DEFECT, and the rows below are
+    /// the narrowing that corrected it. It reported a consuming `while let`
+    /// over an `Option[enum]`, which made three things look load-bearing that
+    /// are not: the `while let` (the `match` and no-construct-at-all spellings
+    /// leak identically), consuming the payload (`Some(_v)` with the binding
+    /// unused leaks the same 76 bytes), and the ENUM payload (a boxed STRUCT
+    /// payload leaks its 100). What actually matters is the pair
+    /// MOVED-IN BOX + ANY LATER STORE — the row's own "minimal shape", which
+    /// dropped the alias, does not reproduce at all.
+    ///
+    /// THE HAZARD ROWS ARE THE POINT OF THE FIXTURE. The excluded gate had a
+    /// real reason: with the payload HANDED OUT of an arm, freeing the box at
+    /// the store site also runs its interior walk, which frees heap the
+    /// destination now owns — a heap-use-after-free rather than a leak. That
+    /// turned out to be a missing retraction rather than a reason to skip the
+    /// free: `compile_if_let` never ran the arm-tail box-view neutralizer its
+    /// `match` twin has had since B-2026-08-04-2. With both halves in, the walk
+    /// is retracted wherever the payload escapes and the free reclaims the
+    /// envelope only. `iflet-hands-out` FAILS AS A UAF with only the eager-free
+    /// half and leaks with neither, so it pins the pair rather than one side.
+    ///
+    /// `discarded-iflet` is the boundary that keeps the new retraction honest:
+    /// an if-let whose value nothing takes has no destination to inherit the
+    /// payload, so neutralizing there strands the box instead of transferring
+    /// it. It is what the `branch_value_is_owned` guard is for, and it is RED
+    /// without it — 68 bytes in 1 object, measured by replacing the guard with
+    /// `true`, exactly the leak the `match` site's own comment predicts.
+    ///
+    /// THE READS ARE `contains`, NOT `len`, AND THAT IS WHY THIS GATES AT
+    /// `-O2`. Every row but `no-construct-at-all` reads its payload through a
+    /// borrow-only arm before the store, which is what keeps the allocation
+    /// alive under the optimizer — but the first draft read it with `s.len()`
+    /// and was GREEN at `-O2` against the unfixed compiler. `len` reads the
+    /// `{ptr,len,cap}` header, not the bytes; the length of an f-string is
+    /// known at the construction site, so LLVM propagates it and deletes the
+    /// `malloc` outright, leaving the fixture asserting nothing on the default
+    /// leg. `contains` runs a real search over the buffer, so the bytes are
+    /// live. With that one change the fixture went from `-O0`-only to RED at
+    /// BOTH levels on the unfixed tree (`-O0`: 77 B / 2 objects on
+    /// `whilelet-reassign`; `-O2`: 293 B / 6 on `loop-reassign`). The payload
+    /// is also runtime-derived via `env.args().len()` for the same reason —
+    /// a literal one folds — and is ≥36 bytes for LSan reachability under the
+    /// Linux gate.
+    ///
+    /// `no-construct-at-all` stays `-O0`-only by construction: reading the
+    /// payload would require the very construct the row exists to exclude, and
+    /// the `asan-o0` CI leg is its gate.
+    #[test]
+    fn asan_reassigning_a_moved_in_boxed_payload_frees_the_envelope() {
+        const H: &str = "enum Val { Nothing, Ident(String) }\n\
+             struct Big { s: String, a: i64, b: i64, c: i64, d: i64 }\n\
+             struct A { value: Option[Val] }\n\
+             fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => (if s.contains(\"moved-in\") { s.len() } else { 0 }), Val.Nothing => 0 } }\n\
+             fn big_len(w: Big) -> i64 { if w.s.contains(\"moved-in\") { w.s.len() } else { 0 } }\n\
+             fn val_none() -> Option[Val] { Option.None }\n\
+             fn big_none() -> Option[Big] { Option.None }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-moved-in-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk_val() -> Option[Val] { Some(Val.Ident(payload())) }\n\
+             fn mk_big() -> Option[Big] { Some(Big { s: payload(), a: 1, b: 2, c: 3, d: 4 }) }\n\
+             fn mk_a() -> A { A { value: mk_val() } }\n";
+        for (label, body, want) in [
+            // ── the row's own shape, and the three axes it wrongly implicated ──
+            (
+                "whilelet-reassign",
+                "fn f(a: A) -> i64 { let A { value } = a; let mut vv = value; let mut acc = 0;\n\
+                 \x20  while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); } acc }\n\
+                 fn main() { println(f(mk_a())); }\n",
+                "45",
+            ),
+            // No struct, no destructure — a plain local alias is enough.
+            (
+                "local-alias",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut acc = 0;\n\
+                 \x20  while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); } acc }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // The alias source is a PARAM rather than a local.
+            (
+                "param-alias",
+                "fn f(value: Option[Val]) -> i64 { let mut vv = value; let mut acc = 0;\n\
+                 \x20  while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); } acc }\n\
+                 fn main() { println(f(mk_val())); }\n",
+                "45",
+            ),
+            // `match`, not `while let` — the loop was never load-bearing.
+            (
+                "match-not-whilelet",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value;\n\
+                 \x20  let n = match vv { Some(v) => ident_len(v), None => 0 };\n\
+                 \x20  vv = val_none(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // The payload is never CONSUMED — a borrow-only read still leaks.
+            (
+                "borrow-only-arm",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut acc = 0;\n\
+                 \x20  while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); }\n\
+                 \x20  acc }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // A boxed STRUCT payload, not an enum one — same 100-byte orphan.
+            (
+                "boxed-struct-payload",
+                "fn f() -> i64 { let value = mk_big(); let mut vv = value;\n\
+                 \x20  let n = match vv { Some(w) => big_len(w), None => 0 };\n\
+                 \x20  vv = big_none(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // Reassigned to another `Some`, not to `None`.
+            (
+                "reassign-to-some",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value;\n\
+                 \x20  let n = match vv { Some(v) => ident_len(v), None => 0 };\n\
+                 \x20  vv = Some(Val.Nothing);\n\
+                 \x20  n + (match vv { Some(v) => ident_len(v), None => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // N stores orphaned N boxes, so the shape is linear rather than
+            // one-off. Six iterations over runtime-derived payloads.
+            (
+                "loop-reassign",
+                "fn fresh(i: i64) -> Option[Val] { Some(Val.Ident(f\"payload-moved-in-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaa\")) }\n\
+                 fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut acc = 0; let mut i = 0;\n\
+                 \x20  while i < 6 { acc = acc + (match vv { Some(v) => ident_len(v), None => 0 });\n\
+                 \x20                vv = fresh(i); i = i + 1; }\n\
+                 \x20  acc + (match vv { Some(v) => ident_len(v), None => 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "315",
+            ),
+            // ── the hazard rows: the payload ESCAPES, then the slot is stored ──
+            (
+                "match-hands-out",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value;\n\
+                 \x20  let k = match vv { Some(g) => g, None => Val.Nothing };\n\
+                 \x20  vv = val_none();\n\
+                 \x20  ident_len(k) + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // The `if let` spelling of the row above — a UAF with only the
+            // eager-free half of the fix, a leak with neither.
+            (
+                "iflet-hands-out",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value;\n\
+                 \x20  let k = if let Some(g) = vv { g } else { Val.Nothing };\n\
+                 \x20  vv = val_none();\n\
+                 \x20  ident_len(k) + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // Braced `if let` tail — the block-vs-bare distinction that
+            // B-2026-08-28-66 found on the `match` side.
+            (
+                "iflet-hands-out-braced",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value;\n\
+                 \x20  let k = if let Some(g) = vv { { g } } else { Val.Nothing };\n\
+                 \x20  vv = val_none();\n\
+                 \x20  ident_len(k) + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // Two aliases off one source, only the second reassigned.
+            (
+                "two-aliases-one-stored",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut ww = vv;\n\
+                 \x20  ww = val_none();\n\
+                 \x20  match ww { Some(g) => ident_len(g), None => 45 } }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // ── boundaries: each was CLEAN before the fix and must stay so ──
+            //
+            // The retraction must NOT fire for a discarded if-let: nothing
+            // downstream owns the payload, so neutralizing the box's walk
+            // there trades this row's leak for a double free.
+            (
+                "discarded-iflet",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value;\n\
+                 \x20  if let Some(g) = vv { g };\n\
+                 \x20  vv = val_none(); if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "0",
+            ),
+            // No store at all — the scope-exit action is the only owner and
+            // was always correct.
+            (
+                "alias-never-stored",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value; let mut acc = 0;\n\
+                 \x20  while let Some(v) = vv { acc = acc + ident_len(v); break } acc }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // A directly-initialized binding — never in the excluded set, so
+            // this is the axis rather than a confirmation.
+            (
+                "direct-init-control",
+                "fn f() -> i64 { let mut vv = mk_val();\n\
+                 \x20  let n = match vv { Some(v) => ident_len(v), None => 0 };\n\
+                 \x20  vv = val_none(); n + (if vv.is_some() { 1 } else { 0 }) }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // `vv = vv` must not free the buffer it is about to store back.
+            (
+                "self-assign",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value; vv = vv;\n\
+                 \x20  match vv { Some(v) => ident_len(v), None => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // A roundtrip through a callee — the RHS mentions the target, so
+            // the old value may have moved into the call; the free declines.
+            (
+                "roundtrip",
+                "fn pass(o: Option[Val]) -> Option[Val] { o }\n\
+                 fn f() -> i64 { let value = mk_val(); let mut vv = value; vv = pass(vv);\n\
+                 \x20  match vv { Some(v) => ident_len(v), None => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "45",
+            ),
+            // The one row with NO match, no `if let` and no `while let`: an
+            // alias and a store, nothing else. `-O0`-only, per the doc above.
+            (
+                "no-construct-at-all",
+                "fn f() -> i64 { let value = mk_val(); let mut vv = value; vv = val_none();\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "0",
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &[want], label);
+        }
+    }
+
     /// B-2026-07-04-7 (FIXED): a `struct A { value: Option[<non-shared enum/struct>] }`
     /// field is now DROP-SUPPORTED. Before, `emit_struct_drop_synthesis(A)` emitted no
     /// drop for the `Option[<heap enum>]` field (the `OptionInline` pass was gated to

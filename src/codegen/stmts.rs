@@ -6560,19 +6560,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .insert(var_name.to_string(), src);
                                     }
                                 }
-                                // B-2026-08-07-4 — record PROVENANCE. A box
-                                // acquired by whole-value move from another
-                                // binding shares B-2026-08-05-20's bookkeeping
-                                // with its source and can be released through a
-                                // channel that leaves this slot reading `Some`
-                                // with a stale pointer, so it is excluded from
-                                // the reassignment eager-free. See the field's
-                                // doc for the measured shape.
-                                if matches!(&value.kind, ExprKind::Identifier(_)) {
-                                    self.payload_vars
-                                        .boxed_moved_in_vars
-                                        .insert(var_name.to_string());
-                                }
                                 for (enum_name, variant, inner) in &boxed {
                                     let nested_opt_drop = payload_te
                                         .as_ref()
@@ -9950,17 +9937,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     // was measured on; NOT true for a boxed one, which is this
                     // row — the scope-exit action reads the slot after the
                     // store and frees only the last value.
-                    if (self
+                    //
+                    // B-2026-08-28-75 — this used to DECLINE for a box acquired
+                    // by whole-value move from another binding (`let mut vv =
+                    // value;`), tracked as `boxed_moved_in_vars`. That gate was
+                    // provenance-based rather than ownership-based, and it left
+                    // the whole aliased family leaking its envelope: `let mut vv
+                    // = value; vv = none();` orphaned the box on every store,
+                    // with no match, no `while let` and no consumption needed to
+                    // trigger it. Its stated hazard — the arm frees the box and
+                    // leaves the slot reading `Some` with a stale pointer, so a
+                    // store-site free double-frees — was REAL, but it was the
+                    // symptom of a missing retraction rather than a reason to
+                    // skip the free: `compile_if_let` never ran the arm-tail
+                    // box-view neutralizer its `match` twin has had since
+                    // B-2026-08-04-2. With that call added (control_flow.rs) the
+                    // interior walk is retracted wherever the payload is handed
+                    // out, so this free reclaims the ENVELOPE only and the two
+                    // halves balance. Verified in both directions: the free
+                    // without the retraction is a heap-use-after-free, the
+                    // retraction without the free is the leak, and neither alone
+                    // is shippable.
+                    if self
                         .payload_vars
                         .boxed_enum_payload_vars
                         .contains(name.as_str())
                         || self
                             .payload_vars
                             .nested_boxed_payload_vars
-                            .contains(name.as_str()))
-                        && !self
-                            .payload_vars
-                            .boxed_moved_in_vars
                             .contains(name.as_str())
                     {
                         let self_alias =

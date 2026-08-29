@@ -331,6 +331,34 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_source_retains_inline_payload = saved_source_retains;
         self.fn_ctx.tail_ret_inner = tail;
+        // B-2026-08-28-75 — the `if let` twin of `compile_match`'s arm-tail
+        // box-view neutralizer (control_flow_match.rs, B-2026-08-04-2 /
+        // B-2026-08-28-66). When the then-block HANDS THE BOUND PAYLOAD OUT as
+        // the construct's value (`let k = if let Some(g) = o { g } else { .. }`),
+        // that is a move like any other and the source box's interior walk must
+        // be retracted, or the box and the destination binding both own the
+        // payload's heap.
+        //
+        // The `match` spelling has had this since B-2026-08-04-2; this path
+        // simply never grew it, and the asymmetry stayed invisible because the
+        // reassignment eager-free below (stmts.rs) declined for exactly this
+        // population — so the un-retracted walk was never reached and the shape
+        // presented as a 32-byte envelope LEAK instead. Freeing the envelope
+        // without this call turns that leak into a heap-use-after-free: the
+        // walk frees the `String` the destination is about to read. Measured on
+        // `let k = if let Some(g) = vv { g } else { Val.Nothing }; vv = none();
+        // ident_len(k)` — clean with both halves, UAF with only the stmts.rs
+        // half, leaking with neither.
+        //
+        // Same `branch_value_is_owned` gate as the match site, for the same
+        // reason it states: neutralizing assumes a destination that registers a
+        // drop of its own, and a DISCARDED if-let result has none — without the
+        // guard the double free is traded for a leak.
+        if own_value {
+            if let Some(fe) = then_block.final_expr.as_deref() {
+                self.suppress_boxed_payload_view_move(Self::block_tail_expr(fe));
+            }
+        }
         let mut then_val = self.compile_block(then_block)?;
         // B-2026-08-28-7 — record the then-arm's tail type so an `if let` used
         // as a VALUE receiver (`if let Some(v) = o { Tag { n: v } } else { … }.n`)

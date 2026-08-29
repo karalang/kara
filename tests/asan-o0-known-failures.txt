@@ -148,34 +148,3 @@
 # The copy is a separate allocation from the caller's value — counted, not
 # assumed: the fixture's program reports 168 allocations for 40 iterations, four
 # per call — so the caller-owns contract at the argument site is untouched.
-
-# ── 2026-08-29: the list goes NON-EMPTY for B-2026-08-28-75. ──
-memory_sanitizer_tests::asan_b31_option_agg_payload_borrow_only_no_leak  # B-2026-08-28-75
-#
-# `via_whilelet` leaks 456 B in 12 objects at -O0 and passes at -O2 — the
-# classic shape this list exists for, and this time the -O2 pass is because
-# nothing reads the buffer after the loop so LLVM deletes the allocation.
-#
-# A REGRESSION, not a latent gap: clean at 93dbc48, leaking at 77729f2
-# (B-2026-08-28-64) and since. Bisected by walking the range rather than by
-# checking out one commit's parent — that shortcut reverts the whole tail and
-# named the wrong commit the first time this range was attributed.
-#
-# The minimal shape needs BOTH a consuming `while let` and a reassignment of
-# the scrutinee variable inside the loop:
-#
-#     while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); }
-#
-# Three controls are clean and bracket it: the same reassignment with no
-# `while let`; the same `while let` with a `break` instead of the reassignment;
-# and the struct-payload twin of the first. The bind takes the payload out of
-# the box, the reassignment overwrites the only variable still holding the box,
-# and nothing frees the ENVELOPE. Before 77729f2 the source binding kept its
-# words as an alias and an unguarded `karac_drop_Option_<P>` freed it through
-# that; a correct move-out zeroing has since removed the alias.
-#
-# Full analysis, the IR diff it was read from, and the existing
-# `own_boxed_option_field_envelope_at` shape of the answer are on the row.
-#
-# The line goes when -75 lands; the ratchet's "a listed fixture that starts
-# PASSING fails the leg too" direction is what will say so.
