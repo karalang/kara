@@ -142,6 +142,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
             self.track_freshtemp_shared_option_scrutinee(value, &[pattern], val);
+            // B-2026-08-28-74 — the bare `shared` enum sibling; mutually
+            // exclusive with the line above by value shape (struct vs RC ptr).
+            self.track_freshtemp_shared_enum_scrutinee(value, &[pattern], val);
         }
         let cond = self.compile_pattern_condition(pattern, val)?;
         // Reuse if-else codegen
@@ -621,6 +624,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
             self.track_freshtemp_shared_option_scrutinee(value, &[pattern], val);
+            // B-2026-08-28-74 — the bare `shared` enum sibling; mutually
+            // exclusive with the line above by value shape (struct vs RC ptr).
+            self.track_freshtemp_shared_enum_scrutinee(value, &[pattern], val);
         }
         // Borrowed identifier scrutinee — see the if-let site (slice 3q).
         // Slice 3s adds the borrow-CALL half (`m.get` scrutinee) + the
@@ -1114,6 +1120,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
             self.track_freshtemp_shared_option_scrutinee(value, &[pattern], val);
+            // B-2026-08-28-74 — the bare `shared` enum sibling; mutually
+            // exclusive with the line above by value shape (struct vs RC ptr).
+            self.track_freshtemp_shared_enum_scrutinee(value, &[pattern], val);
         }
         let cond = self.compile_pattern_condition(pattern, val)?;
 

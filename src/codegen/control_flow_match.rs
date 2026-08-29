@@ -247,6 +247,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
             self.track_freshtemp_shared_option_scrutinee(scrutinee, &pats, scrut);
+            // B-2026-08-28-74 — the bare `shared` enum sibling of the line
+            // above. Mutually exclusive with it by value shape: that tracker
+            // needs a `StructValue` (the `Option` struct), this one the RC box
+            // `PointerValue`, so at most one can fire.
+            self.track_freshtemp_shared_enum_scrutinee(scrutinee, &pats, scrut);
         }
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
@@ -10707,6 +10712,83 @@ impl<'ctx> super::Codegen<'ctx> {
     /// tracker instead (a shared handle is one word, so the two are
     /// mutually exclusive); borrow-returning scrutinees (`Map.get`) never
     /// owned a transferable ref and are excluded by the borrow gate.
+    /// B-2026-08-28-74 — the BARE `shared` enum sibling of
+    /// [`Self::track_freshtemp_shared_option_scrutinee`].
+    ///
+    /// `match mk() { … }` over a `shared enum` evaluates the producer's `+1`
+    /// into a temporary no binding names, and nothing ever releases it. The
+    /// two paths that would have owned it both decline:
+    /// `materialize_freshtemp_enum_scrutinee` (the fresh-temp owner-minting
+    /// path for VALUE enums) fails its `BasicValueEnum::StructValue` gate,
+    /// because a shared enum's value is the RC box POINTER — and its
+    /// `layout.is_shared` bail sits below that anyway — while the
+    /// `Option[shared T]` tracker next to this one only recognizes an `Option`
+    /// wrapper. So the box, and every heap field it owns, leaks.
+    ///
+    /// The BOUND spelling is the oracle, and it is clean on every payload shape
+    /// measured — scalar, `String`, `Vec`, shared child, recursive enum:
+    /// `let t = mk(); match t { … }` registers exactly one `RcDec` through
+    /// `track_rc_var` at the let site. This registers that same action for the
+    /// unnamed temp, so the two spellings free identically.
+    ///
+    /// The rest of the machinery is already in place, which is why only the
+    /// registration was missing:
+    ///
+    ///  * `track_rc_var` lazily synthesizes the recursive drop fn, and for a
+    ///    shared ENUM `emit_shared_struct_rc_drop_fn`'s `info.is_enum` arm
+    ///    routes to `emit_shared_enum_rc_drop_fn` — the tag-switched walk that
+    ///    frees an UNBOUND payload's heap before the box.
+    ///  * An arm that MOVES a payload out is covered by
+    ///    `suppress_shared_enum_payload_move_out`, which already fires per-arm
+    ///    for ANY pointer-valued scrutinee, independent of this registration:
+    ///    it zeroes the consumed field's words in the box so the walk skips
+    ///    what the binding now owns rather than double-freeing it.
+    ///
+    /// No-op for a PLACE scrutinee (an existing binding / field): that value is
+    /// owned elsewhere and carries its own dec, so a second one would release
+    /// it early. Same freshness gate as every sibling tracker here.
+    pub(super) fn track_freshtemp_shared_enum_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        patterns: &[&Pattern],
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+            return;
+        }
+        if self.scrutinee_is_borrow_call(scrutinee) {
+            return;
+        }
+        // A shared enum arrives as the RC box pointer; a value enum arrives as
+        // a struct and belongs to `materialize_freshtemp_enum_scrutinee`.
+        let BasicValueEnum::PointerValue(ptr) = val else {
+            return;
+        };
+        let Some(enum_name) = patterns
+            .iter()
+            .find_map(|p| self.variant_pattern_enum_name(p))
+        else {
+            return;
+        };
+        if !self
+            .type_decls
+            .enum_layouts
+            .get(&enum_name)
+            .is_some_and(|l| l.is_shared)
+        {
+            return;
+        }
+        let Some(heap_type) = self
+            .type_decls
+            .shared_types
+            .get(&enum_name)
+            .map(|i| i.heap_type)
+        else {
+            return;
+        };
+        self.track_rc_var("__freshtemp_shared_enum", ptr, heap_type);
+    }
+
     pub(super) fn track_freshtemp_shared_option_scrutinee(
         &mut self,
         scrutinee: &Expr,

@@ -57185,6 +57185,132 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-74 (leak 1) — a `match` / `if let` / `let…else` /
+    /// `while let` over a FRESH `shared` enum TEMPORARY never released the RC
+    /// box, so the box and everything it owned leaked.
+    ///
+    /// The two fresh-temp trackers that would have owned it both declined: the
+    /// value-enum one (`materialize_freshtemp_enum_scrutinee`) fails its
+    /// `StructValue` gate because a shared enum's value is the box POINTER,
+    /// and the `Option[shared T]` one only recognizes an `Option` wrapper.
+    /// `track_freshtemp_shared_enum_scrutinee` is the missing bare sibling.
+    ///
+    /// THE FIXTURE MUST BE A RECURSIVE ENUM BUILT RECURSIVELY, and that is the
+    /// whole reason this shape was chosen over the one-line `match mk() { … }`
+    /// the bug reproduces on. This suite compiles at **-O2** (`read_opt_level_env`
+    /// defaults to `2`), and at -O2 LLVM promotes a never-freed, non-escaping
+    /// box out of existence: measured pre-fix, the flat shapes drop from 9/10/11
+    /// allocations to 8 and report NO leak, while only this recursive one keeps
+    /// its allocations and leaks 32 B directly + 192 B indirectly (15 allocs,
+    /// 8 frees). A flatter fixture here would pass whether or not the bug is
+    /// present. `min_allocs` is the second half of that guard.
+    ///
+    /// The BOUND spellings are the oracle rows: `let t = mk(…); match t { … }`
+    /// was already clean on every payload shape, and the fix's whole claim is
+    /// that the unnamed temporary now frees identically.
+    #[test]
+    fn asan_freshtemp_shared_enum_scrutinee_releases_its_box() {
+        // Recursive shared enum + recursive builder — the one shape -O2 cannot
+        // optimize the leak away in. Each row is (source, expected, label).
+        let rows: [(&str, &str, &str); 7] = [
+            // The discarded fresh temp, in each construct that takes a scrutinee.
+            (
+                "match mk(3) { Num(a) => println(a), Bin(l, r) => println(7) }",
+                "7",
+                "freshtemp-shared-enum-match",
+            ),
+            (
+                "if let Bin(l, r) = mk(3) { println(7) } else { println(0) }",
+                "7",
+                "freshtemp-shared-enum-iflet",
+            ),
+            (
+                "let Bin(l, r) = mk(3) else { return; }; println(7);",
+                "7",
+                "freshtemp-shared-enum-letelse",
+            ),
+            // An arm that binds NOTHING: the box's tag-switched drop walk owns
+            // the whole payload, so this is the wholesale-free edge.
+            (
+                "match mk(3) { Num(a) => println(a), Bin(_, _) => println(7) }",
+                "7",
+                "freshtemp-shared-enum-unbound",
+            ),
+            // The BOUND oracle: already clean pre-fix, and must stay clean —
+            // this is the row that would fail if the new dec double-freed.
+            (
+                "let t = mk(3); match t { Num(a) => println(a), Bin(l, r) => println(7) }",
+                "7",
+                "freshtemp-shared-enum-bound-oracle",
+            ),
+            // A PLACE scrutinee reached through a second binding — the tracker
+            // must keep declining here, or the box is released early and the
+            // later read is a use-after-free ASAN would report.
+            (
+                "let t = mk(3); let u = t; match u { Num(a) => println(a), Bin(l, r) => println(7) }",
+                "7",
+                "freshtemp-shared-enum-place-declines",
+            ),
+            // `while let` registers in the PER-ITERATION body frame rather than
+            // the enclosing one, and a `break` leaves that frame by a different
+            // edge than falling off the end — so this row is the one that would
+            // catch a registration the break path drains past. A fresh temp is
+            // loop-invariant, so the `break` is what makes the shape expressible
+            // at all.
+            (
+                "while let Bin(l, r) = mk(3) { println(7); break; }",
+                "7",
+                "freshtemp-shared-enum-whilelet-break",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!(
+                "shared enum E {{ Num(i64), Bin(E, E) }}\n\
+                 fn mk(n: i64) -> E {{ if n <= 0 {{ return E.Num(n); }} return E.Bin(mk(n - 1), E.Num(n)); }}\n\
+                 fn main() {{ {body} }}\n"
+            );
+            assert_clean_asan_run_min_allocs(&src, &[expected], label, 8);
+        }
+    }
+
+    /// The payload-shape matrix for the fix above, on the shape that actually
+    /// exercises the move-out interaction: a heap payload an arm either TAKES
+    /// or LEAVES.
+    ///
+    /// Taking it and freeing the box are the two halves that must not overlap.
+    /// They do not, and the reason is that `suppress_shared_enum_payload_move_out`
+    /// already fires per-arm for any pointer-valued scrutinee — independent of
+    /// the new registration — zeroing the consumed field's words in the box so
+    /// the drop walk skips what the binding now owns. Leaving it unbound is the
+    /// other side: the walk must free it, or the payload leaks under the box.
+    ///
+    /// Both rows carry the recursive spine for the -O2 reason above; the
+    /// `String` rides on the outer node.
+    #[test]
+    fn asan_freshtemp_shared_enum_payload_moveout_is_balanced() {
+        let rows: [(&str, &str, &str); 2] = [
+            (
+                "match mk(3) { Num(a) => println(a), Tag(s, l) => println(s) }",
+                "tag-0123456789abcdef",
+                "freshtemp-shared-enum-payload-taken",
+            ),
+            (
+                "match mk(3) { Num(a) => println(a), Tag(_, _) => println(7) }",
+                "7",
+                "freshtemp-shared-enum-payload-left",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!(
+                "shared enum E {{ Num(i64), Tag(String, E) }}\n\
+                 fn lbl() -> String {{ let a = \"tag-\"; let b = \"0123456789abcdef\"; return a + b; }}\n\
+                 fn mk(n: i64) -> E {{ if n <= 0 {{ return E.Num(n); }} return E.Tag(lbl(), mk(n - 1)); }}\n\
+                 fn main() {{ {body} }}\n"
+            );
+            assert_clean_asan_run_min_allocs(&src, &[expected], label, 8);
+        }
+    }
+
     /// The `Map` rvalue — a call RETURN, so the handle is manufactured a frame
     /// down and arrives already owned. The per-iteration `scratch` map is the
     /// leak half of the same two-sided check: the break path drains it while
