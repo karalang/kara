@@ -5729,6 +5729,7 @@ impl<'ctx> Codegen<'ctx> {
                 range_let_bindings: HashMap::new(),
             },
             payload_vars: PayloadVars {
+                boxed_leaf_owning_depth: std::collections::HashMap::new(),
                 passthrough_owner_alias: std::collections::HashMap::new(),
                 boxed_passthrough_owner_alias: std::collections::HashMap::new(),
                 inline_option_payload_vars: std::collections::HashSet::new(),

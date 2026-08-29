@@ -99,6 +99,15 @@ pub(crate) struct PayloadVars<'ctx> {
     /// instead. `track_boxed_enum_var` already receives it as
     /// `inner_struct_name`.
     pub(crate) boxed_enum_payload_struct: std::collections::HashMap<String, String>,
+    /// B-2026-08-29-2 — for a binding whose box carries a LEAF interior drop,
+    /// how many variant-pattern levels a `match` must descend before it names
+    /// the value that drop frees. See `boxed_leaf_owning_depth`.
+    ///
+    /// Read by `retract_boxed_leaf_drop_for_consuming_pattern`, which is what
+    /// keeps the leaf drop from racing an arm that already owns the value. Only
+    /// populated when a leaf drop was actually registered, so an absent entry
+    /// means there is nothing to retract.
+    pub(crate) boxed_leaf_owning_depth: std::collections::HashMap<String, usize>,
     pub(crate) boxed_struct_payload_vars: std::collections::HashSet<String>,
     /// B-2026-08-06-32 — bindings carrying a `NestedBoxedEnumDrop`, i.e. a box
     /// living inside the binding's INLINE payload area

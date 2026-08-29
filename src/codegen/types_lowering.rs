@@ -4317,6 +4317,75 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// The type at the BOTTOM of the envelope chain [`Self::nested_box_deeper_tag_chain`]
+    /// walks (B-2026-08-29-2).
+    ///
+    /// Same walk, same eight-level bound, same break conditions — it returns
+    /// the `cur` that walk discards. Every level it descends is a
+    /// `coerce_to_payload_words` envelope; the value that actually owns heap is
+    /// the one this returns, which is where the chain's interior drop belongs.
+    /// With no chain to walk it returns its argument, so a caller can use it
+    /// unconditionally.
+    pub(super) fn nested_box_leaf_contents<'t>(
+        &self,
+        boxed_contents: &'t TypeExpr,
+    ) -> &'t TypeExpr {
+        let mut cur = boxed_contents;
+        for _ in 0..8 {
+            let Some((enum_lit, _, _)) = self.boxed_enum_payload_variants(cur).into_iter().next()
+            else {
+                break;
+            };
+            if enum_lit != "Option" {
+                break;
+            }
+            let Some(next) = Self::path_generic_arg(cur, 0) else {
+                break;
+            };
+            cur = next;
+        }
+        cur
+    }
+
+    /// How many variant-pattern levels a `match` must descend from a binding
+    /// before it names the value the chain's leaf drop frees (B-2026-08-29-2).
+    ///
+    /// This is the number the consume-aware retraction compares a pattern's
+    /// binding depth against, and getting it right is the whole difference
+    /// between fixing the leak and trading it for a double free.
+    ///
+    /// `1` for the boxed contents itself, plus one per envelope the chain
+    /// walks, plus ONE MORE when the leaf is an `Option`/`Result` — because
+    /// there the registered drop is the leaf's tag-guarded PAYLOAD free, so the
+    /// value it reclaims sits one level below the leaf. When the leaf is a
+    /// struct or enum the drop is that type's own field synthesis, so the leaf
+    /// IS the owned value and no extra level applies.
+    ///
+    ///   Option[Option[String]]         leaf `Option[String]`, chain 0 -> 2
+    ///   Option[Option[Option[String]]] leaf `Option[String]`, chain 1 -> 3
+    ///   Option[Option[Wide]]           leaf `Wide`            -> None
+    ///
+    /// `None` for a STRUCT or ENUM leaf, and that is a measurement rather than
+    /// an omission. There the registered drop is the leaf type's field
+    /// synthesis, so the value a pattern binds at leaf depth is the struct
+    /// HEADER — and an arm that binds it does NOT take the fields' heap over:
+    /// `match vv { Some(Some(w)) => wl(w), _ => 0 }` over `Option[Option[Wide]]`
+    /// leaks the `Wide`'s `String` on an unmodified tree, so nobody owns it and
+    /// retracting would only preserve that leak. Retracting solely where the
+    /// leaf is an `Option`/`Result` — where the drop frees the payload the
+    /// pattern literally names — is what lets that shape be fixed while the
+    /// `Some(Some(s))` shapes stay single-freed.
+    pub(super) fn boxed_leaf_owning_depth(
+        &self,
+        boxed_contents: &TypeExpr,
+        chain_len: usize,
+    ) -> Option<usize> {
+        let leaf = self.nested_box_leaf_contents(boxed_contents);
+        let leaf_is_optres = matches!(&leaf.kind, TypeKind::Path(p)
+            if p.segments.last().is_some_and(|n| n == "Option" || n == "Result"));
+        leaf_is_optres.then_some(1 + chain_len + 1)
+    }
+
     pub(super) fn nested_boxed_enum_payload_variants(
         &self,
         te: &TypeExpr,

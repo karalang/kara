@@ -6682,7 +6682,86 @@ impl<'ctx> super::Codegen<'ctx> {
                                             .as_ref()
                                             .map(|p| self.nested_box_deeper_tag_chain(p))
                                             .unwrap_or_default();
-                                        if deeper.is_empty() || inner.is_some() {
+                                        // B-2026-08-29-2 — the drop for the
+                                        // value at the BOTTOM of the envelope
+                                        // chain, resolved from its TypeExpr
+                                        // rather than from a user type NAME.
+                                        //
+                                        // The name-based resolution inside
+                                        // `track_boxed_enum_var` answers `None`
+                                        // for a boxed `Option`/`Result`
+                                        // contents, because those are not user
+                                        // struct or enum names — so the whole
+                                        // doubly-nested family registered a box
+                                        // with no interior drop and leaked its
+                                        // payload's heap on plain scope exit,
+                                        // with nothing else in the program:
+                                        // `Option[Option[String]]` 38 B,
+                                        // `Option[Option[Vec[i64]]]` 80 B,
+                                        // `Option[Result[Wide, i64]]` 94 B in 2.
+                                        // The flat `Option[Wide]` was always
+                                        // clean, which is the axis.
+                                        //
+                                        // `vec_elem_agg_drop_for_type_expr` is
+                                        // the MEMORY-only resolver the rest of
+                                        // this family funnels through: it
+                                        // routes `Option[..]`/`Result[..]` to
+                                        // their tag-guarded drops and a
+                                        // struct/enum to its field synthesis,
+                                        // and answers `None` for a heapless
+                                        // contents — so a POD box registers
+                                        // exactly what it did before.
+                                        //
+                                        // Registering it is only half the job:
+                                        // an arm that binds the leaf out
+                                        // already owns it, and freeing it here
+                                        // as well is a double free rather than
+                                        // a fix. `boxed_leaf_owning_depth`
+                                        // records how deep that arm would have
+                                        // to bind, and
+                                        // `retract_boxed_leaf_drop_for_consuming_pattern`
+                                        // clears the drop when one does.
+                                        let leaf_drop = payload_te.as_ref().and_then(|p| {
+                                            let leaf = self.nested_box_leaf_contents(p).clone();
+                                            self.vec_elem_agg_drop_for_type_expr(&leaf)
+                                        });
+                                        if leaf_drop.is_some() {
+                                            if let Some(d) = payload_te.as_ref().and_then(|p| {
+                                                self.boxed_leaf_owning_depth(p, deeper.len())
+                                            }) {
+                                                self.payload_vars
+                                                    .boxed_leaf_owning_depth
+                                                    .insert(var_name.to_string(), d);
+                                            }
+                                        }
+                                        if deeper.is_empty() {
+                                            match (inner.as_deref(), leaf_drop) {
+                                                // A user struct/enum NAME still
+                                                // takes the name-based path: it
+                                                // also records
+                                                // `boxed_struct_payload_vars`,
+                                                // which the by-value-call
+                                                // arg-site skip reads.
+                                                (Some(n), _) => self.track_boxed_enum_var(
+                                                    var_name,
+                                                    slot.ptr,
+                                                    enum_name,
+                                                    variant,
+                                                    Some(n),
+                                                ),
+                                                (None, Some(f)) => self
+                                                    .track_boxed_enum_var_with_inner_drop(
+                                                        var_name,
+                                                        slot.ptr,
+                                                        enum_name,
+                                                        variant,
+                                                        Some(f),
+                                                    ),
+                                                (None, None) => self.track_boxed_enum_var(
+                                                    var_name, slot.ptr, enum_name, variant, None,
+                                                ),
+                                            }
+                                        } else if inner.is_some() {
                                             self.track_boxed_enum_var(
                                                 var_name,
                                                 slot.ptr,
@@ -6692,7 +6771,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                             );
                                         } else {
                                             self.track_boxed_enum_var_with_chain(
-                                                var_name, slot.ptr, enum_name, variant, None,
+                                                var_name, slot.ptr, enum_name, variant, leaf_drop,
                                                 deeper,
                                             );
                                         }

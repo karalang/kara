@@ -1761,15 +1761,13 @@ impl<'ctx> super::Codegen<'ctx> {
         inner_drop_fn: Option<FunctionValue<'ctx>>,
         deeper_tags: Vec<u64>,
     ) {
-        // The interior belongs to whoever owns it; this action walks envelopes
-        // only. See the field docs on both — if a chain ever coexisted with an
-        // inner drop the walk would descend through a payload that already has
-        // an owner.
-        debug_assert!(
-            deeper_tags.is_empty() || inner_drop_fn.is_none(),
-            "boxed-enum envelope chain must not coexist with an inner payload drop \
-             (binding `{name}`): the chain walks envelopes, the drop owns the interior",
-        );
+        // B-2026-08-29-2 — the two USED to be mutually exclusive here, asserted
+        // on the reading that "the chain walks envelopes, the drop owns the
+        // interior". Both halves are still true; what was wrong is treating
+        // them as alternatives. `inner_drop_fn` is now the drop for the value
+        // at the BOTTOM of the chain — the only level holding a real payload —
+        // so the two compose, and the emit arm hands it to the leaf. With an
+        // empty chain the leaf is this box and the behaviour is byte-identical.
         let (enum_ty, some_tag) = match self.type_decls.enum_layouts.get(enum_name) {
             Some(l) => (
                 l.llvm_type,
@@ -9519,11 +9517,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// reasons: a tag that is not the boxing variant leaves the payload words
     /// holding a value rather than a pointer, and a null word means the
     /// envelope was never minted. Either miss frees a scalar.
+    ///
+    /// `leaf_drop_fn` (B-2026-08-29-2) is the interior drop for the value at
+    /// the BOTTOM of the chain, and it is what makes a nested envelope free its
+    /// contents rather than just its boxes. Every level above the leaf holds an
+    /// envelope the source program cannot name; only the innermost box holds a
+    /// real payload, so the drop belongs there and nowhere else. Applied
+    /// immediately before that box's own `free`, on the recursion bottom only.
+    /// `None` keeps the pre-existing envelope-only behaviour verbatim — which
+    /// is also what a consuming arm leaves behind, by retraction.
     fn emit_nested_box_chain_free(
         &self,
         fn_val: inkwell::values::FunctionValue<'ctx>,
         box_ptr: PointerValue<'ctx>,
         deeper_tags: &[u64],
+        leaf_drop_fn: Option<&FunctionValue<'ctx>>,
         name: &str,
     ) {
         let i64_t = self.context.i64_type();
@@ -9581,10 +9589,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
 
             self.builder.position_at_end(rec_bb);
-            self.emit_nested_box_chain_free(fn_val, next, rest, name);
+            self.emit_nested_box_chain_free(fn_val, next, rest, leaf_drop_fn, name);
             self.builder.build_unconditional_branch(free_bb).unwrap();
 
             self.builder.position_at_end(free_bb);
+        } else if let Some(drop_fn) = leaf_drop_fn {
+            // Recursion bottom: this box holds the real payload, so run its
+            // cleanup before releasing it. Above the bottom the box holds only
+            // another envelope, which owns nothing of its own.
+            self.builder
+                .build_call(*drop_fn, &[box_ptr.into()], "")
+                .unwrap();
         }
         // Reached on every path, including the two guard failures above: this
         // box exists and is ours regardless of what it turned out to contain.
@@ -11428,29 +11443,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_null, join_bb, free_bb)
                     .unwrap();
                 self.builder.position_at_end(free_bb);
-                // The box points directly at `T`; run its field cleanup
-                // before releasing the box (no-op when `T` is all-inline).
-                if let Some(drop_fn) = inner_drop_fn {
-                    self.builder
-                        .build_call(*drop_fn, &[box_ptr.into()], "")
-                        .unwrap();
-                }
                 // B-2026-08-07-6 — when `T` is itself an enum whose own payload
                 // is boxed, this box holds another ENVELOPE and freeing only
                 // this one leaks the rest. The chain walk emits this level's
-                // own `free` on its join, so it REPLACES the call below rather
-                // than preceding it. Empty at every registration site but the
-                // let site, where the walk collapses to exactly that free.
-                debug_assert!(
-                    deeper_tags.is_empty() || inner_drop_fn.is_none(),
-                    "envelope chain must not coexist with an inner payload drop",
-                );
+                // own `free` on its join, so it REPLACES the plain free rather
+                // than preceding it.
+                //
+                // B-2026-08-29-2 — `inner_drop_fn` is the drop for the value at
+                // the BOTTOM of that chain, not for this box. With no chain the
+                // bottom IS this box and the two readings coincide, which is
+                // why every pre-existing single-box registration is unaffected;
+                // with a chain, handing it down is what stops the leaf's own
+                // heap from leaking under a correctly-freed stack of envelopes.
+                // The two used to be mutually exclusive by assertion, and that
+                // exclusion was half the bug.
                 if deeper_tags.is_empty() {
+                    // The box points directly at `T`; run its field cleanup
+                    // before releasing the box (no-op when `T` is all-inline).
+                    if let Some(drop_fn) = inner_drop_fn {
+                        self.builder
+                            .build_call(*drop_fn, &[box_ptr.into()], "")
+                            .unwrap();
+                    }
                     self.builder
                         .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                         .unwrap();
                 } else {
-                    self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, name);
+                    self.emit_nested_box_chain_free(
+                        fn_val,
+                        box_ptr,
+                        deeper_tags,
+                        inner_drop_fn.as_ref(),
+                        name,
+                    );
                 }
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
@@ -11597,7 +11622,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_unconditional_branch(ip_done).unwrap();
                     self.builder.position_at_end(ip_done);
                 }
-                self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, name);
+                // `None` leaf drop: this family stays box-only. Its DIRECT half
+                // passes `box_contents: None` at the let site, so there is
+                // nothing to resolve here anyway — see B-2026-08-29-2, which
+                // leaves the outer-`Result` shapes open for that reason.
+                self.emit_nested_box_chain_free(fn_val, box_ptr, deeper_tags, None, name);
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
             }

@@ -291,6 +291,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.block_only_borrows_option_agg_payload(value, pattern, then_block) {
             self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         }
+        // B-2026-08-29-2 — the `if let` twin of the match site's leaf-drop
+        // retraction: an arm that binds the leaf out already owns it, so the
+        // box's interior drop has to stand down or free it twice.
+        self.retract_boxed_leaf_drop_for_consuming_pattern(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).

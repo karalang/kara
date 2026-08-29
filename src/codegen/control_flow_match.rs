@@ -837,6 +837,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     ) {
                         self.suppress_inline_option_agg_payload_cleanup(scrutinee, &arm.pattern);
                     }
+                    // B-2026-08-29-2 — retract this binding's LEAF interior
+                    // drop when the arm binds the value that drop frees.
+                    // Outside the borrow-only gate above on purpose: the
+                    // question here is ownership of the leaf, not whether the
+                    // source keeps its payload, and the depth test is what
+                    // makes it precise.
+                    self.retract_boxed_leaf_drop_for_consuming_pattern(scrutinee, &arm.pattern);
                     // Slice 3t: struct-destructure of a BOXED payload — zero
                     // the consumed fields inside the box so the binding's
                     // BoxedEnumDrop inner walk frees only unbound fields.
@@ -9400,6 +9407,98 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Static, like every compile-time retraction here: a move inside a
     /// conditional disarms on all paths, which can only under-free — the safe
     /// side. A no-op for any name not recorded as a boxed-payload view.
+    /// B-2026-08-29-2 — retract a boxed binding's LEAF interior drop when an
+    /// arm binds the very value that drop frees.
+    ///
+    /// The leaf drop (registered at the let site) exists because nothing else
+    /// frees the innermost payload of a doubly-nested `Option`/`Result`. That
+    /// is true only while nobody NAMES that payload. A pattern like
+    /// `Some(Some(Some(s)))` binds it out, and the arm's own binding already
+    /// owns and frees it — so leaving the box's drop armed frees it twice.
+    /// Measured: without this, `asan_direct_boxed_enum_chain_frees_every_envelope`
+    /// and `asan_struct_field_boxed_heapless_option_envelope_owned` both abort
+    /// with an AddressSanitizer double-free.
+    ///
+    /// DEPTH IS THE WHOLE DIFFICULTY, and a coarse "the pattern binds any name"
+    /// rule is wrong in the expensive direction — it retracts for
+    /// `match vv { Some(o) => … }`, where `o` is an intermediate ENVELOPE whose
+    /// binding does NOT take over the leaf, and every one of those shapes goes
+    /// back to leaking. So the comparison is against
+    /// `boxed_leaf_owning_depth`, recorded at registration from the same walk
+    /// that chose the drop: only a binding at exactly that depth is the owner.
+    ///
+    /// Retraction is monotone and compile-time, so calling it once per arm is
+    /// right even though only one arm runs: a `match` with a consuming arm and
+    /// a wildcard arm keeps the leak on the wildcard path, which is the
+    /// pre-existing behaviour and the safe direction — the alternative would be
+    /// a double free on the consuming one.
+    pub(super) fn retract_boxed_leaf_drop_for_consuming_pattern(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        let Some(depth) = self
+            .payload_vars
+            .boxed_leaf_owning_depth
+            .get(name.as_str())
+            .copied()
+        else {
+            return;
+        };
+        if !Self::pattern_binds_name_at_depth(pattern, depth) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                match action {
+                    super::state::CleanupAction::BoxedEnumDrop {
+                        enum_slot,
+                        inner_drop_fn,
+                        ..
+                    } if *enum_slot == slot.ptr => *inner_drop_fn = None,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Does `pattern` bind a NAME exactly `depth` variant levels down?
+    ///
+    /// Depth 0 is the pattern itself, so `Some(Some(s))` binds `s` at depth 2.
+    /// A wildcard binds nothing, which is the case that must keep the leaf drop
+    /// armed — `Some(Some(_))` names no owner, so the box is still the only one.
+    /// `Or` alternatives are searched independently: any alternative that binds
+    /// the leaf makes the arm a potential owner.
+    fn pattern_binds_name_at_depth(pattern: &Pattern, depth: usize) -> bool {
+        match &pattern.kind {
+            PatternKind::Binding(_) => depth == 0,
+            PatternKind::AtBinding {
+                name: _,
+                pattern,
+                by_ref,
+            } => (depth == 0 && !*by_ref) || Self::pattern_binds_name_at_depth(pattern, depth),
+            PatternKind::Or(alts) => alts
+                .iter()
+                .any(|a| Self::pattern_binds_name_at_depth(a, depth)),
+            PatternKind::TupleVariant { patterns, .. } => {
+                depth > 0
+                    && patterns
+                        .iter()
+                        .any(|p| Self::pattern_binds_name_at_depth(p, depth - 1))
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn suppress_boxed_payload_view_move(&mut self, value: &Expr) {
         let ExprKind::Identifier(name) = &value.kind else {
             return;

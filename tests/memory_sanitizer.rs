@@ -12063,6 +12063,193 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-2, outer-`Option` half (FIXED): a doubly-nested `Option`
+    /// over a heap payload leaked that payload on plain scope exit —
+    /// `let vv: Option[Option[String]] = Some(Some(s));` and nothing else in
+    /// the program leaked the whole 38-byte buffer. Reassignment, which the row
+    /// was filed for, is not involved anywhere.
+    ///
+    /// The envelope boxes were always freed; only the innermost payload's own
+    /// heap was stranded. `track_boxed_enum_var` resolved a box's interior drop
+    /// from a user struct/enum NAME, and a boxed `Option[..]`/`Result[..]`
+    /// contents is neither — so the box got no interior drop at all. Where the
+    /// contents' own payload boxes again, `emit_nested_box_chain_free` took
+    /// over and walks ENVELOPES by construction. The fix reads `inner_drop_fn`
+    /// as the drop for the value at the BOTTOM of that chain (with no chain the
+    /// bottom is the box itself, so single-box registrations are unchanged) and
+    /// resolves it from the contents' TypeExpr.
+    ///
+    /// THE RETRACTION IS THE OTHER HALF, AND WITHOUT IT THIS IS A DOUBLE FREE
+    /// RATHER THAN A FIX. An arm written `Some(Some(s))` binds the leaf out and
+    /// already owns and frees it. Registering the drop alone — measured — makes
+    /// `asan_direct_boxed_enum_chain_frees_every_envelope` and
+    /// `asan_struct_field_boxed_heapless_option_envelope_owned` abort with an
+    /// AddressSanitizer double-free. The `leaf-bound-*` rows below are those two
+    /// fixtures' shape in miniature and are the ones that would go red first.
+    ///
+    /// DEPTH IS WHAT MAKES THE RETRACTION PRECISE, and the two rows that pin it
+    /// are `envelope-bind` and `leaf-wildcard`. A coarse "the pattern binds any
+    /// name" rule is wrong in the expensive direction: `Some(o)` binds an
+    /// intermediate ENVELOPE whose binding does NOT take the leaf over, and
+    /// retracting there puts every one of those shapes back to leaking.
+    /// `Some(Some(_))` names no owner at all, so the box must stay armed.
+    ///
+    /// `leaf-bound-wide` is the row that forced the rule's second half. A
+    /// STRUCT leaf takes NO retraction: there the drop is the struct's field
+    /// synthesis and an arm binding `w` gets the header, not the fields' heap —
+    /// verified, since that shape leaks on an unmodified tree, so nobody owns
+    /// it and retracting would only preserve the leak. Retracting solely where
+    /// the leaf is an `Option`/`Result`, whose drop frees the payload the
+    /// pattern literally names, is what lets both rows be clean at once.
+    ///
+    /// WHICH ROWS CARRY WHICH SIGNAL, measured per row against the unfixed tree
+    /// rather than assumed, because two of them are easy to mislabel:
+    /// `envelope-bind` and `leaf-wildcard` are RED unfixed (38 B each) and are
+    /// therefore FIXED rows as well as depth-rule pins, while the
+    /// `leaf-bound-*` rows are clean both before and after and are pure
+    /// hazards — they go red only if the retraction stops firing.
+    ///
+    /// `-O0` ONLY, and the fixture says so rather than implying otherwise. Every
+    /// leaking row here builds a nested envelope and drops it; at `-O2` the
+    /// whole local, non-escaping structure is scalarized and the box `malloc`
+    /// removed, so there is no allocation left to leak — verified, the fixture
+    /// is GREEN at `-O2` against the unfixed compiler. Unlike B-2026-08-28-75's
+    /// and B-2026-08-29-1's fixtures, no read placement recovers that: the
+    /// reading rows are exactly the hazard rows, which are clean either way.
+    /// `asan_direct_boxed_enum_chain_frees_every_envelope` states the same
+    /// limitation for the same family ("the memory half rides entirely on the
+    /// -O0 leg"), and `scripts/asan-o0-leg.sh` is the gate for both.
+    ///
+    /// STILL OPEN, and deliberately absent here: the outer-`Result` half
+    /// (`Result[Option[Wide], i64]` and friends), whose `NestedBoxedEnumDrop`
+    /// DIRECT registration passes `box_contents: None` at the let site, so
+    /// there is nothing for this resolver to see. Measured unchanged by this
+    /// fix and tracked on the row.
+    ///
+    /// Payloads are runtime-derived through `env.args().len()` and read with
+    /// `contains` rather than `len` — see the B-2026-08-28-75 fixture for what
+    /// each guards against.
+    #[test]
+    fn asan_nested_option_envelope_frees_its_leaf_payload() {
+        const H: &str = "struct Wide { a: String, b: i64, c: i64, d: i64, e: i64 }\n\
+             struct Narrow { a: String }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn slen(s: String) -> i64 { if s.contains(\"payload\") { s.len() } else { 0 } }\n\
+             fn wl(w: Wide) -> i64 { slen(w.a) }\n\
+             fn mkw() -> Wide { Wide { a: payload(), b: 1, c: 2, d: 3, e: 4 } }\n";
+        for (label, body, want) in [
+            // ── the leaking family: build one, drop it, nothing else ──
+            (
+                "opt-opt-string",
+                "fn f() -> i64 { let vv: Option[Option[String]] = Some(Some(payload()));\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            (
+                "opt-opt-vec",
+                "fn f() -> i64 { let vv: Option[Option[Vec[i64]]] = Some(Some([seed(), 2, 3, 4, 5, 6, 7, 8, 9, 10]));\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // A boxed STRUCT leaf, reached through a chain of two envelopes.
+            (
+                "opt-opt-wide",
+                "fn f() -> i64 { let vv: Option[Option[Wide]] = Some(Some(mkw()));\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // A `Result` one level down rather than an `Option` — 94 B in 2
+            // objects unfixed, the `Wide` box AND its `String`.
+            (
+                "opt-result-wide",
+                "fn f() -> i64 { let vv: Option[Result[Wide, i64]] = Some(Ok(mkw()));\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // A single-field struct leaf, which fits its own payload area and
+            // so takes a different path to the same place.
+            (
+                "opt-opt-narrow",
+                "fn f() -> i64 { let vv: Option[Option[Narrow]] = Some(Some(Narrow { a: payload() }));\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // ── the depth rule: an ENVELOPE binding must NOT retract ──
+            (
+                "envelope-bind",
+                "fn f() -> i64 { let vv: Option[Option[Wide]] = Some(Some(mkw()));\n\
+                 \x20  match vv { Some(o) => (match o { Some(w) => wl(w), None => 0 }), None => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // ── the hazard rows: an arm binds the LEAF, so it owns it ──
+            (
+                "leaf-bound-string",
+                "fn f() -> i64 { let vv: Option[Option[String]] = Some(Some(payload()));\n\
+                 \x20  match vv { Some(Some(s)) => slen(s), _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "leaf-bound-triple",
+                "fn f() -> i64 { let vv: Option[Option[Option[String]]] = Some(Some(Some(payload())));\n\
+                 \x20  match vv { Some(Some(Some(s))) => slen(s), _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            (
+                "leaf-bound-iflet",
+                "fn f() -> i64 { let vv: Option[Option[String]] = Some(Some(payload()));\n\
+                 \x20  if let Some(Some(s)) = vv { slen(s) } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // A STRUCT leaf bound out takes NO retraction — see the doc above.
+            (
+                "leaf-bound-wide",
+                "fn f() -> i64 { let vv: Option[Option[Wide]] = Some(Some(mkw()));\n\
+                 \x20  match vv { Some(Some(w)) => wl(w), _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "38",
+            ),
+            // ── boundaries ──
+            // A wildcard at leaf depth names no owner, so the box must stay
+            // armed; retracting here would put the leak straight back.
+            (
+                "leaf-wildcard",
+                "fn f() -> i64 { let vv: Option[Option[String]] = Some(Some(payload()));\n\
+                 \x20  match vv { Some(Some(_)) => 1, _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // The axis: one level, always correct, before and after.
+            (
+                "flat-option-wide",
+                "fn f() -> i64 { let vv: Option[Wide] = Some(mkw());\n\
+                 \x20  if vv.is_some() { 1 } else { 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+            // A POD leaf owes nothing, so the resolver answers `None` and the
+            // registration is byte-identical to before.
+            (
+                "opt-opt-pod",
+                "fn f() -> i64 { let vv: Option[Option[i64]] = Some(Some(seed()));\n\
+                 \x20  match vv { Some(Some(x)) => x, _ => 0 } }\n\
+                 fn main() { println(f()); }\n",
+                "1",
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &[want], label);
+        }
+    }
+
     /// B-2026-07-04-7 (FIXED): a `struct A { value: Option[<non-shared enum/struct>] }`
     /// field is now DROP-SUPPORTED. Before, `emit_struct_drop_synthesis(A)` emitted no
     /// drop for the `Option[<heap enum>]` field (the `OptionInline` pass was gated to
