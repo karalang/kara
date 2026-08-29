@@ -4198,8 +4198,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `uno` (unordered) is true exactly when either operand is NaN; with
         // both operands the same value it is a NaN test.
         let is_nan = self
-            .builder
-            .build_float_compare(inkwell::FloatPredicate::UNO, inner, inner, "tf.isnan")
+            .build_float_compare_bf16_safe(inkwell::FloatPredicate::UNO, inner, inner, "tf.isnan")
             .unwrap();
         self.builder
             .build_select(is_nan, canon, inner, "tf.canon")

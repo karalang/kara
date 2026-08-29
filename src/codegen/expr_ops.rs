@@ -5438,9 +5438,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// of them (verified with llc-18 on both `apple-m1` and `generic` v8a:
     /// `fpext bfloat → float`, `fpext bfloat → double`, and
     /// `fptrunc float → bfloat` all die at ISel with "LLVM ERROR: Cannot
-    /// select" — even load-fed; bf16 *arithmetic* (`fadd`/`fcmp`/`fneg`)
-    /// legalizes fine, only the conversion nodes are gapped, fixed upstream
-    /// in LLVM 19). Any bf16 value the mid-end can't constant-fold away
+    /// select" — even load-fed; fixed upstream in LLVM 19).
+    ///
+    /// THE GAP IS NOT LIMITED TO THE CONVERSION NODES, though this comment
+    /// claimed exactly that until B-2026-08-29-23. Re-measured with llc-18
+    /// at `-O2` on `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`,
+    /// `-mcpu` in {`generic`, `apple-m1`, `apple-m2`, `neoverse-v1`,
+    /// `cortex-a72`}, operands loaded from pointers so nothing crosses a
+    /// call boundary: `fadd` / `fsub` / `fmul` / `fdiv` / `fneg` / `fcmp`
+    /// on `bfloat` ALL die with the same "Cannot select", and so does
+    /// wasm32. Only `alloca` / `load` / `store` / `bitcast` survive. The
+    /// mistaken half of that sentence is what left the `==` comparator
+    /// emitting a raw `fcmp oeq bfloat` and aborting `karac run` on arm64.
+    ///
+    /// So the rule is the broad one: emit NO native `bfloat` node beyond a
+    /// bare copy. Conversions go through this function, comparisons through
+    /// [`Self::build_float_compare_bf16_safe`], negation through
+    /// [`Self::build_float_neg_bf16_safe`], and arithmetic is already
+    /// widened to `f32` by the binary-op path. `verify_no_native_bf16_ops`
+    /// enforces it on every host so a new site cannot reintroduce the class
+    /// silently on x86.
+    ///
+    /// Any bf16 value the mid-end can't constant-fold away
     /// (`KARAC_OPT_LEVEL=0`, or a value flowing through an opaque call
     /// boundary) would hit the gap, so bf16 conversions are emitted as
     /// integer-level sequences instead — the same lowering LLVM 19
@@ -5565,6 +5584,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_add(biased, lsb, &format!("{name}.f2bf.rnd"))
             .unwrap();
+        // Direct builder call, not the bf16-safe wrapper: `fv` is the f32
+        // INPUT (the wrapper would be a no-op on it), and routing it through
+        // the wrapper would cycle back into this very function.
         let is_nan = self
             .builder
             .build_float_compare(
@@ -5604,6 +5626,91 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_bit_cast(out16, bf16_t, name)
             .unwrap()
             .into_float_value()
+    }
+
+    /// Float comparison that never emits an `fcmp` whose operands are
+    /// `bfloat` — the compare half of the same LLVM-18 gap
+    /// [`Self::build_float_cast_bf16_safe`] documents for the conversion
+    /// nodes (B-2026-08-29-23).
+    ///
+    /// bf16 operands are widened to `f32` first and compared there. That is
+    /// EXACT, not an approximation: a bf16 is a truncated f32, so widening
+    /// is a shift and every bf16 value has an identical f32 image. The
+    /// answer therefore matches what a native `fcmp bfloat` would give for
+    /// every input, NaN and ±0 included — which matters because this is the
+    /// comparator behind `==` (see the IEEE reasoning in
+    /// `emit_eq_fn_for_type`'s float arm).
+    ///
+    /// A non-bf16 operand pair emits the identical instruction it always
+    /// did, so routing a site through this wrapper is a no-op for `f32` /
+    /// `f64` / `f16`. LLVM requires both operands of an `fcmp` to have the
+    /// same type, so testing both is testing one.
+    ///
+    /// Returns the same `Result` shape as `Builder::build_float_compare` so a
+    /// site can be routed through it by changing the receiver alone.
+    pub(super) fn build_float_compare_bf16_safe(
+        &self,
+        pred: inkwell::FloatPredicate,
+        lhs: inkwell::values::FloatValue<'ctx>,
+        rhs: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, inkwell::builder::BuilderError> {
+        let bf16_t = self.context.bf16_type();
+        let (l, r) = if lhs.get_type() == bf16_t && rhs.get_type() == bf16_t {
+            let f32_t = self.context.f32_type();
+            (
+                self.build_float_cast_bf16_safe(lhs, f32_t, &format!("{name}.l32")),
+                self.build_float_cast_bf16_safe(rhs, f32_t, &format!("{name}.r32")),
+            )
+        } else {
+            (lhs, rhs)
+        };
+        self.builder.build_float_compare(pred, l, r, name)
+    }
+
+    /// Float negation that never emits an `fneg bfloat` — the third member
+    /// of the family, for the same reason as
+    /// [`Self::build_float_compare_bf16_safe`].
+    ///
+    /// A bf16 is negated by WIDENING TO `f32`, negating there, and rounding
+    /// back, which is the same "bf16 computes in f32" shape the binary-op
+    /// path already uses. It is exact in both directions: widening is a
+    /// shift, and the negated value is still exactly representable, so the
+    /// round-back cannot lose anything.
+    ///
+    /// THE OBVIOUS IMPLEMENTATION DOES NOT WORK, and the reason is worth
+    /// keeping. Negating a bf16 is a flip of one bit, so the first cut was
+    /// `bitcast i16` → `xor 0x8000` → `bitcast bfloat`: three integer ops,
+    /// exact, and it selects fine in isolation. DAGCombine then folds
+    /// `bitcast(xor(bitcast x, signmask))` straight back into `fneg x` —
+    /// reintroducing the unselectable node from IR that does not contain
+    /// it. Measured on the real `.abs()` lowering: aarch64 `-O0` selects,
+    /// `-O2` dies with `Cannot select: bf16 = fneg`. (`and` with the
+    /// inverted mask is folded to `fabs` the same way, so the whole family
+    /// of bit-twiddles is out.) Routing through `f32` survives because the
+    /// round-back is the rounding-bias-plus-NaN-quieting sequence in
+    /// `emit_f32_to_bf16`, which is not a pattern any combine recognizes as
+    /// an `fptrunc`.
+    ///
+    /// A non-bf16 operand emits the plain `fneg` unchanged.
+    ///
+    /// Returns the same `Result` shape as `Builder::build_float_neg` so a site
+    /// can be routed through it by changing the receiver alone.
+    pub(super) fn build_float_neg_bf16_safe(
+        &self,
+        v: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> Result<inkwell::values::FloatValue<'ctx>, inkwell::builder::BuilderError> {
+        let bf16_t = self.context.bf16_type();
+        if v.get_type() != bf16_t {
+            return self.builder.build_float_neg(v, name);
+        }
+        let widened =
+            self.build_float_cast_bf16_safe(v, self.context.f32_type(), &format!("{name}.w32"));
+        let negated = self
+            .builder
+            .build_float_neg(widened, &format!("{name}.n32"))?;
+        Ok(self.build_float_cast_bf16_safe(negated, bf16_t, name))
     }
 
     /// Bit width (32 / 64) of an LLVM float type, for intrinsic name mangling.
@@ -5738,8 +5845,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `f == f` is false exactly when `f` is NaN (saturating cast maps NaN to
         // 0, which would otherwise pass the round-trip).
         let not_nan = self
-            .builder
-            .build_float_compare(FloatPredicate::OEQ, fv, fv, "f2i.notnan")
+            .build_float_compare_bf16_safe(FloatPredicate::OEQ, fv, fv, "f2i.notnan")
             .unwrap();
         let in_range = self
             .builder
@@ -9734,33 +9840,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(round_back(self, r).into())
             }
             BinOp::Eq => Ok(self
-                .builder
-                .build_float_compare(FloatPredicate::OEQ, lf, rf, "feq")
+                .build_float_compare_bf16_safe(FloatPredicate::OEQ, lf, rf, "feq")
                 .unwrap()
                 .into()),
             BinOp::NotEq => Ok(self
-                .builder
-                .build_float_compare(FloatPredicate::ONE, lf, rf, "fne")
+                .build_float_compare_bf16_safe(FloatPredicate::ONE, lf, rf, "fne")
                 .unwrap()
                 .into()),
             BinOp::Lt => Ok(self
-                .builder
-                .build_float_compare(FloatPredicate::OLT, lf, rf, "flt")
+                .build_float_compare_bf16_safe(FloatPredicate::OLT, lf, rf, "flt")
                 .unwrap()
                 .into()),
             BinOp::LtEq => Ok(self
-                .builder
-                .build_float_compare(FloatPredicate::OLE, lf, rf, "fle")
+                .build_float_compare_bf16_safe(FloatPredicate::OLE, lf, rf, "fle")
                 .unwrap()
                 .into()),
             BinOp::Gt => Ok(self
-                .builder
-                .build_float_compare(FloatPredicate::OGT, lf, rf, "fgt")
+                .build_float_compare_bf16_safe(FloatPredicate::OGT, lf, rf, "fgt")
                 .unwrap()
                 .into()),
             BinOp::GtEq => Ok(self
-                .builder
-                .build_float_compare(FloatPredicate::OGE, lf, rf, "fge")
+                .build_float_compare_bf16_safe(FloatPredicate::OGE, lf, rf, "fge")
                 .unwrap()
                 .into()),
             _ => Err(format!("Unsupported float binary op: {:?}", op)),
@@ -9790,27 +9890,20 @@ impl<'ctx> super::Codegen<'ctx> {
             UnaryOp::Neg => {
                 if val.is_float_value() {
                     let f = val.into_float_value();
-                    if f.get_type() == self.context.bf16_type() {
-                        // `fneg bfloat` is ISel-fragile on LLVM 18 aarch64
-                        // (B-2026-07-22-1 class). A float negate is exactly
-                        // a sign-bit flip, so do it in the integer domain —
-                        // exact, and selectable on every target.
-                        let i16_t = self.context.i16_type();
-                        let bits = self
-                            .builder
-                            .build_bit_cast(f, i16_t, "fneg.bf.bits")
-                            .unwrap()
-                            .into_int_value();
-                        let flipped = self
-                            .builder
-                            .build_xor(bits, i16_t.const_int(0x8000, false), "fneg.bf.flip")
-                            .unwrap();
-                        return Ok(self
-                            .builder
-                            .build_bit_cast(flipped, self.context.bf16_type(), "fneg")
-                            .unwrap());
-                    }
-                    Ok(self.builder.build_float_neg(f, "fneg").unwrap().into())
+                    // B-2026-08-29-23 — this used to open-code the bf16 case as
+                    // a sign-bit XOR on the i16 pattern (B-2026-07-22-1). That
+                    // is exact, but DAGCombine folds
+                    // `bitcast(xor(bitcast x, signmask))` straight back into
+                    // `fneg x`, reintroducing the unselectable node. It
+                    // survived here only because this site's result is
+                    // immediately re-widened for formatting, which collapses
+                    // the bitcast pair before any fold sees a float — i.e. it
+                    // was safe by consumer, not by construction. The `.abs()`
+                    // lowering, whose XOR result feeds a `select` on `bfloat`,
+                    // is the same shape and DOES die at aarch64 `-O2`.
+                    // `build_float_neg_bf16_safe` routes through f32, which
+                    // holds regardless of the consumer.
+                    Ok(self.build_float_neg_bf16_safe(f, "fneg").unwrap().into())
                 } else {
                     // Checked negate: `-iN::MIN` doesn't fit and traps as
                     // `integer overflow`, matching the interpreter's

@@ -645,14 +645,13 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 FloatPredicate::OLT
             };
-            self.builder
-                .build_float_compare(
-                    pred,
-                    x.into_float_value(),
-                    cur.into_float_value(),
-                    "kern.mm.cmp",
-                )
-                .unwrap()
+            self.build_float_compare_bf16_safe(
+                pred,
+                x.into_float_value(),
+                cur.into_float_value(),
+                "kern.mm.cmp",
+            )
+            .unwrap()
         } else {
             let pred = match (is_max, access.unsigned) {
                 (false, false) => IntPredicate::SLT,
@@ -1033,8 +1032,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // True IEEE negation — `-0.0` for `0.0` (a `0.0 - x` would
                 // lose the signed zero; B-2026-07-01-1).
                 BasicValueEnum::FloatValue(fv) => self
-                    .builder
-                    .build_float_neg(fv, "kern.map.fneg")
+                    .build_float_neg_bf16_safe(fv, "kern.map.fneg")
                     .unwrap()
                     .into(),
                 // Checked `0 - x` — traps on `MIN` like the interpreter's
@@ -1462,8 +1460,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_gt = |a: BasicValueEnum<'ctx>, b: BasicValueEnum<'ctx>| -> IntValue<'ctx> {
             match key {
                 SortKey::Value | SortKey::IndexInto(_) => self
-                    .builder
-                    .build_float_compare(
+                    .build_float_compare_bf16_safe(
                         FloatPredicate::OGT,
                         a.into_float_value(),
                         b.into_float_value(),
@@ -1981,14 +1978,13 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 FloatPredicate::OLT
             };
-            self.builder
-                .build_float_compare(
-                    pred,
-                    x.into_float_value(),
-                    bx.into_float_value(),
-                    "kern.am.take",
-                )
-                .unwrap()
+            self.build_float_compare_bf16_safe(
+                pred,
+                x.into_float_value(),
+                bx.into_float_value(),
+                "kern.am.take",
+            )
+            .unwrap()
         } else {
             let pred = match (is_max, access.unsigned) {
                 (false, false) => IntPredicate::SLT,

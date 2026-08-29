@@ -1529,8 +1529,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_float_value();
                 // q ∈ [0, 1] (runtime-checked, matching the interpreter).
                 let ge0 = self
-                    .builder
-                    .build_float_compare(
+                    .build_float_compare_bf16_safe(
                         FloatPredicate::OGE,
                         q,
                         self.context.f64_type().const_zero(),
@@ -1538,8 +1537,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                     .unwrap();
                 let le1 = self
-                    .builder
-                    .build_float_compare(
+                    .build_float_compare_bf16_safe(
                         FloatPredicate::OLE,
                         q,
                         self.context.f64_type().const_float(1.0),
@@ -1887,8 +1885,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let fv = loaded.into_float_value();
             // `fcmp uno x, x` is true iff x is NaN (unordered self-compare).
             let is_nan = self
-                .builder
-                .build_float_compare(FloatPredicate::UNO, fv, fv, "col.fill.isnan")
+                .build_float_compare_bf16_safe(FloatPredicate::UNO, fv, fv, "col.fill.isnan")
                 .unwrap();
             let drop_nan = self
                 .builder
@@ -3494,8 +3491,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let denom = self.column_sqrt_f64(prod);
         let is_zero = self
-            .builder
-            .build_float_compare(
+            .build_float_compare_bf16_safe(
                 FloatPredicate::OEQ,
                 denom,
                 f64_t.const_zero(),

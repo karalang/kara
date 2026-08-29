@@ -115100,6 +115100,148 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-23 — NO `bf16` OPERATION MAY LOWER TO A NATIVE `bfloat`
+    /// LLVM NODE. This is the IR-level twin of
+    /// `e2e_bf16_operations_lower_without_a_native_bfloat_node` below, and it
+    /// is the assertion that actually pins the bug.
+    ///
+    /// WHY AN IR TEST AND NOT JUST AN OUTPUT TEST. LLVM 18's x86 backend
+    /// legalizes every scalar `bfloat` node happily; aarch64 (every `-mcpu`
+    /// measured) and wasm32 select NONE of them and abort the process with
+    /// `LLVM ERROR: Cannot select` and no program output. So the defect is
+    /// INVISIBLE to any output-based test on the x86 machines this compiler
+    /// is developed and CI-tested on — `karac_eq_bf16` shipped a raw
+    /// `fcmp oeq bfloat` for exactly that reason. An output assertion here
+    /// would pass against the broken compiler; only looking at the emitted
+    /// node catches it.
+    ///
+    /// The safe set is `alloca` / `load` / `store` / `bitcast`: a bf16 may be
+    /// COPIED natively, never computed on. Everything else routes through
+    /// `f32` (`build_float_cast_bf16_safe` and its compare/neg siblings).
+    #[test]
+    fn bf16_operations_emit_no_native_bfloat_node() {
+        let ir = ir_for(
+            r#"
+#[derive(PartialEq)]
+shared struct Sb { x: bf16 }
+fn main() {
+    let n = env.args().len() as i64;
+    let a: bf16 = (n as f32) as bf16;
+    let b: bf16 = ((n + 1) as f32) as bf16;
+    println(f"cmp={a < b} {a <= b} {a > b} {a >= b} {a == b} {a != b}");
+    println(f"arith={a + b} {a - b} {a * b} {a / b}");
+    println(f"unary={-a} {a.abs()}");
+    println(f"minmax={a.min(b)} {a.max(b)}");
+    println(f"clamp={b.clamp(a, b)}");
+    let s1 = Sb { x: a };
+    let s2 = Sb { x: a };
+    println(f"eq={s1 == s2}");
+    let v: Vec[bf16] = [b, a, b];
+    println(f"contains={v.contains(a)}");
+    let mut m: Map[Bf16, i64] = Map.new();
+    let _ = m.insert(Bf16.from(a), 1);
+    println(f"map={m.len()}");
+    println(f"fmt={a} back={a as f32}");
+}
+"#,
+        );
+        // Every native bf16 shape LLVM 18 cannot select off x86. `fcmp` is
+        // matched by predicate-agnostic prefix so a new predicate cannot slip
+        // through; the intrinsic form is matched by the `.bf16` suffix LLVM
+        // mangles onto an overloaded declaration.
+        let mut offenders: Vec<&str> = Vec::new();
+        for line in ir.lines() {
+            let t = line.trim();
+            // Anchored on `= <opcode> `, not a bare substring: an LLVM value
+            // NAME derived from an op trips the loose form
+            // (`%fneg = bitcast i16 %fneg.bf.flip to bfloat` contains
+            // "fneg " twice and is a perfectly safe bitcast). The opcode can
+            // only appear immediately after the assignment.
+            let native_op = t.contains(" bfloat")
+                && [
+                    "= fadd ",
+                    "= fsub ",
+                    "= fmul ",
+                    "= fdiv ",
+                    "= frem ",
+                    "= fneg ",
+                    "= fcmp ",
+                    "= fptrunc ",
+                    "= fpext ",
+                    "= fptosi ",
+                    "= fptoui ",
+                    "= sitofp ",
+                    "= uitofp ",
+                ]
+                .iter()
+                .any(|op| t.contains(op));
+            // `llvm.minnum.bf16` was a real offender: an intrinsic is a native
+            // bf16 op wearing a call's clothing, and it is what broke wasm32
+            // after the plain-instruction sites were already fixed.
+            let native_intrinsic = t.contains("@llvm.") && t.contains(".bf16");
+            if native_op || native_intrinsic {
+                offenders.push(line);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "emitted native `bfloat` node(s) — unselectable on aarch64 and wasm32:\n{}",
+            offenders.join("\n")
+        );
+        // Anti-vacuity: the program must actually have produced bf16 values,
+        // or the assertion above is satisfied by an empty search. A bf16
+        // `alloca` is the shape that survives the fix.
+        assert!(
+            ir.contains("alloca bfloat"),
+            "fixture stopped exercising bf16 at all — the no-native-node \
+             assertion above would then hold vacuously"
+        );
+    }
+
+    /// B-2026-08-29-23, the behavioural half: every `bf16` operation still
+    /// computes the right answer after being rerouted through `f32`.
+    ///
+    /// The widening is exact in both directions (bf16 is a truncated f32), so
+    /// these answers are the same ones a native bf16 op would give — that is
+    /// the property this pins. Its sibling above is what catches the
+    /// regression; this one catches a *wrong* widening.
+    #[test]
+    fn e2e_bf16_operations_lower_without_a_native_bfloat_node() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+shared struct Sb { x: bf16 }
+fn main() {
+    let a: bf16 = 1.5bf16;
+    let b: bf16 = 2.5bf16;
+    println(f"lt={a < b} gt={a > b} eq={a == b} ne={a != b}");
+    println(f"add={a + b} sub={a - b} mul={a * b} div={b / a}");
+    println(f"neg={-a} abs={(-a).abs()}");
+    println(f"min={a.min(b)} max={a.max(b)}");
+    println(f"clamp={b.clamp(a, a)}");
+    let s1 = Sb { x: a };
+    let s2 = Sb { x: a };
+    let s3 = Sb { x: b };
+    println(f"seq={s1 == s2} sne={s1 == s3}");
+    let v: Vec[bf16] = [b, a, b];
+    println(f"contains={v.contains(a)} missing={v.contains(0.25bf16)}");
+}
+"#
+            ),
+            Some(
+                "lt=true gt=false eq=false ne=true\n\
+                 add=4 sub=-1 mul=3.75 div=1.6640625\n\
+                 neg=-1.5 abs=1.5\n\
+                 min=1.5 max=2.5\n\
+                 clamp=1.5\n\
+                 seq=true sne=false\n\
+                 contains=true missing=false\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// B-2026-08-27-5 — the compiled twin of
     /// `eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche`.
     ///

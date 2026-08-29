@@ -2395,7 +2395,9 @@ let y = (x as Tensor[f32, _]).matmul(w as Tensor[f32, _]);
 let out: Tensor[bf16, [batch, 768]] = y as Tensor[bf16, _];
 ```
 
-On targets without native `f16`/`bf16` hardware, LLVM promotes operations to `f32` automatically. The compiler emits a `#[allow(f16_software_emulated)]`-suppressible lint so the performance cost is never silent.
+On targets without native `f16`/`bf16` hardware, reduced-precision operations are performed in `f32` and rounded back. The compiler emits a `#[allow(f16_software_emulated)]`-suppressible lint so the performance cost is never silent.
+
+> **Erratum (2026-08-29, B-2026-08-29-23):** this paragraph used to say LLVM performs that promotion *automatically*. It does not, and relying on it produced a shipped bug. On LLVM 18, **AArch64 and wasm32 can select no scalar `bfloat` operation at all** — `fadd`/`fsub`/`fmul`/`fdiv`/`fneg`/`fcmp` and every conversion node abort the compiler with `LLVM ERROR: Cannot select`, with no diagnostic and no program output. Only `alloca`/`load`/`store`/`bitcast` survive; `f16` is genuinely fine. x86_64 legalizes all of them, which is what makes the gap invisible during development. **The promotion is therefore codegen's own responsibility, not the backend's**: `karac` widens every bf16 arithmetic, comparison, negation and conversion to `f32` itself, and `verify_no_native_bf16_ops` rejects a module containing a native `bfloat` node on every host so a new site cannot reintroduce the class silently. (`Vector[bf16, N]` lane ops are the one remaining gap — tracked as B-2026-08-29-34.)
 
 **Character type:** `char` represents a single Unicode scalar value (same as Rust's `char`). `String` is UTF-8 encoded internally. `s.char_at(i)` and `for c in s` both operate on characters by default; byte-level access requires explicit `s.bytes()`. `s[i]` on a `String` is a compile error — use `s.char_at(i)` to make the O(n) cost explicit. The diagnostic must be newcomer-friendly:
 

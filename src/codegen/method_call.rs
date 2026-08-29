@@ -765,8 +765,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_int_compare(IntPredicate::EQ, e, x, "arr.c.eq")
                             .unwrap(),
                         (BasicValueEnum::FloatValue(e), BasicValueEnum::FloatValue(x)) => self
-                            .builder
-                            .build_float_compare(inkwell::FloatPredicate::OEQ, e, x, "arr.c.eq")
+                            .build_float_compare_bf16_safe(
+                                inkwell::FloatPredicate::OEQ,
+                                e,
+                                x,
+                                "arr.c.eq",
+                            )
                             .unwrap(),
                         _ => return Err("Array.contains supports scalar elements only".to_string()),
                     };
@@ -3404,10 +3408,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 BasicValueEnum::FloatValue(fv) => {
                     let zero = fv.get_type().const_zero();
                     let is_neg = self
-                        .builder
-                        .build_float_compare(inkwell::FloatPredicate::OLT, fv, zero, "fabs.isneg")
+                        .build_float_compare_bf16_safe(
+                            inkwell::FloatPredicate::OLT,
+                            fv,
+                            zero,
+                            "fabs.isneg",
+                        )
                         .unwrap();
-                    let neg = self.builder.build_float_neg(fv, "fabs.neg").unwrap();
+                    let neg = self.build_float_neg_bf16_safe(fv, "fabs.neg").unwrap();
                     let r = self.builder.build_select(is_neg, neg, fv, "fabs").unwrap();
                     return Ok(r);
                 }
@@ -3463,8 +3471,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap_basic();
                     // `fcmp uno x, x` is true iff `x` is NaN — return `x` then.
                     let is_nan = self
-                        .builder
-                        .build_float_compare(inkwell::FloatPredicate::UNO, fv, fv, "sgn.nan")
+                        .build_float_compare_bf16_safe(
+                            inkwell::FloatPredicate::UNO,
+                            fv,
+                            fv,
+                            "sgn.nan",
+                        )
                         .unwrap();
                     let r = self
                         .builder
@@ -3575,6 +3587,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         "llvm.maxnum"
                     };
+                    // B-2026-08-29-23 — bf16 computes in f32. `llvm.minnum.bf16`
+                    // is a native bf16 node like any other: aarch64 expands it
+                    // into `bf16_to_fp` / `fp_to_bf16` soft ops it can lower,
+                    // but wasm32 has no pattern for `fp_to_bf16` and dies at
+                    // ISel. Widening here keeps the intrinsic on `f32`, where
+                    // every target has it, and rounds the result back — the
+                    // same shape the binary-op path uses.
+                    let bf16_t = self.context.bf16_type();
+                    let narrow = av.get_type() == bf16_t;
+                    let (av, bv) = if narrow {
+                        let f32_t = self.context.f32_type();
+                        (
+                            self.build_float_cast_bf16_safe(av, f32_t, "mm.l32"),
+                            self.build_float_cast_bf16_safe(bv, f32_t, "mm.r32"),
+                        )
+                    } else {
+                        (av, bv)
+                    };
                     let intrinsic = inkwell::intrinsics::Intrinsic::find(iname)
                         .unwrap_or_else(|| panic!("{iname} intrinsic must exist"));
                     let decl = intrinsic
@@ -3586,6 +3616,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .try_as_basic_value()
                         .unwrap_basic();
+                    if narrow {
+                        let back =
+                            self.build_float_cast_bf16_safe(r.into_float_value(), bf16_t, method);
+                        return Ok(back.into());
+                    }
                     return Ok(r);
                 }
                 _ => {}
@@ -3660,16 +3695,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     BasicValueEnum::FloatValue(hiv),
                 ) => {
                     let v_gt_hi = self
-                        .builder
-                        .build_float_compare(inkwell::FloatPredicate::OGT, vv, hiv, "cl.gt")
+                        .build_float_compare_bf16_safe(
+                            inkwell::FloatPredicate::OGT,
+                            vv,
+                            hiv,
+                            "cl.gt",
+                        )
                         .unwrap();
                     let upper = self
                         .builder
                         .build_select(v_gt_hi, hiv, vv, "cl.hi")
                         .unwrap();
                     let v_lt_lo = self
-                        .builder
-                        .build_float_compare(inkwell::FloatPredicate::OLT, vv, lov, "cl.lt")
+                        .build_float_compare_bf16_safe(
+                            inkwell::FloatPredicate::OLT,
+                            vv,
+                            lov,
+                            "cl.lt",
+                        )
                         .unwrap();
                     let r = self
                         .builder

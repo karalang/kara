@@ -835,8 +835,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_float_value();
             let eq = self
-                .builder
-                .build_float_compare(inkwell::FloatPredicate::OEQ, va, vb, "feq")
+                .build_float_compare_bf16_safe(inkwell::FloatPredicate::OEQ, va, vb, "feq")
                 .unwrap();
             self.builder.build_return(Some(&eq)).unwrap();
         } else {

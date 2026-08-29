@@ -482,12 +482,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.emit_column_guard(nonempty, "Stats.percentile() called on empty slice")?;
         let ge0 = self
-            .builder
-            .build_float_compare(FloatPredicate::OGE, p, f64_t.const_zero(), "stats.pct.ge0")
+            .build_float_compare_bf16_safe(
+                FloatPredicate::OGE,
+                p,
+                f64_t.const_zero(),
+                "stats.pct.ge0",
+            )
             .unwrap();
         let le100 = self
-            .builder
-            .build_float_compare(
+            .build_float_compare_bf16_safe(
                 FloatPredicate::OLE,
                 p,
                 f64_t.const_float(100.0),

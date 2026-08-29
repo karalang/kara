@@ -8259,6 +8259,10 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // B-2026-08-29-23 — fail closed on any NATIVE `bfloat` operation
+        // before handing the module to a backend that cannot select one.
+        self.verify_no_native_bf16_ops()?;
+
         self.module.verify().map_err(|e| {
             // A verifier failure is otherwise a one-line ICE with no module to
             // inspect. `KARAC_DUMP_IR_ON_VERIFY_FAIL=<path>` writes the full
@@ -8269,6 +8273,126 @@ impl<'ctx> Codegen<'ctx> {
             }
             format!("Module verification failed: {}", e)
         })
+    }
+
+    /// Reject any NATIVE `bfloat` operation in the finished module
+    /// (B-2026-08-29-23).
+    ///
+    /// LLVM 18 can select essentially nothing on a scalar `bfloat`: on
+    /// aarch64 (every `-mcpu` tried) and on wasm32, `fadd` / `fsub` /
+    /// `fmul` / `fdiv` / `fneg` / `fcmp` and all the conversion nodes die
+    /// with "LLVM ERROR: Cannot select" — a hard abort with no diagnostic
+    /// and no program output. Only `alloca` / `load` / `store` / `bitcast`
+    /// survive, which is why codegen lowers bf16 arithmetic through `f32`
+    /// and its conversions through integer sequences
+    /// (`build_float_cast_bf16_safe` and its two siblings).
+    ///
+    /// THE REASON THIS CHECK EXISTS RATHER THAN A CONVENTION: x86_64 selects
+    /// all of these fine. A site that emits a raw `bfloat` op is therefore
+    /// invisible on the machine most of this compiler is developed and
+    /// tested on, and shows up only as an abort on an arm64 or wasm build —
+    /// which is exactly how the `==` comparator shipped broken. Running the
+    /// scan on EVERY host converts that into a deterministic compiler error
+    /// wherever the code is built.
+    ///
+    /// SCALAR ONLY, DELIBERATELY. A `<N x bfloat>` lane op is broken the same
+    /// way — aarch64's vector legalizer SCALARIZES it back to a `bf16 fadd`
+    /// and then cannot select that, and wasm32 dies on `fp_to_bf16` — but
+    /// `Vector[bf16, N]` reaches that path through ~18 vector-typed sites
+    /// needing their own `<N x float>` widening, so it is tracked separately
+    /// as B-2026-08-29-34 rather than fixed here. Rejecting it in this guard
+    /// without fixing it would turn code that works on x86 today into a hard
+    /// compile error everywhere, which is a worse trade than the status quo.
+    ///
+    /// COST, MEASURED rather than assumed. A name scan over the module's
+    /// functions plus one typed walk of its instructions. An earlier draft
+    /// printed EVERY interesting instruction and cost ~17 ms per module
+    /// against `Module::verify`'s ~2.5 ms — SEVEN TIMES the pass it sits in
+    /// front of, for a check that fires almost never, and it shipped with a
+    /// comment asserting the opposite. Do not reintroduce a per-instruction
+    /// `to_string()` here without re-measuring.
+    fn verify_no_native_bf16_ops(&self) -> Result<(), String> {
+        use inkwell::values::InstructionOpcode as Op;
+        let bf16_t: BasicTypeEnum<'_> = self.context.bf16_type().into();
+
+        // PASS 1 — declared bf16 INTRINSICS, found by NAME at the module level.
+        //
+        // An intrinsic is a native bf16 op wearing a call's clothing:
+        // `x.min(y)` on bf16 emitted `llvm.minnum.bf16`, which wasm32 cannot
+        // select. LLVM mangles the overloaded type into the symbol, so the
+        // declaration's name is enough — and reading names avoids touching
+        // call instructions at all, which is the whole point. TWO separate
+        // inkwell APIs panic on the operands and result of a coroutine
+        // intrinsic (`get_operand` → `BasicValueEnum::new` on a metadata
+        // argument, `get_type` → `AnyTypeEnum::new` on a `token` result), and
+        // each one crashed the compiler on every `async` and wasm-threads
+        // build before this pass was written this way.
+        let mut f = self.module.get_first_function();
+        while let Some(fv) = f {
+            let name = fv.get_name().to_string_lossy().into_owned();
+            if name.starts_with("llvm.") && name.contains("bf16") {
+                return Err(Self::native_bf16_error(&name, &name));
+            }
+            f = fv.get_next_function();
+        }
+
+        // PASS 2 — plain arithmetic / comparison / conversion. These carry
+        // only float operands and results, so the type API is safe on them;
+        // `Call` is deliberately NOT in this list (pass 1 covers it).
+        let mut f = self.module.get_first_function();
+        while let Some(fv) = f {
+            for bb in fv.get_basic_blocks() {
+                let mut i = bb.get_first_instruction();
+                while let Some(inst) = i {
+                    let op = inst.get_opcode();
+                    if matches!(
+                        op,
+                        Op::FAdd
+                            | Op::FSub
+                            | Op::FMul
+                            | Op::FDiv
+                            | Op::FRem
+                            | Op::FNeg
+                            | Op::FCmp
+                            | Op::FPExt
+                            | Op::FPTrunc
+                            | Op::FPToSI
+                            | Op::FPToUI
+                            | Op::SIToFP
+                            | Op::UIToFP
+                    ) {
+                        let hits = BasicTypeEnum::try_from(inst.get_type())
+                            .is_ok_and(|t| t == bf16_t)
+                            || (0..inst.get_num_operands()).any(|n| {
+                                inst.get_operand(n)
+                                    .and_then(|o| o.value())
+                                    .is_some_and(|v| v.get_type() == bf16_t)
+                            });
+                        if hits {
+                            return Err(Self::native_bf16_error(
+                                &format!("{op:?}"),
+                                &fv.get_name().to_string_lossy(),
+                            ));
+                        }
+                    }
+                    i = inst.get_next_instruction();
+                }
+            }
+            f = fv.get_next_function();
+        }
+        Ok(())
+    }
+
+    /// The shared message for [`Self::verify_no_native_bf16_ops`]'s two passes.
+    fn native_bf16_error(what: &str, whence: &str) -> String {
+        format!(
+            "internal error: codegen emitted a native `bfloat` {what} in `{whence}`. \
+             LLVM 18 cannot select any scalar bf16 arithmetic, comparison or \
+             conversion on aarch64 or wasm32 (it aborts with `LLVM ERROR: Cannot \
+             select`), so bf16 must be widened to f32 — route the site through \
+             `build_float_compare_bf16_safe`, `build_float_neg_bf16_safe` or \
+             `build_float_cast_bf16_safe`."
+        )
     }
 
     /// Slice 4 structural self-check (`KARAC_ORACLE_DROP_CHECK`): report any

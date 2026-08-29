@@ -8901,8 +8901,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_float_value();
         let is_nan = self
-            .builder
-            .build_float_compare(inkwell::FloatPredicate::UNO, v, v, "srt.isnan")
+            .build_float_compare_bf16_safe(inkwell::FloatPredicate::UNO, v, v, "srt.isnan")
             .unwrap();
         self.builder
             .build_select(is_nan, canon, v, "srt.canon")
