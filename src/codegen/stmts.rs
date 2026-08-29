@@ -14658,6 +14658,106 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && !self.is_borrow_returning_call_expr(expr)
     }
 
+    /// B-2026-08-29-27 — [`Self::expr_yields_fresh_owned_temp`] widened by the
+    /// one WRAPPER shape a value-position block or branch has: a construct
+    /// whose every tail mints a fresh owned temp is itself a fresh owned temp,
+    /// because exactly one tail runs and the merge hands its value out.
+    ///
+    /// `if c { mk(n) } else { mk(n + 1) }.contains("x")` stranded the taken
+    /// arm's buffer once per evaluation — unbounded in a loop — and so did the
+    /// `match` spelling, a BARE BLOCK `{ mk(n) }.contains("x")` with no branch
+    /// in it at all, and `use_it(if c { mk(n) } else { mk(n + 1) })`. The same
+    /// call unwrapped is clean, which is what localizes this to the predicate
+    /// rather than to the frees: the machinery at each consuming position is
+    /// correct, it was just never reached through a wrapper.
+    ///
+    /// THE BRANCH IS NOT THE SUBJECT. A bare block leaks identically, so the
+    /// population is "a value-position construct whose TAIL mints a fresh owned
+    /// temp"; `if` and `match` are two members of it. Worth stating because the
+    /// obvious reading sends a fix to `compile_if` / `compile_match` and misses
+    /// the block.
+    ///
+    /// FAIL-CLOSED on every tail — one arm runs, but the consumer sees a single
+    /// merged value and cannot tell which produced it, so ONE tail handing back
+    /// storage someone else owns disqualifies the construct. The reason is
+    /// sharper than the usual "conservative by design", and it is measured: a
+    /// tail that hands out a BINDING leaves that binding READABLE afterwards —
+    /// `let a = { loc }.contains("p"); println(loc)` still prints `loc`
+    /// correctly, because the wrapper disarms its cleanup without ending its
+    /// lifetime. Several of the gates that hold this predicate free IMMEDIATELY
+    /// at the use site (`free_str_vec_buffer_if_heap` at the receiver sites,
+    /// `free_fresh_owned_str_arg` at the operand chokepoint), so admitting such
+    /// a tail would DANGLE that later read: a use-after-free, strictly worse
+    /// than the leak it replaces. A MINTED temp cannot have a later reader,
+    /// which is exactly what this tests for. The binding-tail class is tracked
+    /// separately rather than left implicit.
+    ///
+    /// SEPARATE from the general predicate on purpose, the same choice
+    /// [`Self::expr_is_fresh_owned_array_temp`] documents: that one is asked by
+    /// ~50 sites whose freshness question is a different one (entry-copy depth,
+    /// RC transfer, aliasing), and a wrapper is not universally a fresh owned
+    /// temp in their sense. The seven sites that hold this are exactly the ones
+    /// whose gate already reads "is this value's buffer unowned by anyone else":
+    /// two method-receiver sites, the separate `len`/`is_empty` fast path, a
+    /// by-value call argument, an f-string interpolation, a `for` iterable, and
+    /// the shared borrow-consuming-operand chokepoint.
+    ///
+    /// Only the wrapper kinds are admitted at the top level: an unwrapped
+    /// `Call` is already the general predicate's job, and every site chains the
+    /// two with `||`.
+    pub(super) fn expr_is_fresh_owned_branch_tail(&self, expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::Block(_)
+                | ExprKind::Seq(_)
+                | ExprKind::Unsafe(_)
+                | ExprKind::LabeledBlock { .. }
+                | ExprKind::If { .. }
+                | ExprKind::Match { .. }
+        ) && self.branch_tail_mints_fresh_owned_temp(expr)
+    }
+
+    /// One tail's worth of [`Self::expr_is_fresh_owned_branch_tail`]'s
+    /// fail-closed test. Recurses through nested wrappers so a block inside an
+    /// arm (`if c { { mk(n) } } else { … }`) and an `else if` chain — whose
+    /// `else` branch is another `If` — are decided on the same terms as the
+    /// shapes that spell them flat.
+    ///
+    /// An `if` with NO `else`, or whose chosen branch has no tail expression,
+    /// yields unit: there is no merged value to own, so it declines. A `match`
+    /// with no arms declines for the same reason.
+    fn branch_tail_mints_fresh_owned_temp(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.branch_tail_mints_fresh_owned_temp(t)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let (Some(else_branch), Some(then_tail)) =
+                    (else_branch.as_deref(), then_block.final_expr.as_deref())
+                else {
+                    return false;
+                };
+                self.branch_tail_mints_fresh_owned_temp(then_tail)
+                    && self.branch_tail_mints_fresh_owned_temp(else_branch)
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms
+                        .iter()
+                        .all(|a| self.branch_tail_mints_fresh_owned_temp(&a.body))
+            }
+            _ => self.expr_yields_fresh_owned_temp(e),
+        }
+    }
+
     /// B-2026-08-27-35 — [`Self::expr_yields_fresh_owned_temp`] widened by the
     /// one producer shape an `Array[T, N]` has and the general predicate does
     /// not admit: an array LITERAL (`Array[f"a{n}", f"b{n}"]`).

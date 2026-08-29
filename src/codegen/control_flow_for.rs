@@ -1229,7 +1229,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // producer of `temp_recv_elem_types` uses on the same question
                 // (`recv_is_call || recv_is_coll_lit`), which is what keeps the two
                 // ends of this decision agreeing.
+                // B-2026-08-29-27 — and behind a value-position block or
+                // branch (`for x in { mkv(n) }`), for the same reason the
+                // literal half above is here: the iterable is fresh by
+                // construction and `expr_yields_fresh_owned_temp` recognizes
+                // only `Call`/`MethodCall`, so the wrapper never reached this
+                // gate and the loop lost the whole buffer per execution.
                 let fresh = self.expr_yields_fresh_owned_temp(iterable)
+                    || self.expr_is_fresh_owned_branch_tail(iterable)
                     || matches!(
                         iterable.kind,
                         ExprKind::PrefixCollectionLiteral { .. } | ExprKind::ArrayLiteral(_)

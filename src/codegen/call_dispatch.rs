@@ -1972,6 +1972,16 @@ impl<'ctx> super::Codegen<'ctx> {
             );
             let is_fresh_heap_call_arg = (self.expr_yields_fresh_owned_temp(&a.value)
                 || self.expr_is_inline_temp_vec_heap_index(&a.value)
+                // B-2026-08-29-27 — the BRANCHING arg the `is_block_arg` arm
+                // above deferred ("a branching `if`/`match` arg whose tail is
+                // an aliased place would double-free, so those stay a (safe)
+                // leak for a later slice"). This is that slice: the predicate
+                // requires EVERY tail to mint a fresh owned temp, so the
+                // aliased-place case it worried about still declines and keeps
+                // leaking. `use_it(if c { mk(n) } else { mk(n + 1) })` stranded
+                // the taken arm's buffer per call; the block spelling was
+                // already clean, which is what identified the gate.
+                || self.expr_is_fresh_owned_branch_tail(&a.value)
                 || is_collection_literal_arg)
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && !self.rhs_stages_fstr_acc(&a.value);

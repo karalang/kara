@@ -3219,6 +3219,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // no-ops on a borrowed (cap == 0) view. B-2026-07-16-21.
             if self.expr_yields_fresh_owned_temp(object)
                 || self.expr_is_fresh_owned_string_slice(object)
+                // B-2026-08-29-27 — a receiver behind a value-position block
+                // or branch (`{ mk(n) }.to_string()`). Every tail must mint a
+                // fresh owned temp, so a receiver whose arms hand back a
+                // binding's storage still declines and the `cap > 0` guard
+                // covers a borrowed view as before.
+                || self.expr_is_fresh_owned_branch_tail(object)
             {
                 self.free_str_vec_buffer_if_heap(v.into());
             }
@@ -7847,8 +7853,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // predicate matter — `Add` is also scalar addition, and the
                     // vec-struct value check is what keeps `a + b` over `i64`
                     // out of it.
+                    // B-2026-08-29-27 — the receiver behind a value-position
+                    // block or branch (`{ mkv(n) }.len()`, `if c { mk(n) }
+                    // else { mk(n + 1) }.len()`). The len family is a THIRD
+                    // receiver gate beside the two in this file, and it needs
+                    // the widening for the same reason they did: the predicate
+                    // decides only whether the receiver's buffer is unowned,
+                    // and a wrapper never reached it. The `expr_is_unwrap_of_-
+                    // borrow_accessor` exclusion below still applies unchanged.
                     if (self.expr_yields_fresh_owned_temp(object)
-                        || self.expr_is_fresh_owned_string_concat(object, recv_val.get_type()))
+                        || self.expr_is_fresh_owned_string_concat(object, recv_val.get_type())
+                        || self.expr_is_fresh_owned_branch_tail(object))
                         && !self.expr_is_unwrap_of_borrow_accessor(object)
                     {
                         let recv_span_key = (object.span.offset, object.span.length);
@@ -9793,6 +9808,14 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.expr_yields_fresh_owned_temp(object)
                 || self.expr_is_fresh_owned_string_slice(object)
                 || self.expr_is_fresh_owned_string_concat(object, val.get_type())
+                // B-2026-08-29-27 — a receiver behind a value-position block or
+                // branch (`{ mk(n) }.contains(…)`, `if c { mk(n) } else
+                // { mk(n + 1) }.len()`), admitted here for exactly the reason
+                // the concat receiver above was: the result-aliasing analysis
+                // that follows is unchanged and still decides whether the free
+                // is safe — the predicate only decides whether the receiver's
+                // buffer is unowned, and a wrapper never reached this gate.
+                || self.expr_is_fresh_owned_branch_tail(object)
             {
                 let result_is_heap_struct = self.llvm_ty_is_vec_struct(rv.get_type());
                 // A heap-struct result is receiver-independent only for methods

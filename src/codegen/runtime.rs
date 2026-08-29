@@ -2439,9 +2439,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // route. The `llvm_ty_is_vec_struct` + `cap > 0` guards in the free
         // core make a scalar/vector `+` a no-op.
         let is_string_concat_binary = self.expr_is_fresh_owned_string_concat(arg, val.get_type());
+        // B-2026-08-29-27 — the same fresh owned temp behind a value-position
+        // block or branch, e.g. `{ mk(n) } + "!"` as a concat operand.
+        //
+        // This free is IMMEDIATE, at the current insert position, which is
+        // exactly why the predicate's fail-closed test matters more here than
+        // at the scope-exit sites: a wrapper handing out a BINDING leaves that
+        // binding readable afterwards (measured — `let a = { loc }.contains(…)`
+        // still prints `loc` correctly), so freeing it here would dangle rather
+        // than merely double-free. Requiring every tail to MINT a fresh temp is
+        // what rules that out — a minted temp has no later reader.
         if !self.expr_yields_fresh_owned_temp(arg)
             && !self.expr_is_fresh_owned_string_slice(arg)
             && !self.expr_is_inline_temp_vec_heap_index(arg)
+            && !self.expr_is_fresh_owned_branch_tail(arg)
             && !is_string_concat_binary
         {
             return;
@@ -12994,7 +13005,14 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into())
             && (self.expr_yields_fresh_owned_temp(e)
                 || self.expr_is_fresh_owned_string_slice(e)
-                || self.expr_is_inline_temp_vec_heap_index(e))
+                || self.expr_is_inline_temp_vec_heap_index(e)
+                // B-2026-08-29-27 — the same fresh owned temp behind a
+                // value-position block or branch. `f"[{if c { mk(n) } else
+                // { mk(n + 1) }}]"` and `f"[{{ mk(n) }}]"` both leaked the
+                // taken tail's buffer once per interpolation, while the
+                // unwrapped `f"{mk(n)}"` has been clean since B-2026-07-15-12
+                // — this arm is the only thing that was missing.
+                || self.expr_is_fresh_owned_branch_tail(e))
         {
             let sv = val.into_struct_value();
             let acc = self.create_entry_alloca(
