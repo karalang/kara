@@ -13741,13 +13741,16 @@ fn main() {
                  println(f\"{a}\"); }\n",
                 "drop 31\n3\n",
             ),
-            // CROSS-FRAME ISOLATION. The moved-out sets are keyed by BINDING
-            // NAME with no frame qualifier, and the method path never had the
-            // free-fn path's save/restore — so `add`'s `r` (legitimately marked
-            // moved-out, it goes into `self.xs`) suppressed the LATER method's
-            // unrelated `r`. Renaming the second param to `q` was enough to make
-            // the body reappear, which is what identified it. Pre-fix the
-            // interpreter printed no `drop 12`.
+            // CROSS-FRAME NAME COLLISION — codegen's side, which is CORRECT and
+            // must stay so. The interpreter misses `drop 12` here: its moved-out
+            // sets are keyed by BINDING NAME with no frame qualifier, so `add`'s
+            // `r` (legitimately marked, it goes into `self.xs`) suppresses this
+            // later method's unrelated `r`. 277621a isolated the callee frame to
+            // fix that; B-2026-08-29-9 reverted the isolation, because the same
+            // leak is what suppresses a payload bound out of an owned enum param
+            // and returned — isolating it produced a DOUBLE body, the worse
+            // defect. So this case is a one-sided control while that divergence
+            // is tracked on its own row.
             (
                 "moved-out-marks-do-not-leak-across-frames",
                 "struct Box3 { xs: Vec[R] }\n\

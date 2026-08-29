@@ -515,43 +515,39 @@ impl<'a> super::Interpreter<'a> {
                 // seeding in `eval_call`, wider admission — see
                 // `method_param_drop_names`.
                 self.pending_param_drop_bindings = self.method_param_drop_names(&type_name, method);
-                // B-2026-08-28-70 — isolate the callee frame's moved-out sets,
-                // exactly as `eval_call` does for a free fn. They are keyed by
-                // BINDING NAME with no frame qualifier, so without this a mark
-                // left by one method leaks into the next frame that happens to
-                // reuse the name: `Box3.add`'s `r` (moved into `self.xs`, so
-                // legitimately marked there) suppressed the `Drop` slot of an
-                // unrelated later method's `r`, and renaming that param to `q`
-                // was enough to make the body reappear. Pre-existing — the
-                // method path never had the free-fn path's save/restore — but
-                // it only became observable once this frame started owning its
-                // params, so it is fixed here rather than left as a trap.
+                // B-2026-08-29-9 — the callee frame's moved-out sets are
+                // deliberately NOT isolated here, though `eval_call` isolates a
+                // free fn's. They are keyed by BINDING NAME with no frame
+                // qualifier, and a method's callee relies on the CALLER's marks
+                // being visible: when an arm binds a payload out of an owned
+                // enum/`Option` param and returns it, nothing inside the callee
+                // marks that payload moved-out — the suppression comes from the
+                // caller's mark on the argument leaking in under the shared
+                // name.
                 //
-                // Taken AFTER B-2026-08-01-7's owned-enum-receiver insert just
-                // above, deliberately: that insert names a CALLER-scope binding
-                // and is meant for the caller's frame, so it must ride out on
-                // the saved copy rather than be wiped by the restore.
-                let saved_moved_out = (
-                    std::mem::take(&mut self.moved_out_user_drop_bindings),
-                    std::mem::take(&mut self.moved_out_enum_payload_bindings),
-                    std::mem::take(&mut self.moved_out_drop_field_bindings),
-                    std::mem::take(&mut self.moved_out_container_bodies_bindings),
-                    std::mem::take(&mut self.moved_out_tuple_elem_bodies),
-                    std::mem::take(&mut self.moved_out_struct_field_bodies),
-                );
+                // 277621a added the isolation (mirroring `eval_call`) and this
+                // is what it cost: `impl T { fn take(ref self, b: Box2) -> Res {
+                // match b { Box2.Full(r) => { return r; } .. } } }` ran the
+                // payload's `Drop` body TWICE in the interpreter against once on
+                // every compiled backend. Bisected to the isolation and not to
+                // the param registration beside it, by disabling each
+                // independently: with the registration off the double body
+                // remained; with the isolation off it went away, registration
+                // still on.
+                //
+                // So the accidental cross-frame leak is currently LOAD-BEARING
+                // for this shape. Removing it is still the right end state — it
+                // also lets one method's mark suppress an unrelated later
+                // method's identically-named param — but only once the callee
+                // marks an escaping payload itself, which is a scoped slice
+                // rather than a line. Tracked as its own row; the leak is
+                // restored here because a double `Drop` body is a worse defect
+                // than the missed one it hides.
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
-                (
-                    self.moved_out_user_drop_bindings,
-                    self.moved_out_enum_payload_bindings,
-                    self.moved_out_drop_field_bindings,
-                    self.moved_out_container_bodies_bindings,
-                    self.moved_out_tuple_elem_bodies,
-                    self.moved_out_struct_field_bodies,
-                ) = saved_moved_out;
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if pushed_self_mode {

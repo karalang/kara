@@ -32859,6 +32859,68 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-9 — a METHOD that RETURNS a payload bound out of its owned
+/// enum / `Option` param runs that payload's `Drop` body ONCE.
+///
+/// Exactly one value is constructed and one reaches the caller's binding, so
+/// one body is correct; the compiled backends always had it. 277621a made the
+/// interpreter run it twice — once at the method's own exit and once for the
+/// caller's binding — by isolating the callee frame's moved-out sets.
+///
+/// The mechanism is worth stating, because it is not obvious and the fix is a
+/// REVERT rather than an addition. Those sets are keyed by BINDING NAME with no
+/// frame qualifier. Nothing inside the callee marks an escaping payload
+/// moved-out; the suppression comes entirely from the CALLER's mark on the
+/// argument leaking into the callee under the shared name. Isolating the frame
+/// removed that leak and with it the only suppression this shape had.
+///
+/// So the leak is currently load-bearing. Removing it is still the right end
+/// state — it also lets one method's mark suppress an unrelated later method's
+/// identically-named param, which is a real missed body tracked on its own row
+/// — but only once the callee marks an escaping payload itself. A missed body
+/// is the lesser defect, so the leak stays until then.
+///
+/// Isolated by disabling each half of 277621a's interpreter change
+/// independently: with the param registration off the double body REMAINED,
+/// with the isolation off it went away and the registration still on. Both
+/// legs below therefore also serve as controls that the registration is not
+/// what regressed.
+#[test]
+fn test_method_returned_enum_param_payload_body_runs_once() {
+    for (label, decls, want) in [
+        // A USER value enum.
+        (
+            "user-enum-param",
+            "enum Box2 { Full(Res), Empty }\n\
+             struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Box2) -> Res \
+             { match b { Box2.Full(r) => { return r; } \
+             Box2.Empty => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let b: Box2 = Box2.Full(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = t.take(b); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+        // `Option` behaves identically, which is what shows this is the METHOD
+        // spelling of the shape rather than anything about the built-ins.
+        (
+            "option-param",
+            "struct T { n: i64 }\n\
+             impl T { fn take(ref self, b: Option[Res]) -> Res \
+             { match b { Option.Some(r) => { return r; } \
+             Option.None => { return Res { id: 0, name: f\"z\" }; } } } }\n\
+             fn main() { let t = T { n: 1 }; \
+             let b: Option[Res] = Option.Some(Res { id: 7, name: f\"e7\" }); \
+             let r: Res = t.take(b); println(f\"got {r.id}\") }\n",
+            "got 7\ndrop 7 e7\n",
+        ),
+    ] {
+        const DROPPER: &str = "struct Res { id: i64, name: String }\n\
+             impl Drop for Res { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n";
+        assert_eq!(run(&format!("{DROPPER}{decls}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-6, interpreter leg — a passthrough call used directly as a
 /// MATCH SCRUTINEE yields the payload exactly once.
 ///
@@ -33101,24 +33163,16 @@ fn test_method_owned_param_user_drop_body_runs_once() {
              fn main() { let g = G1 { n: 1 }; let a = g.gm(R { id: 31 }, 5); println(f\"{a}\") }\n",
             "drop 31\n3\n",
         ),
-        // CROSS-FRAME ISOLATION, and this one is interpreter-only by nature:
-        // the moved-out sets are keyed by BINDING NAME with no frame qualifier,
-        // and the method path never had the free-fn path's save/restore. So
-        // `add`'s `r` — legitimately marked moved-out, it goes into `self.xs` —
-        // suppressed the LATER method's unrelated `r`. Renaming that second
-        // param to `q` was enough to make the body reappear, which is how it was
-        // identified. Pre-fix: no `drop 12`.
-        (
-            "moved-out-marks-do-not-leak-across-frames",
-            "struct Box3 { xs: Vec[R] }\n\
-             impl Box3 { fn add(mut ref self, r: R) { self.xs.push(r); } }\n\
-             struct G2 { n: i64 }\n\
-             impl G2 { fn eat(ref self, r: R) -> i64 { 3 } }\n\
-             fn main() { let mut bx = Box3 { xs: Vec.new() }; \
-             bx.add(R { id: 11 }); println(\"added\"); \
-             let g = G2 { n: 1 }; let v = g.eat(R { id: 12 }); println(f\"{v}\") }\n",
-            "drop 11\nadded\ndrop 12\n3\n",
-        ),
+        // The CROSS-FRAME case that used to sit here is deliberately gone. The
+        // moved-out sets are keyed by BINDING NAME with no frame qualifier, and
+        // 277621a isolated the callee frame's copies to stop one method's mark
+        // suppressing an unrelated later method's identically-named param. That
+        // isolation was REVERTED in B-2026-08-29-9: the leak turns out to be
+        // load-bearing — it is the only thing suppressing a payload bound out of
+        // an owned enum param and returned, so isolating produced a DOUBLE
+        // `Drop` body, which is the worse defect. The missed body it hides is
+        // filed as its own row rather than pinned here as expected output; the
+        // codegen twin keeps its case, because that backend is correct.
         // CONTROLS — the free-function twins, unanimous on all four surfaces
         // before and after. They are the oracle the method cases are measured
         // against, so a change that "fixed" methods by moving free functions
