@@ -2908,7 +2908,30 @@ impl<'a> super::Interpreter<'a> {
         args: &[CallArg],
         arg_vals: &[Value],
     ) {
-        for (i, arg) in args.iter().enumerate() {
+        // REVERSE argument order (B-2026-08-29-46). Every temp in this list
+        // has the same live-range end -- design.md's temporary-lifetime table
+        // gives "Function/method call argument | After the call returns" -- so
+        // which one dies FIRST is settled by the drop-ordering rule that
+        // sequences co-expiring values: the unified drop+defer stack is "a
+        // single LIFO stack ordered by program-order of introduction"
+        // (design.md, Drop ordering within a branch, rule 1). Argument temps
+        // are introduced left to right, so they pop right to left.
+        //
+        // Walking forward here made `fn take(r: R, q: R)` called with two
+        // fresh temps print `dR1 dR2` on this backend against `dR2 dR1` on JIT
+        // and AOT -- a run-vs-build divergence no A/B parity gate could see,
+        // because the COUNT agreed and only the order differed. The compiled
+        // backends register these on a cleanup frame that drains LIFO, which is
+        // the rule above falling out of the mechanism; this loop is the odd one
+        // out, and it is also out of step with the interpreter's OWN method
+        // path (`method_param_drop_names`, drained by the callee frame), which
+        // already ran `h.take(R { id: 1 }, R { id: 2 })` as `dR2 dR1`.
+        //
+        // Only calls with two or more FRESH-temp args change: an identifier arg
+        // is skipped by this walk and drops through its own binding, so a mixed
+        // `take(a, R { id: 2 })` is sequenced by the two owners' relative
+        // program order and was already correct.
+        for (i, arg) in args.iter().enumerate().rev() {
             // B-2026-07-01-7 passthrough guard — mirrored with codegen's
             // `call_arg_flows_into_return`: when the callee can return
             // this parameter, the temp flows out and the RESULT's consumer

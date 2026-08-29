@@ -54043,6 +54043,94 @@ fn main() {
     ///
     /// Case 2 keeps the MIXED payload shape (B-2026-08-29-24) under the
     /// sanitizer: it still runs one body too many, and this asserts that the
+    /// B-2026-08-29-46 — reversing the interpreter's fresh-temp argument walk
+    /// moved a BODY, and this proves it moved no FREE.
+    ///
+    /// Both argument temporaries carry heap, so a change that reordered the
+    /// cleanup registration rather than just the body walk would surface here as
+    /// a leak or a double free instead of as an output-order difference. The
+    /// expected lines are the compiled backends' order (`dR2` then `dR1`), which
+    /// is what the fix made `--interp` agree with.
+    #[test]
+    fn asan_owned_param_temps_free_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn take(r: R, q: R) -> i64 { 7 }
+fn main() {
+    let v = take(R { id: 1, name: f"heap-one" }, R { id: 2, name: f"heap-two" });
+    println(f"v={v}");
+}
+"#,
+            &["dR2 heap-two", "dR1 heap-one", "v=7"],
+            "owned_param_temps_two",
+        );
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn take3(a: R, b: R, c: R) -> i64 { 7 }
+fn main() {
+    let v = take3(
+        R { id: 1, name: f"heap-one" },
+        R { id: 2, name: f"heap-two" },
+        R { id: 3, name: f"heap-three" },
+    );
+    println(f"v={v}");
+}
+"#,
+            &["dR3 heap-three", "dR2 heap-two", "dR1 heap-one", "v=7"],
+            "owned_param_temps_three",
+        );
+        // The MIXED shape, where the rule is program-order of introduction
+        // rather than argument position: the local is introduced first and so
+        // pops last, giving a FORWARD print. Included here because it is the
+        // case whose memory is split across two different owners — the caller's
+        // binding and the argument cleanup frame — which is exactly where a
+        // mis-registration would show as a double free.
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn take(r: R, q: R) -> i64 { 7 }
+fn main() {
+    let b = R { id: 2, name: f"heap-two" };
+    let v = take(R { id: 1, name: f"heap-one" }, b);
+    println(f"v={v}");
+}
+"#,
+            &["dR1 heap-one", "dR2 heap-two", "v=7"],
+            "owned_param_temps_mixed",
+        );
+        // PINNED AT THE DEFECT, and it is the pin that grades the defect. A
+        // STATIC (associated) function's fresh-temp arguments run NO `Drop` body
+        // on the compiled backends — the expected output below is `v=7` alone,
+        // with neither `dR1` nor `dR2` — while `--interp` runs both.
+        //
+        // What this case establishes is that the two missing bodies are NOT
+        // missing frees: LSan is live on Linux here and reports clean, so the
+        // memory registration fires and only the user body is absent. That is
+        // the same body-vs-memory split B-2026-08-29-24 measured from the other
+        // direction, and it is why the row is a lost body rather than a leak.
+        // Both payloads carry heap precisely so the distinction is observable.
+        // B-2026-08-29-54.
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+struct H { n: i64 }
+impl H { fn s2(a: R, b: R) -> i64 { 7 } }
+fn main() {
+    let v = H.s2(R { id: 1, name: f"heap-one" }, R { id: 2, name: f"heap-two" });
+    println(f"v={v}");
+}
+"#,
+            &["v=7"],
+            "static_method_args_no_body_but_no_leak",
+        );
+    }
+
     /// surplus stays a body and never becomes a second free.
     #[test]
     fn asan_wrapped_param_view_payload_frees_once() {

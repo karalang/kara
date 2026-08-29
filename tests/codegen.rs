@@ -38499,12 +38499,13 @@ fn main() {
             .as_deref(),
             Some("dR1\nv=7\n")
         );
-        // TWO owned params, no wrap at all: the compiled backends drop the
-        // caller's fresh temps in REVERSE argument order and `--interp` drops
-        // them forward. Counts agree, order does not — a run-vs-build
-        // divergence with no wrap involved, pre-existing, and pinned on both
-        // sides so a fix to either has to touch both. The interpreter twin
-        // pins `dR1 dR2`. UNFIXED (B-2026-08-29-46).
+        // TWO owned params, no wrap at all: both backends drop the caller's
+        // fresh temps in REVERSE argument order. This side was always right —
+        // the temps ride a cleanup frame that drains LIFO — and it pinned the
+        // compiled half of what was B-2026-08-29-46 while `--interp` walked the
+        // argument list forward. Kept here as the wrap-free neighbour of the
+        // cases above; the full surface lives in
+        // `e2e_owned_param_temps_drop_in_reverse_argument_order`.
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
@@ -38517,6 +38518,190 @@ fn main() {
             .as_deref(),
             Some("dR2\ndR1\nv=7\n")
         );
+    }
+
+    /// B-2026-08-29-46, codegen leg — the caller's fresh ARGUMENT temporaries
+    /// run their `Drop` bodies in REVERSE argument order.
+    ///
+    /// The twin of `test_owned_param_temps_drop_in_reverse_argument_order`, with
+    /// the SAME expected output for every case, which is the point of the pair:
+    /// the row was a run-vs-build divergence in which both backends ran each
+    /// body exactly once and only the ORDER differed, so no count-based
+    /// assertion and no A/B parity gate could see it — only an absolute
+    /// expectation on both sides can.
+    ///
+    /// This side needed no change. Argument temps ride a caller cleanup frame
+    /// that drains LIFO, which is design.md § Drop ordering within a branch
+    /// rule 1 ("a single LIFO stack ordered by program-order of introduction")
+    /// falling out of the mechanism; the fix was to the interpreter's forward
+    /// walk. These cases exist so a future change to the frame — reordering the
+    /// drain, or moving argument cleanup to a different registration point —
+    /// cannot silently re-open the divergence from this end.
+    #[test]
+    fn e2e_owned_param_temps_drop_in_reverse_argument_order() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        for (label, src, want) in [
+            (
+                "two-fresh-temps",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                     fn main() {{ let v = take(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\"); }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "three-fresh-temps",
+                format!(
+                    "{hdr}fn take3(a: R, b: R, c: R) -> i64 {{ 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let v = take3(R {{ id: 1 }}, R {{ id: 2 }}, R {{ id: 3 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR3\ndR2\ndR1\nv=7\n",
+            ),
+            (
+                "callee-local-pops-before-params",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ let z = R {{ id: 3 }}; 7 }}\n\
+                     fn main() {{ let v = take(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\"); }}"
+                ),
+                "dR3\ndR2\ndR1\nv=7\n",
+            ),
+            (
+                "call-result-args",
+                format!(
+                    "{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                     fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                     fn main() {{ let v = take(mk(1), mk(2)); println(f\"v={{v}}\"); }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "two-calls-in-sequence",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     \x20   let w = take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                     \x20   println(f\"w={{w}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR1\nv=7\ndR4\ndR3\nw=7\n",
+            ),
+            (
+                "guard-method-two-temps",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn take(ref self, r: R, q: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{\n\
+                     \x20   let h = H {{ n: 0 }};\n\
+                     \x20   let v = h.take(R {{ id: 1 }}, R {{ id: 2 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "guard-method-three-temps",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn t3(ref self, a: R, b: R, c: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{\n\
+                     \x20   let h = H {{ n: 0 }};\n\
+                     \x20   let v = h.t3(R {{ id: 1 }}, R {{ id: 2 }}, R {{ id: 3 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR3\ndR2\ndR1\nv=7\n",
+            ),
+            (
+                "guard-moved-locals",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let a = R {{ id: 1 }};\n\
+                     \x20   let b = R {{ id: 2 }};\n\
+                     \x20   let v = take(a, b);\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            // The rule is program-order of introduction, NOT argument position,
+            // and these two are where the difference shows: a named binding is
+            // introduced at its `let`, a temp during argument evaluation. So
+            // `guard-mixed-temp-first` runs FORWARD, and a backend that reversed
+            // by argument position instead would break it.
+            (
+                "guard-mixed-local-first",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let a = R {{ id: 1 }};\n\
+                     \x20   let v = take(a, R {{ id: 2 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "guard-mixed-temp-first",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let b = R {{ id: 2 }};\n\
+                     \x20   let v = take(R {{ id: 1 }}, b);\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR1\ndR2\nv=7\n",
+            ),
+        ] {
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+        // PINNED AT THE DEFECT — the compiled half of two neighbouring
+        // divergences this fix does NOT close. The interpreter twin pins the
+        // other half of each number, so the pair records the divergence rather
+        // than one backend's opinion of it.
+        for (label, src, want) in [
+            // A STATIC (associated) function's fresh-temp arguments run NO body
+            // here — not misordered, missing. `--interp` runs both. This is a
+            // lost `Drop` body, a strictly worse failure than the order this
+            // test is about, and it is pinned rather than fixed because it is a
+            // different mechanism: these temps never reach the caller cleanup
+            // frame at all. B-2026-08-29-54.
+            (
+                "pin-static-method-args-missing-here",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{ let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\"); }}"
+                ),
+                "v=7\n",
+            ),
+            // TIMING, not order: design.md's temporary-lifetime table ends an
+            // argument temporary's live range "After the call returns", so with
+            // two calls in one expression the first call's temps must die before
+            // the second call's are built. This backend holds all four to the
+            // statement's `;`, extending them past the position rule's ceiling;
+            // `--interp` now matches the table. B-2026-08-29-55.
+            (
+                "pin-arg-temps-held-to-statement-end",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "in-take\nin-take\ndR4\ndR3\ndR2\ndR1\nv=14\n",
+            ),
+        ] {
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
     }
 
     /// B-2026-08-29-17's guard rails — the shapes where the arm binding really
