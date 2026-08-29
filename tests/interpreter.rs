@@ -34928,6 +34928,98 @@ fn readthrough_arm_leaves_the_payload_with_its_enum() {
     }
 }
 
+/// B-2026-08-29-29, interpreter leg — the TUPLE-ELEMENT half, which is where
+/// the interpreter had a defect of its own rather than merely the compiled
+/// side's mirror.
+///
+/// `match t.0 { E.A(r) => println(r.id) }` printed `v8 dR8`: the enum's OWN
+/// body, `dE`, was gone entirely. The tuple disarm
+/// (`moved_out_tuple_elem_bodies`) retracts the whole ELEMENT's walk, not just
+/// its payload's body, and it asked `pattern_consumes_user_drop_payload`
+/// directly instead of the shared `match_disarms_payload_walk` — so a
+/// read-through arm, which moves nothing out and can never take over the
+/// enum's own body, still silenced it. That is exactly the drift
+/// B-2026-08-28-67 routed the identifier arm through one function to prevent,
+/// reached by the one arm it did not route.
+///
+/// The struct-FIELD rows were already correct here (the interpreter declines
+/// both the disarm and the stash for a `FieldAccess` place) and are pinned
+/// anyway: the compiled twin
+/// (`codegen::e2e_readthrough_arm_over_a_projection_leaves_the_payload_with_its_owner`)
+/// asserts the same strings, so a later edit cannot reconcile the two by moving
+/// the interpreter instead.
+#[test]
+fn readthrough_arm_over_a_projection_leaves_the_payload_with_its_owner() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         enum H { A(R), B }\n\
+         struct S { e: E }\n\
+         struct Sh { h: H }\n\
+         struct W { s: S }\n";
+    for (label, body, want) in [
+        // ── tuple element: RED rows, the interpreter's own defect ──────────
+        (
+            "tuple-element",
+            "let t = (E.A(R { id: 8 }), 1i64);\n\
+             \x20 match t.0 { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+            "v8\ndE\ndR8\npost\n",
+        ),
+        (
+            "tuple-element-never-mentioned",
+            "let t = (E.A(R { id: 8 }), 1i64);\n\
+             \x20 match t.0 { E.A(r) => { println(\"got\") } E.B => {} }\n",
+            "got\ndE\ndR8\npost\n",
+        ),
+        (
+            // The `if let` spelling reaches a DIFFERENT site (`eval_expr`'s
+            // hand-rolled place test, now routed through the same
+            // `place_walk_is_retractable`), and it was wrong in the other
+            // direction: `v8 dR8 dE dR8`, the stash firing beside the tuple's
+            // element walk for two bodies where one is due.
+            "if-let-tuple-element",
+            "let t = (E.A(R { id: 8 }), 1i64);\n\
+             \x20 if let E.A(r) = t.0 { println(f\"v{r.id}\") }\n",
+            "v8\ndE\ndR8\npost\n",
+        ),
+        (
+            "no-own-drop-tuple",
+            "let t = (H.A(R { id: 8 }), 1i64);\n\
+             \x20 match t.0 { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+            "v8\ndR8\npost\n",
+        ),
+        // ── struct field: PARITY PINS, green before and after ──────────────
+        (
+            "struct-field",
+            "let s = S { e: E.A(R { id: 8 }) };\n\
+             \x20 match s.e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+            "v8\ndE\ndR8\npost\n",
+        ),
+        (
+            "nested-field-chain",
+            "let w = W { s: S { e: E.A(R { id: 8 }) } };\n\
+             \x20 match w.s.e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+            "v8\ndE\ndR8\npost\n",
+        ),
+        (
+            "if-let-struct-field",
+            "let s = S { e: E.A(R { id: 8 }) };\n\
+             \x20 if let E.A(r) = s.e { println(f\"v{r.id}\") }\n",
+            "v8\ndE\ndR8\npost\n",
+        ),
+        (
+            "no-own-drop-field",
+            "let s = Sh { h: H.A(R { id: 8 }) };\n\
+             \x20 match s.h { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+            "v8\ndR8\npost\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-57, interpreter leg — the PARITY PIN for the compiled fix.
 ///
 /// Unlike its siblings this one was green before the fix and after it: the

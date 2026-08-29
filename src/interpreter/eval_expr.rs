@@ -1044,7 +1044,13 @@ impl<'a> super::Interpreter<'a> {
                         // disarm above has a walk to hand back. See
                         // `place_walk_is_retractable`.
                         Value::EnumVariant { enum_name, .. } => {
-                            matches!(value.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+                            // B-2026-08-29-29 — routed through the shared
+                            // predicate rather than re-spelling the place test,
+                            // which is how the `t.0` spelling was left out: its
+                            // stash fired beside the tuple's own element walk
+                            // and printed the payload's body twice, where the
+                            // `match` spelling of the same read printed it once.
+                            Self::place_walk_is_retractable(value)
                                 && self.let_form_only_reads_payload_through(
                                     enum_name, pattern, then_block,
                                 )

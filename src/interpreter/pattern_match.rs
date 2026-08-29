@@ -318,10 +318,15 @@ impl<'a> super::Interpreter<'a> {
                 let enum_name = enum_name.clone();
                 let src = src.clone();
                 let index = *index as usize;
-                if arms
-                    .iter()
-                    .any(|arm| self.pattern_consumes_user_drop_payload(&enum_name, &arm.pattern))
-                {
+                // B-2026-08-29-29 — routed through the SHARED decision, like
+                // the identifier arm below, instead of asking
+                // `pattern_consumes_user_drop_payload` on its own. A
+                // READ-THROUGH arm moves nothing out, so retracting here
+                // silenced the element's whole walk — including the enum's OWN
+                // body, which no arm binding could ever have taken over:
+                // `match t.0 { E.A(r) => println(r.id) }` printed `v8 dR8` with
+                // `dE` gone, against `v8 dE dR8` on both compiled backends.
+                if self.match_disarms_payload_walk(&enum_name, arms) {
                     self.moved_out_tuple_elem_bodies.insert((src, index));
                 }
             }
@@ -503,8 +508,23 @@ impl<'a> super::Interpreter<'a> {
     /// That is the same "the two decisions live in different places" failure the
     /// row records for the first attempt at this fix, reached from the other
     /// side.
-    fn place_walk_is_retractable(place: &Expr) -> bool {
-        matches!(place.kind, ExprKind::Identifier(_) | ExprKind::SelfValue)
+    pub(super) fn place_walk_is_retractable(place: &Expr) -> bool {
+        match &place.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+            // B-2026-08-29-29 — a TUPLE ELEMENT rooted at an identifier has a
+            // walk to hand back too: the disarm above expresses it as the
+            // `(binding, index)` pair rather than a bare name, which is exactly
+            // the shape `moved_out_tuple_elem_bodies` exists for. Without this
+            // the read-through gate could not reach the `t.0` spelling, so its
+            // arm stash fired beside the tuple's own element walk. A deeper
+            // root has no disarm, so it stays non-retractable for the same
+            // reason a fresh temp does — standing the stash down there would
+            // hand the payload to nobody.
+            ExprKind::TupleIndex { object, .. } => {
+                matches!(object.kind, ExprKind::Identifier(_))
+            }
+            _ => false,
+        }
     }
 
     /// B-2026-08-28-67 — does this arm merely READ THROUGH every Drop-bearing

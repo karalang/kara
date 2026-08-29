@@ -15608,6 +15608,133 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-29 — a READ-THROUGH arm over a PROJECTION-PLACE enum
+    /// scrutinee (`match s.e`, `match t.0`) leaves the payload with the value
+    /// that owns it, and runs its `Drop` body exactly ONCE.
+    ///
+    /// B-2026-08-28-67 settled the read-through rule for an identifier
+    /// scrutinee and gated it there, so a projection place kept the old path:
+    /// the arm registered the payload's body AND the owner's bodies walk ran
+    /// it, so both compiled backends fired it TWICE — the second time on the
+    /// slot the arm's move-out had cap-zeroed. `struct-field` measured
+    /// `v8 dR8 dE dR0` where `v8 dE dR8` is due, and `dR0` is a user body
+    /// reading its own fields on a zeroed object.
+    ///
+    /// The identifier spelling is the ORACLE for every row here: each one
+    /// prints exactly what `match e { … }` prints for the same arm, which is
+    /// the point — the place a value is reached through must not change how
+    /// many times its destructor runs.
+    ///
+    /// `self-field-in-ref-method` is a PARITY PIN, green before and after: a
+    /// `ref self` receiver was already classified as borrowed, so its field
+    /// projection never took the doubling path. It is here so a later edit
+    /// cannot reconcile the family by moving that half instead.
+    ///
+    /// NOT PINNED, and deliberately: a MATERIALIZING arm over a projection
+    /// (`E.A(r) => { let m = r; … }`) still runs the body twice on every
+    /// backend. That needs a payload-ONLY retraction of the owner's walk,
+    /// which neither backend can express today — a struct's field-bodies walk
+    /// is one emitted function running the enum's own body and its payload's
+    /// together — so pinning it here would pin a bug as the contract. Filed
+    /// separately.
+    #[test]
+    fn e2e_readthrough_arm_over_a_projection_leaves_the_payload_with_its_owner() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             enum H { A(R), B }\n\
+             struct S { e: E }\n\
+             struct Sh { h: H }\n\
+             struct W { s: S }\n\
+             impl S { fn look(ref self) -> i64 {\n\
+             \x20   match self.e { E.A(r) => { return r.id } E.B => { return 0i64 } } } }\n";
+        for (label, body, want) in [
+            (
+                "struct-field",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 match s.e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v8\ndE\ndR8\npost\n",
+            ),
+            (
+                "struct-field-never-mentioned",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 match s.e { E.A(r) => { println(\"got\") } E.B => {} }\n",
+                "got\ndE\ndR8\npost\n",
+            ),
+            (
+                "tuple-element",
+                "let t = (E.A(R { id: 8 }), 1i64);\n\
+                 \x20 match t.0 { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v8\ndE\ndR8\npost\n",
+            ),
+            (
+                "tuple-element-never-mentioned",
+                "let t = (E.A(R { id: 8 }), 1i64);\n\
+                 \x20 match t.0 { E.A(r) => { println(\"got\") } E.B => {} }\n",
+                "got\ndE\ndR8\npost\n",
+            ),
+            (
+                // A DEEPER chain resolves through the same place walker, so the
+                // classifier must not stop at one hop.
+                "nested-field-chain",
+                "let w = W { s: S { e: E.A(R { id: 8 }) } };\n\
+                 \x20 match w.s.e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v8\ndE\ndR8\npost\n",
+            ),
+            (
+                // B-2026-08-28-67's rule that the two spellings answer the SAME
+                // question: a `match`-only cut of this fix left both `if let`
+                // rows doubling.
+                "if-let-struct-field",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 if let E.A(r) = s.e { println(f\"v{r.id}\") }\n",
+                "v8\ndE\ndR8\npost\n",
+            ),
+            (
+                "if-let-tuple-element",
+                "let t = (E.A(R { id: 8 }), 1i64);\n\
+                 \x20 if let E.A(r) = t.0 { println(f\"v{r.id}\") }\n",
+                "v8\ndE\ndR8\npost\n",
+            ),
+            (
+                // PARITY PIN — green before and after; see the doc comment.
+                "self-field-in-ref-method",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 println(f\"v{s.look()}\");\n",
+                "v8\ndE\ndR8\npost\n",
+            ),
+            (
+                // The guard is part of the read-through question, exactly as it
+                // is for the identifier spelling.
+                "guard-reads-only",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 match s.e { E.A(r) if r.id == 8i64 => { println(\"g\") }\n\
+                 \x20           E.A(r) => { println(\"o\") } E.B => {} }\n",
+                "g\ndE\ndR8\npost\n",
+            ),
+            (
+                // The enum having NO own `Drop` is not a carve-out here, unlike
+                // B-2026-08-28-67's gate: with no own body the two orders
+                // coincide, but the payload's body was still doubled, so these
+                // are RED rows too (`v8 dR8 dR0` unfixed).
+                "no-own-drop-field",
+                "let s = Sh { h: H.A(R { id: 8 }) };\n\
+                 \x20 match s.h { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+                "v8\ndR8\npost\n",
+            ),
+            (
+                "no-own-drop-tuple",
+                "let t = (H.A(R { id: 8 }), 1i64);\n\
+                 \x20 match t.0 { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+                "v8\ndR8\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-57 — a fixed `Array[T, N]`'s elements run their user
     /// `Drop` bodies, at the binding's live-range end, on every backend.
     ///

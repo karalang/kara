@@ -332,6 +332,7 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_enum_local(scrutinee, arms)
+            || self.scrutinee_is_readonly_owned_enum_projection(scrutinee, arms)
             || readonly_inline_optres;
         // B-2026-07-15-21 Part B — scrutinee is an RC-elidable borrowed param:
         // skip the Some-binding acquire + its scope-exit RcDec (payload is a
@@ -1757,6 +1758,119 @@ impl<'ctx> super::Codegen<'ctx> {
         self.no_arm_payload_escapes(arms)
     }
 
+    /// B-2026-08-29-29 — the PROJECTION-PLACE sibling of
+    /// [`Self::scrutinee_is_readonly_owned_enum_local`]: `match s.e { … }` and
+    /// `match t.0 { … }`, where the matched enum is a FIELD or TUPLE ELEMENT of
+    /// a value the enclosing scope still owns.
+    ///
+    /// A projection is a VIEW. The owner (`s`, `t`) is untouched by the match
+    /// and outlives it, so its bodies walk is the payload's one owner — which
+    /// is why this returns a BORROW classification rather than trying to retract
+    /// half of that walk. The retraction is not merely harder, it is not
+    /// expressible: a struct's field-bodies walk is ONE emitted function running
+    /// the enum's own body and its payload's body together, so
+    /// `suppress_struct_field_bodies_for_var` can only take both (losing `dE`)
+    /// or neither. The identifier spelling has two separate actions —
+    /// `OwnWrapper` and `ContainerElemBodies` — and that, not a difference in
+    /// semantics, is the whole reason it can hand the payload to the arm.
+    ///
+    /// Without this the arm registered the payload's body AND the owner's walk
+    /// ran it, so both compiled backends fired it TWICE, the second time on the
+    /// slot the arm's move-out had cap-zeroed:
+    /// `match s.e { E.A(r) => println(r.id) }` printed `dR8 dE dR0` where one
+    /// `dR8` is due. Raising `pattern_binding_is_borrow` fixes both halves at
+    /// once — the whole suppression block (including
+    /// `suppress_destructured_struct_field_enum_cleanup`, the memory half that
+    /// did the zeroing) is gated on the flag being clear, and
+    /// `bind_pattern_values` skips the binding's own registration.
+    ///
+    /// The ORDER this produces for a materializing arm (`let m = r;`) is the
+    /// owner's — `dE` then the payload's body, at the OWNER's death — where the
+    /// identifier spelling gives the arm the body first. Same count on both;
+    /// the sequences differ because the owners differ, and design.md § Part 8
+    /// fixes the order WITHIN a walk, not across two different values' deaths.
+    ///
+    /// THE OWNERSHIP WITNESS IS A LIVE BODIES WALK ON THE ROOT, not the shape.
+    /// Standing the arm down when nothing else runs the body loses it outright —
+    /// the same failure `place_walk_is_retractable` records from the other side
+    /// for a fresh-temp scrutinee — so this asks the cleanup frames directly.
+    /// An ESCAPING arm keeps today's transfer path (`no_arm_payload_escapes`
+    /// defaults to "escapes" for any shape it does not recognise), because a
+    /// binding that outlives the owner cannot be a view of it.
+    fn scrutinee_is_readonly_owned_enum_projection(
+        &self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> bool {
+        if !matches!(
+            &scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return false;
+        }
+        let Some(enum_name) = self.place_chain_type_name(scrutinee) else {
+            return false;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name.as_str()) else {
+            return false;
+        };
+        // A `shared` enum drops through refcounts, not through the owner's
+        // walk — the same carve-out the identifier classifier makes.
+        if layout.is_shared {
+            return false;
+        }
+        // Only the arms that would actually take a body-running payload are at
+        // stake; a match that binds nothing the owner's walk would fire for is
+        // not the shape that doubles, and there is no reason to move it off its
+        // current path.
+        if !arms
+            .iter()
+            .any(|a| self.enum_pattern_consumes_user_drop_payload(&enum_name, &a.pattern))
+        {
+            return false;
+        }
+        let Some(root) = self.place_expr_root_ident(scrutinee) else {
+            return false;
+        };
+        let root_name = match &root.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return false,
+        };
+        if !self.var_has_live_bodies_walk(&root_name) {
+            return false;
+        }
+        self.no_arm_payload_escapes(arms)
+    }
+
+    /// Does a bodies-only user-`Drop` walk on `name` survive in a live scope
+    /// frame? The ownership witness for
+    /// [`Self::scrutinee_is_readonly_owned_enum_projection`] — a struct's
+    /// `StructFieldBodies` walk or a tuple / container's `ContainerElemBodies`
+    /// one, either of which reaches a projected enum's payload.
+    ///
+    /// `OwnWrapper` deliberately does NOT count: it is the root's own `impl
+    /// Drop` body (or memory glue), which says nothing about whether a nested
+    /// payload's body will run.
+    fn var_has_live_bodies_walk(&self, name: &str) -> bool {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .any(|a| {
+                matches!(
+                    a,
+                    crate::codegen::state::CleanupAction::UserDrop { binding_name, kind, .. }
+                        if binding_name == name
+                            && matches!(
+                                kind,
+                                crate::codegen::state::UserDropKind::StructFieldBodies
+                                    | crate::codegen::state::UserDropKind::ContainerElemBodies
+                            )
+                )
+            })
+    }
+
     /// The block-body sibling of
     /// [`Self::scrutinee_is_readonly_owned_enum_local`], for the `if let`
     /// `then_block` / `while let` `body` scopes — the user-enum peer of
@@ -1779,6 +1893,55 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         };
         if !self.enum_pattern_binds_heap_payload(&enum_name, pattern) {
+            return false;
+        }
+        !self.pattern_bindings_escape_in_block(pattern, block)
+    }
+
+    /// The block-body sibling of
+    /// [`Self::scrutinee_is_readonly_owned_enum_projection`], for the `if let`
+    /// `then_block` / `while let` `body` scopes.
+    ///
+    /// B-2026-08-28-67's rule that the two spellings must answer the SAME
+    /// question applies here too, and the `match`-only first cut of
+    /// B-2026-08-29-29 broke it: `if let E.A(r) = s.e { println(r.id) }` still
+    /// printed the payload's body twice while the `match` spelling of the same
+    /// read printed it once. Same gates as the `match` form; only the escape
+    /// test changes shape, from "no arm's binding escapes" to "this pattern's
+    /// bindings do not escape this block".
+    pub(super) fn scrutinee_is_readonly_owned_enum_projection_block(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        if !matches!(
+            &scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return false;
+        }
+        let Some(enum_name) = self.place_chain_type_name(scrutinee) else {
+            return false;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get(enum_name.as_str()) else {
+            return false;
+        };
+        if layout.is_shared {
+            return false;
+        }
+        if !self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
+            return false;
+        }
+        let Some(root) = self.place_expr_root_ident(scrutinee) else {
+            return false;
+        };
+        let root_name = match &root.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return false,
+        };
+        if !self.var_has_live_bodies_walk(&root_name) {
             return false;
         }
         !self.pattern_bindings_escape_in_block(pattern, block)
