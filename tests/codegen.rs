@@ -13336,6 +13336,91 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-4 — a METHOD that hands an inline `Option`/`Result`
+    /// argument back ALIASES the source binding's payload, so the result must be
+    /// recorded as an alias rather than tracked as a fresh owner.
+    ///
+    /// Pre-fix both bindings freed the same buffer once the result was
+    /// consumed, aborting the process (`free(): double free detected in tcache
+    /// 2`) on all three compiled backends while the interpreter and the
+    /// free-function twin were correct — so `run_program` returns `None` here
+    /// rather than wrong bytes. The memory twin is
+    /// `asan_method_passthrough_arg_aliases_the_source_payload`.
+    ///
+    /// Every case binds the result with `let` first: the INLINE-scrutinee
+    /// spelling double-frees for a FREE FUNCTION too and is a different, wider
+    /// defect tracked on its own row.
+    #[test]
+    fn e2e_method_passthrough_arg_aliases_the_source_payload() {
+        const DECLS: &str = "struct Bx { n: i64 }\n\
+             impl Bx {\n\
+             fn take(ref self, o: Option[String]) -> Option[String] { o }\n\
+             fn second(ref self, a: Option[String], b: Option[String]) -> Option[String] { b }\n\
+             fn first(ref self, a: Option[String], b: Option[String]) -> Option[String] { a }\n\
+             fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f\"fresh{self.n}\") }\n\
+             }\n";
+        for (label, body, want) in [
+            // The headline shape: one argument, handed straight back.
+            (
+                "single-arg-passthrough",
+                "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"a{b.n}\"); \
+                 let o = b.take(s); \
+                 match o { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got a1\n",
+            ),
+            // TWO arguments, the SECOND handed back — the first must keep its own
+            // owner and the second must alias.
+            (
+                "two-args-second-returned",
+                "fn main() { let b = Bx { n: 1 }; let p = Option.Some(f\"d{b.n}\"); \
+                 let q = Option.Some(f\"e{b.n}\"); let o = b.second(p, q); \
+                 match o { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got e1\n",
+            ),
+            // TWO arguments, the FIRST handed back. Together with the case above
+            // this pins that the alias is recorded for the argument the callee
+            // actually returns rather than for a fixed position.
+            (
+                "two-args-first-returned",
+                "fn main() { let b = Bx { n: 1 }; let p = Option.Some(f\"f{b.n}\"); \
+                 let q = Option.Some(f\"g{b.n}\"); let o = b.first(p, q); \
+                 match o { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got f1\n",
+            ),
+            // CONTROL — the method does NOT hand the argument back, so the
+            // result owns a freshly produced payload. No alias may be recorded,
+            // or the fresh payload is left with no owner at all.
+            (
+                "no-passthrough-keeps-fresh-owner",
+                "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"h{b.n}\"); \
+                 let o = b.fresh(s); \
+                 match o { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got fresh1\n",
+            ),
+            // CONTROL — the free-function twin, correct before and after. It is
+            // the oracle that showed one allocation with two frees was wrong
+            // rather than merely different.
+            (
+                "free-fn-oracle-passthrough",
+                "fn takef(o: Option[String]) -> Option[String] { o }\n\
+                 fn main() { let n = 1; let s = Option.Some(f\"a{n}\"); let o = takef(s); \
+                 match o { Option.Some(v) => { println(f\"got {v}\"); } \
+                 Option.None => { println(\"none\"); } } }\n",
+                "got a1\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{DECLS}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-28-70 — a METHOD's owned param reached NO owner at all in the
     /// interpreter and TWO in the compiled backends, in opposite directions,
     /// because the method-argument path carries neither half of the ownership

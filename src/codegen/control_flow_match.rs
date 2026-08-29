@@ -9179,24 +9179,66 @@ impl<'ctx> super::Codegen<'ctx> {
     /// so a callee that sometimes returns something else leaves the value
     /// unregistered here — a leak, the side this file errs toward over a double
     /// free.
+    ///
+    /// B-2026-08-29-4 — METHOD CALLS match too. This tested `ExprKind::Call`
+    /// alone, so `impl Bx { fn take(ref self, o: Option[String]) ->
+    /// Option[String] { o } }` over `let out = b.take(src);` recorded no alias:
+    /// `out` registered its own inline-payload owner while `src` stayed armed,
+    /// and both freed the SAME buffer once the result was consumed. Measured
+    /// `free(): double free detected in tcache 2` on all three compiled
+    /// backends, valgrind `Invalid free()`, 10 allocs against 11 frees — while
+    /// the interpreter and the free-function twin (10 allocs, 10 frees, clean)
+    /// were correct. One allocation, so nothing entry-copies here and the two
+    /// bindings genuinely alias.
+    ///
+    /// The method callee is resolved through the span-keyed
+    /// `method_callee_types` table, guarded on the method SEGMENT matching this
+    /// call: chained calls share one aliased span key (the collision note in
+    /// `method_call.rs`), and `lazyframe.rs` guards the same table the same way.
+    /// `fn_returns_param` is asked on the RECEIVER-EXCLUDING index, because
+    /// `find_function_ast` hands back the raw AST method whose `params` exclude
+    /// the receiver — verified by instrumentation, not assumed.
+    ///
+    /// Asked DIRECTLY rather than through `call_arg_flows_into_return`, whose
+    /// `Item::Function`-only scan answers false for a method key. Widening that
+    /// shared predicate would move seven other consumers at once; this reads the
+    /// same predicate it does, on the one shape this site needs.
     fn call_passthrough_armed_source(
         &self,
         value: &Expr,
         armed: &std::collections::HashSet<String>,
     ) -> Option<String> {
-        let ExprKind::Call { callee, args, .. } = &value.kind else {
-            return None;
-        };
-        let ExprKind::Identifier(callee_name) = &callee.kind else {
-            return None;
-        };
-        args.iter().enumerate().find_map(|(i, a)| {
-            let ExprKind::Identifier(n) = &a.value.kind else {
-                return None;
-            };
-            (armed.contains(n.as_str()) && self.call_arg_flows_into_return(callee_name, i))
-                .then(|| n.clone())
-        })
+        match &value.kind {
+            ExprKind::Call { callee, args, .. } => {
+                let ExprKind::Identifier(callee_name) = &callee.kind else {
+                    return None;
+                };
+                args.iter().enumerate().find_map(|(i, a)| {
+                    let ExprKind::Identifier(n) = &a.value.kind else {
+                        return None;
+                    };
+                    (armed.contains(n.as_str()) && self.call_arg_flows_into_return(callee_name, i))
+                        .then(|| n.clone())
+                })
+            }
+            ExprKind::MethodCall { method, args, .. } => {
+                let key = (value.span.offset, value.span.length);
+                let qualified = self.span_tables.method_callee_types.get(&key)?;
+                if qualified.rsplit_once('.').map(|(_, m)| m) != Some(method.as_str()) {
+                    return None;
+                }
+                let program = self.program_snapshot.as_deref()?;
+                let f = super::declarations::find_function_ast(program, qualified)?;
+                args.iter().enumerate().find_map(|(i, a)| {
+                    let ExprKind::Identifier(n) = &a.value.kind else {
+                        return None;
+                    };
+                    (armed.contains(n.as_str()) && crate::ast::fn_returns_param(f, i))
+                        .then(|| n.clone())
+                })
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {

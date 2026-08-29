@@ -32808,6 +32808,74 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-4, interpreter leg — a METHOD that hands an inline
+/// `Option`/`Result` argument back yields the payload exactly once.
+///
+/// The twin of `e2e_method_passthrough_arg_aliases_the_source_payload` in
+/// `tests/codegen.rs`, carrying the same cases with the same expected output.
+/// Keep the two in step verbatim.
+///
+/// This backend was CORRECT before the fix, so every case here is a control
+/// rather than a reproduction: the defect was a compiled-only double free (one
+/// allocation, two frees, process abort), and what this pins is that the
+/// codegen fix moved codegen ONTO the interpreter's answer rather than moving
+/// both. A regression that "fixed" the double free by changing what the
+/// program prints would fail here instead.
+#[test]
+fn test_method_passthrough_arg_aliases_the_source_payload() {
+    const DECLS: &str = "struct Bx { n: i64 }\n\
+         impl Bx {\n\
+         fn take(ref self, o: Option[String]) -> Option[String] { o }\n\
+         fn second(ref self, a: Option[String], b: Option[String]) -> Option[String] { b }\n\
+         fn first(ref self, a: Option[String], b: Option[String]) -> Option[String] { a }\n\
+         fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f\"fresh{self.n}\") }\n\
+         }\n";
+    for (label, body, want) in [
+        (
+            "single-arg-passthrough",
+            "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"a{b.n}\"); \
+             let o = b.take(s); \
+             match o { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got a1\n",
+        ),
+        (
+            "two-args-second-returned",
+            "fn main() { let b = Bx { n: 1 }; let p = Option.Some(f\"d{b.n}\"); \
+             let q = Option.Some(f\"e{b.n}\"); let o = b.second(p, q); \
+             match o { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got e1\n",
+        ),
+        (
+            "two-args-first-returned",
+            "fn main() { let b = Bx { n: 1 }; let p = Option.Some(f\"f{b.n}\"); \
+             let q = Option.Some(f\"g{b.n}\"); let o = b.first(p, q); \
+             match o { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got f1\n",
+        ),
+        (
+            "no-passthrough-keeps-fresh-owner",
+            "fn main() { let b = Bx { n: 1 }; let s = Option.Some(f\"h{b.n}\"); \
+             let o = b.fresh(s); \
+             match o { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got fresh1\n",
+        ),
+        (
+            "free-fn-oracle-passthrough",
+            "fn takef(o: Option[String]) -> Option[String] { o }\n\
+             fn main() { let n = 1; let s = Option.Some(f\"a{n}\"); let o = takef(s); \
+             match o { Option.Some(v) => { println(f\"got {v}\") } \
+             Option.None => { println(\"none\") } } }\n",
+            "got a1\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DECLS}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-70, interpreter leg — a METHOD's owned param runs its user
 /// `Drop` body exactly once, wherever it dies.
 ///

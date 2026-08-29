@@ -7800,6 +7800,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // non-heap / borrow payloads.
                     if matches!(value.kind, ExprKind::Call { .. })
                         || self.rhs_is_fresh_inline_enum(value)
+                        // B-2026-08-29-4 — `let out = b.take(src);` where the
+                        // METHOD hands its argument back. Admitted to this
+                        // Call-gated block for exactly the reason `.map` is
+                        // admitted two lines down: the result ALIASES the
+                        // source's payload, so it must reach the alias branch
+                        // below rather than be tracked as a fresh owner. Without
+                        // this, `out` registered its own inline-payload owner
+                        // while `src` stayed armed and both freed the same
+                        // buffer — `free(): double free detected in tcache 2` on
+                        // all three compiled backends, 10 allocs against 11
+                        // frees, while the free-function twin was clean.
+                        || self.call_passthrough_armed_inline_source(value).is_some()
                         // B-2026-08-07-3 — `let r = <binding>.map(f)`: the `.map`
                         // Err/None branch aliases the receiver's payload, so `r`
                         // must be recorded as an alias (below) rather than

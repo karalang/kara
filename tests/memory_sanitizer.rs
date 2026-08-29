@@ -60498,6 +60498,89 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-4 — a METHOD that hands an inline `Option`/`Result`
+    /// argument back ALIASES the source binding's payload, so the result must
+    /// be recorded as an alias rather than tracked as a fresh owner.
+    ///
+    /// Pre-fix both bindings freed the SAME buffer once the result was
+    /// consumed: `free(): double free detected in tcache 2` on all three
+    /// compiled backends, valgrind `Invalid free()`, 10 allocs against 11
+    /// frees — while the interpreter and the free-function twin (10 allocs, 10
+    /// frees) were correct. The equal ALLOCATION count is what shows the two
+    /// bindings genuinely alias rather than one entry-copying: nothing here
+    /// makes a second buffer, so exactly one of them may own it.
+    ///
+    /// The failure is a SIGNAL, not an output mismatch, so a revert kills the
+    /// process rather than printing wrong bytes.
+    ///
+    /// SCOPE, deliberately: every case binds the result with `let` first. The
+    /// INLINE-scrutinee spelling (`match b.take(s) { .. }`) double-frees too,
+    /// but it does so for a FREE FUNCTION as well, so it is a different and
+    /// wider defect — filed separately rather than folded in here. Writing this
+    /// fixture in the inline form is what surfaced that, after each shape had
+    /// passed individually in the `let`-bound form.
+    ///
+    /// Payloads are built with f-strings carrying an interpolation, not
+    /// literals: a literal is rodata with `cap == 0` and is never freed, so it
+    /// cannot witness a double free. That is not a stylistic note — an earlier
+    /// pass of this investigation drew a wrong conclusion from a `f"heap-1"`
+    /// oracle that silently tested nothing.
+    #[test]
+    fn asan_method_passthrough_arg_aliases_the_source_payload() {
+        assert_clean_asan_run(
+            r#"
+struct Bx { n: i64 }
+impl Bx {
+    fn take(ref self, o: Option[String]) -> Option[String] { o }
+    fn take_mut(mut ref self, o: Option[String]) -> Option[String] { self.n = self.n + 1; o }
+    fn take_res(ref self, o: Result[String, i64]) -> Result[String, i64] { o }
+    fn second(ref self, a: Option[String], b: Option[String]) -> Option[String] { b }
+    fn first(ref self, a: Option[String], b: Option[String]) -> Option[String] { a }
+    fn fresh(ref self, o: Option[String]) -> Option[String] { Option.Some(f"fresh-{self.n}") }
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let b = Bx { n: base };
+    let s1 = Option.Some(f"a{base}");
+    let o1 = b.take(s1);
+    match o1 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    let mut c = Bx { n: base };
+    let s2 = Option.Some(f"b{base}");
+    let o2 = c.take_mut(s2);
+    match o2 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    let s3: Result[String, i64] = Result.Ok(f"c{base}");
+    let o3 = b.take_res(s3);
+    match o3 { Result.Ok(v) => { println(f"got {v}"); } Result.Err(e) => { println(f"err {e}"); } }
+    let p = Option.Some(f"d{base}");
+    let q = Option.Some(f"e{base}");
+    let o4 = b.second(p, q);
+    match o4 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    let r1 = Option.Some(f"f{base}");
+    let r2 = Option.Some(f"g{base}");
+    let o5 = b.first(r1, r2);
+    match o5 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    // CONTROL — the method does NOT hand the argument back, so the result owns
+    // a freshly produced payload and the source owns its own. No alias, and the
+    // fix must not record one.
+    let s4 = Option.Some(f"h{base}");
+    let o6 = b.fresh(s4);
+    match o6 { Option.Some(v) => { println(f"got {v}"); } Option.None => { println("none"); } }
+    println("end");
+}
+"#,
+            &[
+                "got a1",
+                "got b1",
+                "got c1",
+                "got e1",
+                "got f1",
+                "got fresh-1",
+                "end",
+            ],
+            "method-passthrough-arg-alias",
+        );
+    }
+
     /// B-2026-08-28-70 — the MEMORY half of the method owned-argument
     /// ownership fix: every heap-carrying param a method takes by value is
     /// allocated once and freed once, on the path where it dies and on the path
