@@ -36364,6 +36364,142 @@ fn main() {
         );
     }
 
+    /// B-2026-08-28-72 — the `Option` / `Result` leg of B-2026-08-09-15, whose
+    /// retraction this reuses verbatim.
+    ///
+    /// That row taught the caller to stop running an owned arg's payload bodies
+    /// when the callee hands the payload back out of a `match` arm. Its gate
+    /// admitted only a bare user enum, excluding `Option` and `Result` by name
+    /// on the stated ground that they "have their own" retraction. They do not.
+    /// The SAME program spelled with a user enum was correct on every backend
+    /// while the `Option` spelling ran the payload's `Drop` body TWICE on both
+    /// compiled ones — the caller's `__karac_dropelems_opt_*` walk at the arg's
+    /// live-range end, plus the result binding's own wrapper at scope exit.
+    ///
+    /// Not reachable by the run-vs-build parity oracle in the other direction
+    /// either: memory stays balanced (the bodies walk frees nothing by
+    /// construction), so an ASAN/LSan corpus cannot see this class at all. The
+    /// output pin is the only signal.
+    ///
+    /// The `Drop` body READS `name` for the reason B-2026-08-09-15's pin gives:
+    /// printing the id alone leaves the payload buffer unobserved and LLVM
+    /// deletes the allocation with its frees, so a memory defect underneath
+    /// could still pass an output-only assertion.
+    #[test]
+    fn test_e2e_returned_option_arg_payload_drop_fires_once() {
+        let hdr = "struct Res { id: i64, name: String }\n\
+                   impl Drop for Res {\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+                   }\n";
+        // `return` out of the arm — the spelling B-2026-08-09-15 pins for enums.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Some(r) => {{ return r; }}\n\
+                 \x20       None => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+        // BLOCK-TAIL spelling of the same escape — the arm yields the binding
+        // rather than returning it. This is the shape the row reduced to, and
+        // it is a different code path from `return` (an arm tail is a Block,
+        // which is why B-2026-08-28-66's neutralizer family keys on it).
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> Res {{\n\
+                 \x20   match b {{ Some(r) => {{ r }} None => {{ Res {{ id: 0, name: f\"z\" }} }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+        // `Result` carries the identical defect through its own
+        // `__karac_dropelems_res_*` walker, and the widened gate admits it by
+        // the same name test — pinned so a future narrowing cannot drop the
+        // `Result` half while keeping `Option`.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Result[Res, i64]) -> Res {{\n\
+                 \x20   match b {{\n\
+                 \x20       Ok(r) => {{ return r; }}\n\
+                 \x20       Err(_) => {{ return Res {{ id: 0, name: f\"z\" }}; }}\n\
+                 \x20   }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Result[Res, i64] = Result.Ok(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let r: Res = take(b);\n\
+                 \x20   println(f\"got {{r.id}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("got 7\ndrop 7 e7\n")
+        );
+    }
+
+    /// B-2026-08-28-72's guard rail — the `Option` shapes whose payload does
+    /// NOT escape the callee must keep firing caller-side exactly once.
+    ///
+    /// The twin of `test_e2e_nonescaping_enum_arg_payload_still_fires_once`,
+    /// and it exists for the same reason: the widened gate keys on "does the
+    /// callee return something bound out of this arg", and an unconditional
+    /// retraction would silence every case here. A lost `Drop` body reads as a
+    /// passing test unless something pins the output.
+    #[test]
+    fn test_e2e_nonescaping_option_arg_payload_still_fires_once() {
+        let hdr = "struct Res { id: i64, name: String }\n\
+                   impl Drop for Res {\n\
+                   \x20   fn drop(mut ref self) { println(f\"drop {self.id}\") }\n\
+                   }\n";
+        // Payload bound out but NOT returned — the caller-retains fire is the
+        // only one, and it must survive the widened gate.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> i64 {{\n\
+                 \x20   match b {{ Some(r) => {{ return r.id; }} None => {{ return 0; }} }}\n\
+                 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let v: i64 = take(b);\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("drop 7\nv=7\n")
+        );
+        // Param NEVER matched — nothing binds the payload out at all.
+        assert_eq!(
+            run_program(&format!(
+                "{hdr}\
+                 fn take(b: Option[Res]) -> i64 {{ println(f\"in\"); 1 }}\n\
+                 fn main() {{\n\
+                 \x20   let b: Option[Res] = Some(Res {{ id: 7, name: f\"e7\" }});\n\
+                 \x20   let v: i64 = take(b);\n\
+                 \x20   println(f\"end {{v}}\");\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("in\ndrop 7\nend 1\n")
+        );
+    }
+
     /// B-2026-08-09-15, METHOD spelling — the same doubling one call shape over.
     ///
     /// `t.take(b)` reaches a different arg loop than `take(b)`, so the retraction

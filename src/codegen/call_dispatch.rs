@@ -2535,22 +2535,34 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(param) = f.params.get(ast_i) else {
                 return false;
             };
-            // Bare `Path` naming a non-shared user enum — the types whose
-            // payload bodies ride the `__karac_dropelems_enum_<E>` channel this
-            // retraction acts on. `Option`/`Result` have their own.
+            // Bare `Path` naming a non-shared user enum, `Option`, or
+            // `Result` — every tagged type whose payload bodies ride a
+            // `ContainerElemBodies` walker (`__karac_dropelems_enum_<E>` for a
+            // user enum, `__karac_dropelems_opt_*` / `_res_*` for the two
+            // built-ins). This read `en != "Option" && en != "Result"` until
+            // B-2026-08-28-72, on the stated ground that "Option/Result have
+            // their own" retraction. They do not, and the exclusion was the
+            // whole defect: the SAME program spelled with a user enum was
+            // correct on every backend while the `Option` spelling ran the
+            // payload's `Drop` body twice on both compiled ones —
+            // `fn take(o: Option[R]) -> R { match o { Some(r) => r, .. } }`
+            // printed `dR1 dR1` against the interpreter's `dR1`. Nothing about
+            // the retraction is enum-specific: it acts through
+            // `suppress_container_elem_bodies_for_var`, which is keyed on the
+            // BINDING, not on which walker the binding carries.
             let TypeKind::Path(path) = &param.ty.kind else {
                 return false;
             };
-            let is_value_enum = path.segments.first().is_some_and(|en| {
-                en != "Option"
-                    && en != "Result"
-                    && self
+            let is_payload_carrying_enum = path.segments.first().is_some_and(|en| {
+                en == "Option"
+                    || en == "Result"
+                    || self
                         .type_decls
                         .enum_layouts
                         .get(en.as_str())
                         .is_some_and(|l| !l.is_shared)
             });
-            is_value_enum && crate::ast::fn_returns_param_payload(f, ast_i)
+            is_payload_carrying_enum && crate::ast::fn_returns_param_payload(f, ast_i)
         })
     }
 
