@@ -2155,6 +2155,12 @@ impl<'a> super::Interpreter<'a> {
                     std::mem::take(&mut self.moved_out_container_bodies_bindings),
                     std::mem::take(&mut self.moved_out_tuple_elem_bodies),
                     std::mem::take(&mut self.moved_out_struct_field_bodies),
+                    // B-2026-08-29-33 — the two payload-only masks ride the
+                    // same per-frame save/restore for the same reason: they are
+                    // keyed by NAME, so a callee local sharing a caller
+                    // binding's name would otherwise disarm the caller's walk.
+                    std::mem::take(&mut self.moved_out_struct_field_payload_bodies),
+                    std::mem::take(&mut self.moved_out_tuple_elem_payload_bodies),
                 );
                 // B-2026-08-28-22 — hand the callee ownership of the `Drop`
                 // BODY of any owned param it returns on some tail paths and not
@@ -2178,6 +2184,8 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_container_bodies_bindings,
                     self.moved_out_tuple_elem_bodies,
                     self.moved_out_struct_field_bodies,
+                    self.moved_out_struct_field_payload_bodies,
+                    self.moved_out_tuple_elem_payload_bodies,
                 ) = saved_moved_out;
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();

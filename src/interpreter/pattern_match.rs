@@ -327,7 +327,56 @@ impl<'a> super::Interpreter<'a> {
                 // `match t.0 { E.A(r) => println(r.id) }` printed `v8 dR8` with
                 // `dE` gone, against `v8 dE dR8` on both compiled backends.
                 if self.match_disarms_payload_walk(&enum_name, arms) {
-                    self.moved_out_tuple_elem_bodies.insert((src, index));
+                    // B-2026-08-29-33 — a USER enum takes the PAYLOAD-ONLY set,
+                    // not the whole-element one. Retracting the element
+                    // wholesale also silenced the enum's OWN body, which no arm
+                    // binding can take over: `match t.0 { E.A(r) => { let m = r;
+                    // … } }` printed `m8 dR8` with `dE` gone, against
+                    // `m8 dR8 dE` on both compiled backends.
+                    //
+                    // `Option`/`Result` KEEP the whole-element set. They have no
+                    // own `Drop` body to preserve, so the finer mask buys
+                    // nothing — and it would not even apply: the element walk
+                    // routes them through `run_discarded_value_user_drops`
+                    // before reaching the user-enum arm the payload mask guards,
+                    // so switching them over ran the body twice
+                    // (`test_tuple_elem_match_scrutinee_body_fires_at_arm_end`).
+                    if enum_name == "Option" || enum_name == "Result" {
+                        self.moved_out_tuple_elem_bodies.insert((src, index));
+                    } else {
+                        self.moved_out_tuple_elem_payload_bodies
+                            .insert((src, index));
+                    }
+                }
+            }
+            return;
+        }
+        // B-2026-08-29-33 — a STRUCT-FIELD scrutinee (`match s.e { … }`), the
+        // sibling of the tuple arm above and keyed the same way, by
+        // `(binding, field)` rather than a bare name. Without it a consuming
+        // arm took the payload while the owner's field walk still ran its body:
+        // `m8 dR8 dE dR8` where one payload body is due. ONE HOP only — a
+        // deeper chain (`w.s.e`) has no such record and keeps today's
+        // behaviour, matching codegen's `disarm_projection_enum_payload_bodies`.
+        if let ExprKind::FieldAccess { object, field } = &place.kind {
+            if let ExprKind::Identifier(src) = &object.kind {
+                let Value::EnumVariant { enum_name, .. } = scrutinee else {
+                    return;
+                };
+                let enum_name = enum_name.clone();
+                let src = src.clone();
+                let field = field.clone();
+                // `Option`/`Result` are deliberately NOT recorded here: the
+                // field walk routes them through `run_discarded_value_user_drops`
+                // ahead of the user-enum arm this mask guards, and nothing
+                // recorded them before this fix — so leaving them alone keeps
+                // that path byte-identical rather than half-masking it.
+                if enum_name != "Option"
+                    && enum_name != "Result"
+                    && self.match_disarms_payload_walk(&enum_name, arms)
+                {
+                    self.moved_out_struct_field_payload_bodies
+                        .insert((src, field));
                 }
             }
             return;
@@ -365,6 +414,54 @@ impl<'a> super::Interpreter<'a> {
         pattern: &Pattern,
         scope: Option<&Block>,
     ) {
+        // B-2026-08-29-33 — the PROJECTION arms, mirroring the `match` form's.
+        // A consuming `if let` over `s.e` / `t.0` took the payload, so the
+        // owner's walk must stop running its body while still running the
+        // enum's own; without them the `if let` spelling doubled where the
+        // `match` spelling of the same code ran one body.
+        let takes_payload = |me: &mut Self, en: &str| -> bool {
+            me.pattern_consumes_user_drop_payload(en, pattern)
+                && !scope.is_some_and(|b| me.let_form_only_reads_payload_through(en, pattern, b))
+        };
+        match &scrutinee_place.kind {
+            ExprKind::FieldAccess { object, field } => {
+                if let ExprKind::Identifier(src) = &object.kind {
+                    let Value::EnumVariant { enum_name, .. } = scrutinee else {
+                        return;
+                    };
+                    let enum_name = enum_name.clone();
+                    let src = src.clone();
+                    let field = field.clone();
+                    if enum_name != "Option"
+                        && enum_name != "Result"
+                        && takes_payload(self, &enum_name)
+                    {
+                        self.moved_out_struct_field_payload_bodies
+                            .insert((src, field));
+                    }
+                }
+                return;
+            }
+            ExprKind::TupleIndex { object, index } => {
+                if let ExprKind::Identifier(src) = &object.kind {
+                    let Value::EnumVariant { enum_name, .. } = scrutinee else {
+                        return;
+                    };
+                    let enum_name = enum_name.clone();
+                    let src = src.clone();
+                    let index = *index as usize;
+                    if enum_name != "Option"
+                        && enum_name != "Result"
+                        && takes_payload(self, &enum_name)
+                    {
+                        self.moved_out_tuple_elem_payload_bodies
+                            .insert((src, index));
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
         let name = match &scrutinee_place.kind {
             ExprKind::Identifier(n) => n.clone(),
             ExprKind::SelfValue => "self".to_string(),
@@ -374,10 +471,7 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         let enum_name = enum_name.clone();
-        if self.pattern_consumes_user_drop_payload(&enum_name, pattern)
-            && !scope
-                .is_some_and(|b| self.let_form_only_reads_payload_through(&enum_name, pattern, b))
-        {
+        if takes_payload(self, &enum_name) {
             self.moved_out_enum_payload_bindings.insert(name);
         }
     }
@@ -452,11 +546,41 @@ impl<'a> super::Interpreter<'a> {
             // projection has no such disarm, so it stays non-consuming and the
             // owner's walk keeps firing) and to a non-owned-param root, matching
             // the Identifier arm's caller-retains carve-out.
+            //
+            // B-2026-08-29-33 — a one-hop STRUCT-FIELD place joins it, on the
+            // same terms and for the same reason: `disarm_moved_out_enum_
+            // payload`'s FieldAccess arm now retracts the field's payload walk,
+            // so without the stash the body would be lost rather than merely
+            // mistimed. A read-through arm never reaches here — the
+            // `arm_reads_through` gate above stands the stash down first.
             ExprKind::TupleIndex { object, .. } => match &object.kind {
                 ExprKind::Identifier(n) => !self
                     .owned_param_names_stack
                     .last()
                     .is_some_and(|params| params.contains(n.as_str())),
+                _ => false,
+            },
+            // B-2026-08-29-33 — a one-hop STRUCT-FIELD place joins it, but on
+            // strictly the LOCKSTEP terms: consuming exactly when the disarm
+            // (which ran first) actually retracted this field's payload walk.
+            // The tuple arm can answer structurally because its disarm covers
+            // every enum kind; this one cannot, because `Option`/`Result`
+            // fields are deliberately left unrecorded — their walk reaches them
+            // through `run_discarded_value_user_drops`, ahead of the arm the
+            // payload mask guards. Answering true for them anyway stashed a
+            // body the field walk still owned and ran it twice
+            // (`test_result_struct_payload_field_freed_and_single_body`'s
+            // `local-match`).
+            ExprKind::FieldAccess { object, field } => match &object.kind {
+                ExprKind::Identifier(n) => {
+                    !self
+                        .owned_param_names_stack
+                        .last()
+                        .is_some_and(|params| params.contains(n.as_str()))
+                        && self
+                            .moved_out_struct_field_payload_bodies
+                            .contains(&(n.clone(), field.clone()))
+                }
                 _ => false,
             },
             _ => false,
@@ -520,7 +644,7 @@ impl<'a> super::Interpreter<'a> {
             // root has no disarm, so it stays non-retractable for the same
             // reason a fresh temp does — standing the stash down there would
             // hand the payload to nobody.
-            ExprKind::TupleIndex { object, .. } => {
+            ExprKind::TupleIndex { object, .. } | ExprKind::FieldAccess { object, .. } => {
                 matches!(object.kind, ExprKind::Identifier(_))
             }
             _ => false,

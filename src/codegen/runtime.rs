@@ -7889,6 +7889,44 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-29-33 — swap the walker function of `name`'s live `UserDrop`
+    /// action of `kind`, IN PLACE, leaving its frame and its position within
+    /// that frame untouched. Returns whether one was found.
+    ///
+    /// The retract-and-re-register pair (`suppress_*_for_var` +
+    /// [`Self::track_user_drop_var_with_fn`]) is correct only when the caller
+    /// runs in the SAME frame the action lives in — which is true of the
+    /// `let x = h.o` move-out sites it was written for, and false of a `match`
+    /// ARM, whose frame is inner. Re-registering from there pushes the owner's
+    /// walk into the arm's frame, so it drains at the ARM's end instead of at
+    /// the owner's death: measured `k8 dE dR8` where `k8 dR8 dE` is due, the
+    /// owner's `dE` overtaking a body that belongs before it. Mutating rather
+    /// than moving keeps the placement the let-site chose.
+    pub(super) fn replace_user_drop_fn_for_var(
+        &mut self,
+        name: &str,
+        kind: UserDropKind,
+        new_fn: FunctionValue<'ctx>,
+    ) -> bool {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            for action in frame.iter_mut() {
+                if let CleanupAction::UserDrop {
+                    binding_name,
+                    kind: k,
+                    drop_fn,
+                    ..
+                } = action
+                {
+                    if binding_name == name && *k == kind {
+                        *drop_fn = new_fn;
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Re-arm placement variant of [`Self::track_user_drop_var_with_fn`] for
     /// the enum walker (own-Drop enum reassign leg): when the binding's OWN
     /// `karac_drop_<E>` action survived (payload move-out shape), the

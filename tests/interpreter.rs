@@ -35020,6 +35020,92 @@ fn readthrough_arm_over_a_projection_leaves_the_payload_with_its_owner() {
     }
 }
 
+/// B-2026-08-29-33, interpreter leg — a MATERIALIZING arm over a
+/// PROJECTION-PLACE enum scrutinee owns the payload exactly once here too.
+///
+/// The interpreter had two defects of its own, in opposite directions. A
+/// STRUCT-FIELD place had no disarm at all, so the arm's binding ran the body
+/// AND the owner's field walk ran it again (`m8 dR8 dE dR8`). A TUPLE element
+/// had one, but it retracted the whole element, so the enum's own body went
+/// with it (`m8 dR8`, `dE` gone) — the same whole-vs-payload granularity
+/// problem codegen had, reached from the other side.
+///
+/// `optres-field-local-match` is the carve-out, and it is load-bearing: an
+/// `Option`/`Result` field is walked through `run_discarded_value_user_drops`
+/// BEFORE the user-enum arm the payload mask guards, so routing it through the
+/// finer mask half-masks it and the body fires twice. Those places are
+/// deliberately left on the old path, and the arm stash is locked to whether
+/// the disarm actually recorded — stash without retract is the other half of
+/// the same double.
+#[test]
+fn materializing_arm_over_a_projection_owns_the_payload_once() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         enum N { A(R), B }\n\
+         struct S { e: E }\n\
+         struct Sn { n: N }\n\
+         struct Sr { r: Result[R, i64] }\n\
+         fn keep(x: R) -> R { x }\n";
+    for (label, body, want) in [
+        (
+            "field-let-rebind",
+            "let s = S { e: E.A(R { id: 8 }) };\n\
+             \x20 match s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+            "m8\ndR8\ndE\npost\n",
+        ),
+        (
+            "field-returning-free-fn",
+            "let s = S { e: E.A(R { id: 8 }) };\n\
+             \x20 match s.e { E.A(r) => { let k = keep(r); println(f\"k{k.id}\") } E.B => {} }\n",
+            "k8\ndR8\ndR8\ndE\npost\n",
+        ),
+        (
+            "tuple-let-rebind",
+            "let t = (E.A(R { id: 8 }), 1i64);\n\
+             \x20 match t.0 { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+            "m8\ndR8\ndE\npost\n",
+        ),
+        (
+            "if-let-field-let-rebind",
+            "let s = S { e: E.A(R { id: 8 }) };\n\
+             \x20 if let E.A(r) = s.e { let m = r; println(f\"m{m.id}\") }\n",
+            "m8\ndR8\ndE\npost\n",
+        ),
+        (
+            "if-let-tuple-let-rebind",
+            "let t = (E.A(R { id: 8 }), 1i64);\n\
+             \x20 if let E.A(r) = t.0 { let m = r; println(f\"m{m.id}\") }\n",
+            "m8\ndR8\ndE\npost\n",
+        ),
+        (
+            "no-own-drop-field",
+            "let s = Sn { n: N.A(R { id: 8 }) };\n\
+             \x20 match s.n { N.A(r) => { let m = r; println(f\"m{m.id}\") } N.B => {} }\n",
+            "m8\ndR8\npost\n",
+        ),
+        (
+            // THE CARVE-OUT — see the doc comment. Pinned here beside the rows
+            // it must not be folded into.
+            "optres-field-local-match",
+            "let s = Sr { r: Result.Ok(R { id: 8 }) };\n\
+             \x20 let v = match s.r { Result.Ok(x) => x.id, Result.Err(e) => e };\n\
+             \x20 println(f\"v{v}\");\n",
+            "dR8\nv8\npost\n",
+        ),
+        (
+            "ident-oracle-let-rebind",
+            "let e = E.A(R { id: 8 });\n\
+             \x20 match e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+            "m8\ndR8\ndE\npost\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-57, interpreter leg — the PARITY PIN for the compiled fix.
 ///
 /// Unlike its siblings this one was green before the fix and after it: the

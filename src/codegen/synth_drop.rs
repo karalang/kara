@@ -39,13 +39,26 @@ use super::state::EnumDropKind;
 pub(crate) struct FieldSkipTree {
     /// Fields whose bodies are skipped outright at this level.
     pub(crate) here: std::collections::BTreeSet<usize>,
+    /// B-2026-08-29-33 — ENUM fields whose live-variant PAYLOAD bodies are
+    /// skipped while the field's OWN `impl Drop` body still runs. A finer cut
+    /// than `here`, and the one a `match s.e { E.A(r) => { let m = r; … } }`
+    /// needs: the arm took the payload, so the owner must stop running ITS
+    /// body — but the enum object itself did not move, so `E.drop` still owes
+    /// its own body. Masking the whole field (`here`) loses that body; not
+    /// masking at all runs the payload's twice, the second time on the slot the
+    /// move-out cap-zeroed.
+    ///
+    /// Expressible only because the enum-field arm of the walker emits the two
+    /// as SEPARATE calls — `E.drop` then `emit_enum_payload_user_drop_bodies_fn`
+    /// (B-2026-08-28-40) — so this drops the second and keeps the first.
+    pub(crate) payload_here: std::collections::BTreeSet<usize>,
     /// Sub-masks applied to a surviving field's own walker.
     pub(crate) nested: std::collections::BTreeMap<usize, FieldSkipTree>,
 }
 
 impl FieldSkipTree {
     pub(crate) fn is_empty(&self) -> bool {
-        self.here.is_empty() && self.nested.is_empty()
+        self.here.is_empty() && self.payload_here.is_empty() && self.nested.is_empty()
     }
 
     /// A stable, collision-free suffix for the walker's symbol name. Empty for
@@ -57,6 +70,9 @@ impl FieldSkipTree {
         let mut out = String::new();
         for i in &self.here {
             out.push_str(&format!("$s{i}"));
+        }
+        for i in &self.payload_here {
+            out.push_str(&format!("$p{i}"));
         }
         for (i, sub) in &self.nested {
             out.push_str(&format!("$n{i}{}$e", sub.mangle()));
@@ -4000,8 +4016,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // where a BOUND local of the same type runs both on every backend.
             // Bodies only, so it stays additive over whatever memory half the
             // parent's drop already owns.
+            //
+            // B-2026-08-29-33 — unless a consuming arm over `s.<field>` took
+            // the payload, in which case the ARM runs its body and this call
+            // would be the second fire, on the cap-zeroed slot. `E.drop` above
+            // is deliberately NOT masked with it: the enum object did not move,
+            // only its payload did.
             if field_type != "Option"
                 && field_type != "Result"
+                && !skip.payload_here.contains(&field_idx)
                 && self
                     .type_decls
                     .enum_layouts
@@ -7482,6 +7505,26 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_tes: &[TypeExpr],
         skip: &std::collections::HashSet<u32>,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_tuple_elem_user_drop_bodies_fn_masked(
+            agg_ty,
+            elem_tes,
+            skip,
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    /// [`Self::emit_tuple_elem_user_drop_bodies_fn_skipping`] plus the finer
+    /// B-2026-08-29-33 mask: `payload_skip` names ENUM elements whose payload
+    /// bodies a consuming arm took, and whose own `impl Drop` body must still
+    /// run. Folded into the symbol name so a payload-masked walker never
+    /// aliases the full one.
+    pub(super) fn emit_tuple_elem_user_drop_bodies_fn_masked(
+        &mut self,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+        skip: &std::collections::HashSet<u32>,
+        payload_skip: &std::collections::HashSet<u32>,
+    ) -> Option<FunctionValue<'ctx>> {
         // Indices of every element that runs a body — a DIRECT Drop-running
         // struct, or (B-2026-08-02-26) ONE CONTAINER LEVEL around one. The
         // old walk accepted only a `Path` naming a user struct, so a
@@ -7510,7 +7553,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|i| format!("{i}_{}", Self::display_mangle_te(&elem_tes[*i as usize])))
             .collect();
-        let fn_name = format!("__karac_dropelems_tuple_{}", key.join("_"));
+        let mut psk: Vec<u32> = payload_skip.iter().copied().collect();
+        psk.sort_unstable();
+        let payload_sig: String = if psk.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "$p{}",
+                psk.iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            )
+        };
+        let fn_name = format!("__karac_dropelems_tuple_{}{payload_sig}", key.join("_"));
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
@@ -7533,7 +7589,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .ok();
             let Some(ep) = ep else { continue };
             let te = elem_tes[idx as usize].clone();
-            self.emit_slot_drop_bodies_at(ep, &te);
+            self.emit_slot_drop_bodies_at_opt(ep, &te, payload_skip.contains(&idx));
         }
 
         self.builder.build_return(None).unwrap();
@@ -7808,6 +7864,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Vec.truncate` needed exactly the same per-slot dispatch
     /// (B-2026-08-03-2); the contract was never tuple-specific.
     pub(super) fn emit_slot_drop_bodies_at(&mut self, ep: PointerValue<'ctx>, te: &TypeExpr) {
+        self.emit_slot_drop_bodies_at_opt(ep, te, false);
+    }
+
+    /// [`Self::emit_slot_drop_bodies_at`] with the option of skipping a user
+    /// ENUM slot's live-variant PAYLOAD bodies while still running the enum's
+    /// OWN `impl Drop` body (B-2026-08-29-33).
+    ///
+    /// The tuple-element peer of `FieldSkipTree::payload_here`, and it exists
+    /// for the same shape: `match t.0 { E.A(r) => { let m = r; … } }` hands the
+    /// payload to the arm, so the tuple's element walk must stop running its
+    /// body — but the enum object itself did not move, so `E.drop` still owes
+    /// its own. Masking the whole element (`emit_tuple_elem_user_drop_bodies_fn_
+    /// skipping`'s `skip` set) loses that own body; masking nothing ran the
+    /// payload's twice, the second time on the cap-zeroed slot.
+    ///
+    /// `skip_enum_payload` reaches ONLY the direct user-enum arm. A nested slot
+    /// (a `Vec[E]` element, a map value) keeps its walk, since the arm can only
+    /// have taken the payload of the enum sitting directly in this slot.
+    pub(super) fn emit_slot_drop_bodies_at_opt(
+        &mut self,
+        ep: PointerValue<'ctx>,
+        te: &TypeExpr,
+        skip_enum_payload: bool,
+    ) {
         if let TypeKind::Tuple(inner) = &te.kind {
             let inner = inner.clone();
             if let inkwell::types::BasicTypeEnum::StructType(agg) = self.llvm_type_for_type_expr(te)
@@ -7882,8 +7962,10 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.build_call(f, &[ep.into()], "").unwrap();
                             }
                         }
-                        if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&head) {
-                            self.builder.build_call(w, &[ep.into()], "").unwrap();
+                        if !skip_enum_payload {
+                            if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&head) {
+                                self.builder.build_call(w, &[ep.into()], "").unwrap();
+                            }
                         }
                     }
                     return;

@@ -1912,6 +1912,12 @@ pub(super) struct Codegen<'ctx> {
     /// across move-outs so `let a = t.0; let b = t.1;` masks both. Cleared per
     /// function alongside `tuple_var_elem_tes` (B-2026-08-03-3).
     pub(crate) tuple_moved_elem_bodies: HashMap<String, std::collections::HashSet<u32>>,
+    /// B-2026-08-29-33 — tuple ELEMENT indices whose ENUM PAYLOAD bodies a
+    /// consuming `match` / `if let` arm over `<var>.<index>` took, per variable.
+    /// Held apart from `tuple_moved_elem_bodies` because the mask is finer: the
+    /// element's own `impl Drop` body still runs (the enum object did not move,
+    /// only its payload), so masking it through that map would lose it.
+    pub(crate) tuple_moved_elem_payload_bodies: HashMap<String, std::collections::HashSet<u32>>,
     /// The synthesized `void __karac_static_init()` function, declared
     /// in `declare_module_bindings` when `map_set_module_inits` is
     /// non-empty so `main`'s entry can emit a forward `call` to it, and
@@ -5915,6 +5921,7 @@ impl<'ctx> Codegen<'ctx> {
                 enum_inst_type_exprs: HashMap::new(),
                 enum_inst_var_types: HashMap::new(),
                 struct_moved_field_bodies: HashMap::new(),
+                struct_moved_field_payload_bodies: HashMap::new(),
                 user_shadowed_prelude_types: std::collections::HashSet::new(),
             },
             assoc_type_bindings: HashMap::new(),
@@ -6192,6 +6199,7 @@ impl<'ctx> Codegen<'ctx> {
             user_ref_method_names: std::collections::HashSet::new(),
             user_ref_method_inner: std::collections::HashMap::new(),
             tuple_moved_elem_bodies: HashMap::new(),
+            tuple_moved_elem_payload_bodies: HashMap::new(),
             mod_bindings: ModBindings {
                 consts: HashMap::new(),
                 module_bindings: HashMap::new(),

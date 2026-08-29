@@ -1462,7 +1462,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.tuple_var_elem_tes.clear();
         self.var_types.array_var_elem_te.clear();
         self.tuple_moved_elem_bodies.clear();
+        self.tuple_moved_elem_payload_bodies.clear();
         self.type_decls.struct_moved_field_bodies.clear();
+        self.type_decls.struct_moved_field_payload_bodies.clear();
         self.var_types.optres_var_payload_tes.clear();
         self.mapset.map_val_bodies_tes.clear();
         self.var_types.string_vars.clear();

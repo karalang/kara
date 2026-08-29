@@ -15735,6 +15735,138 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-33 — a MATERIALIZING arm over a PROJECTION-PLACE enum
+    /// scrutinee runs the payload's `Drop` body exactly as often as the
+    /// identifier spelling does, and never on a zeroed slot.
+    ///
+    /// B-2026-08-29-29 fixed the READ-THROUGH half by classifying a projection
+    /// arm as a borrow. A materializing arm (`E.A(r) => { let m = r; … }`)
+    /// cannot take that route — the binding really does own the payload — so it
+    /// kept firing the body twice on both compiled backends, the second time
+    /// over the slot the move-out had cap-zeroed: `m8 dR8 dE dR0` where
+    /// `m8 dR8 dE` is due.
+    ///
+    /// The retraction that fixes it is a PAYLOAD-ONLY mask on the owner's walk
+    /// (`FieldSkipTree::payload_here`, and the tuple walker's `payload_skip`),
+    /// which is expressible only because the walkers emit the enum's own body
+    /// and its payload's as two separate calls. Masking the whole field or
+    /// element — the granularity that already existed — loses `dE`.
+    ///
+    /// `heap-payload-*` are the memory half, and they were a
+    /// USE-AFTER-FREE, not just a doubled body: the three `let`-form legs
+    /// (`if let` / `while let` / `let … else`) never ran the projection-place
+    /// suppressor at all, so the source struct kept a populated payload while
+    /// the binding took the buffer and both freed it. The binary produced NO
+    /// output under valgrind (invalid read of a freed block) while the `match`
+    /// spelling of the same code was clean.
+    ///
+    /// `ident-oracle-let-rebind` is the control: every projection row above
+    /// prints exactly what it prints.
+    #[test]
+    fn e2e_materializing_arm_over_a_projection_owns_the_payload_once() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct Rh { id: i64, s: String }\n\
+             impl Drop for Rh { fn drop(mut ref self) { println(f\"dH{self.id}:{self.s}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             enum Eh { A(Rh), B }\n\
+             impl Drop for Eh { fn drop(mut ref self) { println(\"dEh\") } }\n\
+             enum N { A(R), B }\n\
+             struct S { e: E }\n\
+             struct Sh { e: Eh }\n\
+             struct Sn { n: N }\n\
+             fn take(x: R) -> i64 { x.id }\n\
+             fn keep(x: R) -> R { x }\n";
+        for (label, body, want) in [
+            (
+                "field-let-rebind",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 match s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+                "m8\ndR8\ndE\npost\n",
+            ),
+            (
+                "field-free-fn-argument",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 match s.e { E.A(r) => { let k = take(r); println(f\"k{k}\") } E.B => {} }\n",
+                "k8\ndR8\ndE\npost\n",
+            ),
+            (
+                // TWO bodies is correct here and is what the identifier
+                // spelling gives: under the entry-copy model `keep` returns an
+                // independent value, so `k` and the arm binding both own one.
+                "field-returning-free-fn",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 match s.e { E.A(r) => { let k = keep(r); println(f\"k{k.id}\") } E.B => {} }\n",
+                "k8\ndR8\ndR8\ndE\npost\n",
+            ),
+            (
+                "tuple-let-rebind",
+                "let t = (E.A(R { id: 8 }), 1i64);\n\
+                 \x20 match t.0 { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+                "m8\ndR8\ndE\npost\n",
+            ),
+            (
+                "tuple-returning-free-fn",
+                "let t = (E.A(R { id: 8 }), 1i64);\n\
+                 \x20 match t.0 { E.A(r) => { let k = keep(r); println(f\"k{k.id}\") } E.B => {} }\n",
+                "k8\ndR8\ndR8\ndE\npost\n",
+            ),
+            (
+                "if-let-field-let-rebind",
+                "let s = S { e: E.A(R { id: 8 }) };\n\
+                 \x20 if let E.A(r) = s.e { let m = r; println(f\"m{m.id}\") }\n",
+                "m8\ndR8\ndE\npost\n",
+            ),
+            (
+                "if-let-tuple-let-rebind",
+                "let t = (E.A(R { id: 8 }), 1i64);\n\
+                 \x20 if let E.A(r) = t.0 { let m = r; println(f\"m{m.id}\") }\n",
+                "m8\ndR8\ndE\npost\n",
+            ),
+            (
+                // The USE-AFTER-FREE rows — see the doc comment. A heap payload
+                // makes the same defect a memory error rather than a doubled
+                // line, so these fail by producing nothing at all.
+                "heap-payload-field",
+                "let s = Sh { e: Eh.A(Rh { id: 8, s: f\"n{8}\" }) };\n\
+                 \x20 match s.e { Eh.A(r) => { let m = r; println(f\"m{m.id}:{m.s}\") } Eh.B => {} }\n",
+                "m8:n8\ndH8:n8\ndEh\npost\n",
+            ),
+            (
+                "heap-payload-if-let-field",
+                "let s = Sh { e: Eh.A(Rh { id: 8, s: f\"n{8}\" }) };\n\
+                 \x20 if let Eh.A(r) = s.e { let m = r; println(f\"m{m.id}:{m.s}\") }\n",
+                "m8:n8\ndH8:n8\ndEh\npost\n",
+            ),
+            (
+                // No own `Drop` is not a carve-out: with no own body to
+                // preserve the two mask granularities coincide, but the
+                // payload's body was still doubled (`m8 dR8 dR0` unfixed).
+                "no-own-drop-field",
+                "let s = Sn { n: N.A(R { id: 8 }) };\n\
+                 \x20 match s.n { N.A(r) => { let m = r; println(f\"m{m.id}\") } N.B => {} }\n",
+                "m8\ndR8\npost\n",
+            ),
+            (
+                "no-own-drop-tuple",
+                "let t = (N.A(R { id: 8 }), 1i64);\n\
+                 \x20 match t.0 { N.A(r) => { let m = r; println(f\"m{m.id}\") } N.B => {} }\n",
+                "m8\ndR8\npost\n",
+            ),
+            (
+                // The control every row above is measured against.
+                "ident-oracle-let-rebind",
+                "let e = E.A(R { id: 8 });\n\
+                 \x20 match e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n",
+                "m8\ndR8\ndE\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-28-57 — a fixed `Array[T, N]`'s elements run their user
     /// `Drop` bodies, at the binding's live-range end, on every backend.
     ///

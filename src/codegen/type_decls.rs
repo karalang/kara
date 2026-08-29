@@ -161,6 +161,14 @@ pub(crate) struct TypeDecls<'ctx> {
     /// `__karac_dropbodies_*` walk is re-registered with it masked. Cleared per
     /// function alongside that map (B-2026-08-03-8).
     pub(crate) struct_moved_field_bodies: HashMap<String, std::collections::HashSet<usize>>,
+    /// B-2026-08-29-33 — struct FIELD indices whose ENUM PAYLOAD bodies were
+    /// taken by a consuming `match` / `if let` arm over `<var>.<field>`, per
+    /// variable. Held apart from `struct_moved_field_bodies` because the mask is
+    /// finer: the field's OWN `impl Drop` body still runs (the enum object did
+    /// not move, only its payload), so masking it through that map would lose
+    /// `dE`. Accumulates across arms and is cleared per function alongside its
+    /// sibling.
+    pub(crate) struct_moved_field_payload_bodies: HashMap<String, std::collections::HashSet<usize>>,
     /// B-2026-08-02-7 / B-2026-08-02-13 — prelude type names a user program
     /// re-declared, shadowing the stdlib type of the same name.
     ///

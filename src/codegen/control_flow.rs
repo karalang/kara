@@ -263,6 +263,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // to heap-bearing bound fields, so non-heap patterns no-op too. The
             // miss/else edge runs no suppression, so the drop frees `e` whole.
             self.suppress_destructured_enum_payload_cleanup(value, pattern);
+            // B-2026-08-29-33 — the PROJECTION-PLACE sibling, which the `match`
+            // path has run since #15 and these three legs never did. `if let
+            // E.A(r) = s.e { let m = r; … }` therefore left the source struct's
+            // enum field fully populated while `m` took the payload, and BOTH
+            // freed the buffer: measured as a use-after-free on `karac build`
+            // and the JIT alike (valgrind: invalid read of a freed block, no
+            // program output at all), against a clean `match` on the same
+            // place. It also carries the BODIES half now, so the two move
+            // together — the B-2026-08-28-67 lockstep rule.
+            self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
         }
         // B-2026-06-10-6: a variable `Option[String]`/`Option[Vec]` scrutinee
         // with a `FreeInlineOptionPayload` needs its source `cap` zeroed when
@@ -766,6 +776,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // skips the payload the binding now owns, then the next
             // iteration's store re-populates and this store re-fires.
             self.suppress_destructured_enum_payload_cleanup(value, pattern);
+            // B-2026-08-29-33, `while let` leg — see the `if let` note above.
+            self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
         // suppression (see `compile_if_let`). No-op for temp / non-inline.
@@ -1254,6 +1266,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // exactly what r2 now owns; the divergent else edge runs no
             // suppression and drops `w` whole.
             self.suppress_destructured_enum_payload_cleanup(value, pattern);
+            // B-2026-08-29-33, `let … else` leg — see the `if let` note above.
+            self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee — `s` binds into
         // the enclosing scope where x's `FreeInlineOptionPayload` also lives,

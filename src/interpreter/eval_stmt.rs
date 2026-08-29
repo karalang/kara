@@ -878,6 +878,12 @@ impl<'a> super::Interpreter<'a> {
             .filter(|(n, _)| n == name)
             .map(|(_, i)| *i)
             .collect();
+        let payload_masked: Vec<usize> = self
+            .moved_out_tuple_elem_payload_bodies
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, i)| *i)
+            .collect();
         for (ei, e) in elems.into_iter().enumerate() {
             if moved.contains(&ei) {
                 continue;
@@ -946,7 +952,15 @@ impl<'a> super::Interpreter<'a> {
                 if self.program.drop_method_keys.contains_key(&tn) {
                     self.run_user_drop_body_only(&tn, e.clone());
                 }
-                self.run_enum_payload_user_drops_value(&e);
+                // B-2026-08-29-33 — a consuming arm over `<name>.<ei>` took
+                // this element's PAYLOAD, so its body belongs to the arm now.
+                // The element's own body above is NOT masked with it: the enum
+                // object did not move. Masking through `moved_out_tuple_elem_
+                // bodies` (the `moved` list above) would skip the element
+                // wholesale and lose that own body.
+                if !payload_masked.contains(&ei) {
+                    self.run_enum_payload_user_drops_value(&e);
+                }
                 continue;
             }
             if let Value::Struct { name: tn, .. } = &e {
@@ -1113,7 +1127,24 @@ impl<'a> super::Interpreter<'a> {
                 return;
             }
         }
+        self.seed_payload_masked_fields(name);
         self.drop_user_drop_fields_of_value(&value);
+    }
+
+    /// B-2026-08-29-33 — arm the one-shot top-level payload mask for `name`
+    /// before a `drop_user_drop_fields_of_value` call, from the pairs a
+    /// consuming arm over `<name>.<field>` recorded. No-op when nothing was
+    /// taken, which is every walk that is not downstream of such an arm.
+    pub(super) fn seed_payload_masked_fields(&mut self, name: &str) {
+        let fields: std::collections::HashSet<String> = self
+            .moved_out_struct_field_payload_bodies
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, f)| f.clone())
+            .collect();
+        if !fields.is_empty() {
+            self.pending_payload_masked_fields = Some(fields);
+        }
     }
 
     /// B-2026-07-30-11 (enum leg) — run the user `impl Drop` body of each
@@ -1766,6 +1797,13 @@ impl<'a> super::Interpreter<'a> {
     /// struct-field-only, and matching its scope exactly is what keeps the two
     /// backends in step.
     pub(crate) fn drop_user_drop_fields_of_value(&mut self, value: &Value) {
+        // B-2026-08-29-33 — TAKEN, not borrowed: the mask applies to this level
+        // only, so the recursion below into nested struct fields cannot inherit
+        // it through a field-name collision.
+        let payload_masked = self
+            .pending_payload_masked_fields
+            .take()
+            .unwrap_or_default();
         let Value::Struct {
             name: struct_name,
             fields,
@@ -1959,7 +1997,11 @@ impl<'a> super::Interpreter<'a> {
                     if self.program.drop_method_keys.contains_key(&tn) {
                         self.run_user_drop_body_only(&tn, field_value.clone());
                     }
-                    self.run_enum_payload_user_drops_value(&field_value);
+                    // B-2026-08-29-33 — payload masked when a consuming arm
+                    // over this field took it; the own body above is not.
+                    if !payload_masked.contains(field.as_str()) {
+                        self.run_enum_payload_user_drops_value(&field_value);
+                    }
                 }
                 continue;
             }
@@ -3149,6 +3191,10 @@ impl<'a> super::Interpreter<'a> {
         self.moved_out_container_bodies_bindings.remove(name);
         self.moved_out_tuple_elem_bodies.retain(|(n, _)| n != name);
         self.moved_out_struct_field_bodies
+            .retain(|(n, _)| n != name);
+        self.moved_out_struct_field_payload_bodies
+            .retain(|(n, _)| n != name);
+        self.moved_out_tuple_elem_payload_bodies
             .retain(|(n, _)| n != name);
         self.moved_out_drop_field_bindings.remove(name);
         self.moved_out_enum_payload_bindings.remove(name);

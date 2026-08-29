@@ -507,6 +507,25 @@ pub struct Interpreter<'a> {
     /// walker with the same field masked. Cleared for a name by
     /// `rearm_container_bodies_for_name`.
     pub(crate) moved_out_struct_field_bodies: HashSet<(String, String)>,
+    /// B-2026-08-29-33 — `(variable, field name)` pairs whose ENUM field's
+    /// PAYLOAD bodies a consuming `match` / `if let` arm over `<var>.<field>`
+    /// took. Held apart from `moved_out_struct_field_bodies` because the mask is
+    /// finer: the field's OWN `impl Drop` body still runs, since the enum object
+    /// did not move — only its payload did. Masking through that set removes the
+    /// field from the walked value entirely and loses that own body.
+    /// Codegen's twin is `disarm_struct_field_enum_payload_bodies_at`.
+    pub(crate) moved_out_struct_field_payload_bodies: HashSet<(String, String)>,
+    /// B-2026-08-29-33, tuple leg — `(variable, element index)` pairs whose ENUM
+    /// element's PAYLOAD bodies such an arm took, with the element's own body
+    /// still owed. The tuple sibling of the set above; codegen's twin is
+    /// `disarm_tuple_elem_enum_payload_bodies_at`.
+    pub(crate) moved_out_tuple_elem_payload_bodies: HashSet<(String, usize)>,
+    /// B-2026-08-29-33 — one-shot scratch consumed by the next
+    /// `drop_user_drop_fields_of_value` call: field names whose enum payload
+    /// walk it must skip at its TOP level. Taken (not borrowed) at entry, so the
+    /// mask applies to exactly one level and the walker's recursion into nested
+    /// struct fields cannot inherit it by name collision.
+    pub(crate) pending_payload_masked_fields: Option<HashSet<String>>,
     /// B-2026-07-30-11 (Option/Result leg) — the resolved `Option[P]` /
     /// `Result[O, E]` instantiation per let-bound variable, recorded by the
     /// Let arm through the SAME static resolution chain codegen's
@@ -945,6 +964,9 @@ impl<'a> Interpreter<'a> {
             moved_out_container_bodies_bindings: HashSet::new(),
             moved_out_tuple_elem_bodies: HashSet::new(),
             moved_out_struct_field_bodies: HashSet::new(),
+            moved_out_struct_field_payload_bodies: HashSet::new(),
+            moved_out_tuple_elem_payload_bodies: HashSet::new(),
+            pending_payload_masked_fields: None,
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),

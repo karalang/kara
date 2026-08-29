@@ -7327,6 +7327,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
+        // B-2026-08-29-33 — the BODIES half, beside the MEMORY half above.
+        // Gated on the arm actually taking a body-running payload, exactly as
+        // the identifier path gates its `suppress_container_elem_bodies_for_var`
+        // call: with nothing taken there is nothing to hand over, and masking
+        // would lose the body outright.
+        if self.enum_pattern_consumes_user_drop_payload(&enum_name, pattern) {
+            self.disarm_projection_enum_payload_bodies(scrutinee);
+        }
     }
 
     /// #16: a plain struct-pattern match destructure of an OWNED local struct
@@ -7956,8 +7964,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // moved out of the binding), so its tree carries `here` and no nested
         // level; the tree shape exists for the caller-side argument sites,
         // which resolve a path.
+        let payload_skip: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_payload_bodies
+            .get(var_name)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
         let skip = super::synth_drop::FieldSkipTree {
             here: skip.iter().copied().collect(),
+            payload_here: payload_skip,
             nested: Default::default(),
         };
         self.suppress_struct_field_bodies_for_var(var_name);
@@ -7971,6 +7986,91 @@ impl<'ctx> super::Codegen<'ctx> {
                 bodies,
                 UserDropKind::StructFieldBodies,
             );
+        }
+    }
+
+    /// B-2026-08-29-33 — the PAYLOAD-ONLY sibling of
+    /// [`Self::disarm_struct_field_bodies_at`]: a consuming arm over
+    /// `<var>.<field>` (`match s.e { E.A(r) => { let m = r; … } }`) took the
+    /// enum payload, so the owner's walk must stop running ITS body — while
+    /// still running the enum field's OWN `impl Drop` body, because the enum
+    /// object did not move, only its payload did.
+    ///
+    /// Masking the whole field through the sibling above would lose that own
+    /// body (`dE`); not masking at all ran the payload's body TWICE, the second
+    /// time on the slot `suppress_destructured_struct_field_enum_cleanup` had
+    /// just cap-zeroed — `m8 dR8 dE dR0` where `m8 dR8 dE` is due, `dR0` being a
+    /// user body reading its own fields off a zeroed object. The identifier
+    /// spelling gets this for free by having two separate cleanup actions; a
+    /// field has one walk, so the split has to happen inside it.
+    pub(super) fn disarm_struct_field_enum_payload_bodies_at(
+        &mut self,
+        var_name: &str,
+        field_idx: usize,
+    ) {
+        let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
+            return;
+        };
+        // Presence check only — the slot pointer is no longer needed, since the
+        // masked walker replaces an EXISTING action in place rather than
+        // registering a new one against the variable's slot.
+        if !self.variables.contains_key(var_name) {
+            return;
+        }
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        self.type_decls
+            .struct_moved_field_payload_bodies
+            .entry(var_name.to_string())
+            .or_default()
+            .insert(field_idx);
+        // Both masks are re-read from their maps so repeated arms accumulate
+        // and the two kinds compose — a struct can have one field moved
+        // wholesale and another's payload taken.
+        let here: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_bodies
+            .get(var_name)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        let payload_here: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_payload_bodies
+            .get(var_name)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        let skip = super::synth_drop::FieldSkipTree {
+            here,
+            payload_here,
+            nested: Default::default(),
+        };
+        // IN-PLACE swap, not retract-and-re-register: this runs inside a match
+        // ARM, whose cleanup frame is inner to the owner's, so a re-register
+        // would move the owner's walk into the arm and drain it there. See
+        // `replace_user_drop_fn_for_var`.
+        match self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip) {
+            Some(bodies) => {
+                // NO fallback registration when nothing matched. An absent
+                // action means the owner has no bodies walk here — a `ref self`
+                // receiver, say, whose CALLER owns the walk — and inventing one
+                // makes the caller's struct fire inside the callee: measured
+                // `dR8 dE n8 dE dR8`, `dE` twice, for a `ref self` method
+                // matching `self.e` and moving the payload out. Nothing to hand
+                // over is not the same as something to add.
+                let _ = self.replace_user_drop_fn_for_var(
+                    var_name,
+                    UserDropKind::StructFieldBodies,
+                    bodies,
+                );
+            }
+            // Nothing survives the mask — leave the action retracted, the same
+            // reading the whole-field sibling gives a `None`.
+            None => self.suppress_struct_field_bodies_for_var(var_name),
         }
     }
 
@@ -8009,6 +8109,121 @@ impl<'ctx> super::Codegen<'ctx> {
                 bodies,
                 UserDropKind::ContainerElemBodies,
             );
+        }
+    }
+
+    /// B-2026-08-29-33 — the PAYLOAD-ONLY sibling of
+    /// [`Self::disarm_tuple_elem_bodies_at`], and the tuple peer of
+    /// [`Self::disarm_struct_field_enum_payload_bodies_at`]. A consuming arm
+    /// over `<var>.<index>` took the enum element's payload, so the tuple's
+    /// element walk must stop running ITS body while still running the enum's
+    /// own. Masking the whole element loses `dE`; masking nothing runs the
+    /// payload's body twice, the second time on the cap-zeroed slot.
+    pub(super) fn disarm_tuple_elem_enum_payload_bodies_at(
+        &mut self,
+        var_name: &str,
+        index: u32,
+        tuple_ty: inkwell::types::StructType<'ctx>,
+    ) {
+        let Some(elem_tes) = self.var_types.tuple_var_elem_tes.get(var_name).cloned() else {
+            return;
+        };
+        if !self.variables.contains_key(var_name) {
+            return;
+        }
+        self.tuple_moved_elem_payload_bodies
+            .entry(var_name.to_string())
+            .or_default()
+            .insert(index);
+        let skip = self
+            .tuple_moved_elem_bodies
+            .get(var_name)
+            .cloned()
+            .unwrap_or_default();
+        let payload_skip = self
+            .tuple_moved_elem_payload_bodies
+            .get(var_name)
+            .cloned()
+            .unwrap_or_default();
+        // In-place swap for the same reason as the struct sibling above.
+        match self.emit_tuple_elem_user_drop_bodies_fn_masked(
+            tuple_ty,
+            &elem_tes,
+            &skip,
+            &payload_skip,
+        ) {
+            Some(bodies) => {
+                // No fallback registration — see the struct sibling above.
+                let _ = self.replace_user_drop_fn_for_var(
+                    var_name,
+                    UserDropKind::ContainerElemBodies,
+                    bodies,
+                );
+            }
+            None => self.suppress_container_elem_bodies_for_var(var_name),
+        }
+    }
+
+    /// B-2026-08-29-33 — the BODIES half of
+    /// [`Self::suppress_destructured_struct_field_enum_cleanup`], which until
+    /// now did only the MEMORY half (cap-zeroing the source field). A consuming
+    /// arm over a projection place took the payload, so whoever owns the place
+    /// must stop running its `Drop` body — otherwise it fires twice, the second
+    /// time reading its own fields off the slot the cap-zeroing just emptied.
+    ///
+    /// ONE HOP only, deliberately: `<ident>.<field>` and `<ident>.<index>` are
+    /// the shapes whose owner has a walk this can re-register. A deeper chain
+    /// (`w.s.e`) would need the mask threaded through `FieldSkipTree::nested`
+    /// against the intermediate field's walker, and it keeps today's behaviour
+    /// until something measures it.
+    fn disarm_projection_enum_payload_bodies(&mut self, scrutinee: &Expr) {
+        match &scrutinee.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let ExprKind::Identifier(root) = &object.kind else {
+                    return;
+                };
+                let root = root.clone();
+                let Some(struct_name) = self.var_types.var_type_names.get(root.as_str()).cloned()
+                else {
+                    return;
+                };
+                let Some(fidx) = self
+                    .type_decls
+                    .struct_field_names
+                    .get(struct_name.as_str())
+                    .and_then(|names| names.iter().position(|n| n == field))
+                else {
+                    return;
+                };
+                self.disarm_struct_field_enum_payload_bodies_at(&root, fidx);
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let ExprKind::Identifier(root) = &object.kind else {
+                    return;
+                };
+                let root = root.clone();
+                let index = *index as u32;
+                let Some(elem_tes) = self
+                    .var_types
+                    .tuple_var_elem_tes
+                    .get(root.as_str())
+                    .cloned()
+                else {
+                    return;
+                };
+                let tes: Vec<TypeExpr> = elem_tes.clone();
+                let tuple_te = TypeExpr {
+                    kind: TypeKind::Tuple(tes),
+                    span: scrutinee.span,
+                };
+                let inkwell::types::BasicTypeEnum::StructType(agg) =
+                    self.llvm_type_for_type_expr(&tuple_te)
+                else {
+                    return;
+                };
+                self.disarm_tuple_elem_enum_payload_bodies_at(&root, index, agg);
+            }
+            _ => {}
         }
     }
 
