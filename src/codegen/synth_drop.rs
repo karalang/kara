@@ -1530,6 +1530,28 @@ impl<'ctx> super::Codegen<'ctx> {
             /// a nulling write — the same rationale
             /// `CleanupAction::FreeGpuBuffer` records for a bound buffer.
             GpuBufferFree,
+            /// B-2026-08-29-12 — a `Tensor[T, [dims]]` field. The field is one
+            /// pointer to the `[rank][dims][data]` block (`src/codegen/tensor.rs`),
+            /// which no classifier above reads as anything but an opaque word, so
+            /// `struct Holder { t: Tensor[i64, [2, 3]] }` reclaimed its storage and
+            /// leaked the block — 72 B, with no ref return, no method and no read
+            /// of the field needed.
+            ///
+            /// Freed exactly like `CleanupAction::FreeTensor` does for a BOUND
+            /// tensor: null-guard, `free`, then null the field. Null is the
+            /// move-suppression sentinel for a tensor (the analog of Vec's
+            /// `cap = 0`), so the guard is what makes a moved-out field inert and
+            /// the store is what makes a second drop of the same storage inert.
+            ///
+            /// Safe to free here WITHOUT a deep-copy peer, and that pairing is the
+            /// whole design: `field_copy_supported` has no `Tensor` arm and falls
+            /// to its `_ => false` default, so a by-value struct param carrying one
+            /// stays CALLER-RETAINS and the callee never mints a second owner.
+            /// That is the same not-copy-supported-but-still-dropped shape a
+            /// `Map`/`Set` field already has (see `struct_heap_copyable_or_handle`,
+            /// which records the two properties coming apart), and it is why a
+            /// tensor field needs no `deep_copy_one_aggregate_field` sibling.
+            TensorFree,
             /// Phase-8 line 39 follow-up — an i64 field that's an opaque
             /// handle into a runtime side-table; free it via the named
             /// extern (guarded on `handle != 0`) at scope exit.
@@ -1642,6 +1664,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // cleanup channel, not this classifier).
                 Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet")
                 | Some("SortedMap") | Some("SortedSet") => FieldDrop::MapOrSet,
+                Some("Tensor") => FieldDrop::TensorFree,
                 _ => FieldDrop::None,
             })
             .collect();
@@ -2855,6 +2878,54 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder
                         .build_store(field_ptr, ptr_ty.const_null())
                         .unwrap();
+                }
+                FieldDrop::TensorFree => {
+                    // B-2026-08-29-12 — mirror `CleanupAction::FreeTensor`: the
+                    // field holds one pointer to the `[rank][dims][data]` block.
+                    // Null means the field was moved out (the tensor's
+                    // move-suppression sentinel), so guard before freeing, then
+                    // store null so a second drop of the same storage is inert.
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.tensor.p"),
+                        )
+                        .unwrap();
+                    let t_ptr = self
+                        .builder
+                        .build_load(ptr_ty, field_ptr, &format!("drop.field{field_idx}.tensor"))
+                        .unwrap()
+                        .into_pointer_value();
+                    let live = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            t_ptr,
+                            ptr_ty.const_null(),
+                            &format!("drop.field{field_idx}.tensor.live"),
+                        )
+                        .unwrap();
+                    let free_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("drop.f{field_idx}.tensor.free"));
+                    let skip_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("drop.f{field_idx}.tensor.skip"));
+                    self.builder
+                        .build_conditional_branch(live, free_bb, skip_bb)
+                        .unwrap();
+                    self.builder.position_at_end(free_bb);
+                    self.builder
+                        .build_call(self.runtime_fns.free_fn, &[t_ptr.into()], "")
+                        .unwrap();
+                    self.builder
+                        .build_store(field_ptr, ptr_ty.const_null())
+                        .unwrap();
+                    self.builder.build_unconditional_branch(skip_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
                 }
                 FieldDrop::GpuBufferFree => {
                     // Field 0 of the `{handle, n}` value is the resident

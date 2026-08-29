@@ -35253,6 +35253,111 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-12 — a `Tensor` FIELD of a struct was never freed: 72 B per
+    /// struct, with no ref return, no method, and no read of the field needed.
+    ///
+    /// The field is one pointer to the `[rank][dims][data]` block, and
+    /// `emit_struct_drop_synthesis`'s `FieldDrop` classifier had no arm for it,
+    /// so it read as `None` and the drop walk skipped it. The fix is the pair
+    /// `FieldDrop::TensorFree` (free it) + a `"Tensor"` arm in
+    /// `zero_struct_move_caps_mono` (null the source on a move) — and the
+    /// second half is not optional: with only the drop, a struct move armed BOTH
+    /// structs against one block and aborted with `free(): double free or
+    /// corruption`. `tensor-field-moved-into-vec` is the row that catches that
+    /// AT -O2 — verified by building with the drop arm alone, where it aborts
+    /// while the flat `tensor-field-moved` row below still passes, because -O2
+    /// has elided the flat one's blocks entirely.
+    ///
+    /// This is the row the parent B-2026-08-28-74 called "a tensor ref-return".
+    /// It is not — `asan_tensor_ref_return_borrow_clean` above reached the leak
+    /// only because it happened to hold its tensor in a `struct Holder`.
+    ///
+    /// THE `Vec[Holder]` ROW IS THE ONE THAT ASSERTS AT -O2, and that is why it
+    /// leads. This suite compiles at -O2, where LLVM promotes a never-freed
+    /// non-escaping tensor block out of existence: measured pre-fix, every flat
+    /// spelling below drops to 8 allocations and reports clean, while the
+    /// `Vec`-held pair keeps its blocks and leaks 144 B (11 allocs / 9 frees).
+    /// The flat rows are kept because they are the minimal statements of the
+    /// bug and they DO assert under the -O0 leg (`scripts/asan-o0-leg.sh`), but
+    /// their `min_allocs` floor is deliberately low — at -O2 there is nothing
+    /// left to count.
+    #[test]
+    fn asan_struct_tensor_field_is_freed() {
+        // The -O2-visible row: a Vec of tensor-bearing structs. Real floor.
+        assert_clean_asan_run_min_allocs(
+            "struct H { t: Tensor[i64, [2, 3]], n: i64 }\n\
+             fn mk(n: i64) -> H { return H { t: Tensor.from([[n, 2, 3], [4, 5, 6]]), n: n }; }\n\
+             fn main() {\n\
+             \x20   let mut hs: Vec[H] = [];\n\
+             \x20   hs.push(mk(1));\n\
+             \x20   hs.push(mk(2));\n\
+             \x20   println(hs[1].n);\n\
+             }\n",
+            &["2"],
+            "tensor-field-in-vec",
+            10,
+        );
+        // The -O2-visible MOVE row: a struct moved into a `Vec`, so the tensor
+        // stays live in memory the optimizer cannot promote away. This is the
+        // row that fails (double free, not a leak) if the `"Tensor"` arm in
+        // `zero_struct_move_caps_mono` is removed while the drop arm stays.
+        assert_clean_asan_run_min_allocs(
+            "struct H { t: Tensor[i64, [2, 3]], n: i64 }\n\
+             fn mk(n: i64) -> H { return H { t: Tensor.from([[n, 2, 3], [4, 5, 6]]), n: n }; }\n\
+             fn main() {\n\
+             \x20   let h = mk(1);\n\
+             \x20   let mut hs: Vec[H] = [];\n\
+             \x20   hs.push(h);\n\
+             \x20   println(hs[0].n);\n\
+             }\n",
+            &["1"],
+            "tensor-field-moved-into-vec",
+            10,
+        );
+        // The flat spellings. -O2 elides these (see the note above), so they
+        // carry a low floor and do their real work under the -O0 leg.
+        let rows: [(&str, &str, &str); 5] = [
+            (
+                "fn main() { let h = H { t: Tensor.from([[10, 20, 30], [40, 50, 60]]), n: 5 }; println(7); }",
+                "7",
+                "tensor-field-never-read",
+            ),
+            (
+                "fn main() { let h = H { t: Tensor.from([[10, 20, 30], [40, 50, 60]]), n: 5 }; println(h.t[1, 2]); }",
+                "60",
+                "tensor-field-read",
+            ),
+            // The move: with the drop but WITHOUT the move-suppression null,
+            // this is a double free, not a leak.
+            (
+                "fn main() { let h = H { t: Tensor.from([[10, 20, 30], [40, 50, 60]]), n: 5 }; let g = h; println(g.t[1, 2]); }",
+                "60",
+                "tensor-field-moved",
+            ),
+            // A by-value param: a Tensor-bearing struct is NOT copy-supported
+            // (`field_copy_supported` falls to its `_ => false` default), so the
+            // param stays caller-retains and the callee mints no second owner.
+            // Clean before the fix and after — the row exists to keep it so.
+            (
+                "fn take(h: H) -> i64 { return h.t[1, 2]; }\n\
+                 fn main() { let h = H { t: Tensor.from([[10, 20, 30], [40, 50, 60]]), n: 5 }; println(take(h)); }",
+                "60",
+                "tensor-field-by-value-param",
+            ),
+            // Returned from a fn rather than built in place.
+            (
+                "fn mk() -> H { return H { t: Tensor.from([[10, 20, 30], [40, 50, 60]]), n: 5 }; }\n\
+                 fn main() { let h = mk(); println(h.n); }",
+                "5",
+                "tensor-field-returned-struct",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!("struct H {{ t: Tensor[i64, [2, 3]], n: i64 }}\n{body}\n");
+            assert_clean_asan_run_min_allocs(&src, &[expected], label, 4);
+        }
+    }
+
     #[test]
     fn asan_borrow_local_read_methods_no_double_free() {
         // B-2026-06-07-5 residue: read-only methods beyond len/is_empty on a

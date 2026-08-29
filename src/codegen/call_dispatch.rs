@@ -7434,6 +7434,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 // same double-free this arm exists to prevent.
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+            } else if fname == "Tensor" {
+                // B-2026-08-29-12 — the `Tensor` sibling of the Map/Set arm
+                // above, and it exists for the same reason: the field is a
+                // single inline `ptr` to the `[rank][dims][data]` block, and the
+                // struct's drop now frees it (`FieldDrop::TensorFree`). A field
+                // the drop frees but the move does not neutralize is exactly the
+                // double free that arm prevents — measured here as `free(): double
+                // free or corruption` on `let g = h;` the moment the drop existed,
+                // with the by-value-param spelling unaffected (a Tensor-bearing
+                // struct is not copy-supported, so that param stays
+                // caller-retains and mints no second owner).
+                //
+                // Null the source pointer. Unlike the map handle this is read
+                // back under an explicit `!= null` guard in the drop arm rather
+                // than relying on a runtime early-return, matching what
+                // `CleanupAction::FreeTensor` already does for a bound tensor —
+                // null is that value's documented move-suppression sentinel.
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
             } else if self.type_decls.shared_types.contains_key(fname) {
                 // B-2026-07-28-9 — a `shared struct` / `shared enum` HANDLE
                 // field is one inline `ptr`, and the struct's drop rc-dec's it
