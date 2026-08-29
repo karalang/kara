@@ -2568,18 +2568,6 @@ impl<'a> super::Interpreter<'a> {
         });
     }
 
-    /// B-2026-07-30-11 (discarded-temp leg) — does a `let _ = <rhs>;` RHS
-    /// provably produce an OWNED value this discard site is responsible for?
-    /// Struct/tuple literals, enum-variant constructors, calls to
-    /// user-declared functions, a moved identifier (whose own Drop slot the
-    /// let-rebind hook retracts — the discard fire is then the single body),
-    /// and the owning container methods (`insert`/`remove`/`pop*`/`take`,
-    /// which return a displaced/extracted value the caller owns). Everything
-    /// else — `get`/`first`/`last`/`peek` borrows, unknown methods, arbitrary
-    /// expressions — stays silent: uncertain ⇒ silent, and firing a body on a
-    /// borrowed view would double it against the real owner. Codegen twin:
-    /// the same match in `compile_stmt`'s wildcard-let path; the two must
-    /// stay identical or the backends fire on different shapes.
     /// The value a match arm ultimately yields: an arm may be a bare
     /// expression or a block, and only the block's tail is the value. Mirrors
     /// codegen's `Codegen::block_tail_expr` so the two backends peel the same
@@ -2593,6 +2581,42 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-29-25 — the expression whose SHAPE decides a bare-statement
+    /// discard (`{ mk(7) };`, `{ match n { … } };`). The value has already
+    /// been evaluated from the whole statement; only the shape dispatch needs
+    /// the wrapper peeled, which is exactly what codegen's discard gates do —
+    /// they compile the whole expression and key the cleanup battery on the
+    /// tail.
+    ///
+    /// One shape is deliberately NOT peeled to: a bare `Identifier` that is
+    /// not a unit variant. `r;` is a moved local whose own scope-exit body
+    /// still fires, so a discard fire on top would double it, and compiled is
+    /// silent for the wrapped spelling too — declining keeps the pair agreed
+    /// rather than trading one defect for a divergence.
+    fn discard_stmt_shape_expr<'e>(&self, expr: &'e Expr) -> &'e Expr {
+        let tail = Self::arm_tail_expr(expr);
+        match &tail.kind {
+            ExprKind::Identifier(n)
+                if !std::ptr::eq(tail, expr) && self.fresh_bare_unit_variant_enum(n).is_none() =>
+            {
+                expr
+            }
+            _ => tail,
+        }
+    }
+
+    /// B-2026-07-30-11 (discarded-temp leg) — does a `let _ = <rhs>;` RHS
+    /// provably produce an OWNED value this discard site is responsible for?
+    /// Struct/tuple literals, enum-variant constructors, calls to
+    /// user-declared functions, a moved identifier (whose own Drop slot the
+    /// let-rebind hook retracts — the discard fire is then the single body),
+    /// and the owning container methods (`insert`/`remove`/`pop*`/`take`,
+    /// which return a displaced/extracted value the caller owns). Everything
+    /// else — `get`/`first`/`last`/`peek` borrows, unknown methods, arbitrary
+    /// expressions — stays silent: uncertain ⇒ silent, and firing a body on a
+    /// borrowed view would double it against the real owner. Codegen twin:
+    /// the same match in `compile_stmt`'s wildcard-let path; the two must
+    /// stay identical or the backends fire on different shapes.
     fn discard_rhs_produces_owned_value(&self, rhs: &Expr, val: &Value) -> bool {
         match &rhs.kind {
             ExprKind::StructLiteral { .. } | ExprKind::Identifier(_) => true,
@@ -2671,6 +2695,55 @@ impl<'a> super::Interpreter<'a> {
                             && self.discard_rhs_produces_owned_value(tail, val)
                     })
             }
+            // B-2026-08-29-25 — the `if` SPELLING of the arm above. An `if`
+            // chooses between branch values exactly as a `match` does, and the
+            // codegen twin decides both through one predicate
+            // (`discarded_match_value_tail`), so the two must be admitted here
+            // on identical terms — including the `Identifier` exclusion, whose
+            // rationale is spelled out on the `Match` arm and applies verbatim
+            // (a branch handing out a live enclosing local owns its own
+            // scope-exit body; firing here would double it).
+            //
+            // No `else`, or a chosen block with no tail expression, yields
+            // unit: there is no owned value for this discard to be responsible
+            // for, and the twin declines those for the same reason.
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => match (then_block.final_expr.as_deref(), else_branch.as_deref()) {
+                (Some(then_tail), Some(else_tail)) => [then_tail, else_tail]
+                    .into_iter()
+                    .map(Self::arm_tail_expr)
+                    .all(|tail| {
+                        !matches!(tail.kind, ExprKind::Identifier(_))
+                            && self.discard_rhs_produces_owned_value(tail, val)
+                    }),
+                _ => false,
+            },
+            // B-2026-08-29-25 — a BLOCK-WRAPPED RHS (`let _ = { match .. }`,
+            // `let _ = { mk(7) }`). This dispatch had no wrapper arm at all
+            // while the codegen twins have peeled wrappers since slice 5, so
+            // one pair of braces made this backend silent where all three
+            // compiled surfaces fired — measured on a wrapped call, a wrapped
+            // struct literal and a wrapped tuple before this landed.
+            //
+            // A bare `Identifier` tail is the exception, and it is not
+            // symmetry for its own sake: `let _ = r` is admitted above only
+            // because the let-rebind hook RETRACTS the local's own Drop slot,
+            // making the discard fire the single body. No such hook fires
+            // through a wrapper, so `let _ = { r }` would double it — and
+            // compiled is silent there too, so declining keeps the pair
+            // agreed. A bare unit VARIANT is not a place and stays admitted.
+            ExprKind::Block(block) | ExprKind::Seq(block) | ExprKind::Unsafe(block) => block
+                .final_expr
+                .as_deref()
+                .map(Self::arm_tail_expr)
+                .is_some_and(|tail| {
+                    !matches!(&tail.kind,
+                        ExprKind::Identifier(n) if self.fresh_bare_unit_variant_enum(n).is_none())
+                        && self.discard_rhs_produces_owned_value(tail, val)
+                }),
             ExprKind::MethodCall { method, .. } => {
                 matches!(
                     method.as_str(),
@@ -4222,7 +4295,17 @@ impl<'a> super::Interpreter<'a> {
                 // callee's declared return type has a user `impl Drop` —
                 // the discarded temp's body must fire (codegen twin:
                 // `try_track_discarded_user_drop_temp`).
-                match &expr.kind {
+                //
+                // B-2026-08-29-25 — dispatch on the block-WRAPPED tail, not on
+                // the wrapper. Codegen's discard gates have peeled `{ … }` /
+                // `unsafe { … }` / a labeled block down to their tail since
+                // slice 5; this dispatch never did, so `{ mk(7) };` and
+                // `{ match n { … } };` were silent on this backend while all
+                // three compiled surfaces fired. See
+                // `discard_stmt_shape_expr` for the one shape a wrapper is
+                // not peeled for.
+                let shape = self.discard_stmt_shape_expr(expr);
+                match &shape.kind {
                     ExprKind::Call { callee, .. } => {
                         // Bare Path-callee CTOR discard (`Option.Some(mk());`,
                         // `Sig.A(g);`): the wildcard-let gate admits Path
@@ -4353,6 +4436,37 @@ impl<'a> super::Interpreter<'a> {
                             matches!(&Self::arm_tail_expr(&a.body).kind,
                                 ExprKind::Identifier(n) if self.env.get(n).is_some())
                         });
+                        if !hands_out_live_binding {
+                            self.run_discarded_value_user_drops(discarded);
+                        }
+                    }
+                    // B-2026-08-29-25 — the `if` SPELLING of the arm above,
+                    // silent here and on both compiled surfaces until this
+                    // row. Same liveness gate, and it is needed for the same
+                    // measured reason: `let r = R { id: 41 }; if n == 0 { r }
+                    // else { R { id: 9 } };` hands out an ENCLOSING local that
+                    // already owns its scope-exit body, and that shape is
+                    // correct at one body today on all four surfaces —
+                    // firing the walker on top would double it.
+                    //
+                    // A branch with no tail expression, and an `if` with no
+                    // `else`, yield unit; the walker is value-driven and a
+                    // no-op on `Unit`, so they need no gate of their own.
+                    ExprKind::If {
+                        then_block,
+                        else_branch,
+                        ..
+                    } => {
+                        let hands_out_live_binding = then_block
+                            .final_expr
+                            .as_deref()
+                            .into_iter()
+                            .chain(else_branch.as_deref())
+                            .map(Self::arm_tail_expr)
+                            .any(|tail| {
+                                matches!(&tail.kind,
+                                    ExprKind::Identifier(n) if self.env.get(n).is_some())
+                            });
                         if !hands_out_live_binding {
                             self.run_discarded_value_user_drops(discarded);
                         }

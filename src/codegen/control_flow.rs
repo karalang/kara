@@ -2097,6 +2097,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the condition's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(condition);
+        // B-2026-08-29-25 — does the DISCARD STATEMENT site take ownership of
+        // this `if`'s value? If it does, the arm-level owner below must stand
+        // down: both would free the same buffer, measured as a double free on
+        // B-2026-08-29-5's `[if-fresh-in-both-arms]` fixture. Leaving the flag
+        // clear also restores the ordinary tail SUPPRESSION for these arms,
+        // which is exactly right — the statement frame is the consumer, and
+        // it is how the `match` spelling has always worked.
+        //
+        // The two gates partition the shape rather than overlapping: the
+        // statement site declines a no-`else` branch (the merge yields a
+        // placeholder, so it never sees the value) and an arm tail naming an
+        // existing binding, which are precisely the two populations
+        // B-2026-08-29-5 added the arm-level path for.
+        let discard_stmt_owns_value =
+            self.discarded_if_parts_qualify(then_block, else_branch) && !own_value;
         let cond_val = self.compile_expr(condition)?.into_int_value();
         // B-2026-08-28-44 — clear any takeover signal left by an unrelated
         // expression compiled before this branch; only what THIS branch's arms
@@ -2115,7 +2130,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_ctx.tail_ret_inner = tail;
         // B-2026-08-29-5 — see `branch_arm_value_discarded`: this arm's tail
         // hands its value to nobody when the `if`'s own value is discarded.
-        self.branch_arm_value_discarded = !own_value;
+        self.branch_arm_value_discarded = !own_value && !discard_stmt_owns_value;
         let mut then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
@@ -2150,7 +2165,7 @@ impl<'ctx> super::Codegen<'ctx> {
             match &else_expr.kind {
                 ExprKind::Block(blk) => {
                     else_tail = blk.final_expr.as_deref();
-                    self.branch_arm_value_discarded = !own_value;
+                    self.branch_arm_value_discarded = !own_value && !discard_stmt_owns_value;
                     self.compile_block_with_frame(blk)?
                 }
                 ExprKind::If {

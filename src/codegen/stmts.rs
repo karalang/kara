@@ -15385,23 +15385,6 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
-    /// General owned-temp tracking, slice 5 (see
-    /// `docs/spikes/general-owned-temp-tracking.md`): peel single-tail block
-    /// wrappers (`{ … make() }`, `unsafe { … }`, a labeled block) down to the
-    /// tail expression a *discarded* value actually originates from, so a
-    /// fresh owned temp produced in a block tail position — `{ make() }` in
-    /// statement position, or `let _ = { make() };` — routes through the
-    /// owned-temp chokepoint at the discard site instead of leaking. Returns
-    /// the tail `Expr` (whose span keys the `owned_temp_drops` hint table)
-    /// iff it yields a fresh owned temp; `None` leaves the value untracked,
-    /// exactly as before.
-    ///
-    /// Only *single-tail* wrappers are peeled. Branching tails (`if` / `match`
-    /// in tail position) are deliberately excluded: a branch whose tail is a
-    /// *place* expression (an aliased binding) would be double-freed against
-    /// its own cleanup, so discarded branching tails stay a (safe) leak for a
-    /// later slice. Phi-merged fresh-temp branches are the only thing lost by
-    /// this conservatism, and they are rare in discard position.
     /// A `match` used as a discarded expression-STATEMENT whose arms yield a
     /// fresh heap value — `match d { E.A(n) => f"[{n}]", E.B(_) => "x" };`.
     ///
@@ -15413,7 +15396,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`let s = match … ;`) has always been clean, which is the whole shape
     /// of the bug — the value is identical, only the discard path is missing.
     ///
-    /// Returns the MATCH itself, not an arm: exactly one arm runs and
+    /// Returns the CONSTRUCT itself, not an arm: exactly one arm runs and
     /// `compile_expr` hands back the merged phi, so the phi is the thing to
     /// free once.
     ///
@@ -15430,38 +15413,111 @@ impl<'ctx> super::Codegen<'ctx> {
     /// would double-free exactly when that arm is the one taken. One
     /// disqualifying arm is enough: the phi is a single value and the frame
     /// cannot know at compile time which arm produced it.
+    ///
+    /// B-2026-08-29-25 — also the `if` spelling, and through block wrappers.
+    /// An `if` chooses between arm values exactly as a `match` does and
+    /// `compile_expr` merges them into one phi, but this gate opened with a
+    /// `Match`-only `let .. else`, so `if c { R { .. } } else { .. };` ran no
+    /// `Drop` body on any backend — in BOTH statement forms, since the two
+    /// discard sites share this one predicate. An `if` with no `else`, or
+    /// whose chosen branch has no tail expression, yields unit and is
+    /// declined: there is no phi to own.
+    ///
+    /// The block recursion is the same one `discarded_owned_temp_tail` and
+    /// `discarded_unit_variant_tail` have always had; without it a single
+    /// pair of braces (`let _ = { match .. }`) hid an otherwise-admitted
+    /// construct from the gate. As in those siblings the INNER construct is
+    /// returned, not the wrapper: `compile_expr` still compiles the whole
+    /// block, and the returned expression is only what the cleanup battery
+    /// keys its shape queries on.
     fn discarded_match_value_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
-        let ExprKind::Match { arms, .. } = &expr.kind else {
-            return None;
-        };
-        if arms.is_empty() {
-            return None;
-        }
-        for arm in arms {
-            let tail = Self::block_tail_expr(&arm.body);
-            let ok = match &tail.kind {
-                ExprKind::InterpolatedStringLit(_) => true,
-                ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
-                ExprKind::Binary { .. } => self
-                    .span_tables
-                    .string_typed_exprs
-                    .contains(&(tail.span.offset, tail.span.length)),
-                // B-2026-08-28-69 — a STRUCT LITERAL arm mints a fresh owned
-                // value exactly as a call does, but `expr_yields_fresh_owned_temp`
-                // recognizes only `Call`/`MethodCall`, so `match n { 1 => { R {
-                // id: 7 } } .. };` was declined at this gate and its `Drop` body
-                // ran on NO backend. Admitted HERE rather than by widening that
-                // predicate, which has many other consumers whose freshness
-                // question is a different one (entry-copy depth, RC transfer);
-                // this gate's only consumers are the discard sites.
-                ExprKind::StructLiteral { .. } => true,
-                _ => self.expr_yields_fresh_owned_temp(tail),
-            };
-            if !ok {
-                return None;
+        match &expr.kind {
+            ExprKind::Match { arms, .. } => {
+                if arms.is_empty() {
+                    return None;
+                }
+                for arm in arms {
+                    if !self.discard_arm_tail_qualifies(Self::block_tail_expr(&arm.body)) {
+                        return None;
+                    }
+                }
+                Some(expr)
             }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => self
+                .discarded_if_parts_qualify(then_block, else_branch.as_deref())
+                .then_some(expr),
+            ExprKind::Block(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::LabeledBlock { body: block, .. } => block
+                .final_expr
+                .as_deref()
+                .and_then(|e| self.discarded_match_value_tail(e)),
+            _ => None,
         }
-        Some(expr)
+    }
+
+    /// [`Self::discarded_match_value_tail`]'s `If` leg, in the form
+    /// `compile_if` can ask it: that function receives the `if`'s PARTS, not
+    /// an `Expr` node, and it must know whether this discard site is going to
+    /// take ownership before it arms the arm-level owner B-2026-08-29-5
+    /// added. The two must not both fire — measured as a DOUBLE FREE on that
+    /// row's `[if-fresh-in-both-arms]` ASAN fixture.
+    ///
+    /// An `if` with no `else`, or whose then-branch has no tail expression,
+    /// yields unit: there is no owned phi for the statement frame to free,
+    /// and `compile_if`'s merge hands back a placeholder rather than the
+    /// arm's value, so the arm-level owner is the only thing that can reach
+    /// it. Declining here is what leaves that case to it.
+    pub(super) fn discarded_if_parts_qualify(
+        &self,
+        then_block: &Block,
+        else_branch: Option<&Expr>,
+    ) -> bool {
+        let (Some(else_branch), Some(then_tail)) = (else_branch, then_block.final_expr.as_deref())
+        else {
+            return false;
+        };
+        self.discard_arm_tail_qualifies(Self::block_tail_expr(then_tail))
+            && self.discard_arm_tail_qualifies(Self::block_tail_expr(else_branch))
+    }
+
+    /// One arm's worth of [`Self::discarded_match_value_tail`]'s fail-closed
+    /// test, shared by its `Match` and `If` legs so the two spellings can
+    /// never admit different shapes.
+    ///
+    /// A nested `Match`/`If` at an arm tail recurses rather than falling to
+    /// `expr_yields_fresh_owned_temp` (which recognizes only `Call` /
+    /// `MethodCall` and would decline it): the inner construct is itself a
+    /// phi of arm values, and it is admissible on exactly the same terms.
+    /// That recursion is also what carries an `else if` chain — its `else`
+    /// branch is another `If`.
+    fn discard_arm_tail_qualifies(&self, tail: &Expr) -> bool {
+        match &tail.kind {
+            ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => true,
+            ExprKind::Binary { .. } => self
+                .span_tables
+                .string_typed_exprs
+                .contains(&(tail.span.offset, tail.span.length)),
+            // B-2026-08-28-69 — a STRUCT LITERAL arm mints a fresh owned
+            // value exactly as a call does, but `expr_yields_fresh_owned_temp`
+            // recognizes only `Call`/`MethodCall`, so `match n { 1 => { R {
+            // id: 7 } } .. };` was declined at this gate and its `Drop` body
+            // ran on NO backend. Admitted HERE rather than by widening that
+            // predicate, which has many other consumers whose freshness
+            // question is a different one (entry-copy depth, RC transfer);
+            // this gate's only consumers are the discard sites.
+            ExprKind::StructLiteral { .. } => true,
+            ExprKind::Match { .. } | ExprKind::If { .. } => {
+                self.discarded_match_value_tail(tail).is_some()
+            }
+            _ => self.expr_yields_fresh_owned_temp(tail),
+        }
     }
 
     /// The value an arm body ultimately yields: an arm may be a bare
@@ -15475,6 +15531,24 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// General owned-temp tracking, slice 5 (see
+    /// `docs/spikes/general-owned-temp-tracking.md`): peel single-tail block
+    /// wrappers (`{ … make() }`, `unsafe { … }`, a labeled block) down to the
+    /// tail expression a *discarded* value actually originates from, so a
+    /// fresh owned temp produced in a block tail position — `{ make() }` in
+    /// statement position, or `let _ = { make() };` — routes through the
+    /// owned-temp chokepoint at the discard site instead of leaking. Returns
+    /// the tail `Expr` (whose span keys the `owned_temp_drops` hint table)
+    /// iff it yields a fresh owned temp; `None` leaves the value untracked,
+    /// exactly as before.
+    ///
+    /// Only *single-tail* wrappers are peeled here. A branching tail (`if` /
+    /// `match`) is declined by this predicate because it is not a Call — a
+    /// branch whose tail is a *place* expression (an aliased binding) would
+    /// be double-freed against its own cleanup. Branching tails are decided
+    /// by the `&self` sibling [`Self::discarded_match_value_tail`] instead,
+    /// which applies that fail-closed test per arm; both discard sites chain
+    /// the two, so a phi-merged fresh-temp branch is no longer lost.
     pub(super) fn discarded_owned_temp_tail(expr: &Expr) -> Option<&Expr> {
         match &expr.kind {
             ExprKind::Call { .. } | ExprKind::MethodCall { .. } => Some(expr),

@@ -3126,6 +3126,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// declared return type has a user `impl Drop` (`make();` — silent on
     /// both surfaces before this). Type-gated exactly like the arg-temp
     /// arm; shared types stay with the rc machinery.
+    /// The owned type a discarded BRANCH tail mints, for
+    /// [`Self::try_track_discarded_user_drop_temp`]'s `Match` and `If` arms.
+    /// A struct literal names its own type; a call resolves through the fn
+    /// return table; a nested branch recurses, which is what carries an
+    /// `else if` chain and a `match` inside an `if` arm. Anything else
+    /// yields `None` and the battery registers nothing — the same
+    /// uncertain-⇒-silent rule the gate that admitted the shape applies.
+    fn discard_branch_tail_type_name(&self, body: &Expr) -> Option<String> {
+        let t = Self::block_tail_expr(body);
+        match &t.kind {
+            ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fn_name) => {
+                    self.fn_sig.fn_return_type_names.get(fn_name).cloned()
+                }
+                _ => None,
+            },
+            ExprKind::Match { arms, .. } => arms
+                .first()
+                .and_then(|arm| self.discard_branch_tail_type_name(&arm.body)),
+            ExprKind::If { then_block, .. } => then_block
+                .final_expr
+                .as_deref()
+                .and_then(|e| self.discard_branch_tail_type_name(e)),
+            _ => None,
+        }
+    }
+
     pub(super) fn try_track_discarded_user_drop_temp(
         &mut self,
         tail: &Expr,
@@ -3145,19 +3173,24 @@ impl<'ctx> super::Codegen<'ctx> {
             // arm's tail decides it. Resolved through the same two shapes this
             // routine already understands plus a struct literal, which is the
             // canonical way an arm mints a fresh owned value.
-            ExprKind::Match { arms, .. } => arms.first().and_then(|arm| {
-                let t = Self::block_tail_expr(&arm.body);
-                match &t.kind {
-                    ExprKind::StructLiteral { path, .. } => path.last().cloned(),
-                    ExprKind::Call { callee, .. } => match &callee.kind {
-                        ExprKind::Identifier(fn_name) => {
-                            self.fn_sig.fn_return_type_names.get(fn_name).cloned()
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }),
+            ExprKind::Match { arms, .. } => arms
+                .first()
+                .and_then(|arm| self.discard_branch_tail_type_name(&arm.body)),
+            // B-2026-08-29-25 — the `if` sibling of the arm above, and the
+            // second half of that row's fix: widening
+            // `discarded_match_value_tail` to admit an `if` gets the discard
+            // frame pushed, but the body still needs a TYPE to register, and
+            // every arm of this resolution keyed on a call or a `match`. With
+            // the gate open and this closed, `if c { R { .. } } else { .. };`
+            // entered the discard arm and registered nothing — still silent.
+            //
+            // The THEN branch decides it, for the same reason the `match`
+            // arm's first arm does: every branch of one `if` yields the same
+            // type.
+            ExprKind::If { then_block, .. } => then_block
+                .final_expr
+                .as_deref()
+                .and_then(|t| self.discard_branch_tail_type_name(t)),
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(fn_name) => {
                     self.fn_sig.fn_return_type_names.get(fn_name).cloned()

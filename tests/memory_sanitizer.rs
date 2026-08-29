@@ -53826,6 +53826,122 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-25 — the MEMORY half of the discarded-`if` and
+    /// block-wrapper fix, with HEAP-CARRYING payloads.
+    ///
+    /// The row that filed this called for the check explicitly: routing a
+    /// value into the discard battery FREES it as well as running its body,
+    /// so a gate widening is exactly the change that can turn a missing body
+    /// into a double free. Every shape this row newly admits carries a
+    /// `String` here, and the enclosing-local guard is included because it is
+    /// the one the gate must keep DECLINING — a fire there would free a
+    /// buffer the local still owns.
+    #[test]
+    fn asan_discarded_if_and_block_wrapped_rhs_free_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"heap-{i}" }; }
+fn main() {
+    let n = 1;
+    let _ = if n == 1 { R { id: 7, name: f"lit-seven" } } else { mk(0) };
+    if n == 1 { mk(3) } else { mk(0) };
+    let _ = if n == 2 { mk(1) } else if n == 1 { mk(4) } else { mk(0) };
+    println("dropped");
+}
+"#,
+            &["dR7 lit-seven", "dR3 heap-3", "dR4 heap-4", "dropped"],
+            "discarded_if",
+        );
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"heap-{i}" }; }
+fn main() {
+    let n = 1;
+    let _ = { match n { 1 => { mk(5) } _ => { mk(0) } } };
+    { match n { 1 => { mk(6) } _ => { mk(0) } } };
+    let _ = { mk(8) };
+    println("dropped");
+}
+"#,
+            &["dR5 heap-5", "dR6 heap-6", "dR8 heap-8", "dropped"],
+            "discarded_block_wrapped",
+        );
+        // A block-wrapped `if` is the shape where the two mechanisms are most
+        // likely to disagree about who owns the value: the statement gate
+        // recurses through the wrapper to reach the `if`, while `compile_if`
+        // decides whether to arm B-2026-08-29-5's arm-level owner from the
+        // condition alone and never sees the wrapper. One free, either way.
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"heap-{i}" }; }
+fn main() {
+    let n = 1;
+    let _ = { if n == 1 { mk(1) } else { mk(0) } };
+    { if n == 1 { mk(2) } else { mk(0) } };
+    let _ = if n == 1 { { mk(3) } } else { { mk(0) } };
+    println("dropped");
+}
+"#,
+            &["dR1 heap-1", "dR2 heap-2", "dR3 heap-3", "dropped"],
+            "discarded_block_wrapped_if",
+        );
+        // The shape `test_ir_discarded_branching_tail_temp_is_tracked` now
+        // asserts IS tracked: a branching discard tail whose every arm is a
+        // fresh `Vec` call. Slice 5 left this untracked as "a safe leak,
+        // deferred"; it is freed now, and this is the check that freeing it
+        // is a single free and not the double the old conservatism feared.
+        assert_clean_asan_run(
+            r#"
+fn make_vec(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    return v;
+}
+fn main() {
+    let cond = true;
+    { if cond { make_vec(1) } else { make_vec(2) } }
+    let _ = if cond { make_vec(3) } else { make_vec(4) };
+    println("dropped");
+}
+"#,
+            &["dropped"],
+            "discarded_branching_tail_vec",
+        );
+        // The shape the gate must keep declining: the branch hands out an
+        // enclosing local. `r`'s buffer is still the local's, and a discard
+        // fire would free it a second time — ASAN is the check that it does
+        // not, and it passes.
+        //
+        // The body reads `name`, which is what makes this a content check and
+        // not just a count. Against a tree WITHOUT B-2026-08-29-5's fix this
+        // printed `dR41 ` on both compiled backends against the interpreter's
+        // `dR41 forty-one`: the local's String was moved into the discarded
+        // value and freed there, and the scope-exit body then read the
+        // emptied field. That fix landed while this row was in flight and the
+        // three backends agree now — pinned here so a regression shows up as
+        // a content mismatch rather than a silent one.
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
+fn main() {
+    let r = R { id: 41, name: f"forty-one" };
+    let n = 0;
+    if n == 0 { r } else { R { id: 9, name: f"nine" } };
+    println("end");
+}
+"#,
+            &["dR41 forty-one", "end"],
+            "discarded_if_enclosing_local",
+        );
+    }
+
     /// B-2026-08-29-19 — the MEMORY half of the wrapped-param-view double body,
     /// with a HEAP-CARRYING payload.
     ///

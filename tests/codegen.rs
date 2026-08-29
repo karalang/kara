@@ -18988,10 +18988,10 @@ fn main() {
     ///  * 1 and 6 are agreed-silent, and 2 is a live run-vs-build DIVERGENCE —
     ///    compiled fires through the general match lowering (an arm-scope drop
     ///    of the binding), the interpreter does not. All three are arms that
-    ///    HAND OUT A BINDING rather than mint a value, which is
-    ///    B-2026-08-29-5's population ("a discarded match/if let whose arm
-    ///    hands the bound payload out as the construct's value"), reached here
-    ///    through the `let _ =` spelling instead of the bare statement.
+    ///    HAND OUT A BINDING rather than mint a value. B-2026-08-29-5 fixed
+    ///    the LEAK for that population ("a discarded branch construct strands
+    ///    whatever its taken arm hands out"); the missing BODY, which is what
+    ///    these rows measure, is B-2026-08-29-31.
     ///
     /// Row 2 is why the interpreter twin EXCLUDES `Identifier` at an arm tail
     /// rather than recursing whole: its predicate admits a bare identifier
@@ -18999,7 +18999,7 @@ fn main() {
     /// well — where compiled is silent — moving the divergence one row over
     /// instead of removing it. Making rows 1 and 2 agree needs the arm-binding
     /// ownership question answered for both backends at once, which is the
-    /// separate design decision B-2026-08-29-5 carries.
+    /// separate design decision B-2026-08-29-31 carries.
     ///
     /// Also still silent and NOT in this table, measured while bounding the
     /// fix: the `if` spelling of the same discard (`let _ = if c { R { .. } }
@@ -19021,14 +19021,14 @@ fn main() {
                  let _ = match o { Some(r) => { r } None => { R { id: 0 } } };\n\
                  println(\"dropped\");",
                 "dropped\n",
-                "UNFIXED (B-2026-08-29-5): braced arm hands out the bound payload",
+                "UNFIXED (B-2026-08-29-31): braced arm hands out the bound payload",
             ),
             (
                 "let o: Option[R] = Some(R { id: 1 });\n\
                  let _ = match o { Some(r) => r, None => R { id: 0 } };\n\
                  println(\"dropped\");",
                 "dR1\ndropped\n",
-                "UNFIXED, DIVERGENT (B-2026-08-29-5): bare arm hands out the bound payload",
+                "UNFIXED, DIVERGENT (B-2026-08-29-31): bare arm hands out the bound payload",
             ),
             (
                 "let n = 1;\n\
@@ -19057,7 +19057,7 @@ fn main() {
                  let _ = match n { 0 => r, _ => R { id: 9 } };\n\
                  println(\"end\");",
                 "end\n",
-                "UNFIXED (B-2026-08-29-5): arm hands out an enclosing local",
+                "UNFIXED (B-2026-08-29-31): arm hands out an enclosing local",
             ),
         ];
         for (body, expected, label) in rows {
@@ -19085,6 +19085,174 @@ fn main() {
             run_program(&read).as_deref(),
             Some("saw1\ndR1\ndropped\n"),
             "[control: read-only arm]"
+        );
+    }
+
+    /// B-2026-08-29-25 — a discarded `if` runs its arm value's `Drop` body,
+    /// in BOTH statement forms, and a discard gate sees through a block
+    /// wrapper.
+    ///
+    /// The `if` half was silent on all three backends: the gate the sibling
+    /// `match` spelling goes through (`discarded_match_value_tail`) opened
+    /// with a `Match`-only destructure, and the type resolution the battery
+    /// needs (`try_track_discarded_user_drop_temp`) had no `If` arm either —
+    /// so both halves had to land for the body to fire. The BARE-STATEMENT
+    /// row is the one that shows the gap predates B-2026-08-29-20: it sits at
+    /// B-2026-08-28-69's site too.
+    ///
+    /// The wrapper half was an interpreter-vs-compiled DIVERGENCE for the
+    /// shapes compiled already admitted (a wrapped call, a wrapped struct
+    /// literal) and an agreed silence for the wrapped `match`. Every row here
+    /// is one `R`, constructed once and taken by nobody, so one body is due.
+    #[test]
+    fn e2e_discarded_if_and_block_wrapped_match_run_their_drop_body_once() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mk(i: i64) -> R { return R { id: i }; }\n";
+        let rows: [(&str, &str, &str); 9] = [
+            (
+                "let n = 1;\n\
+                 let _ = if n == 1 { R { id: 7 } } else { R { id: 0 } };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: `let _ = if …`, struct-literal branches",
+            ),
+            (
+                "let n = 1;\n\
+                 if n == 1 { R { id: 7 } } else { R { id: 0 } };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: bare-statement `if …` — predates B-2026-08-29-20",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = if n == 1 { mk(7) } else { mk(0) };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: `let _ = if …`, call branches",
+            ),
+            (
+                "let n = 1;\n\
+                 if n == 1 { mk(7) } else { mk(0) };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: bare-statement `if …`, call branches",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = if n == 2 { R { id: 1 } } else if n == 1 { R { id: 7 } } else { R { id: 0 } };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: `else if` chain — the else branch is another `If`",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = if n == 1 { match n { 1 => { R { id: 7 } } _ => { R { id: 3 } } } } else { R { id: 0 } };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: a `match` nested at an `if` branch tail",
+            ),
+            (
+                "let n = 1;\n\
+                 let _ = { match n { 1 => { R { id: 7 } } _ => { R { id: 0 } } } };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: block-wrapped match, `let _ =` form",
+            ),
+            (
+                "let n = 1;\n\
+                 { match n { 1 => { R { id: 7 } } _ => { R { id: 0 } } } };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "FIXED: block-wrapped match, bare-statement form",
+            ),
+            (
+                "let _ = { mk(7) };\n\
+                 println(\"end\");",
+                "dR7\nend\n",
+                "block-wrapped call — compiled fired all along; the interpreter twin \
+                 is what this row moved",
+            ),
+        ];
+        for (body, expected, label) in rows {
+            let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(expected), "[{label}]");
+        }
+        // AN `if` BRANCH THAT HANDS OUT AN ENCLOSING LOCAL, both statement
+        // forms, measured against the `match` spelling of the same shape —
+        // the two agree exactly, which is what says the widening did not give
+        // `if` a different answer from its sibling.
+        //
+        // The bare form is the GUARD RAIL and the reason the gate excludes an
+        // `Identifier` branch tail: `r` is still in scope, so its scope-exit
+        // body already fires and is correct at ONE. Firing the discard walker
+        // on top prints `dR41` twice — the failure the sibling `match` arm's
+        // liveness gate was measured into existence by, and this row fails at
+        // 2 if the `If` arm's gate is removed.
+        //
+        // The `let _ =` form is PINNED AT THE DEFECT: `r` is handed out and
+        // nothing runs its body on any backend. B-2026-08-29-5 fixed the
+        // LEAK for that population; the missing BODY is B-2026-08-29-31, and
+        // its `match` twin is pinned identically in
+        // `e2e_discarded_let_wildcard_match_runs_its_drop_body_once`.
+        for (stmt, expected, label) in [
+            (
+                "if n == 0 { r } else { R { id: 9 } };",
+                "dR41\nend\n",
+                "guard: bare form — scope-exit body must stay at ONE",
+            ),
+            (
+                "let _ = if n == 0 { r } else { R { id: 9 } };",
+                "end\n",
+                "pinned UNFIXED (B-2026-08-29-31): branch hands out an enclosing local",
+            ),
+        ] {
+            let src = format!(
+                "{hdr}fn main() {{\n\
+                 let r = R {{ id: 41 }};\n\
+                 let n = 0;\n\
+                 {stmt}\n\
+                 println(\"end\");\n}}\n"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some(expected),
+                "[{label} — {stmt}]"
+            );
+        }
+        // PINNED AT THE DEFECT, not asserted as correct. An `if` with no
+        // `else` still constructs an `R` on the taken path and runs no body
+        // on any backend. It is declined deliberately: with no else there is
+        // no phi, so freeing it needs a CONDITIONAL registration rather than
+        // a wider gate — a different mechanism, filed rather than guessed at.
+        // Agreed across all three backends, so no parity gate can see it;
+        // this row is the only signal, and it flips when that is fixed.
+        for stmt in [
+            "let _ = if n == 1 { R { id: 7 } };",
+            "let _ = if n == 1 { mk(7) };",
+        ] {
+            let src = format!("{hdr}fn main() {{\nlet n = 1;\n{stmt}\nprintln(\"end\");\n}}\n");
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("end\n"),
+                "[pinned UNFIXED: `if` with no `else` — {stmt}]"
+            );
+        }
+        // PINNED: a moved local reached through a wrapper. `let _ = r` is
+        // correct at one body because the let-rebind hook retracts the
+        // local's own slot; no such hook fires through `{ … }`, and both
+        // backends are silent. Declining keeps the pair agreed rather than
+        // trading a shared defect for a divergence.
+        let wrapped_local = format!(
+            "{hdr}fn main() {{\n\
+             let r = R {{ id: 41 }};\n\
+             let _ = {{ r }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(
+            run_program(&wrapped_local).as_deref(),
+            Some("end\n"),
+            "[pinned UNFIXED: `let _ = {{ r }}` — moved local through a wrapper]"
         );
     }
 
@@ -63922,6 +64090,17 @@ fn main() {
         // the aliasing branch the deferral was protecting. Its sibling below
         // pins that half, so the guard the old assertion stood for is still
         // gated, by a predicate rather than by declining the whole shape.
+        //
+        // B-2026-08-29-25 then gave the STATEMENT site an `if` leg of its own,
+        // so two mechanisms can claim this shape and freeing it twice is a
+        // real double free (measured, on the `[if-fresh-in-both-arms]` ASAN
+        // fixture). They partition it instead: `compile_if` asks
+        // `discarded_if_parts_qualify` and stands the arm-level owner down
+        // when the statement site will take ownership, which leaves the arm
+        // path exactly the two cases the statement gate declines — a
+        // no-`else` branch and an arm tail naming an existing binding. Either
+        // mechanism satisfies this assertion; the ASAN suite is what says
+        // only one of them fires.
         let src = r#"
 fn make_vec() -> Vec[i64] {
     let mut v: Vec[i64] = Vec.new();
