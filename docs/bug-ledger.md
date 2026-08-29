@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 310 | 0 |
-| leak | 227 | 3 |
+| leak | 227 | 2 |
 | run-vs-build | 221 | 8 |
 | missing-feature | 187 | 0 |
 | double-free | 155 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1201 | 11 |
+| codegen | 1201 | 10 |
 | typecheck | 278 | 0 |
 | interp | 233 | 6 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1766 surfaced · 12 open · 1728 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1766 surfaced · 11 open · 1729 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1766 surfaced
 | B-2026-08-29-15 | 2026-08-29 | interp+codegen | medium | A NAMED struct binding passed by value to a function that returns it runs the `Drop` body TWICE on all four surfaces -- for a FREE FUNCTION as well as a method, and for a block tail as well as `return r;`. NOTE: the row's free-function oracle and its `return`-vs-tail framing are both REFUTED, and the second body tracks a second real allocation (the callee's entry copy), so 'one body is due' is a design question rather than a measured defect -- see the CORRECTION | — |
 | B-2026-08-29-16 | 2026-08-29 | interp+codegen | medium | A GENERIC method that returns its owned param CONDITIONALLY is wrong in BOTH directions and diverges both ways -- param dies: interp 0 bodies / compiled 1; param escapes: interp 1 / compiled 2 -- and neither side can be corrected alone, because the callee-side flip that would settle it is declined for generics (B-2026-08-28-71) | — |
 | B-2026-08-29-17 | 2026-08-29 | interp+codegen | medium | ALL THREE BACKENDS run a match-arm payload's `Drop` body TWICE when the arm REBINDS it to a local that does NOT escape -- `Box2.Full(r) => { let m = r; m.id }` prints `dR1 dR1 v=1` where one body is due; the same arm without the rebind is correct everywhere, and the ESCAPING spelling of this rebind was B-2026-08-29-8 (which DIVERGED, so parity caught it -- this one agrees and parity cannot) | — |
-| B-2026-08-29-18 | 2026-08-29 | codegen | medium | THE OUTER-`Result` SPELLING OF THE NESTED-ENVELOPE LEAK: `Result[Option[Wide], i64]` and `Result[Option[String], i64]` still strand the innermost payload's heap on plain scope exit (38 B each), because their `NestedBoxedEnumDrop` DIRECT registration passes `box_contents: None` at the let site so the leaf-drop resolver that fixed the outer-`Option` half has nothing to see | — |
 
 ### Relocated (2)
 
@@ -173,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1766 surfaced
 
 </details>
 
-### Fixed (1728)
+### Fixed (1729)
 
-<details><summary>1728 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1729 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1907,6 +1906,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1766 surfaced
 | B-2026-08-29-8 | codegen | medium | A MATCH ARM THAT REBINDS ITS PAYLOAD TO A LOCAL AND YIELDS IT AS THE ARM'S BLOCK TAIL RUNS THE `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `Box2.F… | 077a6bd |
 | B-2026-08-29-9 | interp | high | REGRESSION (277621a): A METHOD that RETURNS a payload bound out of its owned enum / `Option` param now runs that payload's `Drop` BODY TWICE IN THE I… | 1167db7 |
 | B-2026-08-29-12 | codegen | medium | A `Tensor` FIELD OF A STRUCT IS NEVER FREED -- 72 B per struct, with no ref return, no method and no read of the field anywhere; the parent row's "te… | 4b0a560 |
+| B-2026-08-29-18 | codegen | medium | THE OUTER-`Result` SPELLING OF THE NESTED-ENVELOPE LEAK: `Result[Option[Wide], i64]` and `Result[Option[String], i64]` still strand the innermost pay… | c794214 |
 
 </details>
 
