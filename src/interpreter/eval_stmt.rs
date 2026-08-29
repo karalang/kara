@@ -3399,6 +3399,33 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-29-15 — the OWN-`Drop` half of the passthrough disarm, for an
+    /// argument the callee hands back AS ITSELF.
+    ///
+    /// [`Self::record_container_move_source_name`] deliberately skips an
+    /// own-`Drop` struct, deferring to `suppress_let_rebind_user_drop`'s action
+    /// retraction — which only sees a bare `let` rebind, so at a CALL ARG the
+    /// binding stayed armed and fired alongside the caller's result binding:
+    /// `let a = Res { .. }; let r = take(a);` ran the body twice for one
+    /// object, agreeing on all four surfaces and so invisible to any A/B gate.
+    ///
+    /// Gated by the caller on [`crate::ast::fn_always_returns_param_bare`], not
+    /// the looser sibling, because this retracts the WHOLE-VALUE channel and
+    /// only a bare hand-back replaces the retracted owner with an equivalent
+    /// one. A param moved into a returned aggregate (`Bx { r: r }`) has a NEW
+    /// owner and must keep firing — see that predicate for both measurements.
+    ///
+    /// Same shape as the own-`Drop` widening
+    /// [`Self::record_container_move_sources_in_aggregate_arg`] applies for
+    /// B-2026-08-02-22, and it reuses that channel rather than adding one.
+    pub(crate) fn record_returned_arg_user_drop_move(&mut self, name: &str) {
+        let own_drop = matches!(self.env.get(name), Some(Value::Struct { name: ref tn, .. })
+            if self.program.drop_method_keys.contains_key(tn));
+        if own_drop {
+            self.moved_out_user_drop_bindings.insert(name.to_string());
+        }
+    }
+
     /// B-2026-08-02-23 leg 2 (interp twin of the `flows_into_return` bodies
     /// leg in `call_dispatch`) — a bare-identifier arg in a position the callee
     /// RETURNS (`fn passthru(v) -> Vec[Res] { v }`, or a param moved into a
@@ -3418,33 +3445,44 @@ impl<'a> super::Interpreter<'a> {
         fn_name: &str,
         args: &[crate::ast::CallArg],
     ) {
-        let passthrough: Vec<String> = args
+        let passthrough: Vec<(String, bool)> = args
             .iter()
             .enumerate()
             .filter_map(|(i, arg)| {
                 let ExprKind::Identifier(n) = &arg.value.kind else {
                     return None;
                 };
-                self.program
-                    .items
-                    .iter()
-                    .any(|item| {
-                        // B-2026-08-09-15 — `fn_returns_param_payload` is the same
-                        // rule one level down: the callee hands back not the param
-                        // but something a `match` arm bound OUT of it, so the param
-                        // reaches no return site and `fn_returns_param` is blind to
-                        // it while the value still leaves the frame. Codegen's twin
-                        // is `callee_returns_enum_arg_payload`.
-                        matches!(item, crate::ast::Item::Function(f)
+                let is_passthrough = self.program.items.iter().any(|item| {
+                    // B-2026-08-09-15 — `fn_returns_param_payload` is the same
+                    // rule one level down: the callee hands back not the param
+                    // but something a `match` arm bound OUT of it, so the param
+                    // reaches no return site and `fn_returns_param` is blind to
+                    // it while the value still leaves the frame. Codegen's twin
+                    // is `callee_returns_enum_arg_payload`.
+                    matches!(item, crate::ast::Item::Function(f)
                             if f.name == fn_name
                                 && (crate::ast::fn_returns_param(f, i)
                                     || crate::ast::fn_returns_param_payload(f, i)))
-                    })
-                    .then(|| n.clone())
+                });
+                if !is_passthrough {
+                    return None;
+                }
+                // B-2026-08-29-15 — asked separately and STRICTLY: the
+                // whole-value disarm below is licensed only where the callee
+                // hands this argument back as ITSELF on every exit.
+                let returns_bare = self.program.items.iter().any(|item| {
+                    matches!(item, crate::ast::Item::Function(f)
+                        if f.name == fn_name
+                            && crate::ast::fn_always_returns_param_bare(f, i))
+                });
+                Some((n.clone(), returns_bare))
             })
             .collect();
-        for n in passthrough {
+        for (n, returns_bare) in passthrough {
             self.record_container_move_source_name(&n);
+            if returns_bare {
+                self.record_returned_arg_user_drop_move(&n);
+            }
         }
     }
 

@@ -7272,6 +7272,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.suppress_container_elem_bodies_for_var(&var_name);
                             }
                         }
+                        // B-2026-08-29-15 — the method spelling of the
+                        // own-wrapper retraction in `compile_call`'s arg loop:
+                        // a named argument handed back AS ITSELF left the
+                        // caller's binding firing a body the result binding
+                        // also owned, for one object. `i`, not `pidx`:
+                        // `find_function_ast` hands back the raw AST method
+                        // whose `params` exclude the receiver, the same key the
+                        // `fn_always_returns_param` call below uses.
+                        if self.callee_always_returns_arg_bare(&qualified, i) {
+                            if let ExprKind::Identifier(var_name) = &a.value.kind {
+                                let var_name = var_name.clone();
+                                self.suppress_user_drop_body_keeping_memory(&var_name);
+                            }
+                        }
                     }
                     if is_ref {
                         // B-2026-08-21-23 — a `ref Slice[T]` / `mut ref Slice[T]`

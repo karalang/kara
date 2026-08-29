@@ -8819,6 +8819,84 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-29-15 — retract a binding's user `Drop` BODY while leaving its
+    /// MEMORY cleanup registered.
+    ///
+    /// [`Self::suppress_user_drop_for_var`] is too strong for a by-value
+    /// argument the callee hands straight back. The `karac_drop_<T>` wrapper it
+    /// removes is body + fields + memory (see [`CleanupAction::UserDrop`]), and
+    /// for this shape the caller's slot is the sole MEMORY owner even though
+    /// the result binding has taken over the body: measured with the whole
+    /// action removed, `fn takef(r: R) -> R { return r; }` over a named
+    /// argument went from 13 allocs / 13 frees to 12 / 11 — one body correctly
+    /// gone, and one `String` buffer orphaned with it.
+    ///
+    /// So the action is DOWNGRADED rather than dropped: `UserDrop`'s wrapper is
+    /// swapped for the field-cleanup-only `__karac_drop_struct_<T>` that
+    /// wrapper would itself have called, registered against the same alloca.
+    /// A struct with no heap-owning fields synthesises no such function, and
+    /// there the plain removal IS correct — nothing was going to be freed.
+    ///
+    /// Only `UserDropKind::OwnWrapper` entries are touched. The bodies-only
+    /// kinds have their own retraction families
+    /// (`suppress_container_elem_bodies_for_var`,
+    /// `suppress_struct_field_bodies_for_var`) and free nothing, so downgrading
+    /// them would be meaningless.
+    pub(super) fn suppress_user_drop_body_keeping_memory(&mut self, name: &str) {
+        // SELF-ASSIGNMENT DECLINES. `e = pass(e);` stores the callee's result
+        // back into this very binding, so `e` does not die at the call — it
+        // goes on to own the returned value. Retracting its action leaves that
+        // value with no owner at all.
+        if self.drop_rc.assign_ident_target.as_deref() == Some(name) {
+            return;
+        }
+        // Two passes: synthesising the field-cleanup fn needs `&mut self`,
+        // which cannot be held while iterating the action frames.
+        let mut hits: Vec<(usize, usize, PointerValue<'ctx>, String)> = Vec::new();
+        for (fi, frame) in self.drop_rc.scope_cleanup_actions.iter().enumerate() {
+            for (ai, action) in frame.iter().enumerate() {
+                if let CleanupAction::UserDrop {
+                    binding_name,
+                    binding_ptr,
+                    type_name,
+                    kind: crate::codegen::state::UserDropKind::OwnWrapper,
+                    ..
+                } = action
+                {
+                    if binding_name == name {
+                        hits.push((fi, ai, *binding_ptr, type_name.clone()));
+                    }
+                }
+            }
+        }
+        let mut repl: Vec<(
+            usize,
+            usize,
+            PointerValue<'ctx>,
+            Option<FunctionValue<'ctx>>,
+        )> = Vec::new();
+        for (fi, ai, ptr, type_name) in hits {
+            let field_fn = self.emit_struct_drop_synthesis(&type_name);
+            repl.push((fi, ai, ptr, field_fn));
+        }
+        // Highest index first, so a removal never shifts a position still to be
+        // rewritten.
+        repl.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        for (fi, ai, ptr, field_fn) in repl {
+            match field_fn {
+                Some(drop_fn) => {
+                    self.drop_rc.scope_cleanup_actions[fi][ai] = CleanupAction::StructDrop {
+                        struct_alloca: ptr,
+                        drop_fn,
+                    };
+                }
+                None => {
+                    self.drop_rc.scope_cleanup_actions[fi].remove(ai);
+                }
+            }
+        }
+    }
+
     /// B-2026-07-30-11 (enum leg) — the PREFIX-KEYED sibling of
     /// [`Self::suppress_user_drop_for_var`]: remove only the CONTAINER-ELEMENT
     /// bodies action (`__karac_dropelems_*`) for `name`, leaving the binding's

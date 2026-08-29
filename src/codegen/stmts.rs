@@ -3265,7 +3265,33 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-29-15 — save/set/restore wrapper around the statement
+    /// compiler, carrying `DropRc::assign_ident_target`.
+    ///
+    /// An ASSIGNMENT records its bare-identifier target here for as long as it
+    /// is being compiled; every other statement kind INHERITS whatever is
+    /// already set rather than clearing it, so a statement nested inside an
+    /// assignment's RHS (`e = { let z = 1; pass(e) };`) cannot drop the guard
+    /// on the floor and let `pass(e)` retract `e`'s cleanup. Restoring on the
+    /// way out keeps the record from outliving its own statement, including
+    /// when one assignment's RHS contains another.
+    ///
+    /// Inheriting is also the SAFE direction if it ever over-reaches: an
+    /// argument wrongly treated as a self-assignment keeps today's behaviour —
+    /// a double body — never a lost one.
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        let saved = self.drop_rc.assign_ident_target.clone();
+        if let StmtKind::Assign { target, .. } = &stmt.kind {
+            if let ExprKind::Identifier(n) = &target.kind {
+                self.drop_rc.assign_ident_target = Some(n.clone());
+            }
+        }
+        let result = self.compile_stmt_inner(stmt);
+        self.drop_rc.assign_ident_target = saved;
+        result
+    }
+
+    fn compile_stmt_inner(&mut self, stmt: &Stmt) -> Result<(), String> {
         // B-2026-08-28-51 — the other two escaping sites: `let x = <expr>;` and
         // `return <expr>;`. Seeded before the statement compiles, so a branch
         // arm reached while compiling it already knows its tail escapes. Same

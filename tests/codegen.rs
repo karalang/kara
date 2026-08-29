@@ -13770,6 +13770,99 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-15, codegen leg — a NAMED binding passed by value to a
+    /// callee that hands it straight back runs its user `Drop` body ONCE.
+    ///
+    /// The interpreter twin is
+    /// `test_named_arg_returned_bare_user_drop_body_runs_once` and these
+    /// expectations are shared with it verbatim — the two backends AGREED on
+    /// the wrong count pre-fix (`drop 32` / `32` / `drop 32` on every named
+    /// case here), which is precisely why no A/B gate reported it and an
+    /// absolute expectation is the only thing that could.
+    ///
+    /// What licenses removing a body rather than it being a preference: the
+    /// named and fresh-temp spellings of this program allocate identically —
+    /// with a 256-element `Vec[i64]` field, `11 allocs, 11 frees, 10,269 bytes`
+    /// byte-for-byte under valgrind at `KARAC_OPT_LEVEL=0`. There is no entry
+    /// copy, so the second body had no second buffer, and the fresh-temp
+    /// control below is the oracle for the count.
+    ///
+    /// The stand-down is gated on `fn_always_returns_param_bare`, NOT the looser
+    /// `fn_always_returns_param`, because this retracts the binding's whole
+    /// `karac_drop_<T>` wrapper — body + fields + MEMORY. Only a BARE hand-back
+    /// replaces the retracted owner with an equivalent one; a param moved into a
+    /// returned aggregate gets a NEW owner and its caller must keep the wrapper.
+    /// That aggregate shape is deliberately absent from this table: it still
+    /// runs two bodies and pinning that count would bless it. Its leak-freedom
+    /// is pinned in `asan_named_arg_returned_bare_is_memory_balanced`.
+    #[test]
+    fn e2e_named_arg_returned_bare_user_drop_body_runs_once() {
+        const DROPPER: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
+             struct T2 { n: i64 }\n";
+        for (label, body, want) in [
+            (
+                "free-named-return",
+                "fn takef(r: R) -> R { return r; }\n\
+                 fn main() { let a = R { id: 32, tag: f\"h\" }; let b = takef(a); \
+                 println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            (
+                "free-named-tail",
+                "fn keepf(r: R) -> R { r }\n\
+                 fn main() { let a = R { id: 32, tag: f\"h\" }; let b = keepf(a); \
+                 println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            (
+                "method-named-return",
+                "impl T2 { fn take(ref self, r: R) -> R { return r; } }\n\
+                 fn main() { let t = T2 { n: 1 }; let a = R { id: 32, tag: f\"h\" }; \
+                 let b = t.take(a); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            (
+                "method-named-tail",
+                "impl T2 { fn keep(ref self, r: R) -> R { r } }\n\
+                 fn main() { let t = T2 { n: 1 }; let a = R { id: 32, tag: f\"h\" }; \
+                 let b = t.keep(a); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // The caller's binding spelled DIFFERENTLY from the param, so a fix
+            // that only worked on a name coincidence cannot pass this row.
+            (
+                "caller-renamed",
+                "impl T2 { fn take(ref self, r: R) -> R { return r; } }\n\
+                 fn main() { let t = T2 { n: 1 }; let qq = R { id: 32, tag: f\"h\" }; \
+                 let b = t.take(qq); println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // CONTROL — the fresh-temp spelling, correct before this fix.
+            (
+                "fresh-temp-control",
+                "fn takef(r: R) -> R { return r; }\n\
+                 fn main() { let b = takef(R { id: 32, tag: f\"h\" }); \
+                 println(f\"{b.id}\"); }\n",
+                "32\ndrop 32\n",
+            ),
+            // BOUNDARY — the param dies inside, so the caller must keep firing.
+            (
+                "dies-inside-keeps-caller-fire",
+                "fn eatf(r: R) -> i64 { println(f\"saw {r.id}\"); return 0; }\n\
+                 fn main() { let a = R { id: 32, tag: f\"h\" }; let n = eatf(a); \
+                 println(f\"{n}\"); }\n",
+                "saw 32\ndrop 32\n0\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{DROPPER}{body}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-29-6 — a PASSTHROUGH CALL used DIRECTLY AS A MATCH SCRUTINEE,
     /// with the result never bound, leaves the payload owned by the named
     /// source alone.
@@ -15792,13 +15885,20 @@ fn main() {
                 "k8\ndR8\ndE\npost\n",
             ),
             (
-                // TWO bodies is correct here and is what the identifier
-                // spelling gives: under the entry-copy model `keep` returns an
-                // independent value, so `k` and the arm binding both own one.
+                // ONE body, the same count the `-let-rebind` sibling above
+                // prints for the identical object flow. This read `dR8` twice
+                // until B-2026-08-29-15, justified as "under the entry-copy
+                // model `keep` returns an independent value, so `k` and the arm
+                // binding both own one". There is no entry copy: measured with
+                // a heap payload, the call form and the bare-rebind form are
+                // both valgrind-clean and balanced (12/12 and 11/11), and the
+                // second body had no second buffer behind it. The rebind
+                // sibling is the oracle — `let m = r` and `let k = keep(r)`
+                // move the same object to the same kind of owner.
                 "field-returning-free-fn",
                 "let s = S { e: E.A(R { id: 8 }) };\n\
                  \x20 match s.e { E.A(r) => { let k = keep(r); println(f\"k{k.id}\") } E.B => {} }\n",
-                "k8\ndR8\ndR8\ndE\npost\n",
+                "k8\ndR8\ndE\npost\n",
             ),
             (
                 "tuple-let-rebind",
@@ -15807,10 +15907,12 @@ fn main() {
                 "m8\ndR8\ndE\npost\n",
             ),
             (
+                // Same correction as `field-returning-free-fn` above, one
+                // container over: matches `tuple-let-rebind`.
                 "tuple-returning-free-fn",
                 "let t = (E.A(R { id: 8 }), 1i64);\n\
                  \x20 match t.0 { E.A(r) => { let k = keep(r); println(f\"k{k.id}\") } E.B => {} }\n",
-                "k8\ndR8\ndR8\ndE\npost\n",
+                "k8\ndR8\ndE\npost\n",
             ),
             (
                 "if-let-field-let-rebind",

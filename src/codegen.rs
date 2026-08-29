@@ -5782,6 +5782,7 @@ impl<'ctx> Codegen<'ctx> {
                 param_view_locals: HashSet::new(),
             },
             drop_rc: DropRc {
+                assign_ident_target: None,
                 zero_inited_vec_slots: rustc_hash::FxHashSet::default(),
                 inline_optres_retained_sources: std::collections::HashSet::new(),
                 scope_cleanup_actions: Vec::new(),

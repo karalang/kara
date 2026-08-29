@@ -2677,10 +2677,19 @@ impl<'a> super::Interpreter<'a> {
     /// binding the same as the param, and the frame isolation removes the
     /// leak, so the mark is made here on purpose.
     ///
-    /// `record_container_move_source_name` carries the narrowing: a container
-    /// or field-carried-Drop value is disarmed, while an own-`Drop` struct
-    /// stays armed because a by-value struct param is ENTRY-COPIED and the two
-    /// frames genuinely hold distinct values.
+    /// `record_container_move_source_name` carries the container/field-carried
+    /// half of the narrowing. The OWN-`Drop` half is B-2026-08-29-15 and is
+    /// gated separately below: that channel retracts the binding's whole
+    /// action, so it is licensed only where the callee hands the argument back
+    /// AS ITSELF and the caller's result binding becomes an equivalent owner.
+    ///
+    /// This paragraph previously read that an own-`Drop` struct stays armed
+    /// "because a by-value struct param is ENTRY-COPIED and the two frames
+    /// genuinely hold distinct values". That is false, and it was the belief
+    /// holding B-2026-08-29-15 open: with a 256-element `Vec[i64]` field the
+    /// named and fresh-temp spellings allocate identically — `11 allocs, 11
+    /// frees, 10,269 bytes`, byte-for-byte — so no copy is made and the second
+    /// body has no second buffer behind it.
     pub(crate) fn record_method_arg_moves(
         &mut self,
         type_name: &str,
@@ -2693,7 +2702,7 @@ impl<'a> super::Interpreter<'a> {
         // `f.params` excludes the receiver, so `i` indexes it directly — the
         // raw-AST convention `method_param_drop_names` documents, NOT codegen's
         // self-at-0 one.
-        let moved: Vec<String> = args
+        let moved: Vec<(String, bool)> = args
             .iter()
             .enumerate()
             .filter_map(|(i, arg)| {
@@ -2738,11 +2747,20 @@ impl<'a> super::Interpreter<'a> {
                 if !escapes {
                     return None;
                 }
-                Some(n.clone())
+                // B-2026-08-29-15 — among the args that DO escape, only a
+                // BARE hand-back also disarms the binding's own `Drop`
+                // body: a param moved into a returned aggregate, or into
+                // an outliving place, escapes into a NEW owner, so the
+                // argument binding must keep firing. The two rules compose
+                // — this one is asked only of what the escape gate admits.
+                Some((n.clone(), crate::ast::fn_always_returns_param_bare(f, i)))
             })
             .collect();
-        for n in moved {
+        for (n, returns_bare) in moved {
             self.record_container_move_source_name(&n);
+            if returns_bare {
+                self.record_returned_arg_user_drop_move(&n);
+            }
         }
     }
 

@@ -131,6 +131,23 @@ pub(crate) struct DropRc<'ctx> {
     /// with no heap-owning fields don't get an entry (the synthesis fn returns
     /// `None`) and don't reach `CleanupAction::StructDrop`.
     pub(crate) struct_drop_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// B-2026-08-29-15 — the bare-identifier TARGET of the assignment
+    /// statement currently being compiled, if any (`e = pass(e);` records
+    /// `"e"`). Reset at the top of every `compile_stmt`, so it never outlives
+    /// the statement that set it.
+    ///
+    /// Read by `suppress_user_drop_body_keeping_memory` to decline a
+    /// self-assignment: there the callee's result is stored straight back into
+    /// the argument's own slot, so that binding does NOT die at the call — it
+    /// goes on to own the returned value and needs its cleanup action intact.
+    /// Retracting it stranded the value with no owner at all (measured:
+    /// `let mut e = mk_loud(7); e = pass(e);` lost `loud drop` / `drop 7 l7`
+    /// entirely, and the enum spelling aborted before flushing any output).
+    ///
+    /// A stale value could only make the suppression MORE conservative — a
+    /// kept double body, never a lost one — but the per-statement reset means
+    /// there is none.
+    pub(crate) assign_ident_target: Option<String>,
     /// Per-user-type lazy drop-wrapper cache (type name →
     /// `karac_drop_<Type>` `FunctionValue`). Populated by
     /// `emit_user_drop_wrappers` for every type in

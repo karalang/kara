@@ -2211,6 +2211,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(var_name) = &a.value.kind {
                     let var_name = var_name.clone();
                     self.suppress_container_elem_bodies_for_var(&var_name);
+                    // B-2026-08-29-15 — and the binding's OWN wrapper too, but
+                    // ONLY where the callee hands this argument back as itself.
+                    // The paragraph above reasons that an own-`Drop` struct
+                    // param is entry-copied so "two entry-copied values
+                    // genuinely exist"; measurement refutes that — with a
+                    // 256-element `Vec[i64]` field the named and fresh-temp
+                    // spellings allocate `11 allocs, 11 frees, 10,269 bytes`
+                    // alike, byte-for-byte. One object ran two bodies, on all
+                    // four surfaces, so no A/B gate could see it.
+                    //
+                    // The 3-byte leak that paragraph measured is real and is
+                    // what the STRICT predicate preserves: `fn mk(r: Res) -> Bx
+                    // { Bx { r: r } }` moves the param into a NEW owner, so the
+                    // caller is still the only owner of the original and keeps
+                    // its wrapper.
+                    if self.callee_always_returns_arg_bare(&name, i) {
+                        self.suppress_user_drop_body_keeping_memory(&var_name);
+                    }
                 }
             }
             if !borrow_skip && !self.call_arg_flows_into_return(&name, i) {
@@ -3055,6 +3073,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         // caller-side Drop-BODY question alone.
                         || crate::ast::fn_returns_param_via_call(program, f, arg_index)))
         })
+    }
+
+    /// B-2026-08-29-15 — does the callee hand argument `arg_index` back AS
+    /// ITSELF on every exit?
+    ///
+    /// The gate for retracting the caller's own `karac_drop_<T>` wrapper, which
+    /// is a strictly stronger act than the container-element retraction it sits
+    /// beside: that wrapper is body + fields + MEMORY, so retracting it where
+    /// the caller is still the only owner orphans a buffer. Only a BARE
+    /// hand-back makes the result binding an equivalent owner — see
+    /// [`crate::ast::fn_always_returns_param_bare`], which carries the
+    /// measurement in both directions.
+    ///
+    /// Resolves through [`super::declarations::find_function_ast`] rather than
+    /// the free-function scan its sibling uses, so the same helper answers for
+    /// the method arg loop. That lookup returns a `Function` whose `params`
+    /// EXCLUDE the receiver, so both call sites pass the non-self index.
+    pub(super) fn callee_always_returns_arg_bare(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> bool {
+        self.program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .is_some_and(|f| crate::ast::fn_always_returns_param_bare(f, arg_index))
     }
 
     /// B-2026-08-26-9 — the ESCAPE-THROUGH-A-BORROW sibling of

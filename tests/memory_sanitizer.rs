@@ -61933,6 +61933,82 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-15 — a NAMED binding passed by value to a callee that hands
+    /// it straight back is memory-balanced, and so is the AGGREGATE shape the
+    /// fix deliberately declines.
+    ///
+    /// The behaviour twin is `e2e_named_arg_returned_bare_user_drop_body_runs_once`.
+    /// This side pins the two claims that made removing a body safe rather than
+    /// a new leak, and they pull in opposite directions:
+    ///
+    ///  * `take`/`keep`/`takef` — the param handed back AS ITSELF. The caller's
+    ///    `karac_drop_<T>` wrapper is retracted here, and that is only sound
+    ///    because the result binding owns the very same object: with a
+    ///    256-element `Vec[i64]` field the named and fresh-temp spellings
+    ///    allocate `11 allocs, 11 frees, 10,269 bytes` byte-for-byte, so there
+    ///    was never a second buffer for the second body to belong to.
+    ///  * `wrap` — the param moved into a RETURNED AGGREGATE. Here the value
+    ///    gets a NEW owner and the caller is still the only owner of the
+    ///    original, so `fn_always_returns_param_bare` declines and the wrapper
+    ///    stays. Loosen that predicate back to `fn_always_returns_param` and
+    ///    this case orphans its buffer — the 3-byte definite leak
+    ///    `call_dispatch`'s container-only note already records. This is the
+    ///    row that catches such a loosening, since the behaviour twins
+    ///    deliberately assert nothing about the aggregate's (still wrong) body
+    ///    count.
+    ///
+    /// Every param is named DISTINCTLY (`ra`..`rf`) for the reason the
+    /// `return`-spelling sibling above gives: the interpreter shares one
+    /// moved-out name space across method frames, so reusing `r` would let one
+    /// frame's move-out suppress another's body and change what is measured.
+    #[test]
+    fn asan_named_arg_returned_bare_is_memory_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.name}"); } }
+struct T3 { n: i64 }
+struct Hx { r: R }
+impl T3 {
+    fn take(ref self, ra: R) -> R { return ra; }
+    fn keep(ref self, rb: R) -> R { rb }
+    fn wrap(ref self, rc: R) -> Hx { return Hx { r: rc }; }
+    fn eat(ref self, rd: R) -> i64 { println(f"saw {rd.name}"); return 0; }
+}
+fn takef(re: R) -> R { return re; }
+fn keepf(rf: R) -> R { rf }
+fn main() {
+    let base: i64 = env.args().len();
+    let t = T3 { n: 1 };
+    let a1 = R { id: base, name: f"a{base}" };
+    let a = t.take(a1);
+    println(f"{a.id}");
+    let b1 = R { id: base, name: f"b{base}" };
+    let b = t.keep(b1);
+    println(f"{b.id}");
+    let c1 = R { id: base, name: f"c{base}" };
+    let c = t.wrap(c1);
+    println(f"{c.r.id}");
+    let d1 = R { id: base, name: f"d{base}" };
+    let d = t.eat(d1);
+    println(f"{d}");
+    let e1 = R { id: base, name: f"e{base}" };
+    let e = takef(e1);
+    println(f"{e.id}");
+    let g1 = R { id: base, name: f"g{base}" };
+    let g = keepf(g1);
+    println(f"{g.id}");
+    println("end");
+}
+"#,
+            &[
+                "1", "drop a1", "1", "drop b1", "drop c1", "1", "drop c1", "saw d1", "drop d1",
+                "0", "1", "drop e1", "1", "drop g1", "end",
+            ],
+            "named-arg-returned-bare",
+        );
+    }
+
     /// B-2026-08-29-6 — a PASSTHROUGH CALL used DIRECTLY AS A MATCH SCRUTINEE,
     /// with the result never bound, leaves the payload owned by the named
     /// source alone.

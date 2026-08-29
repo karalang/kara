@@ -34167,6 +34167,108 @@ fn test_return_spelling_method_returned_param_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-15, interpreter leg — a NAMED binding passed by value to a
+/// callee that hands it straight back runs its user `Drop` body ONCE.
+///
+/// The sibling above pins the FRESH-TEMP spelling of the same call. This pins
+/// the NAMED one, which is the axis that actually decided the count: pre-fix
+/// every named case here printed `drop 41` / `41` / `drop 41` — two bodies for
+/// one object — while every fresh-temp case printed one. Free function and
+/// method, `return r;` and block tail, all four the same, and all four AGREEING
+/// with the compiled backends, so no A/B gate could see any of it.
+///
+/// One object is not an assumption here, it is a measurement. With a
+/// 256-element `Vec[i64]` field the named and fresh-temp spellings allocate
+/// `11 allocs, 11 frees, 10,269 bytes` — byte-for-byte identical — so there is
+/// no entry copy and the second body had no second buffer behind it. That
+/// matters because the opposite belief ("a by-value struct param is
+/// ENTRY-COPIED, so two values genuinely exist") was written into three places
+/// in the tree and is what held this row open.
+///
+/// `caller-renamed` is the case that keeps a name-coincidence fix honest: the
+/// caller spells its binding `qq` while the param is `r`. The interpreter's
+/// moved-out sets are keyed by bare binding name (B-2026-08-29-11), so a fix
+/// that worked only when the two names matched would pass every other row here.
+///
+/// DELIBERATELY NOT PINNED: the AGGREGATE shape (`fn wrapf(r: R) -> Hh { Hh { r:
+/// r } }`) still runs two bodies, and this fixture asserts nothing about that
+/// count because it is still wrong. It is excluded rather than blessed —
+/// `fn_always_returns_param_bare` declines it on purpose, since retracting the
+/// caller's owner there orphans the buffer (measured as a 3-byte definite leak
+/// in `call_dispatch`'s own note). Its LEAK-freedom, which is correct, is
+/// pinned in `tests/memory_sanitizer.rs`'s
+/// `asan_named_arg_returned_bare_is_memory_balanced` instead.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `e2e_named_arg_returned_bare_user_drop_body_runs_once`, sharing these
+/// expectations verbatim.
+#[test]
+fn test_named_arg_returned_bare_user_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         struct B6 { n: i64 }\n";
+    for (label, body, want) in [
+        // The row's shape, free-function spelling. Pre-fix two bodies.
+        (
+            "free-named-return",
+            "fn takef(r: R) -> R { return r; }\n\
+             fn main() { let a = R { id: 41 }; let x = takef(a); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The BLOCK-TAIL spelling. The row framed `return` vs tail as the
+        // deciding axis; it is not one — both doubled, and both are fixed.
+        (
+            "free-named-tail",
+            "fn keepf(r: R) -> R { r }\n\
+             fn main() { let a = R { id: 41 }; let x = keepf(a); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The METHOD spelling. The row called this method-specific; it is not
+        // that either — the free-function twin above doubled identically.
+        (
+            "method-named-return",
+            "impl B6 { fn take(ref self, r: R) -> R { return r; } }\n\
+             fn main() { let b = B6 { n: 1 }; let a = R { id: 41 }; let x = b.take(a); \
+             println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        (
+            "method-named-tail",
+            "impl B6 { fn keep(ref self, r: R) -> R { r } }\n\
+             fn main() { let b = B6 { n: 1 }; let a = R { id: 41 }; let x = b.keep(a); \
+             println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // The caller's binding spelled DIFFERENTLY from the param — see doc.
+        (
+            "caller-renamed",
+            "impl B6 { fn take(ref self, r: R) -> R { return r; } }\n\
+             fn main() { let b = B6 { n: 1 }; let qq = R { id: 41 }; let x = b.take(qq); \
+             println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // CONTROL — the fresh-temp spelling, correct before this fix and the
+        // oracle that makes ONE body the right answer rather than a preference.
+        (
+            "fresh-temp-control",
+            "fn takef(r: R) -> R { return r; }\n\
+             fn main() { let x = takef(R { id: 41 }); println(f\"{x.id}\") }\n",
+            "41\ndrop 41\n",
+        ),
+        // BOUNDARY — the param DIES inside, so the caller must keep firing.
+        // Over-widen the stand-down to every by-value arg and this body is lost
+        // entirely: nobody else owns it.
+        (
+            "dies-inside-keeps-caller-fire",
+            "fn eatf(r: R) -> i64 { println(f\"saw {r.id}\"); return 0; }\n\
+             fn main() { let a = R { id: 41 }; let n = eatf(a); println(f\"{n}\") }\n",
+            "saw 41\ndrop 41\n0\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-17, interpreter leg — one user `Drop` body per object when the
 /// callee returns a FIELD pulled out of an owned struct param. The struct twin
 /// of `test_returned_tuple_param_element_user_drop_body_runs_once`.
@@ -35457,10 +35559,13 @@ fn materializing_arm_over_a_projection_owns_the_payload_once() {
             "m8\ndR8\ndE\npost\n",
         ),
         (
+            // ONE body since B-2026-08-29-15, matching `field-let-rebind`
+            // above and the codegen twin. The former `dR8` twice rested on an
+            // entry-copy model that measurement refutes; see the twin's note.
             "field-returning-free-fn",
             "let s = S { e: E.A(R { id: 8 }) };\n\
              \x20 match s.e { E.A(r) => { let k = keep(r); println(f\"k{k.id}\") } E.B => {} }\n",
-            "k8\ndR8\ndR8\ndE\npost\n",
+            "k8\ndR8\ndE\npost\n",
         ),
         (
             "tuple-let-rebind",
