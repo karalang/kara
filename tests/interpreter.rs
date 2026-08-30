@@ -34476,6 +34476,21 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
             ),
             "dR2\ndR1\nv=7\n",
         ),
+        // B-2026-08-29-54, formerly pinned below at the divergence: a STATIC
+        // (associated) function's fresh-temp arguments ran no `Drop` body at all
+        // on JIT and AOT — not misordered, MISSING — while this backend ran
+        // both. The compiled arm now agrees, so this is an ordinary live case
+        // and the two suites assert the same string, which is what closing the
+        // divergence means.
+        (
+            "static-two-fresh-temps",
+            format!(
+                "{HDR}struct H {{ n: i64 }}\n\
+                 impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
+                 fn main() {{ let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\") }}\n"
+            ),
+            "dR2\ndR1\nv=7\n",
+        ),
         (
             "guard-mixed-temp-first",
             format!(
@@ -34491,46 +34506,38 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
     ] {
         assert_eq!(run(&src), want, "case {label}");
     }
-    // PINNED AT THE DEFECT — two neighbouring divergences this fix does NOT
-    // close, each measured identical before and after it and each filed on its
-    // own. They are pinned here, beside the fixed cases, because both live in
-    // the same "who drops an argument temporary, and when" surface and a future
-    // change to it will move them; the codegen twin pins the OTHER side of each
-    // number, so the pair records the divergence rather than one backend's half.
-    for (label, src, want) in [
-        // A STATIC (associated) function's fresh-temp arguments run no body at
-        // all on JIT and AOT — not misordered, MISSING. This backend runs both,
-        // now in the right order. B-2026-08-29-54.
-        (
-            "pin-static-method-args-missing-on-compiled",
-            format!(
-                "{HDR}struct H {{ n: i64 }}\n\
-                 impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
-                 fn main() {{ let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\") }}\n"
-            ),
-            "dR2\ndR1\nv=7\n",
-        ),
-        // TIMING, not order: design.md's table ends an argument temporary's live
-        // range "After the call returns", so with two calls in one expression the
-        // first call's temps must die before the second call's are built. This
-        // backend does exactly that (`in-take dR2 dR1 in-take dR4 dR3`); the
-        // compiled backends hold all four to the statement's `;`
-        // (`in-take in-take dR4 dR3 dR2 dR1`), which extends a temporary past the
-        // position rule's ceiling. B-2026-08-29-55.
-        (
-            "pin-arg-temps-die-at-call-return-not-statement-end",
-            format!(
-                "{HDR}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
-                 fn main() {{\n\
-                 \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
-                 \x20   println(f\"v={{v}}\")\n\
-                 }}\n"
-            ),
-            "in-take\ndR2\ndR1\nin-take\ndR4\ndR3\nv=14\n",
-        ),
-    ] {
-        assert_eq!(run(&src), want, "case {label}");
-    }
+    // PINNED AT THE DEFECT — a neighbouring divergence this fix does NOT close,
+    // measured identical before and after it and filed on its own. It is pinned
+    // here, beside the fixed cases, because it lives in the same "who drops an
+    // argument temporary, and when" surface and a future change to it will move
+    // it; the codegen twin pins the OTHER side of the number, so the pair
+    // records the divergence rather than one backend's half. (This block held a
+    // second entry, B-2026-08-29-54, until that divergence was closed and its
+    // case moved up into the live list above.)
+    // TIMING, not order: design.md's table ends an argument temporary's live
+    // range "After the call returns", so with two calls in one expression the
+    // first call's temps must die before the second call's are built. This
+    // backend does exactly that (`in-take dR2 dR1 in-take dR4 dR3`); the
+    // compiled backends hold all four to the statement's `;`
+    // (`in-take in-take dR4 dR3 dR2 dR1`), which extends a temporary past the
+    // position rule's ceiling. B-2026-08-29-55.
+    //
+    // A single assertion rather than the one-element loop the block above uses
+    // — this list held two entries until B-2026-08-29-54's divergence was
+    // closed, and a `for` over one element is a clippy warning (CI runs
+    // `-D warnings`). Restore the loop form if a second pin ever joins it.
+    let pin_src = format!(
+        "{HDR}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+         fn main() {{\n\
+         \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+         \x20   println(f\"v={{v}}\")\n\
+         }}\n"
+    );
+    assert_eq!(
+        run(&pin_src),
+        "in-take\ndR2\ndR1\nin-take\ndR4\ndR3\nv=14\n",
+        "case pin-arg-temps-die-at-call-return-not-statement-end",
+    );
 }
 
 /// B-2026-08-29-14, interpreter leg — a METHOD that hands its owned param back

@@ -3191,6 +3191,132 @@ impl<'ctx> super::Codegen<'ctx> {
                     // pre-existing on the conventional ABI).
                     self.share_option_shared_ref_for_arg(&a.value);
                     self.share_option_shared_field_ref_for_arg(&a.value, val);
+                    // B-2026-08-29-54 — the caller-side owner for a BY-VALUE
+                    // owned argument, which this arm never registered at all.
+                    // The free-function path (`compile_call`) and the instance-
+                    // method path (`compile_method_call`) have both called this
+                    // registrar for years; `Type.method(args)` with no receiver
+                    // was the third dispatch arm, and it registered nothing —
+                    // so a fresh-temp argument had no owner in any frame.
+                    //
+                    // TWO defects, not one. The missing user `Drop` BODY is the
+                    // visible half (`H.s2(R { id: 1 }, R { id: 2 })` printed
+                    // `v=7` alone against the interpreter's `dR2 dR1 v=7`), and
+                    // the orphaned buffer is the other: measured at 75 B per
+                    // heap-carrying argument, 225 B for the three-argument
+                    // shape. The leak hides at -O2, where LLVM DCEs an
+                    // allocation whose only consumer is a callee that ignores
+                    // its parameter — which is why the ASAN pin for this row
+                    // read clean and graded it body-only despite carrying
+                    // f-string payloads on purpose: that harness builds at -O2,
+                    // so there was nothing left to leak. Measure this class at
+                    // -O0, or with an allocation floor.
+                    //
+                    // Mirrors the METHOD path rather than the free-fn one, and
+                    // deliberately: both are keyed by the same `Type.method`
+                    // string, so `find_function_ast` resolves the callee the
+                    // same way and the escape predicates below take the same
+                    // form. The one difference is the parameter index — a
+                    // static function has no `self_param`, so the source
+                    // argument `i` IS the declared parameter index, where the
+                    // method path's `pidx = i + 1` shifts past the receiver.
+                    //
+                    // `escapes_frame` uses the same two-predicate union the
+                    // method path settled on (B-2026-08-28-70): stand down only
+                    // where another owner is CERTAIN — every exit hands the
+                    // param back, or the callee-side conditional flip takes it
+                    // — never on the union-over-return-sites predicate, which
+                    // answers true for a param that escapes on one path and
+                    // dies on another and would lose that path's body.
+                    let handed_off = self
+                        .program_snapshot
+                        .as_deref()
+                        .and_then(|p| super::declarations::find_function_ast(p, &qualified))
+                        .is_some_and(|f| {
+                            crate::ast::fn_always_returns_param(f, i)
+                                || crate::ast::fn_conditionally_returns_param_bare(f, i)
+                        });
+                    let escapes_frame = handed_off
+                        || self.call_arg_moves_into_outliving_place(&qualified, i, false);
+                    self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
+                    // The registrar above answers for an AGGREGATE (struct /
+                    // enum / tuple temp). A bare `String` / `Vec` argument is
+                    // not one — it early-returns on the `vec_struct_type`
+                    // check — so it needs the same fresh-heap materialization
+                    // the other two paths perform, or `H.slen(mk(1))` orphans
+                    // its buffer with no aggregate anywhere to hang a drop on.
+                    let is_block_arg = matches!(
+                        &a.value.kind,
+                        ExprKind::Block(_)
+                            | ExprKind::Seq(_)
+                            | ExprKind::Unsafe(_)
+                            | ExprKind::LabeledBlock { .. }
+                    );
+                    let is_collection_literal_arg = matches!(
+                        &a.value.kind,
+                        ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
+                            | ExprKind::RepeatLiteral { .. }
+                    );
+                    let is_fresh_heap_call_arg = (self.expr_yields_fresh_owned_temp(&a.value)
+                        || self.expr_is_inline_temp_vec_heap_index(&a.value)
+                        || is_collection_literal_arg)
+                        && self.llvm_ty_is_vec_struct(val.get_type())
+                        && !self.rhs_stages_fstr_acc(&a.value);
+                    // B-2026-08-30-2's guard, carried here for the same reason
+                    // it exists on the free-fn path: a block whose tail hands
+                    // out a BINDING was already given an owner when the block
+                    // was compiled, in the frame that binding's own cleanup
+                    // lived in. Minting a second owner here is a double free,
+                    // not belt-and-braces. A tail that MINTS its value
+                    // registers nothing and still needs this.
+                    let tail_already_owned = self
+                        .branch_tail_owner_slots
+                        .contains_key(&(a.value.span.offset, a.value.span.length));
+                    if (is_block_arg || is_fresh_heap_call_arg) && !tail_already_owned {
+                        self.materialize_owned_temp(
+                            val,
+                            (a.value.span.offset, a.value.span.length),
+                        );
+                    }
+                    // B-2026-08-29-54 (the `Option`/`Result` sibling) — an
+                    // inline-payload envelope is neither an aggregate the
+                    // registrar above admits nor a Vec/String the
+                    // materialization catches, so `H.f(Some(mk(1)))` orphaned
+                    // its 75-byte payload where the free-function spelling was
+                    // clean. Same two-question split the other two paths use:
+                    // the `{ptr,len,cap}` payload buffer and the boxed field
+                    // envelope are separate allocations with separate freshness
+                    // rules (B-2026-08-12-15).
+                    //
+                    // The TEMP-ownership half only. The sibling paths also call
+                    // `suppress_inline_option_result_binding_move` for a BINDING
+                    // argument, which is the opposite question — whether the
+                    // callee takes an existing binding's buffer over — and
+                    // getting it wrong strands memory rather than leaking a
+                    // temp. `optres_arg_is_unowned_temp` fires only where no
+                    // binding exists, so this half cannot double-free an owner
+                    // that is already registered somewhere.
+                    if let Some(param_te) = self.callee_optres_param_entry_copied(&qualified, i) {
+                        let own_payload = self.optres_arg_is_unowned_temp(&a.value);
+                        let own_envelope = self.optres_arg_mints_field_envelope(&a.value);
+                        if own_payload || own_envelope {
+                            self.track_optres_arg_temp(val, &param_te, own_payload, own_envelope);
+                        }
+                    }
+                    // A fresh bare-`shared` (RC-box) result passed by value:
+                    // the callee inc/decs net-zero, so the caller still owns
+                    // the temp's +1 and must release it. Self-excludes a
+                    // `g(make())` passthrough chain.
+                    if val.is_pointer_value() {
+                        if let Some(heap_type) = self.fresh_arg_bare_shared_heap_type(&a.value) {
+                            self.track_rc_var(
+                                "__owned_arg_tmp",
+                                val.into_pointer_value(),
+                                heap_type,
+                            );
+                        }
+                    }
                     val.into()
                 };
                 if let Some(prev) = saved_pending_tensor {

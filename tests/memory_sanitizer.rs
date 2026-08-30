@@ -54684,19 +54684,28 @@ fn main() {
             &["dR1 heap-one", "dR2 heap-two", "v=7"],
             "owned_param_temps_mixed",
         );
-        // PINNED AT THE DEFECT, and it is the pin that grades the defect. A
-        // STATIC (associated) function's fresh-temp arguments run NO `Drop` body
-        // on the compiled backends — the expected output below is `v=7` alone,
-        // with neither `dR1` nor `dR2` — while `--interp` runs both.
+        // B-2026-08-29-54 — a STATIC (associated) function's by-value arguments
+        // had no caller-side owner at all, so both `Drop` bodies were missing
+        // AND both payload buffers were orphaned. Now both bodies run and the
+        // memory is clean.
         //
-        // What this case establishes is that the two missing bodies are NOT
-        // missing frees: LSan is live on Linux here and reports clean, so the
-        // memory registration fires and only the user body is absent. That is
-        // the same body-vs-memory split B-2026-08-29-24 measured from the other
-        // direction, and it is why the row is a lost body rather than a leak.
-        // Both payloads carry heap precisely so the distinction is observable.
-        // B-2026-08-29-54.
-        assert_clean_asan_run(
+        // THIS CASE USED TO ASSERT THE OPPOSITE, and the way it went wrong is
+        // worth keeping. It expected `["v=7"]` — no bodies — and graded the row
+        // "a lost body, not a leak" on the strength of a clean LSan run. The
+        // clean run was an artifact: this harness builds at `-O2`, where the
+        // only consumer of these two allocations is a callee that ignores its
+        // parameters, so LLVM deletes them and LSan is handed a program with
+        // nothing to lose. Rebuilt at `-O0` the same source leaked 16 bytes in
+        // 2 blocks before the fix and is clean after it. That is precisely the
+        // population B-2026-08-04-17 named — "fixtures that allocate nothing at
+        // `-O2` and so assert nothing" — reached this time through a fixture
+        // that looked like it carried heap on purpose.
+        //
+        // So it takes a hard allocation FLOOR now rather than the plain
+        // assertion: a fixture whose whole point is that two heap payloads get
+        // freed must fail loudly if it is ever optimized back down to allocating
+        // nothing, instead of quietly passing while proving it.
+        assert_clean_asan_run_min_allocs(
             r#"
 struct R { id: i64, name: String }
 impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id} {self.name}") } }
@@ -54707,8 +54716,9 @@ fn main() {
     println(f"v={v}");
 }
 "#,
-            &["v=7"],
-            "static_method_args_no_body_but_no_leak",
+            &["dR2 heap-two", "dR1 heap-one", "v=7"],
+            "static_method_args_run_bodies_and_free",
+            8,
         );
     }
 

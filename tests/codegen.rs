@@ -39534,6 +39534,21 @@ fn main() {
                 ),
                 "dR2\ndR1\nv=7\n",
             ),
+            // B-2026-08-29-54, formerly pinned here at the defect: a STATIC
+            // (associated) function's fresh-temp arguments ran NO `Drop` body on
+            // this backend — not misordered, missing — because the assoc-call
+            // arm registered no caller-side owner at all. Now ordered exactly
+            // like the free-function twin above it, which is the point of
+            // keeping it in THIS test.
+            (
+                "static-two-fresh-temps",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{ let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\"); }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
             (
                 "guard-mixed-temp-first",
                 format!(
@@ -39549,42 +39564,206 @@ fn main() {
         ] {
             assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
         }
-        // PINNED AT THE DEFECT — the compiled half of two neighbouring
-        // divergences this fix does NOT close. The interpreter twin pins the
-        // other half of each number, so the pair records the divergence rather
-        // than one backend's opinion of it.
+        // PINNED AT THE DEFECT — the compiled half of a neighbouring divergence
+        // this fix does NOT close. The interpreter twin pins the other half of
+        // the number, so the pair records the divergence rather than one
+        // backend's opinion of it. (This block held a second entry,
+        // B-2026-08-29-54, until that divergence was closed and its case moved
+        // up into the live list above.)
+        // TIMING, not order: design.md's temporary-lifetime table ends an
+        // argument temporary's live range "After the call returns", so with two
+        // calls in one expression the first call's temps must die before the
+        // second call's are built. This backend holds all four to the
+        // statement's `;`, extending them past the position rule's ceiling;
+        // `--interp` now matches the table. B-2026-08-29-55.
+        //
+        // A single assertion rather than the one-element loop the sibling block
+        // above uses — this list held two entries until B-2026-08-29-54's
+        // divergence was closed, and a `for` over one element is a clippy
+        // warning (CI runs `-D warnings`). Restore the loop form if a second
+        // pin ever joins it.
+        let pin_src = format!(
+            "{hdr}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+             fn main() {{\n\
+             \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+             \x20   println(f\"v={{v}}\");\n\
+             }}"
+        );
+        assert_eq!(
+            run_program(&pin_src).as_deref(),
+            Some("in-take\nin-take\ndR4\ndR3\ndR2\ndR1\nv=14\n"),
+            "case pin-arg-temps-held-to-statement-end",
+        );
+    }
+
+    /// B-2026-08-29-54 — a STATIC (associated) function's by-value arguments had
+    /// NO caller-side owner on the compiled backends. The free-function arm
+    /// (`compile_call`) and the instance-method arm (`compile_method_call`) both
+    /// registered one; `Type.method(args)` with no receiver was the third
+    /// dispatch arm and registered nothing, so a fresh-temp argument's user
+    /// `Drop` body never ran and its buffer was orphaned.
+    ///
+    /// Each case states the FREE-FUNCTION spelling's answer, because that is the
+    /// oracle the row is measured against: every one of these was already
+    /// correct for `s2(...)` and wrong only for `H.s2(...)`. Asserting absolute
+    /// expected output, not counts — the interpreter ran every one of these
+    /// bodies before the fix, so no count-based or A/B-parity check could see
+    /// the defect from this side.
+    #[test]
+    fn e2e_static_assoc_fn_arg_temps_own_their_values() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        // A heap-carrying twin, for the two cases that read a field off an
+        // associated call's RESULT — see the note on `static-passthrough-single-body`.
+        let hdr_heap = "struct R { id: i64, s: String }\n\
+                        impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                        fn mk(i: i64) -> String { f\"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n";
         for (label, src, want) in [
-            // A STATIC (associated) function's fresh-temp arguments run NO body
-            // here — not misordered, missing. `--interp` runs both. This is a
-            // lost `Drop` body, a strictly worse failure than the order this
-            // test is about, and it is pinned rather than fixed because it is a
-            // different mechanism: these temps never reach the caller cleanup
-            // frame at all. B-2026-08-29-54.
+            // One argument is enough — not an arity or an ordering effect.
             (
-                "pin-static-method-args-missing-here",
+                "static-one-fresh-temp",
                 format!(
                     "{hdr}struct H {{ n: i64 }}\n\
-                     impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
-                     fn main() {{ let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}); println(f\"v={{v}}\"); }}"
+                     impl H {{ fn s1(a: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{ let v = H.s1(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
                 ),
-                "v=7\n",
+                "dR1\nv=7\n",
             ),
-            // TIMING, not order: design.md's temporary-lifetime table ends an
-            // argument temporary's live range "After the call returns", so with
-            // two calls in one expression the first call's temps must die before
-            // the second call's are built. This backend holds all four to the
-            // statement's `;`, extending them past the position rule's ceiling;
-            // `--interp` now matches the table. B-2026-08-29-55.
             (
-                "pin-arg-temps-held-to-statement-end",
+                "static-three-fresh-temps",
                 format!(
-                    "{hdr}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn s3(a: R, b: R, c: R) -> i64 {{ 7 }} }}\n\
                      fn main() {{\n\
-                     \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                     \x20   let v = H.s3(R {{ id: 1 }}, R {{ id: 2 }}, R {{ id: 3 }});\n\
                      \x20   println(f\"v={{v}}\");\n\
                      }}"
                 ),
-                "in-take\nin-take\ndR4\ndR3\ndR2\ndR1\nv=14\n",
+                "dR3\ndR2\ndR1\nv=7\n",
+            ),
+            // MOVED LOCALS already worked before the fix — the arg has its own
+            // binding to own it. Kept so a future edit cannot fix the temp case
+            // by breaking this one.
+            (
+                "static-moved-locals",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{\n\
+                     \x20   let x = R {{ id: 1 }};\n\
+                     \x20   let y = R {{ id: 2 }};\n\
+                     \x20   let v = H.s2(x, y);\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            // A mixed call is sequenced by the two owners' relative PROGRAM
+            // ORDER, not by argument position (B-2026-08-29-46's rule): `a` is
+            // introduced first, so it pops last. Before the fix the temp's body
+            // was simply absent and only `dR1` printed.
+            (
+                "static-mixed-local-and-temp",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn s2(a: R, b: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{\n\
+                     \x20   let a = R {{ id: 1 }};\n\
+                     \x20   let v = H.s2(a, R {{ id: 2 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR1\nv=7\n",
+            ),
+            // A `ref` parameter alongside an owned one: the borrow keeps its own
+            // owner and only the by-value temp gains one here.
+            (
+                "static-ref-and-owned-params",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn f(a: ref R, b: R) -> i64 {{ a.id }} }}\n\
+                     fn main() {{\n\
+                     \x20   let x = R {{ id: 9 }};\n\
+                     \x20   let v = H.f(x, R {{ id: 2 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "dR2\ndR9\nv=9\n",
+            ),
+            // The impl block's target may be an ENUM — same dispatch arm.
+            (
+                "static-on-enum-type",
+                format!(
+                    "{hdr}enum E {{ A, B }}\n\
+                     impl E {{ fn f(a: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{ let v = E.f(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
+                ),
+                "dR1\nv=7\n",
+            ),
+            // A fn-RETURNED Drop temp, the shape B-2026-07-01-7 fixed for free
+            // functions.
+            (
+                "static-fn-returned-temp",
+                format!(
+                    "{hdr}fn mkr(i: i64) -> R {{ R {{ id: i }} }}\n\
+                     struct H {{ n: i64 }}\n\
+                     impl H {{ fn s1(a: R) -> i64 {{ 7 }} }}\n\
+                     fn main() {{ let v = H.s1(mkr(1)); println(f\"v={{v}}\"); }}"
+                ),
+                "dR1\nv=7\n",
+            ),
+            // PASSTHROUGH — the callee hands the argument back, so the caller's
+            // RESULT binding owns it and the caller must NOT register a second
+            // body. Guards the direction this fix could most easily overshoot
+            // in, and matches the free-function spelling exactly.
+            //
+            // `hdr_heap`, not `hdr`: reading a field off an
+            // associated-call RESULT (`x.id` where `x = H.id(..)`) fails to
+            // codegen for an ALL-SCALAR struct — "cannot resolve field 'id' on
+            // this receiver", a pre-existing gap unrelated to this row and
+            // measured identical before and after the fix. A heap-carrying
+            // field records the binding's type and compiles, so these two cases
+            // use it rather than working around a defect this test is not about.
+            (
+                "static-passthrough-single-body",
+                format!(
+                    "{hdr_heap}struct H {{ n: i64 }}\n\
+                     impl H {{ fn id(a: R) -> R {{ a }} }}\n\
+                     fn main() {{ let x = H.id(R {{ id: 1, s: mk(1) }}); println(f\"x={{x.id}}\"); }}"
+                ),
+                "x=1\ndR1\n",
+            ),
+            // CONDITIONAL return: the callee returns a DIFFERENT value on this
+            // path, so the argument dies inside the call and its body must run.
+            // Standing the caller down on the union-over-return-sites predicate
+            // would lose it — which is why the escape test is the two-predicate
+            // form B-2026-08-28-70 settled on.
+            //
+            // The FREE-FUNCTION spelling of this shape prints no `dR1` on either
+            // backend — it frees the buffer and loses the body — so this is one
+            // case where the associated form is correct and its twin is not.
+            // Asserting the correct answer here deliberately; the free-function
+            // half is filed separately rather than copied.
+            (
+                "static-conditional-return-arg-dies",
+                format!(
+                    "{hdr_heap}struct H {{ n: i64 }}\n\
+                     impl H {{ fn pick(a: R, k: bool) -> R {{ if k {{ return R {{ id: 98, s: mk(98) }}; }} a }} }}\n\
+                     fn main() {{ let x = H.pick(R {{ id: 1, s: mk(1) }}, true); println(f\"x={{x.id}}\"); }}"
+                ),
+                "dR1\nx=98\ndR98\n",
+            ),
+            // A GENERIC associated fn already worked — it lowers through the
+            // monomorph path, which calls the registrar. Pinned so the two arms
+            // cannot drift apart again.
+            (
+                "static-generic-already-worked",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn g[T](a: T, k: i64) -> i64 {{ k }} }}\n\
+                     fn main() {{ let v = H.g(R {{ id: 1 }}, 7); println(f\"v={{v}}\"); }}"
+                ),
+                "dR1\nv=7\n",
             ),
         ] {
             assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
