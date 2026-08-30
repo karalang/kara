@@ -832,6 +832,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .filter_map(|(k, ty)| matches!(ty, Type::UInt(_)).then_some((k.0, k.1)))
         .collect();
+    // B-2026-08-29-52: presence sibling of `unsigned_vector_exprs`, over the
+    // same source table but without the element-signedness filter. Codegen's
+    // f-string renderer needs to know a part is a vector before it compiles
+    // it; the unsigned table answers a narrower question and misses every
+    // signed and float-lane vector, which is most of them.
+    program.vector_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| matches!(ty, Type::Vector { .. }).then_some((k.0, k.1)))
+        .collect();
     // Cast sibling (B-2026-08-14-3): the table above cannot serve a cast, whose
     // span is its operand's and whose entry is therefore the TARGET type. The
     // typechecker recorded the source's signedness at the cast itself.

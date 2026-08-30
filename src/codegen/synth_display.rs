@@ -3692,6 +3692,168 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(self.render_via_display_fn(disp, slot)))
     }
 
+    /// B-2026-08-29-52 — render a whole `Vector[T, N]` interpolation part as
+    /// `Vector(l0, l1, …)`, matching the interpreter's `Value::Vector` arm.
+    ///
+    /// Without this arm a vector part fell through to the scalar renderer,
+    /// which produced a DIFFERENT wrong answer on each compiled backend: the
+    /// JIT printed the aggregate's address (the same number for two vectors of
+    /// different element types, which is what identified it as an address),
+    /// and AOT printed a single lane read out of the middle of it. Neither
+    /// backend nor `karac check` said anything.
+    ///
+    /// The lane count and element kind come from the compiled `<N x T>` value
+    /// itself. SIGNEDNESS cannot: an LLVM `iN` is signless, so `u8` and `i8`
+    /// lanes are the same type here. That comes from `unsigned_vector_exprs`,
+    /// the span table the SIMD `reduce_min`/`reduce_max` paths already trust
+    /// for the same question.
+    ///
+    /// The decision to take this arm has to be made BEFORE compiling `e` —
+    /// once the scalar path has run there is no way back — which is why it
+    /// keys on the span table rather than on the compiled value's LLVM type.
+    ///
+    /// KNOWN RESIDUAL, deliberately not matched: for an unsigned lane holding a
+    /// value above `i64::MAX`, this prints the value and the INTERPRETER prints
+    /// a signed reinterpretation (`Vector[u64, 2]` of `u64::MAX` renders
+    /// `Vector(18446744073709551615, 1)` here and `Vector(-1, 1)` there). The
+    /// interpreter's `Value::Vector` holds plain `Value::Int` lanes with no
+    /// element type, so its Display cannot recover the signedness its own
+    /// INDEXED read gets right (`u[0]` prints the unsigned value). That is a
+    /// defect in the reference, filed separately rather than reproduced here —
+    /// encoding a known-wrong sign convention into new code to preserve
+    /// agreement would make the wrong answer harder to remove later.
+    pub(super) fn try_compile_vector_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        if !self.span_tables.vector_typed_exprs.contains(&key) {
+            return Ok(None);
+        }
+        let val = self.compile_expr(e)?;
+        let BasicValueEnum::VectorValue(vv) = val else {
+            return Ok(None);
+        };
+        let unsigned = self.span_tables.unsigned_vector_exprs.contains(&key);
+        let lanes = vv.get_type().get_size();
+        let elem_ty = vv.get_type().get_element_type();
+
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let fn_val = self.current_fn.unwrap();
+        let acc = self.create_entry_alloca(fn_val, "vecd.acc", vec_ty.into());
+        // Entry-block zero AND use-site init, for the reason spelled out on
+        // `render_via_display_fn`: the caller registers this accumulator for
+        // function-scope cleanup, whose drain runs on paths that never reached
+        // the render.
+        self.zero_init_str_acc_at_entry(acc);
+        let dpp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 0, "vecd.dpp")
+            .unwrap();
+        let lp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 1, "vecd.lp")
+            .unwrap();
+        let cp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 2, "vecd.cp")
+            .unwrap();
+        self.builder.build_store(dpp, ptr_ty.const_null()).unwrap();
+        self.builder.build_store(lp, i64_t.const_zero()).unwrap();
+        self.builder.build_store(cp, i64_t.const_zero()).unwrap();
+
+        self.disp_append_lit(acc, "Vector(");
+        for i in 0..lanes {
+            if i > 0 {
+                self.disp_append_lit(acc, ", ");
+            }
+            let lane = self
+                .builder
+                .build_extract_element(vv, i32_t.const_int(i as u64, false), "vecd.lane")
+                .map_err(|err| format!("vector display extractelement: {err}"))?;
+            match elem_ty {
+                BasicTypeEnum::IntType(it) => {
+                    let iv = lane.into_int_value();
+                    let width = it.get_bit_width();
+                    if width > 64 {
+                        // `%lld`/`%llu` extend to i64 first, which truncates.
+                        // Same 128-bit formatter the scalar path uses, so a
+                        // lane renders like the bare primitive would.
+                        let (bp, ln) = self.format_i128_to_stack_buf(iv, unsigned);
+                        self.emit_string_append_raw(acc, bp, ln);
+                    } else if width == 1 {
+                        // A `Vector[bool, N]` mask. No surface constructs one
+                        // today (the comparison methods that would return it
+                        // are unimplemented), but rendering it as 1/0 would be
+                        // a silent mismatch with the interpreter's `true` /
+                        // `false` the day they land, so pick the word here.
+                        let t = self
+                            .builder
+                            .build_global_string_ptr("true", "vecd.t")
+                            .unwrap();
+                        let f = self
+                            .builder
+                            .build_global_string_ptr("false", "vecd.f")
+                            .unwrap();
+                        let sel = self
+                            .builder
+                            .build_select(
+                                iv,
+                                t.as_pointer_value(),
+                                f.as_pointer_value(),
+                                "vecd.bsel",
+                            )
+                            .unwrap()
+                            .into_pointer_value();
+                        let len = self
+                            .builder
+                            .build_select(
+                                iv,
+                                i64_t.const_int(4, false),
+                                i64_t.const_int(5, false),
+                                "vecd.blen",
+                            )
+                            .unwrap()
+                            .into_int_value();
+                        self.emit_string_append_raw(acc, sel, len);
+                    } else if unsigned {
+                        let w = self
+                            .builder
+                            .build_int_z_extend_or_bit_cast(iv, i64_t, "vecd.z")
+                            .unwrap();
+                        self.disp_append_snprintf(acc, "%llu", w.into());
+                    } else {
+                        let w = self
+                            .builder
+                            .build_int_s_extend_or_bit_cast(iv, i64_t, "vecd.s")
+                            .unwrap();
+                        self.disp_append_snprintf(acc, "%lld", w.into());
+                    }
+                }
+                BasicTypeEnum::FloatType(_) => {
+                    // Shortest-round-trip via the runtime formatter, not C
+                    // `%g` — the same helper the scalar and struct-field
+                    // renderers use, so a lane and a bare float of the same
+                    // value cannot print differently. It widens f32 / f16 /
+                    // bf16 to f64 itself (bf16 through f32, per B-2026-07-22-1).
+                    let (bp, ln) = self.format_f64_to_stack_buf(lane.into_float_value());
+                    self.emit_string_append_raw(acc, bp, ln);
+                }
+                // The typechecker restricts `T` to `Numeric`, so there is no
+                // third case; bail rather than assert, and the caller falls
+                // through to the paths that ran before this arm existed.
+                _ => return Ok(None),
+            }
+        }
+        self.disp_append_lit(acc, ")");
+
+        let out = self.builder.build_load(vec_ty, acc, "vecd.val").unwrap();
+        Ok(Some((acc, out)))
+    }
+
     /// B-2026-08-14-31 — the `Map`/`Set` sibling of [`Self::try_compile_vec_display`].
     ///
     /// The identifier arms key off per-variable side tables

@@ -835,6 +835,144 @@ mod codegen_tests {
         );
     }
 
+    /// Printing a whole `Vector[T, N]` must give the SAME text on every backend
+    /// (B-2026-08-29-52).
+    ///
+    /// Before the fix there were three answers and no diagnostic: the
+    /// interpreter rendered the lanes, `karac run` printed the aggregate's
+    /// ADDRESS (identifiably so — the same number for two vectors of different
+    /// element types), and `karac build` printed one stray lane. `karac check`
+    /// said "All checks passed."
+    ///
+    /// Written as a twin comparison against the interpreter AND against pinned
+    /// text: the twin alone would pass if both sides drifted together, and the
+    /// pin alone would not catch a backend that stopped matching the reference.
+    ///
+    /// The bare `println(v)` spelling is covered alongside `f"{v}"` because it
+    /// failed DIFFERENTLY and more quietly — the compiled backends dropped the
+    /// line entirely, printing nothing at all where the interpreter printed the
+    /// vector. Both spellings now route through one renderer, and this asserts
+    /// they still do.
+    #[test]
+    fn e2e_vector_display_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "i32 lanes, f-string",
+                "let v: Vector[i32, 4] = Vector[i32, 4](1, -2, 3, -4);\n\
+                 println(f\"{v}\");",
+                "Vector(1, -2, 3, -4)\n",
+            ),
+            (
+                "i32 lanes, bare println",
+                "let v: Vector[i32, 4] = Vector[i32, 4](1, -2, 3, -4);\n\
+                 println(v);",
+                "Vector(1, -2, 3, -4)\n",
+            ),
+            (
+                "u8 lanes above i8 range",
+                "let v: Vector[u8, 4] = Vector[u8, 4](200u8, 1u8, 2u8, 3u8);\n\
+                 println(f\"{v}\");",
+                "Vector(200, 1, 2, 3)\n",
+            ),
+            (
+                "f64 lanes",
+                "let g: Vector[f64, 2] = Vector[f64, 2](1.5, -2.25);\n\
+                 println(f\"{g}\");",
+                "Vector(1.5, -2.25)\n",
+            ),
+            (
+                "f32 lanes",
+                "let g: Vector[f32, 4] = Vector[f32, 4](1.5f32, 2.5f32, 3.5f32, 4.5f32);\n\
+                 println(f\"{g}\");",
+                "Vector(1.5, 2.5, 3.5, 4.5)\n",
+            ),
+            (
+                "f16 lanes",
+                "let h: Vector[f16, 2] = Vector[f16, 2](1.5f16, 2.25f16);\n\
+                 println(f\"{h}\");",
+                "Vector(1.5, 2.25)\n",
+            ),
+            (
+                "bf16 lanes",
+                "let b: Vector[bf16, 2] = Vector[bf16, 2](1.5bf16, 2.5bf16);\n\
+                 println(f\"{b}\");",
+                "Vector(1.5, 2.5)\n",
+            ),
+            (
+                "i64 lanes, non-power-of-two N",
+                "let e: Vector[i64, 3] = Vector[i64, 3](7, 8, 9);\n\
+                 println(f\"{e}\");",
+                "Vector(7, 8, 9)\n",
+            ),
+            (
+                "unbound expression, not a variable",
+                "let v: Vector[i32, 4] = Vector[i32, 4](1, 2, 3, 4);\n\
+                 println(f\"{v + v}\");",
+                "Vector(2, 4, 6, 8)\n",
+            ),
+            (
+                "two vectors and text in one f-string",
+                "let v: Vector[i32, 2] = Vector[i32, 2](1, 2);\n\
+                 let g: Vector[f64, 2] = Vector[f64, 2](0.5, 1.5);\n\
+                 println(f\"a {v} b {g} c\");",
+                "a Vector(1, 2) b Vector(0.5, 1.5) c\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter is the reference for this text and no \
+                 longer produces it",
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backend must print the vector's lanes \
+                     — it printed the aggregate's address, one stray lane, or \
+                     nothing at all before B-2026-08-29-52",
+                );
+            }
+        }
+    }
+
+    /// B-2026-08-29-52, the one shape where the compiled backends deliberately
+    /// do NOT match the interpreter.
+    ///
+    /// An unsigned lane holding a value above `i64::MAX` renders as the value
+    /// here and as a signed reinterpretation on the interpreter
+    /// (`Vector(-1, 1)`). The interpreter's `Value::Vector` holds untyped
+    /// `Value::Int` lanes, so its Display cannot recover a signedness its own
+    /// INDEXED read gets right — `u[0]` prints 18446744073709551615 while the
+    /// whole vector prints -1, in the same program. That is a defect in the
+    /// reference, tracked separately; reproducing it here to keep the twin
+    /// green would write a known-wrong sign convention into the compiled
+    /// formatter and make it harder to remove.
+    ///
+    /// Pinned rather than twinned for exactly that reason — when the
+    /// interpreter side is fixed, this test keeps passing and the twin above
+    /// can absorb the case.
+    #[test]
+    fn e2e_vector_display_renders_wide_unsigned_lanes_as_unsigned() {
+        let src = "fn main() {\n\
+                   let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                   println(f\"{u}\");\n\
+                   }\n";
+        if let Some(aot) = run_program(src) {
+            assert_eq!(
+                aot, "Vector(18446744073709551615, 1)\n",
+                "a u64 lane must render unsigned, like the scalar and indexed-lane \
+                 paths already do",
+            );
+        }
+    }
+
     /// `Vector[T, N]` integer lane arithmetic must give the SAME value in both
     /// backends (B-2026-08-26-8).
     ///

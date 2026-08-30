@@ -673,6 +673,10 @@ pub type UnsignedIntExprsTable = std::collections::HashSet<(usize, usize)>;
 /// [`Program::vector_method_call_spans`].
 pub type VectorMethodCallSpansTable = std::collections::HashSet<(usize, usize)>;
 
+/// Spans of every expression whose Kāra type is a `Vector[T, N]`, whatever
+/// its element type. See [`Program::vector_typed_exprs`].
+pub type VectorTypedExprsTable = std::collections::HashSet<(usize, usize)>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: for every expression whose Kāra type is a `Named`
 /// struct (`Type::Named { name, .. }`), maps `(span.offset, span.length)`
@@ -1139,6 +1143,26 @@ pub struct Program {
     /// which folds in the sibling `vector_method_receivers` fix for the *type*
     /// half of the same collision.
     pub vector_method_call_spans: VectorMethodCallSpansTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is a `Vector[T, N]`, regardless of
+    /// element type.
+    ///
+    /// The PRESENCE sibling of `unsigned_vector_exprs`, which only records the
+    /// unsigned-element subset and so cannot answer "is this a vector at all".
+    /// Codegen needs that question for f-string interpolation: an LLVM
+    /// `<N x T>` is recoverable from the compiled value, but the arm has to
+    /// decide whether to compile the part as a vector BEFORE compiling it,
+    /// since the scalar fallback would otherwise read the aggregate as a
+    /// pointer or a lone lane (B-2026-08-29-52).
+    ///
+    /// Deliberately NOT folded together with `vector_method_receivers` the way
+    /// `unsigned_vector_exprs` is. That fold exists because a `MethodCall`
+    /// shares its receiver's span and the unsigned table wants the RECEIVER's
+    /// element signedness. Here the question is about the expression's own
+    /// type, and `v.reduce_min()` is an `f32`, not a vector — folding
+    /// receivers in would make the renderer treat a scalar call result as a
+    /// vector.
+    pub vector_typed_exprs: VectorTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every expression whose Kāra type is a `Named` struct, maps
     /// `(offset, length)` to the canonical struct name. Lets codegen

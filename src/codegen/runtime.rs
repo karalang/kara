@@ -12864,6 +12864,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             return Ok((data, len));
         }
+        // Whole-`Vector[T, N]` interpolation part → lane-walking formatter
+        // (B-2026-08-29-52). Must precede every arm below: a `<N x T>` is not
+        // a struct, a String or a pointer, so the scalar fallback read it as
+        // whichever of those the backend happened to have in that place — the
+        // JIT printed the aggregate's address, AOT printed one lane.
+        if let Some((acc, sval)) = self.try_compile_vector_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.simd.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.simd.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         // Collection (Vec/Map/Set) interpolation part → render via its Display
         // fn. Must precede the compile_fstr_part_to_cstr fallback: a Vec value
         // shares String's `{ptr,len,cap}` layout, so the fallback would

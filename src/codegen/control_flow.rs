@@ -1735,6 +1735,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(zero.into());
         }
 
+        // Whole-`Vector[T, N]` arm — `println(v)` (B-2026-08-29-52). Without
+        // it the call reached the value-kind arms below, which have no case
+        // for an LLVM `<N x T>` and printed NOTHING AT ALL: the line vanished
+        // from the output on both compiled backends while the interpreter
+        // printed `Vector(1, 2, 3, 4)`. The f-string spelling of the same
+        // thing had the louder failure (an address, or one stray lane); this
+        // one was silent. Same renderer for both, so they cannot drift.
+        if let Some((_acc, sval)) = self.try_compile_vector_display(&args[0].value)? {
+            self.emit_write_and_free_string(sval, nl, to_stderr);
+            return Ok(zero.into());
+        }
+
         // Whole-tuple arm — `println(t)` where `t: (i64, i64)` — render via the
         // element-wise tuple Display fn (`(a, b)`, matching the interpreter),
         // then print + free the owning buffer. Precedes the struct-value error

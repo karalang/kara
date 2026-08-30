@@ -193,6 +193,12 @@ pub(crate) struct SpanTables {
     /// to pick the unsigned compare predicate (`ult`/`ugt`) over the signed
     /// default. Shared infra for the slice-3 mask comparisons.
     pub(crate) unsigned_vector_exprs: HashSet<(usize, usize)>,
+    /// Presence set of `Vector[T, N]`-typed expression spans, from
+    /// `Program::vector_typed_exprs`. Lets the f-string renderer route a
+    /// vector part to the lane-walking formatter instead of the scalar
+    /// fallback, which reads the aggregate as a pointer or a lone lane
+    /// (B-2026-08-29-52).
+    pub(crate) vector_typed_exprs: HashSet<(usize, usize)>,
     /// B-2026-08-14-3 — scalar sibling of `unsigned_vector_exprs`. Populated
     /// from `Program::unsigned_int_exprs`; see that field for why the
     /// syntactic walk in `expr_is_unsigned_int` needs a fallback and why this

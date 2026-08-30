@@ -6192,6 +6192,7 @@ impl<'ctx> Codegen<'ctx> {
                 index_recv_vec_types: HashMap::new(),
                 unsigned_vector_exprs: HashSet::new(),
                 unsigned_int_exprs: HashSet::new(),
+                vector_typed_exprs: HashSet::new(),
                 cast_source_unsigned: HashSet::new(),
                 vector_method_call_spans: HashSet::new(),
                 expr_struct_type_names: HashMap::new(),
@@ -7505,6 +7506,7 @@ impl<'ctx> Codegen<'ctx> {
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
         self.span_tables.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();
+        self.span_tables.vector_typed_exprs = program.vector_typed_exprs.clone();
         self.span_tables.unsigned_int_exprs = program.unsigned_int_exprs.clone();
         self.span_tables.cast_source_unsigned = program.cast_source_unsigned.clone();
         self.span_tables.vector_method_call_spans = program.vector_method_call_spans.clone();
@@ -9085,6 +9087,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_string_typed_exprs = tp.string_typed_exprs.clone();
         let mut t_borrow_vec_typed_exprs = tp.borrow_vec_typed_exprs.clone();
         let mut t_unsigned_vector_exprs = tp.unsigned_vector_exprs.clone();
+        let mut t_vector_typed_exprs = tp.vector_typed_exprs.clone();
         let mut t_unsigned_int_exprs = tp.unsigned_int_exprs.clone();
         let mut t_cast_source_unsigned = tp.cast_source_unsigned.clone();
         let mut t_vector_method_call_spans = tp.vector_method_call_spans.clone();
@@ -9141,6 +9144,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.unsigned_vector_exprs,
                     &mut t_unsigned_vector_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.vector_typed_exprs,
+                    &mut t_vector_typed_exprs,
                 );
                 std::mem::swap(
                     &mut self.span_tables.unsigned_int_exprs,
