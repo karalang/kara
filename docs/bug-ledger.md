@@ -1988,7 +1988,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1850 surfaced
 | B-2026-08-30-28 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the sto… | fd205752 |
 | B-2026-08-30-29 | effect | high | THE EFFECT CHECKER DOES NOT ENFORCE design.md's "Drop bodies must not panic" RULE -- an `impl Drop` whose body calls `panic()`, indexes out of bounds… | 198b899 |
 | B-2026-08-30-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpre… | 198b899 |
-| B-2026-08-30-31 | codegen | medium | AUTO-PAR RUNS `process.exit(code)` BEFORE THE `println`s THAT PRECEDE IT WHENEVER ANY STATEMENT FOLLOWS THE EXIT, silently discarding ALL prior stdou… | 198b899 |
+| B-2026-08-30-31 | codegen | high | AUTO-PAR RUNS `process.exit(code)` BEFORE THE `println`s THAT PRECEDE IT WHENEVER ANY STATEMENT FOLLOWS THE EXIT, silently discarding ALL prior stdou… | 198b899 |
 
 </details>
 
