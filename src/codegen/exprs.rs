@@ -1276,6 +1276,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // buffers. See the tail-position sibling in
                     // `suppress_cleanup_for_tail_return`.
                     self.suppress_array_binding_move_arg(e);
+                    // B-2026-08-29-56 — the INLINE sibling of the boxed-payload
+                    // escape disarm below. `let buf = Some(f"zz"); buf` hands the
+                    // caller an `Option` whose payload words still point at THIS
+                    // frame's buffer, but the binding's own `FreeInlineOptionPayload`
+                    // (cap-guarded at word 2) stayed armed, so the callee freed it on
+                    // the way out and the caller freed it again — `free(): double free
+                    // detected in tcache 2` on a program `--interp` runs correctly.
+                    //
+                    // The disarm helper already existed and was hooked at seventeen
+                    // CONSUMING positions (struct-literal fields, call arguments,
+                    // method receivers, channel sends, `let` RHS) and at no ESCAPING
+                    // one — the same hole shape B-2026-08-28-15 found for the
+                    // tuple-index peer. Runtime whole-slot zero, not a queue retract,
+                    // so a binding returned on one path and consumed on another still
+                    // frees its payload on the consuming path.
+                    //
+                    // Bare-tail `Some(f"zz")` was always clean because a temporary
+                    // registers no binding cleanup; only the NAMED binding had an
+                    // armed action to leave behind.
+                    self.suppress_inline_option_result_binding_move(e);
                     // B-2026-07-22-2: `return mk().s;` — the caller now owns
                     // the extracted field's buffer; zero it in the staged
                     // fresh-temp slot so the drain below frees only the

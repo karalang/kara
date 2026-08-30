@@ -17627,6 +17627,139 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-56 — a heap-carrying `Option` BOUND TO A LOCAL and returned
+    /// hands its payload to the caller; the callee must not free it on the way
+    /// out.
+    ///
+    /// The binding's `let` arms a `FreeInlineOptionPayload` (cap-guarded at the
+    /// option's word 2). Seventeen CONSUMING positions retract that action when
+    /// the binding is moved away — struct-literal fields, call arguments, method
+    /// receivers, channel sends, a `let` RHS — and no ESCAPING position did, so
+    /// the callee freed the buffer on the way out and the caller freed it again:
+    /// `free(): double free detected in tcache 2`, on a program `--interp` runs
+    /// correctly. Same hole shape B-2026-08-28-15 found for the tuple-index peer
+    /// and B-2026-08-07-1 for the heap-BOXED payload; this is the inline sibling
+    /// of that one.
+    ///
+    /// A double free aborts the process, so `run_program` returns `None` and
+    /// every row below fails as `None` against its expected string until the two
+    /// return positions are hooked.
+    ///
+    /// Two rows exist because the ledger row asserted them CLEAN and measurement
+    /// disagreed: `caller-discards` (the caller never binds the result at all)
+    /// and `caller-holds` (`let r = collect(); println("held")`) both aborted, so
+    /// "the caller must consume the payload" was never an ingredient. The
+    /// `*-control` rows are shapes that were always clean and must stay so — a
+    /// bare-tail temporary registers no binding cleanup, a scalar payload has no
+    /// buffer, and a user enum takes an entirely different drop channel.
+    #[test]
+    fn e2e_option_local_returned_hands_its_inline_payload_to_the_caller() {
+        const H: &str = "struct B { s: String }\n\
+             enum E { A(String), B }\n\
+             fn c_tail() -> Option[String] { let buf = Some(f\"zz\"); buf }\n\
+             fn c_stmt() -> Option[String] { let buf = Some(f\"zz\"); return buf; }\n\
+             fn c_bare() -> Option[String] { Some(f\"zz\") }\n\
+             fn c_vec() -> Option[Vec[i64]] { let buf = Some([1, 2, 3]); buf }\n\
+             fn c_struct() -> Option[B] { let buf = Some(B { s: f\"zz\" }); buf }\n\
+             fn c_mut() -> Option[String] { let mut buf: Option[String] = None; buf = Some(f\"aa\"); buf }\n\
+             fn c_two() -> Option[String] { let a = Some(f\"zz\"); let b = a; b }\n\
+             fn c_int() -> Option[i64] { let buf = Some(7); buf }\n\
+             fn c_enum() -> E { let buf = E.A(f\"zz\"); buf }\n\
+             fn c_cond(n: i64) -> Option[String] {\n\
+             \x20   let buf = Some(f\"zz\");\n\
+             \x20   if n > 0 { return buf; }\n\
+             \x20   match buf { Some(s) => println(f\"c{s}\"), None => println(\"cn\"), }\n\
+             \x20   None\n\
+             }\n";
+        for (label, body, want) in [
+            // THE ROW: the named binding returned as the body's tail.
+            (
+                "tail-local",
+                "match c_tail() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[zz]\npost\n",
+            ),
+            // The explicit-`return` spelling is a SEPARATE code path in
+            // `exprs.rs`; it had the identical hole and needs its own hook.
+            (
+                "stmt-return",
+                "match c_stmt() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[zz]\npost\n",
+            ),
+            // Parity pin: the bare-tail spelling of the SAME value was always
+            // clean (a temporary registers no binding cleanup). The fix makes
+            // the two spellings agree rather than moving one of them.
+            (
+                "bare-tail-control",
+                "match c_bare() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[zz]\npost\n",
+            ),
+            // Not `String`-specific — any heap behind the payload.
+            (
+                "vec-payload",
+                "match c_vec() { Some(v) => println(f\"{v.len()}\"), None => println(\"none\"), }\n",
+                "3\npost\n",
+            ),
+            (
+                "struct-payload",
+                "match c_struct() { Some(b) => println(f\"[{b.s}]\"), None => println(\"none\"), }\n",
+                "[zz]\npost\n",
+            ),
+            // The spelling `selfhost/src/parser.kara` actually uses (~18 sites):
+            // an ANNOTATED `None` let, assigned later. It was shielded until
+            // c793ad0 recorded the binding's concrete type instead of the
+            // literal's, which is why this defect only then turned CI red.
+            (
+                "mut-annotated-then-assigned",
+                "match c_mut() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[aa]\npost\n",
+            ),
+            (
+                "two-hop-let",
+                "match c_two() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[zz]\npost\n",
+            ),
+            // The ledger row called both of these clean. They were not: the
+            // second free is the callee's own, so the caller need not touch the
+            // value — or even bind it.
+            ("caller-discards", "c_tail();\n", "post\n"),
+            (
+                "caller-holds",
+                "let r = c_tail(); println(\"held\");\n",
+                "held\npost\n",
+            ),
+            // CONTROLS that must stay clean: no heap behind the payload, and a
+            // user enum (a different drop channel entirely).
+            (
+                "int-payload-control",
+                "match c_int() { Some(n) => println(f\"{n}\"), None => println(\"none\"), }\n",
+                "7\npost\n",
+            ),
+            (
+                "user-enum-control",
+                "match c_enum() { E.A(s) => println(f\"[{s}]\"), E.B => println(\"b\"), }\n",
+                "[zz]\npost\n",
+            ),
+            // GUARD in the leak direction, and the reason the disarm is a
+            // RUNTIME whole-slot zero rather than a compile-time queue retract:
+            // one path returns the binding, the other consumes it. A static
+            // retraction would strand the payload on the consuming path, trading
+            // this double free for a leak, so both paths are pinned here.
+            (
+                "cond-returned",
+                "match c_cond(1) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[zz]\npost\n",
+            ),
+            (
+                "cond-consumed",
+                "match c_cond(0) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "czz\nnone\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// Phase-11 `PriorityQueue[T: Ord]` — the first stdlib collection whose
     /// bodies are real Kāra over a generic, trait-bounded impl.
     ///

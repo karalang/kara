@@ -36311,6 +36311,100 @@ fn tail_return_hands_the_value_out_like_a_return_statement() {
     }
 }
 
+/// Interpreter mirror of `codegen.rs`'s
+/// `e2e_option_local_returned_hands_its_inline_payload_to_the_caller`.
+///
+/// The interpreter was never wrong here — B-2026-08-29-56 is a compiled-only
+/// double free — so these rows are PARITY PINS, not a reproduction: they assert
+/// the strings the compiled backends must now produce, so a future interpreter
+/// change cannot drift away from the backend the fix just corrected.
+#[test]
+fn option_local_returned_hands_its_inline_payload_to_the_caller() {
+    const H: &str = "struct B { s: String }\n\
+         enum E { A(String), B }\n\
+         fn c_tail() -> Option[String] { let buf = Some(f\"zz\"); buf }\n\
+         fn c_stmt() -> Option[String] { let buf = Some(f\"zz\"); return buf; }\n\
+         fn c_bare() -> Option[String] { Some(f\"zz\") }\n\
+         fn c_vec() -> Option[Vec[i64]] { let buf = Some([1, 2, 3]); buf }\n\
+         fn c_struct() -> Option[B] { let buf = Some(B { s: f\"zz\" }); buf }\n\
+         fn c_mut() -> Option[String] { let mut buf: Option[String] = None; buf = Some(f\"aa\"); buf }\n\
+         fn c_two() -> Option[String] { let a = Some(f\"zz\"); let b = a; b }\n\
+         fn c_int() -> Option[i64] { let buf = Some(7); buf }\n\
+         fn c_enum() -> E { let buf = E.A(f\"zz\"); buf }\n\
+         fn c_cond(n: i64) -> Option[String] {\n\
+         \x20   let buf = Some(f\"zz\");\n\
+         \x20   if n > 0 { return buf; }\n\
+         \x20   match buf { Some(s) => println(f\"c{s}\"), None => println(\"cn\"), }\n\
+         \x20   None\n\
+         }\n";
+    for (label, body, want) in [
+        (
+            "tail-local",
+            "match c_tail() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "[zz]\npost\n",
+        ),
+        (
+            "stmt-return",
+            "match c_stmt() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "[zz]\npost\n",
+        ),
+        (
+            "bare-tail-control",
+            "match c_bare() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "[zz]\npost\n",
+        ),
+        (
+            "vec-payload",
+            "match c_vec() { Some(v) => println(f\"{v.len()}\"), None => println(\"none\"), }\n",
+            "3\npost\n",
+        ),
+        (
+            "struct-payload",
+            "match c_struct() { Some(b) => println(f\"[{b.s}]\"), None => println(\"none\"), }\n",
+            "[zz]\npost\n",
+        ),
+        (
+            "mut-annotated-then-assigned",
+            "match c_mut() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "[aa]\npost\n",
+        ),
+        (
+            "two-hop-let",
+            "match c_two() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "[zz]\npost\n",
+        ),
+        ("caller-discards", "c_tail();\n", "post\n"),
+        (
+            "caller-holds",
+            "let r = c_tail(); println(\"held\");\n",
+            "held\npost\n",
+        ),
+        (
+            "int-payload-control",
+            "match c_int() { Some(n) => println(f\"{n}\"), None => println(\"none\"), }\n",
+            "7\npost\n",
+        ),
+        (
+            "user-enum-control",
+            "match c_enum() { E.A(s) => println(f\"[{s}]\"), E.B => println(\"b\"), }\n",
+            "[zz]\npost\n",
+        ),
+        (
+            "cond-returned",
+            "match c_cond(1) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "[zz]\npost\n",
+        ),
+        (
+            "cond-consumed",
+            "match c_cond(0) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+            "czz\nnone\npost\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-48, interpreter leg — the twin of
 /// `codegen::e2e_arm_assigned_payload_that_is_returned_runs_one_drop_body`,
 /// asserting the same strings so a later one-sided edit cannot re-negotiate
