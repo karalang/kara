@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 321 | 2 |
-| run-vs-build | 254 | 15 |
+| miscompile | 322 | 2 |
+| run-vs-build | 255 | 16 |
 | leak | 237 | 8 |
-| missing-feature | 188 | 1 |
+| missing-feature | 189 | 2 |
 | double-free | 157 | 0 |
 | codegen-gap | 152 | 3 |
 | diagnostics | 112 | 0 |
@@ -110,23 +110,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1264 | 31 |
+| codegen | 1265 | 32 |
 | typecheck | 279 | 1 |
-| interp | 266 | 15 |
+| interp | 267 | 15 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
-| resolver | 27 | 0 |
-| effect | 26 | 0 |
+| resolver | 28 | 1 |
+| effect | 27 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1843 surfaced · 36 open · 1778 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1846 surfaced · 38 open · 1779 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (36)
+### Open (38)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -151,7 +151,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1843 surfaced
 | B-2026-08-30-11 | 2026-08-30 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path while the `t` path is clean, because B-2026-08-29-27's gates need EVERY tail to mint and B-2026-08-30-2's owner needs a source binding to inherit a FRAME from; the innermost frame is wrong (a wrapping block's drains before the value escapes -- caught by the self-host seed-run oracle, not by any sweep), so the lead is the SIBLING binding arm's frame | — |
 | B-2026-08-30-12 | 2026-08-30 | codegen | medium | A VALUE-POSITION BLOCK WHOSE TAIL NAMES A BINDING IT DECLARED ITSELF LEAKS IT IN A READ-ONLY CONSUMER -- `{ let t = mkB(n); t }.contains("bbb")` strands 27 B while the OWNING spelling is clean; B-2026-08-30-2's owner declines it because there is no live frame to replace and admitting it double-freed 23 tests (it is the shape every codegen desugar synthesizes), but unlike that row the source cannot be read again, so this one belongs to `expr_is_fresh_owned_branch_tail` and the seven gates B-2026-08-29-27 wired | — |
 | B-2026-08-30-13 | 2026-08-30 | codegen | low | AN ASSIGNMENT WHOSE RHS IS A VALUE-POSITION BLOCK DOES NOT FREE THE VALUE IT OVERWRITES AT -O0 -- `let mut s = mkA(n); s = { t };` strands 15 B while `s = mkB(n)` and `s = t` are both clean at BOTH opt levels, so it is one RHS shape missing the old-value drop rather than a missing mechanism; clean at -O2, which is the default, so a default build hides it | — |
-| B-2026-08-30-14 | 2026-08-30 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl Drop` -- the statement after the `return` runs, the loop never breaks, and a `return v` yields UNIT; both compiled backends are correct | — |
 | B-2026-08-30-15 | 2026-08-30 | codegen | medium | A FRESH-TEMP STRUCT SCRUTINEE'S OWN `Drop` BODY NEVER RUNS AT ALL ON EITHER COMPILED BACKEND -- `match mkS() { S { r: r } => .. }` is interp `v7 dS dR7` vs compiled `v7 dR7`, with `dS` missing outright rather than misplaced | — |
 | B-2026-08-30-16 | 2026-08-30 | codegen | low | A FRESH-TEMP `shared enum` SCRUTINEE'S OWN `Drop` BODY STILL RUNS AT THE ENCLOSING SCOPE'S EXIT -- `match mkSe() { .. }` is interp `v1 dSe s1 s2` vs compiled `v1 s1 s2 dSe`; the value-enum half of this was fixed by B-2026-08-29-28, the shared half rides a different channel | — |
 | B-2026-08-30-17 | 2026-08-30 | interp+codegen | low | AN `if let` MISS DROPS THE SCRUTINEE TEMPORARY *AFTER* THE `else` ARM ON BOTH BACKENDS, WHERE design.md SAYS BEFORE IT -- `els dE` vs the specified `dE els`; the two backends AGREE, so no A/B gate can see it | — |
@@ -166,6 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1843 surfaced
 | B-2026-08-30-26 | 2026-08-30 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIToFP`) while the interpreter performs it. `f16` is unaffected, and an explicit `f32` hop compiles -- so the four int-conversion opcodes are simply missing the widening the float-cast sites already have. | — |
 | B-2026-08-30-27 | 2026-08-30 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`exp`/`sin`/...) are -- so an identical loop pays a call per iteration or not, decided only by whether the LLVM-18 pin happens to have an intrinsic for the method. | — |
 | B-2026-08-30-28 | 2026-08-30 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the store does NOT happen, on both argument spellings and all four surfaces. The priced remainder of B-2026-08-29-49, which traded a DOUBLE body over a live object for a LOST one over a dead object, in `fn_moves_param_into_outliving_place`'s documented leak-over-double-free direction; a per-callee static predicate cannot answer a per-path question | — |
+| B-2026-08-30-29 | 2026-08-30 | effect | high | THE EFFECT CHECKER DOES NOT ENFORCE design.md's "Drop bodies must not panic" RULE -- an `impl Drop` whose body calls `panic()`, indexes out of bounds, or calls a `panics` function is ACCEPTED by `karac check`, where the spec requires rejection at the definition site; the three shapes the spec itself enumerates all compile | — |
+| B-2026-08-30-30 | 2026-08-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpreter already HAS a correct `process.exit` arm, but it is keyed on `ExprKind::Path` and the callee arrives as a bare `Identifier`, so it never fires; no other spelling is accepted | — |
+| B-2026-08-30-31 | 2026-08-30 | codegen | medium | STDOUT ALREADY WRITTEN BY `println` IS SILENTLY LOST WHEN THE PROGRAM ENDS VIA `process.exit(code)` ON BOTH COMPILED BACKENDS -- `println("before"); process.exit(3)` exits 3 with ZERO bytes on stdout, while the same program without the exit prints normally; the canonical `println("fatal: .."); process.exit(1)` emits nothing at all | — |
 
 ### Relocated (2)
 
@@ -198,9 +200,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1843 surfaced
 
 </details>
 
-### Fixed (1778)
+### Fixed (1779)
 
-<details><summary>1778 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1779 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1982,6 +1984,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1843 surfaced
 | B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
 | B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
+| B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
 
 </details>
 
