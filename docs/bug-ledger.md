@@ -93,15 +93,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 320 | 4 |
-| run-vs-build | 253 | 15 |
+| run-vs-build | 254 | 15 |
 | leak | 237 | 8 |
 | missing-feature | 188 | 1 |
 | double-free | 157 | 0 |
-| codegen-gap | 149 | 0 |
+| codegen-gap | 150 | 1 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | perf | 86 | 1 |
-| soundness | 80 | 0 |
+| soundness | 82 | 2 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
 | use-after-free | 25 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1257 | 28 |
+| codegen | 1260 | 30 |
 | typecheck | 278 | 0 |
-| interp | 262 | 12 |
+| interp | 265 | 15 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1834 surfaced · 31 open · 1774 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1838 surfaced · 34 open · 1775 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (31)
+### Open (34)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -143,7 +143,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1834 surfaced
 | B-2026-08-29-49 | 2026-08-29 | interp+codegen | medium | A METHOD arm that moves an owned enum param's payload into a `mut ref` param runs the payload's `Drop` body ONE TIME TOO MANY -- unanimous on all four surfaces, so A/B-invisible | — |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
 | B-2026-08-29-53 | 2026-08-29 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range. The SCALAR `x.tanh()` on the same value in the SAME binary returns the correct 1. | — |
-| B-2026-08-29-54 | 2026-08-29 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 } }` called as `H.s2(R { id: 1 }, R { id: 2 })` prints `v=7` alone under JIT and AOT against `dR2 dR1 v=7` under `--interp`; one argument is enough, moved locals work, and instance methods work, so it is the static-call arm specifically | none |
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
@@ -161,6 +160,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1834 surfaced
 | B-2026-08-30-17 | 2026-08-30 | interp+codegen | low | AN `if let` MISS DROPS THE SCRUTINEE TEMPORARY *AFTER* THE `else` ARM ON BOTH BACKENDS, WHERE design.md SAYS BEFORE IT -- `els dE` vs the specified `dE els`; the two backends AGREE, so no A/B gate can see it | — |
 | B-2026-08-30-18 | 2026-08-30 | codegen | medium | A struct literal built DIRECTLY at a `return` site, whose field is a `Vec` of `Drop` elements, runs the element's `Drop` body ONCE TOO MANY on every compiled backend -- `mid dR14 v14 dR14 post` against the interpreter's `mid v14 dR14 post`. The two working spellings both route the value through a named binding first (`let bx = ...; return bx`) or omit `return` entirely (the bare tail), so the return-position literal is the whole trigger; a non-container `Drop` field is correct in all three spellings | — |
 | B-2026-08-30-19 | 2026-08-30 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still takes the payload, so a later read of the source is a use-after-free that prints garbage on the JIT and both AOT legs while `--interp` is correct. The borrow classification admits only a DIRECT `{ptr,len,cap}` payload (`String` / `Vec`), and a struct that merely CONTAINS one is not admitted. The same struct inside a USER enum variant is correct, so it is the built-in `Option`/`Result` channel specifically; the `Result` leg fails differently (valgrind-clean, second read empty) | — |
+| B-2026-08-30-20 | 2026-08-30 | interp+codegen | medium | AN ARGUMENT PRODUCED BY AN ASSOCIATED CALL HAS NO OWNER ON ANY BACKEND -- `s1(H.mkr(1))` where `H.mkr` is an `impl` block's associated fn runs NO `Drop` body on interp, JIT and AOT (the free-function producer `s1(mkr2(1))` runs it) and leaks the payload at -O0; all three backends agree, so only an absolute expectation against the free-fn spelling sees it | none |
+| B-2026-08-30-21 | 2026-08-30 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolve field 'id' on this receiver`) and the result binding's own `Drop` body is silently LOST -- both vanish the moment the struct gains one heap field, and the free-function spelling is correct throughout | none |
+| B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
+| B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 
 ### Relocated (2)
 
@@ -193,9 +196,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1834 surfaced
 
 </details>
 
-### Fixed (1774)
+### Fixed (1775)
 
-<details><summary>1774 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1775 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1960,6 +1963,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1834 surfaced
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
 | B-2026-08-29-52 | codegen | high | Printing a `Vector[T, N]` gives THREE DIFFERENT ANSWERS -- the interpreter renders the lanes, the JIT prints a raw POINTER (the same one for two diff… | 60465148 |
+| B-2026-08-29-54 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 }… | 5962bb9 |
 | B-2026-08-29-56 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(… | bc1c37c |
 | B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
 | B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
