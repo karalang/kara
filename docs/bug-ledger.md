@@ -1568,7 +1568,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced
 | B-2026-08-20-12 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => . | `src/exhaustive.rs` lowered every float literal pattern to… |
 | B-2026-08-20-13 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints… | Root cause is in `src/typechecker/types.rs`: the numeric-co… |
 | B-2026-08-20-14 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) r… | f620315 |
-| B-2026-08-20-15 | autopar+codegen | high | AUTO-PAR MISCOMPILE: after a fanned-out `while k < end { ...; k = k + 1; }` reduction, the parent's counter is left at its INIT value instead of `end… | 095e557 |
+| B-2026-08-20-15 | autopar+codegen | high | AUTO-PAR MISCOMPILE: after a fanned-out `while k < end { ...; k = k + 1; }` reduction, the parent's counter is left at its INIT value instead of `end… | d361c11 |
 | B-2026-08-20-16 | cli | high | `karac check <file>` and `karac run <file>` SILENTLY TRUNCATE a package member to a single file, producing both FALSE REJECTIONS and FALSE ACCEPTANCE… | b8e8a70 |
 | B-2026-08-20-17 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing | f725b44 |
 | B-2026-08-20-18 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1 | ae0b21b |

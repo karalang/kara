@@ -214,8 +214,39 @@ else:
     )
     def _repo_shas(fix):
         return set(SHA.findall(KATAS_SHA.sub("kara-katas", fix or "")))
-    cites = {r["id"]: _repo_shas(r.get("fix", "")) for r in rows}
-    cites = {k: v for k, v in cites.items() if v}
+
+    # HEADLINE sha vs sha merely MENTIONED in the prose. What this rule
+    # protects is traceability: a closed row must land you on its commit via
+    # `git show`, and that is the sha in the opening `FIXED by <sha>.` clause —
+    # the one `bug-close.py` requires and the one a reader reaches for first.
+    #
+    # A sha further down the prose is a REFERENCE, and a dangling one there is
+    # frequently DELIBERATE: the row is recording its own history ("this note
+    # first cited `a6f6572` … that sha is orphaned; the live commit is
+    # `d135d02`" — B-2026-08-29-48). Erroring on that punishes a row for being
+    # honest about a rebase, and the only way to silence it is to delete the
+    # record, which is the opposite of what the ledger is for. So: headline
+    # dangling is an ERROR, prose dangling is one aggregated WARN.
+    #
+    # A row whose fix does NOT open with the convention (about a thousand
+    # legacy rows do not) has no distinguishable headline, so every sha in it
+    # is treated as headline-class — the pre-2026-08-30 behaviour, which is
+    # what DANGLING_GRANDFATHERED is calibrated against.
+    OPENER = re.compile(r"(?i)^\s*(?:fixed|fix|closed|resolved)\s+(?:by|in|at|via|with)\b")
+    def _split_shas(fix):
+        masked = KATAS_SHA.sub("kara-katas", fix or "")
+        allshas = set(SHA.findall(masked))
+        if not OPENER.match(masked):
+            return allshas, set()
+        # First sentence only: a period that ends a sentence is followed by
+        # whitespace or end-of-string, which leaves `docs/foo.md` intact.
+        head = re.split(r"\.(?=\s|$)", masked, maxsplit=1)[0]
+        headline = set(SHA.findall(head))
+        return headline, allshas - headline
+
+    split = {r["id"]: _split_shas(r.get("fix", "")) for r in rows}
+    split = {k: v for k, v in split.items() if v[0] or v[1]}
+    cites = {k: (v[0] | v[1]) for k, v in split.items()}
     every = sorted({t for v in cites.values() for t in v})
     if every:
         # One batch call, not one per token — ~940 tokens would otherwise be
@@ -227,17 +258,25 @@ else:
         gone = {l.split("^{commit}")[0] for l in probe.splitlines()
                 if l.rstrip().endswith(("missing", "ambiguous"))}
         stale = 0
-        for bid, toks in sorted(cites.items()):
-            dead = sorted(toks & gone)
-            if not dead:
+        mentioned = []
+        for bid, (headline, prose) in sorted(split.items()):
+            dead_head = sorted(headline & gone)
+            dead_prose = sorted(prose & gone)
+            if not dead_head and not dead_prose:
                 continue
-            where = "errs" if bid not in DANGLING_GRANDFATHERED else "warns"
-            msg = (f"{bid}: fix cites {', '.join(dead)}, which resolve(s) to no commit "
-                   f"in this repo (pre-rebase SHA?)")
-            if where == "errs":
-                errs.append(msg)
-            else:
+            if bid in DANGLING_GRANDFATHERED:
                 stale += 1
+            elif dead_head:
+                errs.append(
+                    f"{bid}: fix cites {', '.join(dead_head)}, which resolve(s) to no commit "
+                    f"in this repo (pre-rebase SHA?)")
+            else:
+                mentioned.append(f"{bid} ({', '.join(dead_prose)})")
+        if mentioned:
+            warns.append(
+                f"{len(mentioned)} row(s) MENTION a sha that resolves to no commit, outside the "
+                f"`FIXED by <sha>.` opener — check each is a deliberately recorded orphan and not "
+                f"a typo: {'; '.join(mentioned)}")
         if stale:
             warns.append(
                 f"{stale} grandfathered row(s) still cite a dangling fix SHA — "
