@@ -1137,6 +1137,32 @@ impl<'a> super::EffectChecker<'a> {
             ExprKind::Unary { operand, .. } => {
                 self.collect_calls_in_expr(operand, calls, bounds);
             }
+            // B-2026-08-30-35 — an f-string INTERPOLATION HOLE is a real
+            // sub-expression, not part of the literal. It sat in the leaf list
+            // below, so `println(f"{touch()}")` contributed nothing to the
+            // enclosing function's inferred set while the `let`-hoisted spelling
+            // of the same call contributed `writes(Db)` — and a DECLARED effect
+            // was dropped exactly as readily as an inferred `panics`.
+            //
+            // Public-fn effect verification checks against this set, so a
+            // function whose only effectful call sat in a hole passed with an
+            // under-declared row: a hole in the effect system's headline
+            // guarantee rather than a cosmetic gap.
+            //
+            // The concurrency analysis reads holes through its OWN walker
+            // (`concurrency/effects_collect.rs`), which already descends here —
+            // measured, not assumed: two statements whose holes hide the same
+            // resource are correctly refused a parallel group, and two hiding
+            // DISTINCT resources are correctly given one. So auto-par was never
+            // misled by this, and the shape of that walker's arm is what this
+            // one mirrors.
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(inner, _) = part {
+                        self.collect_calls_in_expr(inner, calls, bounds);
+                    }
+                }
+            }
             ExprKind::Block(block) | ExprKind::Comptime(block) => {
                 for stmt in &block.stmts {
                     self.collect_calls_in_stmt(stmt, calls, bounds);
@@ -1343,7 +1369,6 @@ impl<'a> super::EffectChecker<'a> {
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
-            | ExprKind::InterpolatedStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }

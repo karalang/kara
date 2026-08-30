@@ -12097,14 +12097,15 @@ fn gamma(n: i64) -> i64 { let h = Holder { f: ping }; n }
 /// to leave alone, and an INHERENT `fn drop` is an ordinary method the
 /// compiler never calls as a destructor, so the rule does not reach it.
 ///
-/// NOT COVERED, deliberately and measurably: the same panicky expression
-/// written inside an f-string interpolation hole (`println(f"{v[3]}")`) is
-/// still accepted, because effects of expressions inside a hole are not
-/// attributed to the enclosing function at all — a general inference gap that
-/// drops a call's declared `writes(Resource)` just as readily as its `panics`.
-/// That is filed separately; the `index-in-interpolation-hole-NOT-caught` row
-/// pins the CURRENT behaviour so closing that gap flips this row loudly rather
-/// than silently widening this rule's reach.
+/// COVERED SINCE B-2026-08-30-35, and this rule's reach widened when that
+/// landed rather than by anything done here. The same panicky expression
+/// written inside an f-string interpolation hole (`println(f"{v[3]}")`) used to
+/// be accepted, because a hole contributed no effects to the enclosing
+/// function at all — a general inference gap that dropped a call's declared
+/// `writes(Resource)` just as readily as its `panics`. The boundary test below
+/// pinned that acceptance so the gap could not close silently; closing it
+/// failed that row, and the shape moved here, which is exactly the handoff
+/// that pin was built for.
 #[test]
 fn drop_body_that_can_panic_is_rejected_at_the_definition_site() {
     for (label, source) in [
@@ -12125,6 +12126,17 @@ fn drop_body_that_can_panic_is_rejected_at_the_definition_site() {
             "index-out-of-bounds",
             "struct S { id: i64 }\n\
              impl Drop for S { fn drop(mut ref self) { let v: Vec[i64] = Vec.new(); let x = v[3]; println(f\"{x}\") } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+        (
+            // Moved here from the boundary table by B-2026-08-30-35, which
+            // made an interpolation hole contribute its effects. The only
+            // difference from the row above is that the indexing sits in the
+            // hole instead of a `let`, and that used to be the difference
+            // between rejected and accepted.
+            "index-out-of-bounds-in-interpolation-hole",
+            "struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { let v: Vec[i64] = Vec.new(); println(f\"{v[3]}\") } }\n\
              fn main() { let s = S { id: 1 }; println(\"x\") }\n",
         ),
     ] {
@@ -12158,16 +12170,6 @@ fn a_panic_free_drop_body_and_an_inherent_drop_are_left_alone() {
              impl S { fn drop(mut ref self) { panic(\"boom\") } }\n\
              fn main() { let s = S { id: 1 }; println(\"x\") }\n",
         ),
-        (
-            // Pins the interpolation-hole gap as it stands today — see the
-            // doc comment above. When that gap closes this row FAILS, which
-            // is the intent: it is a reminder to move the shape into the
-            // rejected table, not a claim that accepting it is correct.
-            "index-in-interpolation-hole-NOT-caught",
-            "struct S { id: i64 }\n\
-             impl Drop for S { fn drop(mut ref self) { let v: Vec[i64] = Vec.new(); println(f\"{v[3]}\") } }\n\
-             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
-        ),
     ] {
         // `effectcheck_ok` asserts the program produces NO non-note effect
         // errors at all, which is the boundary claim in its strongest form:
@@ -12186,6 +12188,114 @@ fn a_panic_free_drop_body_and_an_inherent_drop_are_left_alone() {
         assert!(
             offending.is_empty(),
             "{label}: must still compile clean, got {offending:?}"
+        );
+    }
+}
+
+/// B-2026-08-30-35 — AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE
+/// CONTRIBUTED NO EFFECTS TO THE ENCLOSING FUNCTION'S INFERRED SET.
+///
+/// `InterpolatedStringLit` sat in `collect_calls_in_expr`'s "leaf expressions —
+/// no calls to collect" list, so a hole was treated as part of the literal
+/// rather than as the sub-expression it is. `println(f"{touch()}")` inferred
+/// `[writes(Stdout)]` where the `let`-hoisted spelling of the same call
+/// inferred `[writes(Db), writes(Stdout)]`.
+///
+/// NOT panics-specific and not index-specific: a DECLARED `with writes(Db)` on
+/// an ordinary call was dropped exactly as readily as an inferred `panics`,
+/// which is why both are pinned here. Public-fn effect verification checks
+/// against this set, so a function whose only effectful call sat in a hole
+/// passed with an under-declared row.
+///
+/// THE ORACLE IS THE `let`-HOISTED TWIN, compared as a SET rather than a
+/// string: the two spellings produce the same effects in a different ORDER
+/// (`[writes(Stdout), panics]` vs `[panics, writes(Stdout)]`), and the order is
+/// not part of what this fixes.
+///
+/// AUTO-PAR WAS NEVER MISLED BY THIS, which the row left open and this settles.
+/// The concurrency analysis reads holes through its own walker
+/// (`concurrency/effects_collect.rs`), which already descended into them.
+/// Measured with `--concurrency-report` on the pre-fix compiler: two statements
+/// whose holes hide the SAME resource are correctly refused a parallel group,
+/// and two hiding DISTINCT resources are correctly given one. So the defect was
+/// confined to the effect checker's inferred set — an under-declaration
+/// reaching public-fn verification, not a wrong parallelization.
+#[test]
+fn test_fstring_hole_contributes_its_effects_to_inference() {
+    let verbs = |src: &str, f: &str| -> HashSet<String> {
+        let result = effectcheck_ok(src);
+        result
+            .inferred_effects
+            .get(f)
+            .unwrap()
+            .effects
+            .iter()
+            // Verb AND resource. Comparing verbs alone makes `writes(Db)` and
+            // `writes(Stdout)` the same string, which made the `writes` half of
+            // this test VACUOUS: the hole and let-hoisted sets compared equal
+            // pre-fix even though one was missing `writes(Db)` entirely, and
+            // only the `panics` pair actually failed. Caught by RED-verifying.
+            .map(|e| format!("{:?}({})", e.effect.verb, e.effect.resource))
+            .collect()
+    };
+
+    // A declared `writes(Db)` reached through a hole.
+    let db_hole = verbs(
+        "resource Db;\n\
+         fn touch() -> i64 with writes(Db) { return 1 }\n\
+         fn f() { println(f\"{touch()}\") }",
+        "f",
+    );
+    let db_let = verbs(
+        "resource Db;\n\
+         fn touch() -> i64 with writes(Db) { return 1 }\n\
+         fn f() { let n = touch(); println(f\"{n}\") }",
+        "f",
+    );
+    assert_eq!(
+        db_hole, db_let,
+        "a hole must contribute the same effects as the let-hoisted twin"
+    );
+    assert!(
+        db_hole.contains("Writes(Db)"),
+        "declared writes(Db) dropped by the hole: {db_hole:?}"
+    );
+
+    // An inferred `panics` reached through a hole.
+    let panic_hole = verbs(
+        "fn boom() -> i64 { panic(\"x\"); return 0 }\n\
+         fn f() { println(f\"{boom()}\") }",
+        "f",
+    );
+    let panic_let = verbs(
+        "fn boom() -> i64 { panic(\"x\"); return 0 }\n\
+         fn f() { let n = boom(); println(f\"{n}\") }",
+        "f",
+    );
+    assert_eq!(panic_hole, panic_let, "hole vs let-hoisted twin (panics)");
+    assert!(
+        panic_hole.contains("Panics()"),
+        "inferred panics dropped by the hole: {panic_hole:?}"
+    );
+
+    // The shapes a hole can carry: a method receiver, an operand of a binary
+    // expression, one of two holes, and a hole nested in another f-string.
+    for (label, body) in [
+        ("method", "let w = W { v: 1 }; println(f\"{w.m()}\")"),
+        ("binary", "println(f\"{touch() + 1}\")"),
+        ("two holes", "println(f\"a{touch()}b{touch()}c\")"),
+        ("nested f-string", "println(f\"{f\"{touch()}\"}\")"),
+    ] {
+        let src = format!(
+            "resource Db;\n\
+             fn touch() -> i64 with writes(Db) {{ return 1 }}\n\
+             struct W {{ v: i64 }}\n\
+             impl W {{ fn m(ref self) -> i64 with writes(Db) {{ return 1 }} }}\n\
+             fn f() {{ {body} }}"
+        );
+        assert!(
+            verbs(&src, "f").contains("Writes(Db)"),
+            "{label}: writes(Db) dropped by the hole"
         );
     }
 }

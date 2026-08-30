@@ -7374,20 +7374,28 @@ fn main() {
     ///
     /// The bodies here mutate (`self.buf.clear()`) on purpose: with a read-only
     /// body this whole family is green either way, which is exactly why the
-    /// defect outlived the leg that shares its root cause. Reading `buf[0]` in
+    /// defect outlived the leg that shares its root cause. Reading the buffer in
     /// the body and in the arm also pins that the clear happens after the read,
     /// so a resurrected copy-subject bug shows up as wrong output and not only
     /// as an abort.
+    ///
+    /// The body reads through a `for` loop rather than `buf[0]` because
+    /// B-2026-08-30-35 made an f-string hole contribute its effects: an index is
+    /// `panics`, and design.md requires a `Drop` body to be `panics`-free, so
+    /// `println(f"D{self.buf[0]}")` is now correctly rejected at the definition
+    /// site. It only compiled before because the hole hid the index from
+    /// inference. Each `buf` holds exactly one element, so the loop prints the
+    /// same single line and every assertion below is unchanged.
     #[test]
     fn e2e_freshtemp_boxed_optres_payload_arm_body_runs_against_the_box() {
         let Some(out) = run_program(
             "struct Full { name: String, buf: Vec[i64] }\n\
              impl Drop for Full {\n\
-             \x20   fn drop(mut ref self) { println(f\"D{self.buf[0]}\"); self.buf.clear(); }\n\
+             \x20   fn drop(mut ref self) { for x in self.buf { println(f\"D{x}\"); } self.buf.clear(); }\n\
              }\n\
              struct Wide { tag: i64, a: String, buf: Vec[i64] }\n\
              impl Drop for Wide {\n\
-             \x20   fn drop(mut ref self) { println(f\"W{self.buf[0]}\"); self.buf.clear(); }\n\
+             \x20   fn drop(mut ref self) { for x in self.buf { println(f\"W{x}\"); } self.buf.clear(); }\n\
              }\n\
              fn mk(i: i64) -> Full {\n\
              \x20   let mut b: Vec[i64] = Vec.new();\n\
