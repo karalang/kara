@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 323 | 3 |
+| miscompile | 324 | 3 |
 | run-vs-build | 255 | 16 |
 | leak | 237 | 8 |
 | missing-feature | 189 | 2 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1266 | 32 |
+| codegen | 1267 | 32 |
 | typecheck | 279 | 1 |
-| interp | 267 | 15 |
+| interp | 268 | 15 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1847 surfaced · 38 open · 1780 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1848 surfaced · 38 open · 1781 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (38)
 
@@ -163,11 +163,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1847 surfaced
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
 | B-2026-08-30-26 | 2026-08-30 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIToFP`) while the interpreter performs it. `f16` is unaffected, and an explicit `f32` hop compiles -- so the four int-conversion opcodes are simply missing the widening the float-cast sites already have. | — |
 | B-2026-08-30-27 | 2026-08-30 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`exp`/`sin`/...) are -- so an identical loop pays a call per iteration or not, decided only by whether the LLVM-18 pin happens to have an intrinsic for the method. | — |
-| B-2026-08-30-28 | 2026-08-30 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the store does NOT happen, on both argument spellings and all four surfaces. The priced remainder of B-2026-08-29-49, which traded a DOUBLE body over a live object for a LOST one over a dead object, in `fn_moves_param_into_outliving_place`'s documented leak-over-double-free direction; a per-callee static predicate cannot answer a per-path question | — |
 | B-2026-08-30-29 | 2026-08-30 | effect | high | THE EFFECT CHECKER DOES NOT ENFORCE design.md's "Drop bodies must not panic" RULE -- an `impl Drop` whose body calls `panic()`, indexes out of bounds, or calls a `panics` function is ACCEPTED by `karac check`, where the spec requires rejection at the definition site; the three shapes the spec itself enumerates all compile | — |
 | B-2026-08-30-30 | 2026-08-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpreter already HAS a correct `process.exit` arm, but it is keyed on `ExprKind::Path` and the callee arrives as a bare `Identifier`, so it never fires; no other spelling is accepted | — |
 | B-2026-08-30-31 | 2026-08-30 | codegen | medium | STDOUT ALREADY WRITTEN BY `println` IS SILENTLY LOST WHEN THE PROGRAM ENDS VIA `process.exit(code)` ON BOTH COMPILED BACKENDS -- `println("before"); process.exit(3)` exits 3 with ZERO bytes on stdout, while the same program without the exit prints normally; the canonical `println("fatal: .."); process.exit(1)` emits nothing at all | — |
 | B-2026-08-30-32 | 2026-08-30 | codegen | medium | LLVM-18 PROMOTES f16 ARITHMETIC TO f32 ON wasm32 AND NEVER ROUNDS THE RESULT BACK, so a wasm module holds values the type cannot represent: `65504f16 * 3f16` is a finite 196512 where it must overflow to `inf`, and every inexact quotient keeps f32 precision. Native and the interpreter both round; bf16 is unaffected because codegen widens and rounds it ITSELF rather than trusting the backend | — |
+| B-2026-08-30-33 | 2026-08-30 | interp+codegen | medium | A by-value param with TWO exits -- conditionally STORED into a `mut ref` place and also RETURNED on another path -- runs NO `Drop` body on the path where it dies inside the callee. The shape B-2026-08-30-28's per-path flag deliberately DECLINES: nothing clears the flag on a non-store exit, so admitting it DOUBLES the body instead (measured, all four surfaces). Unanimous across backends, so no A/B gate reports it | — |
 
 ### Relocated (2)
 
@@ -200,9 +200,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1847 surfaced
 
 </details>
 
-### Fixed (1780)
+### Fixed (1781)
 
-<details><summary>1780 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1781 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1986,6 +1986,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1847 surfaced
 | B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
 | B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
 | B-2026-08-30-24 | codegen | medium | NO `f16` PROGRAM LINKS FOR A WASM TARGET: LLVM lowers `half` to the `__extendhfsf2` / `__truncsfhf2` compiler-rt builtins and the wasm link line has… | 240919c |
+| B-2026-08-30-28 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the sto… | fd205752 |
 
 </details>
 
