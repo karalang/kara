@@ -1847,6 +1847,63 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|params| params.contains(n.as_str()))
     }
 
+    /// B-2026-08-29-58 — the ASSIGNMENT spelling of the move
+    /// [`Self::let_destructures_owned_param`] already handles for `let`.
+    ///
+    /// `match b { E.A(r) => { out = r; } .. }` over an OWNED enum param stores a
+    /// payload VIEW of the caller's value into an outer local. The caller still
+    /// owns that payload and runs its body, so leaving the target's own Drop
+    /// slot armed ran it a SECOND time -- measured `dR0 mid dR8 dE dR8 v8`
+    /// against `dR0 mid dE dR8 v8` on all three compiled surfaces. The `let`
+    /// spelling of the same move (`let m = r;`) has been correct since
+    /// B-2026-08-29-17 because it routes through the sibling's `src_is_view`
+    /// test; an assignment target reached no such test.
+    ///
+    /// Silencing through `moved_out_user_drop_bindings` covers BOTH fires the
+    /// target would otherwise run: the displaced-value drop at a LATER
+    /// assignment (which consults the same set) and the binding's own slot at
+    /// its live-range end. That is what makes the repeated-assignment shape
+    /// (`out = r1; .. out = r2;`) agree with codegen, which likewise runs a
+    /// displacement body only for a value the target genuinely owned.
+    ///
+    /// The view-ness PROPAGATES, exactly as the `let` leg propagates it, so a
+    /// later `let z = out;` inherits the ownership story instead of registering
+    /// a slot of its own.
+    ///
+    /// A METHOD frame is excluded for B-2026-08-27-48's reason, and the
+    /// exclusion is load-bearing rather than defensive: a method's FRESH-TEMP
+    /// argument reaches no caller-side fire at all today, so
+    /// `t.take(E.A(R { .. }))` runs the payload body exactly ONCE -- from this
+    /// very slot -- and retracting it would take that count to zero. Measured.
+    /// The gap underneath is filed on its own row and is worth stating here
+    /// because it is what makes the guard necessary: a method frame does not
+    /// participate in the owned-ENUM-param protocol at all, so
+    /// `impl T { fn eat(ref self, b: E) -> i64 { 3 } }` called with a fresh temp
+    /// runs ZERO bodies on the interpreter against two on both compiled
+    /// backends. The free-fn twin and the struct-param twin are both correct. The residue is that a method frame keeps running one body too
+    /// many for a NAMED argument; that is deliberately left alone, because the
+    /// `let` spelling has the identical residue in the identical frame, and the
+    /// two spellings agreeing is exactly the property being restored here.
+    fn record_assign_of_param_view(&mut self, target: &str, value: &Expr) {
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return;
+        }
+        let ExprKind::Identifier(src) = &value.kind else {
+            return;
+        };
+        let src_is_view = self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(src.as_str()));
+        if !src_is_view {
+            return;
+        }
+        if let Some(top) = self.owned_param_names_stack.last_mut() {
+            top.insert(target.to_string());
+        }
+        self.moved_out_user_drop_bindings.insert(target.to_string());
+    }
+
     /// B-2026-08-28-12 — run the user `Drop` bodies of every element/field a
     /// `let` destructure DISCARDS through a wildcard leaf.
     ///
@@ -4785,6 +4842,10 @@ impl<'a> super::Interpreter<'a> {
                 if let ExprKind::Identifier(t) = &target.kind {
                     let t = t.clone();
                     self.rearm_container_bodies_for_name(&t);
+                    // ORDER MATTERS: the re-arm above CLEARS this very set, so
+                    // the view record has to be taken afterwards or it is wiped
+                    // by the statement that establishes it.
+                    self.record_assign_of_param_view(&t, value);
                 }
             }
             StmtKind::CompoundAssign { target, op, value } => {

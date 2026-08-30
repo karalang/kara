@@ -34313,6 +34313,213 @@ fn test_rebound_owned_param_payload_drop_body_runs_once() {
     }
 }
 
+/// B-2026-08-29-58 — a `match` / `if let` arm that ASSIGNS an owned-param
+/// payload to an OUTER local runs that payload's `Drop` body exactly once.
+///
+/// The ASSIGNMENT spelling of the move `let m = r;` has handled since
+/// B-2026-08-29-17. Pre-fix the interpreter ran the body TWICE — its own slot
+/// for the assigned-into local on top of the caller's payload walk — against
+/// one on all three compiled surfaces. Unlike its parent row B-2026-08-29-48,
+/// whose defect was agreed-wrong across every backend, this one IS an A/B
+/// divergence, so the compiled output is a usable oracle and every expectation
+/// below is exactly what `karac build` produces.
+///
+/// The `let` twin is carried as a CONTROL rather than described in prose: it is
+/// what makes one body the right answer here rather than a preference, so a
+/// change that "fixed" the assignment spelling by moving the `let` one would
+/// fail on it.
+#[test]
+fn test_arm_payload_assigned_to_outer_local_drop_body_runs_once() {
+    const DROPPER: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n";
+    for (label, body, want) in [
+        // The row's headline program. Pre-fix the interpreter printed an extra
+        // `dR8` between `mid` and `dE` -- its own slot for `out` firing on top of
+        // the caller's payload walk.
+        (
+            "assign-nonescaping",
+            "fn dies(b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"mid\");\n\
+                 return out.id;\n\
+             }\n\
+             fn main() { let c1: E = E.A(R { id: 8, tag: f\"t8\" }); let v1: i64 = dies(c1); println(f\"v{v1}\"); }\n",
+            "dR0\nmid\ndE\ndR8\nv8\n",
+        ),
+        // The `if let` spelling binds through a separate path in this backend and
+        // needed confirming separately; it doubled identically pre-fix.
+        (
+            "assign-iflet",
+            "fn dies(b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 if let E.A(r) = b { out = r; }\n\
+                 println(\"m\");\n\
+                 return out.id;\n\
+             }\n\
+             fn main() { let c: E = E.A(R { id: 8, tag: f\"t8\" }); let v: i64 = dies(c); println(f\"v{v}\"); }\n",
+            "dR0\nm\ndE\ndR8\nv8\n",
+        ),
+        // PINS THE PLACE, not just the count, which is what separates this fix from
+        // one that merely reaches the right total. `loc` dies at its last use and
+        // `pre-ret` / `post-call` bracket the callee's exit, so a body fired at the
+        // arm lands before `mid`, one at the callee's own slot between `pre-ret` and
+        // `dE`, and the caller's walk after `dE`. Pre-fix there was a `dR8` in the
+        // middle slot as well as the last one.
+        (
+            "assign-place-pinned",
+            "fn dies(b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"mid\");\n\
+                 let loc: R = R { id: 9, tag: f\"t9\" };\n\
+                 let s: i64 = out.id + loc.id;\n\
+                 println(\"pre-ret\");\n\
+                 return s;\n\
+             }\n\
+             fn main() { let c1: E = E.A(R { id: 8, tag: f\"t8\" }); let v1: i64 = dies(c1); println(\"post-call\"); println(f\"v{v1}\"); }\n",
+            "dR0\nmid\ndR9\npre-ret\ndE\ndR8\npost-call\nv17\n",
+        ),
+        // Assigned TWICE. The displacement body must fire for the value the target
+        // genuinely owned (`R{0}`) and NOT for the view it later held (`R{8}`), which
+        // is the caller's to run -- so silencing through the whole-binding set has to
+        // cover the displacement fire too, not only the slot.
+        (
+            "assign-repeated",
+            "fn dies(b1: E, b2: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b1 { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m1\");\n\
+                 match b2 { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m2\");\n\
+                 return out.id;\n\
+             }\n\
+             fn main() { let v: i64 = dies(E.A(R { id: 8, tag: f\"t8\" }), E.A(R { id: 9, tag: f\"t9\" })); println(f\"v{v}\"); }\n",
+            "dR0\nm1\nm2\ndE\ndR9\ndE\ndR8\nv9\n",
+        ),
+        // A FRESH-TEMP argument rather than a named binding: the caller's fire is
+        // `run_fresh_temp_arg_drops` instead of a binding's own NLL drop, and the
+        // stand-down is correct against both.
+        (
+            "assign-fresh-temp-arg",
+            "fn dies(b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m\");\n\
+                 return out.id;\n\
+             }\n\
+             fn main() { let v: i64 = dies(E.A(R { id: 8, tag: f\"t8\" })); println(f\"v{v}\"); }\n",
+            "dR0\nm\ndE\ndR8\nv8\n",
+        ),
+        // GUARD RAIL -- the arm assigns a FRESH value, not the payload, so nothing is
+        // a view and every body stays armed. This is what keeps the gate from firing
+        // on assignment generally.
+        (
+            "guard-fresh-value-assigned",
+            "fn f(b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = R { id: 7, tag: f\"t7\" }; } E.B => { } }\n\
+                 println(\"m\");\n\
+                 return out.id;\n\
+             }\n\
+             fn main() { let c: E = E.A(R { id: 8, tag: f\"t8\" }); let v: i64 = f(c); println(f\"v{v}\"); }\n",
+            "dR0\nm\ndR7\ndE\ndR8\nv7\n",
+        ),
+        // GUARD RAIL -- a LOCAL scrutinee has no caller behind it, so the assigned-into
+        // local really is the only owner and MUST keep its body. Gating on the owned-
+        // param view set is what buys this.
+        (
+            "guard-local-scrutinee",
+            "fn main() {\n\
+                 let o: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match o { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m\");\n\
+                 println(f\"v{out.id}\");\n\
+                 println(\"end\");\n\
+             }\n",
+            "dR0\ndE\nm\nv8\ndR8\nend\n",
+        ),
+        // GUARD RAIL -- a fresh-temp SCRUTINEE is owned outright by the match, same
+        // reasoning as the local one.
+        (
+            "guard-fresh-temp-scrutinee",
+            "fn mk() -> E { return E.A(R { id: 8, tag: f\"t8\" }); }\n\
+             fn main() {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match mk() { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m\");\n\
+                 println(f\"v{out.id}\");\n\
+                 println(\"end\");\n\
+             }\n",
+            "dR0\ndE\nm\nv8\ndR8\nend\n",
+        ),
+        // GUARD RAIL -- a second owned param that is never matched keeps its own
+        // caller-side fire, so the view propagation has to be per-binding rather than
+        // per-frame.
+        (
+            "guard-second-param-unmatched",
+            "fn take(b: E, p: R) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m\");\n\
+                 return out.id + p.id;\n\
+             }\n\
+             fn main() { let c: E = E.A(R { id: 8, tag: f\"t8\" }); let v: i64 = take(c, R { id: 2, tag: f\"t2\" }); println(f\"v{v}\"); }\n",
+            "dR0\nm\ndR2\ndE\ndR8\nv10\n",
+        ),
+        // GUARD RAIL -- B-2026-08-29-48's case, the opposite boundary: the assigned-into
+        // local IS returned, so the value escapes and the caller's result binding owns
+        // it. That row made the caller stand down here; this fix must not disturb it.
+        (
+            "guard-assigned-and-returned",
+            "fn takes(b: E) -> R {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"mid\");\n\
+                 return out;\n\
+             }\n\
+             fn main() { let c1: E = E.A(R { id: 8, tag: f\"t8\" }); let v1: R = takes(c1); println(\"post-call\"); println(f\"v{v1.id}\"); }\n",
+            "dR0\nmid\ndE\npost-call\nv8\ndR8\n",
+        ),
+        // CONTROL -- the `let` spelling of the same move, correct since B-2026-08-29-17
+        // and unchanged here. It is the oracle that made the assignment spelling the
+        // anomaly rather than a matter of preference.
+        (
+            "control-let-twin",
+            "fn dies(b: E) -> i64 {\n\
+                 let mut k: i64 = 0;\n\
+                 match b { E.A(r) => { let inner: R = r; k = inner.id; } E.B => { } }\n\
+                 println(\"mid\");\n\
+                 return k;\n\
+             }\n\
+             fn main() { let c1: E = E.A(R { id: 8, tag: f\"t8\" }); let v1: i64 = dies(c1); println(f\"v{v1}\"); }\n",
+            "mid\ndE\ndR8\nv8\n",
+        ),
+        // INTERPRETER ONLY, and deliberately absent from the codegen twin. When the
+        // arm does NOT run, `out` still holds its own initializer, which nobody else
+        // owns -- so its body must fire, and here it does. Both compiled backends LOSE
+        // it (`mid` / `dE` / `v0`), which is a separate defect filed on its own row;
+        // sharing this case with the twin would mean writing that defect into an
+        // expectation.
+        (
+            "guard-arm-not-taken",
+            "fn dies(b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"mid\");\n\
+                 return out.id;\n\
+             }\n\
+             fn main() { let c1: E = E.B; let v1: i64 = dies(c1); println(f\"v{v1}\"); }\n",
+            "mid\ndR0\ndE\nv0\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{DROPPER}{body}")), want, "{label}");
+    }
+}
+
 /// B-2026-08-28-70, interpreter leg — a METHOD's owned param runs its user
 /// `Drop` body exactly once, wherever it dies.
 ///
