@@ -3398,6 +3398,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // rule and same two positions as the interpreter's
         // `note_escaping_stmt_sites`.
         self.note_escaping_stmt_sites(stmt);
+        // B-2026-08-30-28 / -33 — disarm a conditionally-stored parameter's
+        // per-path body flag at the statement that hands the value to a new
+        // owner. Placed at the INNERMOST statement, so the `false` lands in the
+        // basic block that statement compiles into — for `if c { sink.push(r); }`
+        // the branch that actually stored, not the block evaluating the
+        // condition. No-op for every binding without a flag, which is
+        // everything the conditional-store registration did not admit.
+        self.arm_conditional_store_flag(stmt);
         // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
         // When this stmt is a top-level `let <name> = <expr>` whose
         // binding name is in `snapshot_replay`, skip the original
@@ -9308,14 +9316,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 // they don't reach this fallback.)
             }
             StmtKind::Expr(expr) => {
-                // B-2026-08-30-28 — disarm a conditionally-stored parameter's
-                // per-path body flag at the statement that stores it. Placed
-                // here, at the innermost statement, so the `false` lands in the
-                // basic block this statement compiles into — which for
-                // `if c { sink.push(r); }` is the branch that actually stored.
-                // No-op for every binding without a flag, which is everything
-                // the conditional-store registration did not admit.
-                self.arm_conditional_store_flag(expr);
                 // General owned-temp tracking, slice 1 (see
                 // `docs/spikes/general-owned-temp-tracking.md`): a value
                 // produced in statement position by a fresh-owned-yielding

@@ -9010,7 +9010,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// parameter the conditional-store registration admitted, so it keeps
     /// today's behaviour byte-for-byte, and the new runtime bit cannot reach
     /// any shape the new predicate did not opt in.
-    pub(super) fn arm_conditional_store_flag(&mut self, e: &Expr) {
+    pub(super) fn arm_conditional_store_flag(&mut self, stmt: &Stmt) {
         /// Does `e` hand `name` over BY VALUE — bare, or nested inside an
         /// aggregate or call being built around it? The same move shapes
         /// `outliving_store::moves` recognizes, restated here because that
@@ -9041,27 +9041,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // the returned `Some`) ahead of the real one. The interpreter disarms
         // its own registration on that path already, so without this the two
         // backends disagree as well.
-        let names: Vec<String> = match &e.kind {
-            ExprKind::Return(Some(inner)) => self
-                .drop_rc
-                .cond_move_drop_flags
-                .keys()
-                .filter(|n| hands_over(inner, n))
-                .cloned()
-                .collect(),
-            ExprKind::MethodCall { args, .. } | ExprKind::Call { args, .. } => args
-                .iter()
-                .filter_map(|a| match &a.value.kind {
-                    ExprKind::Identifier(n)
-                        if self.drop_rc.cond_move_drop_flags.contains_key(n.as_str()) =>
-                    {
-                        Some(n.clone())
-                    }
-                    _ => None,
-                })
-                .collect(),
-            _ => return,
+        // Every statement that hands the value to a new owner disarms the
+        // flag: the STORE this row is named for, a `return`, and a `let` /
+        // assignment that binds it into something else. B-2026-08-30-33 is the
+        // measurement that forced the last two — with only the store covered,
+        // `let w = W { r: r }; return Some(w);` left the flag armed while the
+        // wrapper owned the value, and the body ran twice.
+        let handed: Option<&Expr> = match &stmt.kind {
+            StmtKind::Let { value, .. } => Some(value),
+            StmtKind::Assign { value, .. } => Some(value),
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(inner)) => Some(inner),
+                ExprKind::MethodCall { .. } | ExprKind::Call { .. } => Some(e),
+                _ => None,
+            },
+            _ => None,
         };
+        let Some(handed) = handed else { return };
+        let names: Vec<String> = self
+            .drop_rc
+            .cond_move_drop_flags
+            .keys()
+            .filter(|n| hands_over(handed, n))
+            .cloned()
+            .collect();
         let bool_t = self.context.bool_type();
         for n in names {
             if let Some(flag) = self.drop_rc.cond_move_drop_flags.get(n.as_str()).copied() {

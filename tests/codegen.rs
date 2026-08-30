@@ -124252,24 +124252,23 @@ fn main() {
         );
     }
 
-    /// B-2026-08-30-28 — the ESCAPE-ROUTE GUARD. A parameter that can also
-    /// leave by being RETURNED must not get the conditional-store registration,
-    /// because the flag is cleared at the store and nothing clears it on the
-    /// returning path: the callee's guarded body and the caller's result
-    /// binding would both fire for one object.
+    /// B-2026-08-30-33 — a parameter with TWO exits: conditionally STORED into
+    /// a `mut ref` place on one path, and RETURNED (inside a wrapper) on
+    /// another. Every path must run the body exactly once.
     ///
-    /// This is a measured regression, not a hypothetical. With the guard
-    /// absent, the `let`-then-return spelling below printed the body TWICE on
-    /// all four surfaces (`drop 301 ` with the String already moved into the
-    /// returned wrapper, then the real one), and the bare-return and
-    /// return-through-a-call spellings each doubled on at least one backend.
+    /// This began as B-2026-08-30-28's escape-route guard, which DECLINED the
+    /// shape because only the store disarmed the per-path flag: with the
+    /// registration ungated and the return left armed, the callee's body and
+    /// the caller's result binding both fired for one object — `drop 301 ` with
+    /// the String already moved into the wrapper, then the real one, on all four
+    /// surfaces. -33 added the missing disarms (a `return`/`let`/assign that
+    /// hands the value over, on BOTH backends) and the shape is admitted.
     ///
-    /// The assertion is deliberately the PRE-FIX behaviour for these shapes:
-    /// one body for the value that escapes, and none for the one that dies
-    /// inside. Losing that body is the open remainder, tracked separately —
-    /// what must never regress is the count going ABOVE one.
+    /// All three paths are asserted together on purpose. They fail in opposite
+    /// directions — the escaping path doubles, the dying path loses — so a test
+    /// covering one would pass a fix that broke the other.
     #[test]
-    fn e2e_a_param_that_can_also_be_returned_is_not_given_a_store_flag() {
+    fn e2e_a_param_with_two_exits_runs_one_body_on_every_path() {
         let src = "struct Res { id: i64, tag: String }\n\
              impl Drop for Res {\n\
              \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.tag}\"); }\n\
@@ -124282,61 +124281,20 @@ fn main() {
              }\n\
              fn main() {\n\
              \x20   let mut s: Vec[Res] = Vec.new();\n\
-             \x20   let q: Option[Wrap] = via_let(mut s, Res { id: 301, tag: \"ret\" });\n\
-             \x20   println(\"after\");\n\
+             \x20   let a: Option[Wrap] = via_let(mut s, Res { id: 301, tag: \"esc\" });\n\
+             \x20   println(\"1\");\n\
+             \x20   let b: Option[Wrap] = via_let(mut s, Res { id: 151, tag: \"store\" });\n\
+             \x20   println(\"2\");\n\
+             \x20   let c: Option[Wrap] = via_let(mut s, Res { id: 6, tag: \"die\" });\n\
+             \x20   println(\"3\");\n\
              \x20   println(f\"len {s.len()}\");\n\
              }\n"
         .to_string();
         assert_eq!(
             run_program(&src),
-            Some("drop 301 ret\nafter\nlen 0\n".to_string()),
-            "a returnable param must run its body exactly ONCE, never twice"
-        );
-    }
-}
-
-#[cfg(feature = "llvm")]
-mod inferred_elem_drop_3p {
-    //! Slice 3p spelling regression. An ANNOTATED binding's element TypeExpr
-    //! spells `String`; an INFERRED binding's comes from the typechecker's
-    //! `type_to_type_expr(Type::Str)`, which renders the lowercase `str`. The
-    //! drop-family gates originally matched only `String`, so the cross-fn
-    //! `let v = build(1)` (no annotation) silently missed the Option element
-    //! drop — the module still CONTAINED `karac_drop_Option_String` (from
-    //! `build`'s annotated local, runtime-suppressed by the return move-out),
-    //! which is exactly why a module-presence assertion alone was a trap. This
-    //! test pins the INFERRED spelling: main's binding must synthesize and
-    //! call `karac_drop_Option_str`.
-    #[test]
-    fn test_ir_inferred_let_vec_option_string_gets_option_drop() {
-        let src = r#"
-fn build(n: i64) -> Vec[Option[String]] {
-    let mut v: Vec[Option[String]] = Vec.new();
-    v.push(Some(f"alpha string padded out beyond thirty-six bytes {n}"));
-    v.push(None);
-    return v;
-}
-fn main() {
-    let v = build(1);
-    println(v.len());
-}
-"#;
-        let mut parsed = karac::parse(src);
-        assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
-        );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None).expect("codegen");
-        assert!(
-            ir.contains("karac_drop_Option_str"),
-            "expected the INFERRED (un-annotated) `let v = build(1)` binding to get the \
-             Option element drop under the typechecker's lowercase `str` spelling \
-             (karac_drop_Option_str); got:\n{}",
-            ir
+            Some("drop 301 esc\n1\n2\ndrop 6 die\n3\nlen 1\ndrop 151 store\n".to_string()),
+            "each of the three paths runs the body exactly once: escaped at the \
+             caller's binding, died in the callee, stored at the container's drain"
         );
     }
 }

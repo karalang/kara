@@ -635,6 +635,15 @@ pub struct Interpreter<'a> {
     /// `record_conditional_move_tail` disarms it on the path that actually
     /// returned the value — the interpreter twin of codegen's per-path `i1`.
     pub(crate) pending_param_drop_bindings: Vec<String>,
+    /// B-2026-08-30-33 — the parameters a call adopted a per-path body drop
+    /// for, kept for the whole callee frame so any statement that hands the
+    /// value to a new owner can disarm it.
+    ///
+    /// `pending_param_drop_bindings` is `mem::take`n the moment the body block
+    /// adopts it, which is before a single statement has run, so it cannot
+    /// answer "is this name one of ours" later. This set can, and it is the
+    /// interpreter's half of codegen's `cond_store_flag_params`.
+    pub(crate) cond_store_param_names: std::collections::HashSet<String>,
     /// B-2026-07-30-11 (Map-values leg) — the resolved `Map[K, V]`
     /// instantiation per let-bound variable, recorded through the SAME
     /// static chain codegen's `__karac_dropelems_map_*` registration uses
@@ -985,6 +994,7 @@ impl<'a> Interpreter<'a> {
             cond_move_escaping_sites: HashSet::new(),
             pending_arm_drop_bindings: Vec::new(),
             pending_param_drop_bindings: Vec::new(),
+            cond_store_param_names: std::collections::HashSet::new(),
             map_val_bodies_tes: HashMap::new(),
             captured_let_values: HashMap::new(),
             test_deadline: None,

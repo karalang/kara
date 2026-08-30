@@ -557,6 +557,11 @@ impl<'a> super::Interpreter<'a> {
                 // here exactly, so that shape is untouched. What is undone is
                 // only a mark this frame itself introduced.
                 self.pending_param_drop_bindings = param_drop_names;
+                // B-2026-08-30-33 — method sibling of the free-fn seeding.
+                let saved_cond_store_params = std::mem::replace(
+                    &mut self.cond_store_param_names,
+                    self.pending_param_drop_bindings.iter().cloned().collect(),
+                );
                 // The callee frame's moved-out sets ARE isolated, exactly as
                 // `eval_call` isolates a free fn's and for the same reason: they
                 // are keyed by BINDING NAME with no frame qualifier, so without
@@ -630,6 +635,11 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_tuple_elem_bodies,
                     self.moved_out_struct_field_bodies,
                 ) = saved_moved_out;
+                // B-2026-08-30-33 — restored with the rest of this frame's
+                // move bookkeeping, so a parameter name cannot outlive the
+                // frame that registered it and disarm a same-named binding in
+                // the caller.
+                self.cond_store_param_names = saved_cond_store_params;
                 // CALLER leg, after the restore so the mark lands in the
                 // CALLER's set: a by-value identifier arg is no longer the
                 // caller's to walk. See `record_method_arg_moves`.

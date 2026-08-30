@@ -2874,8 +2874,16 @@ mod outliving_store {
         }
     }
 
-    /// B-2026-08-30-28 — does `name` leave the frame by a route that is NOT a
-    /// store into an outliving place?
+    /// B-2026-08-30-28 / -33 — does `name` leave the frame by a route neither
+    /// backend can DISARM the per-path flag on?
+    ///
+    /// Renamed from `escapes_by_non_store_route` when -33 added the missing
+    /// disarms: the store stopped being the only exit that clears the flag, so
+    /// a name built around "non-store" no longer described the question. What
+    /// matters is not which exit the value takes but whether both backends
+    /// disarm at it — a `return`, a `let` and an assignment now do, at
+    /// statement level, in `arm_conditional_store_flag` and
+    /// `disarm_cond_store_param_on_handover`.
     ///
     /// The conditional-store registration hands the parameter's `Drop` body to
     /// a runtime flag that is cleared at the STORE. Any OTHER way the value can
@@ -2898,12 +2906,22 @@ mod outliving_store {
     /// path). That is the same trade `fn_conditionally_returns_param_bare`'s
     /// condition 3 makes, and for the identical reason — a lost body is
     /// recoverable, a double is not.
-    pub(super) fn escapes_by_non_store_route(b: &Block, name: &str, roots: &[&str]) -> bool {
+    pub(super) fn escapes_by_unclearable_route(b: &Block, name: &str, roots: &[&str]) -> bool {
         fn in_expr(e: &Expr, name: &str, roots: &[&str]) -> bool {
             match &e.kind {
                 // A `return` whose operand hands the value over, at any depth
                 // (`return r`, `return Some(r)`, `return mk(r)`).
-                ExprKind::Return(Some(inner)) => moves(inner, name) || in_expr(inner, name, roots),
+                // B-2026-08-30-33 — a `return` whose operand HANDS THE VALUE
+                // OVER is now disarmed on both backends
+                // (`arm_conditional_store_flag` /
+                // `disarm_cond_store_param_on_handover`), so it is no longer an
+                // unclearable route. Anything deeper still is.
+                ExprKind::Return(Some(inner)) => {
+                    if moves(inner, name) {
+                        return false;
+                    }
+                    in_expr(inner, name, roots)
+                }
                 ExprKind::Return(None) => false,
                 // THE store itself is the admitted route; its arguments are not
                 // an escape. Anything else about the call still is.
@@ -2924,7 +2942,7 @@ mod outliving_store {
                 | ExprKind::Unsafe(bb)
                 | ExprKind::Try(bb)
                 | ExprKind::Seq(bb)
-                | ExprKind::Par(bb) => escapes_by_non_store_route(bb, name, roots),
+                | ExprKind::Par(bb) => escapes_by_unclearable_route(bb, name, roots),
                 ExprKind::If {
                     then_block,
                     else_branch,
@@ -2935,7 +2953,7 @@ mod outliving_store {
                     else_branch,
                     ..
                 } => {
-                    escapes_by_non_store_route(then_block, name, roots)
+                    escapes_by_unclearable_route(then_block, name, roots)
                         || else_branch
                             .as_deref()
                             .is_some_and(|x| in_expr(x, name, roots))
@@ -2946,20 +2964,31 @@ mod outliving_store {
                 | ExprKind::For { body, .. }
                 | ExprKind::Loop { body, .. }
                 | ExprKind::LabeledBlock { body, .. } => {
-                    escapes_by_non_store_route(body, name, roots)
+                    escapes_by_unclearable_route(body, name, roots)
                 }
                 _ => false,
             }
         }
         let stmt_escapes = b.stmts.iter().any(|st| match &st.kind {
-            // `let w = W { r: r };` — the value now lives in a local whose own
-            // fate this predicate cannot see.
-            StmtKind::Let { value, .. } => moves(value, name) || in_expr(value, name, roots),
+            // B-2026-08-30-33 — `let w = W { r: r };` hands the value to the
+            // local, and both backends disarm at that statement, so the local
+            // is now the sole owner rather than a second one. Still declined
+            // when the hand-over is nested somewhere the statement-level hook
+            // does not match.
+            StmtKind::Let { value, .. } => {
+                if moves(value, name) {
+                    return false;
+                }
+                in_expr(value, name, roots)
+            }
             StmtKind::Assign { target, value } => {
                 if place_root_outlives(target, roots) && moves(value, name) {
                     return false;
                 }
-                moves(value, name) || in_expr(value, name, roots)
+                if moves(value, name) {
+                    return false;
+                }
+                in_expr(value, name, roots)
             }
             StmtKind::Expr(e) => in_expr(e, name, roots),
             _ => false,
@@ -3162,7 +3191,7 @@ pub fn fn_conditionally_moves_param_into_outliving_place(f: &Function, arg_index
         return false;
     }
     // The value must have NO other way out. See
-    // `outliving_store::escapes_by_non_store_route` for the three measured
+    // `outliving_store::escapes_by_unclearable_route` for the three measured
     // doubles this declines, and why declining is the recoverable direction.
     let Some(param) = f.params.get(arg_index) else {
         return false;
@@ -3185,7 +3214,7 @@ pub fn fn_conditionally_moves_param_into_outliving_place(f: &Function, arg_index
             roots.push(n.as_str());
         }
     }
-    !outliving_store::escapes_by_non_store_route(&f.body, param_name, &roots)
+    !outliving_store::escapes_by_unclearable_route(&f.body, param_name, &roots)
 }
 
 /// The channel-endpoint type heads whose PARAMETERS may be named directly in

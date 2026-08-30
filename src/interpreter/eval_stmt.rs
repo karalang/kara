@@ -139,6 +139,15 @@ impl<'a> super::Interpreter<'a> {
         let last_use = compute_block_last_use(block);
 
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+            // B-2026-08-30-33 — the interpreter twin of codegen's
+            // `arm_conditional_store_flag`. A statement that hands an adopted
+            // parameter to a new owner disarms its per-path body drop, so the
+            // callee frame runs the body only on the path where the value
+            // actually died.
+            //
+            // BEFORE the statement, not after: a `return` unwinds, so a hook
+            // placed after it would never run on the very path that needs it.
+            self.disarm_cond_store_param_on_handover(stmt);
             // `defer` / `errdefer` register their bodies at the moment
             // control flow reaches the statement — *not* at block start.
             // A defer below an early `return` is therefore never registered,
@@ -2724,6 +2733,61 @@ impl<'a> super::Interpreter<'a> {
     /// correct; marking it again would silence container walks the retraction
     /// leaves armed. Codegen's twin resolves the same bit with a per-binding
     /// `i1` drop flag, cleared in the arm's own basic block.
+    /// B-2026-08-30-33 — disarm an adopted parameter's per-path body drop at a
+    /// statement that hands the value over.
+    ///
+    /// [`Self::record_conditional_move_tail`] covers the BARE identifier at an
+    /// escaping site, which is the conditionally-returned shape. It does not
+    /// reach `return Some(r)`, `return inner(r)` or `let w = W { r: r };` — the
+    /// value leaves inside an aggregate or a call — and those are exactly the
+    /// shapes B-2026-08-30-28's guard had to decline because nothing disarmed
+    /// them here. Measured before this: `return inner(r)` ran the body twice in
+    /// the interpreter while codegen ran it once, a run-vs-build split on top of
+    /// the double.
+    ///
+    /// Restricted to `cond_store_param_names`, so it can only touch a parameter
+    /// a call actually registered a per-path drop for.
+    fn disarm_cond_store_param_on_handover(&mut self, stmt: &Stmt) {
+        if self.cond_store_param_names.is_empty() {
+            return;
+        }
+        /// The same move shapes codegen's `hands_over` recognizes, so the two
+        /// backends disarm on the same statements by construction.
+        fn hands_over(e: &Expr, name: &str) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(n) => n == name,
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|a| hands_over(&a.value, name))
+                }
+                ExprKind::StructLiteral { fields, .. } => {
+                    fields.iter().any(|f| hands_over(&f.value, name))
+                }
+                ExprKind::Tuple(elems) => elems.iter().any(|el| hands_over(el, name)),
+                _ => false,
+            }
+        }
+        let handed: Option<&Expr> = match &stmt.kind {
+            StmtKind::Let { value, .. } => Some(value),
+            StmtKind::Assign { value, .. } => Some(value),
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(inner)) => Some(inner),
+                ExprKind::MethodCall { .. } | ExprKind::Call { .. } => Some(e),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(handed) = handed else { return };
+        let hits: Vec<String> = self
+            .cond_store_param_names
+            .iter()
+            .filter(|n| hands_over(handed, n))
+            .cloned()
+            .collect();
+        for n in hits {
+            self.moved_out_user_drop_bindings.insert(n);
+        }
+    }
+
     pub(crate) fn record_conditional_move_tail(&mut self, expr: &Expr, cleanup: &[CleanupAction]) {
         if !self
             .cond_move_escaping_sites

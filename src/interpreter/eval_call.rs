@@ -2199,6 +2199,13 @@ impl<'a> super::Interpreter<'a> {
                 // block's own cleanup; the arm tail that returns the param
                 // disarms it through `record_conditional_move_tail`.
                 self.pending_param_drop_bindings = self.cond_returned_param_drop_names(&fn_name);
+                // B-2026-08-30-33 — keep the names for the whole frame; the
+                // list above is taken by the body block before any statement
+                // runs, and the per-path disarm needs to ask later.
+                let saved_cond_store_params = std::mem::replace(
+                    &mut self.cond_store_param_names,
+                    self.pending_param_drop_bindings.iter().cloned().collect(),
+                );
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
@@ -2215,6 +2222,16 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_tuple_elem_payload_bodies,
                     self.moved_out_enum_payload_slots,
                 ) = saved_moved_out;
+                // B-2026-08-30-33 — restore with the rest of the per-frame
+                // move bookkeeping. Left un-restored, a callee's parameter name
+                // stays live in the CALLER's frame, where any binding that
+                // happens to share the name would be disarmed by a hand-over
+                // that has nothing to do with it. No probe reproduced that --
+                // the same-name case measures identical before and after -- but
+                // every neighbour in this block is saved and restored, and a
+                // set that outlives its frame is a hazard whether or not one
+                // program has found it yet.
+                self.cond_store_param_names = saved_cond_store_params;
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if is_stdlib_wrapper {
