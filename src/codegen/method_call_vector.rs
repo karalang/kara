@@ -489,20 +489,40 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         recv: inkwell::values::VectorValue<'ctx>,
     ) -> Option<inkwell::values::VectorValue<'ctx>> {
-        // B-2026-08-29-34 — bf16 is widened to f32 for the WHOLE body, then
-        // rounded back once at the end. Every arm below (the `llvm.*` vector
-        // intrinsics, and the `exp`/`ln` polynomials `sigmoid` and `tanh`
-        // build on) would otherwise emit native `<N x bfloat>` nodes that
-        // aarch64 and wasm32 cannot select. Widening HERE rather than at each
-        // of the ~40 interior builder calls is what keeps the arms readable
-        // and leaves no site to forget: `vt`, `ft` and the `splat` closure
-        // below all derive from `recv`, so they follow the widened type
+        // BOTH half formats are widened to f32 for the WHOLE body, then
+        // rounded back once at the end. Widening HERE rather than at each of
+        // the ~40 interior builder calls is what keeps the arms readable and
+        // leaves no site to forget: `vt`, `ft` and the `splat` closure below
+        // all derive from `recv`, so they follow the widened type
         // automatically.
         //
-        // It is also more accurate than per-op widening would be — the
-        // polynomial intermediates stay in f32 instead of being rounded to
-        // bf16 after every step.
-        let (recv, narrow_bf16) = self.widen_bf16_vector(recv, "vfu.in");
+        // bf16 was widened first, for SELECTABILITY (B-2026-08-29-34): every
+        // arm below would otherwise emit native `<N x bfloat>` nodes that
+        // aarch64 and wasm32 cannot select. f16 selects fine and was left
+        // narrow — which was the bug, because the reason that mattered here
+        // was never selection but PRECISION. These arms are multi-step
+        // formulas, and it is the INTERMEDIATES that overflow: `tanh` is
+        // `(e^2ˣ-1)/(e^2ˣ+1)`, so an f16 lane computed `e^2ˣ` in f16, whose
+        // 65504 ceiling `2x` crosses at x ≈ 5.545 — `inf/inf`, NaN, where the
+        // scalar `x.tanh()` in the same binary returned the correct 1
+        // (B-2026-08-29-53). Widening one format for its own reason left the
+        // other looking deliberate; it was not.
+        //
+        // Widening is also more accurate than per-op widening would be — the
+        // polynomial intermediates stay in f32 instead of being rounded back
+        // to 16 bits after every step, which is exactly the "compute in f32,
+        // round once" rule the SCALAR float-math path has applied to both half
+        // formats since B-2026-08-29-42.
+        //
+        // The one arm where widening could plausibly COST accuracy is `sqrt`,
+        // whose native `<N x half>` form is correctly rounded while going
+        // through f32 rounds twice. It cannot: f32's 24 significand bits meet
+        // the 2p+2 condition for f16's 11 exactly, so the double rounding is
+        // innocuous. Verified exhaustively rather than cited — over all 31745
+        // finite non-negative f16 inputs, `f16(f32(√x))` and `f16(√x)` agree on
+        // every one. The four rounding arms are exact for the same reason an
+        // integral result is: it is already on the narrow grid.
+        let (recv, narrow_half) = self.widen_reduced_float_vector(recv, "vfu.in");
         let vt = recv.get_type();
         let ft = vt.get_element_type().into_float_type();
         let n = vt.get_size();
@@ -557,7 +577,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return None,
         })
-        .map(|out| self.narrow_bf16_vector(out, narrow_bf16, "vfu.out"))
+        .map(|out| self.narrow_reduced_float_vector(out, narrow_half, "vfu.out"))
     }
 
     pub(super) fn compile_vector_exp(
@@ -732,6 +752,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Any other float width (f16 / bf16): fall back to the intrinsic.
+        // Defensive only — the one caller (`apply_vector_float_unary`)
+        // widens both half formats to f32 before it gets here, so a
+        // narrow vector reaches this line only from a future direct
+        // caller that skipped the widening.
         if ft != self.context.f32_type() {
             return unary_intr("llvm.exp", recv);
         }
@@ -1016,6 +1040,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Any other float width (f16 / bf16): fall back to the intrinsic.
+        // Defensive only — the one caller (`apply_vector_float_unary`)
+        // widens both half formats to f32 before it gets here, so a
+        // narrow vector reaches this line only from a future direct
+        // caller that skipped the widening.
         if ft != self.context.f32_type() {
             let intr =
                 inkwell::intrinsics::Intrinsic::find("llvm.log").expect("llvm.log must exist");

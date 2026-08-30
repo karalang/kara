@@ -24425,6 +24425,51 @@ fn test_vector_unary_math_rounds_lanes_to_element_width() {
     );
 }
 
+// The ORACLE half of B-2026-08-29-53, whose compiled twin is
+// `tests/codegen.rs::test_e2e_vector_f16_transcendentals_match_the_scalar_and_the_interpreter`.
+//
+// The interpreter was RIGHT here and this test passes without that fix — its
+// job is to freeze the answers the compiled half is measured against, so the
+// two cannot drift apart the way the bf16 pair did. Codegen's
+// `apply_vector_float_unary` widened bf16 lanes to f32 for the whole body but
+// left f16 narrow, so `tanh`'s `e^2ˣ` intermediate overflowed f16's 65504
+// ceiling above x ≈ 5.545 and the quotient came out `inf/inf` = NaN; at x = 4,
+// under the threshold, both `e^2ˣ ± 1` rounded to the same f16 and the quotient
+// was exactly 1 instead of 0.99951171875. The interpreter computes each lane in
+// f64 and rounds once to the element width (B-2026-08-29-40), which is why it
+// never had either failure.
+//
+// The seed is the literal 1 rather than `env.args().len()`: the codegen fixture
+// needs an opaque seed to survive constant folding and 1 is what that yields
+// under its harness, while `env.args()` in an in-process interpreter test would
+// report the TEST binary's argv. Values below are otherwise character-identical
+// to the compiled twin.
+#[test]
+fn test_vector_f16_transcendentals_are_computed_without_overflowing_the_lane() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let n: i64 = 1;\n\
+             \x20   let a: f16 = ((n + 3) as f32) as f16;\n\
+             \x20   let b: f16 = ((n + 5) as f32) as f16;\n\
+             \x20   let c: f16 = ((n + 6) as f32) as f16;\n\
+             \x20   let d: f16 = ((n + 19) as f32) as f16;\n\
+             \x20   let v: Vector[f16, 4] = Vector[f16, 4](a, b, c, d);\n\
+             \x20   println(f\"vt {v.tanh()[0]} {v.tanh()[1]} {v.tanh()[2]} {v.tanh()[3]}\");\n\
+             \x20   println(f\"st {a.tanh()} {b.tanh()} {c.tanh()} {d.tanh()}\");\n\
+             \x20   let e: f16 = ((n + 1) as f32) as f16;\n\
+             \x20   let s: Vector[f16, 4] = Vector[f16, 4](e, b, c, d);\n\
+             \x20   println(f\"sg {s.sigmoid()[0]} {s.sigmoid()[1]}\");\n\
+             \x20   println(f\"ve {v.exp()[0]} {v.ln()[1]} {v.sqrt()[2]}\");\n\
+             \x20   println(f\"se {a.exp()} {b.ln()} {c.sqrt()}\");\n\
+             }\n"),
+        "vt 0.99951171875 1 1 1\n\
+         st 0.99951171875 1 1 1\n\
+         sg 0.880859375 0.99755859375\n\
+         ve 54.59375 1.7919921875 2.646484375\n\
+         se 54.59375 1.7919921875 2.646484375\n"
+    );
+}
+
 // A scalar float method must be COMPUTED at the receiver's declared width, not
 // computed in f64 and rounded into it afterwards. The tree-walk carries every
 // float as an f64, so the second is the tempting shortcut — and it is exact for

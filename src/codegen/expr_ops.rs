@@ -5806,6 +5806,80 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_f32_vector_to_bf16(vv, name)
     }
 
+    /// Widen a `<N x half>` OR `<N x bfloat>` operand to `<N x float>` so a
+    /// multi-step lowering runs entirely at f32 and rounds ONCE at the end —
+    /// the vector twin of [`Self::widen_reduced_float_scalar`], and the
+    /// numeric sibling of [`Self::widen_bf16_vector`]. Returns the element
+    /// type to round back to, or `None` when nothing was widened.
+    ///
+    /// TWO PAIRS, TWO REASONS — the distinction is the whole point of having
+    /// both. [`Self::widen_bf16_vector`] widens bf16 ALONE because LLVM 18
+    /// cannot SELECT `<N x bfloat>` lane ops on aarch64/wasm; f16 has no such
+    /// problem, and native `<N x half>` arithmetic is correctly rounded, so
+    /// widening it there would trade a correct single rounding for a double
+    /// one. This pair widens BOTH because of PRECISION: it is for a lowering
+    /// built from several ops, where the intermediates — not the result — are
+    /// what overflow or lose bits. The scalar surface has drawn the same line
+    /// since B-2026-08-29-42 ("Neither half format has a libm entry point of
+    /// its own, so both widen to f32, call the `f`-suffixed symbol, and round
+    /// back"); this is that rule reaching the vector lowerings.
+    ///
+    /// B-2026-08-29-53 is what a missing widening costs. `v.tanh()` is
+    /// `(e^2ˣ-1)/(e^2ˣ+1)`, so an f16 lane computes `e^2ˣ` in f16 — whose
+    /// largest finite value is 65504, crossed at x ≈ 5.545. Above that the
+    /// intermediate is `+inf` and the ratio `inf/inf` is NaN, while the SCALAR
+    /// `x.tanh()` in the SAME binary (which widens) returns the correct 1.
+    /// Below it the same expression merely loses the answer: at x = 4 both
+    /// `e^2ˣ ± 1` round to the same f16, so the quotient is exactly 1 where
+    /// the true value is 0.99951171875. NaN is the visible half of one defect
+    /// whose quiet half is a wrong number.
+    pub(super) fn widen_reduced_float_vector(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        name: &str,
+    ) -> (
+        inkwell::values::VectorValue<'ctx>,
+        Option<inkwell::types::FloatType<'ctx>>,
+    ) {
+        let elem = vv.get_type().get_element_type();
+        if !elem.is_float_type() {
+            return (vv, None);
+        }
+        let ft = elem.into_float_type();
+        if ft == self.context.bf16_type() {
+            // bf16 cannot use `fpext` — see `widen_bf16_vector`.
+            return (self.emit_bf16_vector_to_f32(vv, name), Some(ft));
+        }
+        if ft == self.context.f16_type() {
+            let wide = self.context.f32_type().vec_type(vv.get_type().get_size());
+            let out = self
+                .builder
+                .build_float_ext(vv, wide, &format!("{name}.h2f"))
+                .unwrap();
+            return (out, Some(ft));
+        }
+        (vv, None)
+    }
+
+    /// Round a `<N x float>` result back to the element type
+    /// [`Self::widen_reduced_float_vector`] widened from; the identity when it
+    /// widened nothing, so a call site reads the same whatever the width is.
+    pub(super) fn narrow_reduced_float_vector(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        back_to: Option<inkwell::types::FloatType<'ctx>>,
+        name: &str,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let Some(ft) = back_to else { return vv };
+        if ft == self.context.bf16_type() {
+            return self.emit_f32_vector_to_bf16(vv, name);
+        }
+        let narrow = ft.vec_type(vv.get_type().get_size());
+        self.builder
+            .build_float_trunc(vv, narrow, &format!("{name}.f2h"))
+            .unwrap()
+    }
+
     /// Widen a scalar `bf16` to `f32`, reporting whether it happened — the
     /// scalar twin of [`Self::widen_bf16_vector`], for a site that computes a
     /// WHOLE expression rather than one op.

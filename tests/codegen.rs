@@ -102391,6 +102391,135 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vector_f16_transcendentals_match_the_scalar_and_the_interpreter() {
+        // B-2026-08-29-53. `apply_vector_float_unary` widened bf16 lanes to f32
+        // for the whole body but left f16 narrow, so the exp-derived formulas
+        // computed their INTERMEDIATES at f16. `tanh` is `(e^2ˣ-1)/(e^2ˣ+1)`,
+        // and f16's largest finite value is 65504, which `e^2ˣ` crosses at
+        // x ≈ 5.545: above it the intermediate is `+inf` and the ratio is NaN.
+        //
+        // Two things this pins that the row did not name. The defect is not
+        // only the NaN: at x = 4, well under the threshold, both `e^2ˣ ± 1`
+        // round to the SAME f16, so the quotient is exactly 1 where the answer
+        // is 0.99951171875 — a wrong number rather than a visibly wrong one,
+        // and the half that a NaN-hunting fixture would miss. And `sigmoid` was
+        // affected too (the row listed it as unobserved-but-not-cleared): it
+        // never overflows, being 1/(1+e^-x), but it lost an f16 ULP at x = 2
+        // and x = 6 for the same reason.
+        //
+        // The `st`/`se` scalar lines are the load-bearing half of the oracle.
+        // Pre-fix the compiled binary DISAGREED WITH ITSELF — `v.tanh()[i]` was
+        // NaN where `v[i].tanh()` on the same value in the same binary returned
+        // the correct 1 — and there is no reading of a language under which one
+        // function of one value has two answers inside one program. That is
+        // what made this a defect rather than a precision preference.
+        //
+        // The `bf` and `f32` lines are controls at the two boundaries: bf16
+        // must keep the values `test_e2e_vector_unary_math_lane_width_matches_the_interpreter`
+        // already pins (the widening it relies on is still there), and f32 must
+        // NOT move (it is not a reduced-precision format and is not widened —
+        // a "generalization" of this fix that touched it would show up here).
+        //
+        // Pre-fix this test fails on the `vt` and `sg` lines only:
+        //     vt 1 NaN NaN NaN          sg 0.88037109375 0.9970703125
+        // Receivers derive from `env.args().len()` (= 1 under this harness) so
+        // nothing folds to a constant — a fixture built from literals measures
+        // LLVM's constant folder, not the emitted arithmetic (B-2026-08-29-61).
+        // Verified byte-identical under `karac run --interp`, `karac run`,
+        // `karac build`, and `KARAC_AUTO_PAR=0 karac build`.
+        assert_eq!(
+            run_program(
+                r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let a: f16 = ((n + 3) as f32) as f16;
+    let b: f16 = ((n + 5) as f32) as f16;
+    let c: f16 = ((n + 6) as f32) as f16;
+    let d: f16 = ((n + 19) as f32) as f16;
+    let v: Vector[f16, 4] = Vector[f16, 4](a, b, c, d);
+    println(f"vt {v.tanh()[0]} {v.tanh()[1]} {v.tanh()[2]} {v.tanh()[3]}");
+    println(f"st {a.tanh()} {b.tanh()} {c.tanh()} {d.tanh()}");
+    let e: f16 = ((n + 1) as f32) as f16;
+    let s: Vector[f16, 4] = Vector[f16, 4](e, b, c, d);
+    println(f"sg {s.sigmoid()[0]} {s.sigmoid()[1]}");
+    println(f"ve {v.exp()[0]} {v.ln()[1]} {v.sqrt()[2]}");
+    println(f"se {a.exp()} {b.ln()} {c.sqrt()}");
+    let g: Vector[bf16, 4] = Vector[bf16, 4](1.0bf16, 2.0bf16, 3.0bf16, 7.0bf16);
+    println(f"bf {g.tanh()[0]} {g.sigmoid()[1]}");
+    let f: Vector[f32, 4] = Vector[f32, 4](2.0f32, 3.0f32, 5.0f32, 7.0f32);
+    println(f"f32 {f.tanh()[0]} {f.sigmoid()[1]}");
+}
+"#,
+            ),
+            Some(
+                "vt 0.99951171875 1 1 1\n\
+                 st 0.99951171875 1 1 1\n\
+                 sg 0.880859375 0.99755859375\n\
+                 ve 54.59375 1.7919921875 2.646484375\n\
+                 se 54.59375 1.7919921875 2.646484375\n\
+                 bf 0.76171875 0.87890625\n\
+                 f32 0.9640275835990906 0.9525741338729858\n"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_e2e_tensor_map_f16_transcendental_matches_the_interpreter() {
+        // The SECOND caller of `apply_vector_float_unary`, and the reason
+        // B-2026-08-29-53's fix belongs at that shared site rather than in the
+        // `Vector` method arm: the tensor-map vectorizer routes a
+        // `t.map(|x| x.tanh())` inner loop through the identical lowering, so
+        // it carried the identical NaN. Measured pre-fix at both a 4-element
+        // and a 16-element tensor (`map tanh 1 NaN NaN NaN` either way), which
+        // also rules out "it only bites when the map does not vectorize".
+        assert_eq!(
+            run_program(
+                r#"
+fn main() {
+    let t: Tensor[f16, [4]] = Tensor.from([4.0f16, 6.0f16, 7.0f16, 20.0f16]);
+    let m = t.map(|x| x.tanh());
+    println(f"{m[0]} {m[1]} {m[2]} {m[3]}");
+}
+"#,
+            ),
+            Some("0.99951171875 1 1 1\n".to_string())
+        );
+    }
+
+    #[test]
+    fn test_ir_vector_f16_unary_math_computes_in_f32() {
+        // The STRUCTURAL half of B-2026-08-29-53: the f16 vector body must be
+        // widened once on entry and rounded once on exit, with the formula in
+        // between carried at `<4 x float>`. A value test alone would pass on a
+        // fix that special-cased `tanh` with a saturation cutoff instead, which
+        // would leave every other multi-step f16 lowering to be found one at a
+        // time; this asserts the shape that makes the whole family right.
+        //
+        // The `fdiv <4 x half>` absence is the specific pre-fix artifact — that
+        // instruction, fed `inf` on both sides, is where the NaN was born.
+        let ir = ir_for(
+            r#"
+fn f(a: f16) -> f16 {
+    let v: Vector[f16, 4] = Vector[f16, 4](a, a, a, a);
+    let t = v.tanh();
+    t[0]
+}
+fn main() { println(f(6.0f16)); }
+"#,
+        );
+        assert!(
+            ir.contains("fpext <4 x half>") && ir.contains("fptrunc <4 x float>"),
+            "f16 v.tanh() should widen to <4 x float> and round back once; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("fdiv <4 x half>"),
+            "the tanh quotient must not be evaluated at f16 (that is where the \
+             NaN came from); got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_vector_exp_uses_polynomial_not_intrinsic() {
         // `v.exp()` on an f32 vector is the hand-written Cephes polynomial
         // (guaranteed SIMD — see compile_vector_exp), NOT `@llvm.exp` (which
