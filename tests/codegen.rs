@@ -56706,6 +56706,113 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_binsearch_sum_midpoint_trunc_div_gets_no_assume() {
+        // B-2026-08-30-6 — `(lo + hi) / 2` must NOT get the midpoint assumes.
+        //
+        // `assume(mid < hi)` needs the halve to round DOWN. `/` truncates
+        // toward ZERO, which rounds a NEGATIVE sum UP, and at `hi == lo + 1`
+        // that lands exactly on `hi`: `lo = -3, hi = -2` gives `(-5)/2 == -2`,
+        // so the emitted fact was `assume(-2 < -2)` — `assume(false)`. The
+        // compiled program then ran on injected UB and SIGBUS'd where the
+        // interpreter ran it correctly.
+        //
+        // The difference form is unaffected and keeps its assumes (pinned by
+        // `test_ir_binsearch_midpoint_emits_assumes`), because its dividend
+        // `hi - lo >= 1` is positive under the guard, where the two roundings
+        // agree.
+        let ir = ir_for(
+            r#"
+fn bisect(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = (lo + hi) / 2i64;
+        if nums[mid] < target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64); v.push(3i64); v.push(5i64);
+    println(f"{bisect(v, 3i64, 3i64)}");
+}
+"#,
+        );
+        assert!(
+            !ir.contains("bs.mid.lt.hi"),
+            "a truncating `(lo + hi) / 2` must not assert `mid < hi` — that \
+             fact is false for a negative odd sum"
+        );
+        assert!(
+            !ir.contains("bs.mid.ge.lo"),
+            "the truncating sum form must emit no midpoint assumes at all"
+        );
+    }
+
+    #[test]
+    fn test_ir_binsearch_sum_midpoint_floor_shift_keeps_assume() {
+        // The other half of B-2026-08-30-6: `(lo + hi) >> 1` FLOORS, so
+        // `lo <= mid <= hi - 1` holds for every `lo < hi` including negative
+        // sums, and this spelling is recognised. Without this the fix would
+        // read as "the sum form is unsupported" rather than "the sum form
+        // requires a flooring halve", and a later session could restore the
+        // unsound arm believing it was merely a missing feature.
+        let ir = ir_for(
+            r#"
+fn bisect(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = (lo + hi) >> 1i64;
+        if nums[mid] < target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64); v.push(3i64); v.push(5i64);
+    println(f"{bisect(v, 3i64, 3i64)}");
+}
+"#,
+        );
+        assert!(
+            ir.contains("bs.mid.ge.lo") && ir.contains("bs.mid.lt.hi"),
+            "a flooring `(lo + hi) >> 1` midpoint should still get both assumes"
+        );
+    }
+
+    #[test]
+    fn test_e2e_negative_bisect_midpoint_does_not_miscompile() {
+        // The B-2026-08-30-6 repro end to end. A bisection over NEGATIVE
+        // bounds is a well-defined program; before the fix the compiled binary
+        // died with SIGBUS while the interpreter printed the right answer.
+        // Asserting the VALUE (not merely that it exits) is what makes this a
+        // miscompile test rather than a crash test.
+        let src = r#"
+fn main() {
+    let mut lo = 0i64 - 3i64;
+    let mut hi = 0i64 - 2i64;
+    let mut steps = 0i64;
+    while lo < hi {
+        let mid = (lo + hi) / 2i64;
+        steps = steps + 1i64;
+        println(f"mid {mid}");
+        if steps > 3i64 { break; }
+        lo = mid + 1i64;
+    }
+    println(f"steps {steps}");
+}
+"#;
+        // `(-3 + -2) / 2` truncates to -2, so `mid` is -2 and the loop makes
+        // exactly one pass (`lo` becomes -1, which is not < -2).
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("mid -2\nsteps 1\n"),
+            "negative-bounds bisection must compile to the interpreter's result"
+        );
+    }
+
+    #[test]
     fn test_ir_binsearch_midpoint_emits_assumes() {
         // Binary-search midpoint BCE (control_flow_bce.rs § midpoint): a
         // `let mid = lo + (hi - lo) / 2` under a strict `while lo < hi`

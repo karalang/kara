@@ -887,24 +887,41 @@ fn as_binop<'e>(e: &'e Expr, op: BinOp, method: &str) -> Option<(&'e Expr, &'e E
 /// The dividend `x` when `e` is `x / 2` (surface `Binary(Div)` by the
 /// integer literal 2, or the trait-lowered `Call { Path([ty, "div"]),
 /// [x, 2] }`).
-fn as_div_by_2(e: &Expr) -> Option<&Expr> {
+/// How the halving rounds. The two spellings agree on a NON-NEGATIVE operand
+/// and disagree on a negative one, which is the whole of B-2026-08-30-6:
+/// `/ 2` truncates toward zero, `>> 1` floors toward negative infinity.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Halving {
+    /// `x / 2` — truncates toward zero.
+    Trunc,
+    /// `x >> 1` — arithmetic shift, floors.
+    Floor,
+}
+
+fn as_div_by_2(e: &Expr) -> Option<(&Expr, Halving)> {
     let is_two = |x: &Expr| matches!(&x.kind, ExprKind::Integer(2, _));
+    let is_one = |x: &Expr| matches!(&x.kind, ExprKind::Integer(1, _));
     match &e.kind {
         ExprKind::Binary {
             op: BinOp::Div,
             left,
             right,
-        } if is_two(right) => Some(left),
+        } if is_two(right) => Some((left, Halving::Trunc)),
+        ExprKind::Binary {
+            op: BinOp::Shr,
+            left,
+            right,
+        } if is_one(right) => Some((left, Halving::Floor)),
         ExprKind::Call { callee, args } => {
             let ExprKind::Path { segments, .. } = &callee.kind else {
                 return None;
             };
-            if segments.len() == 2
-                && segments[1] == "div"
-                && args.len() == 2
-                && is_two(&args[1].value)
-            {
-                Some(&args[0].value)
+            if segments.len() == 2 && args.len() == 2 {
+                match segments[1].as_str() {
+                    "div" if is_two(&args[1].value) => Some((&args[0].value, Halving::Trunc)),
+                    "shr" if is_one(&args[1].value) => Some((&args[0].value, Halving::Floor)),
+                    _ => None,
+                }
             } else {
                 None
             }
@@ -914,24 +931,44 @@ fn as_div_by_2(e: &Expr) -> Option<&Expr> {
 }
 
 /// True iff `value` computes the midpoint of `lo`/`hi`: `lo + (hi-lo)/2`,
-/// `(hi-lo)/2 + lo`, or `(lo+hi)/2` (commutative in the sum). Both yield
-/// `mid in [lo, hi)` under `lo < hi` (see the section SOUNDNESS note).
+/// `(hi-lo)/2 + lo` (either halving spelling), or `(lo+hi) >> 1` (commutative
+/// in the sum, FLOORING halve only). Each yields `mid in [lo, hi)` under
+/// `lo < hi` (see the section SOUNDNESS note, and B-2026-08-30-6 for why the
+/// sum form excludes `/ 2`).
 fn expr_is_midpoint(value: &Expr, lo: &str, hi: &str) -> bool {
-    // `(lo + hi) / 2` (or `(hi + lo) / 2`).
-    if let Some(dividend) = as_div_by_2(value) {
-        if let Some((a, b)) = as_add(dividend) {
-            let a = simple_ident(a);
-            let b = simple_ident(b);
-            if (a == Some(lo) && b == Some(hi)) || (a == Some(hi) && b == Some(lo)) {
-                return true;
+    // `(lo + hi) >> 1` (or `(hi + lo) >> 1`).
+    //
+    // THE SUM FORM REQUIRES A FLOORING HALVE, and `/ 2` does not floor
+    // (B-2026-08-30-6). `mid < hi` needs `mid <= hi - 1`; for `lo < hi` the
+    // real midpoint `(lo+hi)/2` sits in `[lo, hi)` only once rounded DOWN.
+    // Truncation rounds a negative sum UP, and at `hi == lo + 1` that lands
+    // exactly on `hi`: `lo = -3, hi = -2` gives `(-5)/2 == -2 == hi`, so the
+    // emitted `assume(mid < hi)` became `assume(false)` and the compiled
+    // program executed on injected UB — it SIGBUS'd where the interpreter ran
+    // it correctly. Accepting only the flooring spelling here is what makes
+    // the fact the section SOUNDNESS note claims actually true of every
+    // execution rather than only of non-negative ones.
+    if let Some((dividend, how)) = as_div_by_2(value) {
+        if how == Halving::Floor {
+            if let Some((a, b)) = as_add(dividend) {
+                let a = simple_ident(a);
+                let b = simple_ident(b);
+                if (a == Some(lo) && b == Some(hi)) || (a == Some(hi) && b == Some(lo)) {
+                    return true;
+                }
             }
         }
     }
     // `lo + (hi - lo) / 2` (or the sum commuted).
+    //
+    // EITHER SPELLING IS SOUND HERE, unlike above, and for a reason local to
+    // this form: the dominating strict guard makes the dividend `hi - lo >= 1`,
+    // i.e. positive, and truncation and flooring agree on every non-negative
+    // value. This is the form the SOUNDNESS note was written for.
     if let Some((a, b)) = as_add(value) {
         for (x, y) in [(a, b), (b, a)] {
             if simple_ident(x) == Some(lo) {
-                if let Some(dividend) = as_div_by_2(y) {
+                if let Some((dividend, _)) = as_div_by_2(y) {
                     if let Some((s1, s2)) = as_sub(dividend) {
                         if simple_ident(s1) == Some(hi) && simple_ident(s2) == Some(lo) {
                             return true;
