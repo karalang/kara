@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 320 | 2 |
+| miscompile | 321 | 2 |
 | run-vs-build | 254 | 15 |
 | leak | 237 | 8 |
 | missing-feature | 188 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1263 | 31 |
+| codegen | 1264 | 31 |
 | typecheck | 279 | 1 |
-| interp | 265 | 15 |
+| interp | 266 | 15 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1842 surfaced · 36 open · 1777 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1843 surfaced · 36 open · 1778 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (36)
 
@@ -140,7 +140,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1842 surfaced
 | B-2026-08-29-44 | 2026-08-29 | interp+codegen | medium | A WHOLE-VALUE REBIND AFTER A MIXED WRAP RE-ARMS THE WALK THE MASK JUST WITHHELD -- `let w = W2.Two(r, R { id: 2 }); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, because B-2026-08-29-24's per-slot mask is keyed on the BINDING and the destination registers afresh with no mask | none |
 | B-2026-08-29-45 | 2026-08-29 | interp+codegen | medium | A BINDING MOVED INTO A `Vec` LITERAL RUNS ITS `Drop` BODY TWICE -- both `let v = [r]` (param) and `let m = R { .. }; let v = [m]` (plain local) print two bodies where one is due, while `let v = [R { .. }]` with a FRESH element is correct; the element walk arms without the source's ownership being taken over | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
-| B-2026-08-29-49 | 2026-08-29 | interp+codegen | medium | A METHOD arm that moves an owned enum param's payload into a `mut ref` param runs the payload's `Drop` body ONE TIME TOO MANY -- unanimous on all four surfaces, so A/B-invisible | — |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
@@ -166,6 +165,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1842 surfaced
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
 | B-2026-08-30-26 | 2026-08-30 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIToFP`) while the interpreter performs it. `f16` is unaffected, and an explicit `f32` hop compiles -- so the four int-conversion opcodes are simply missing the widening the float-cast sites already have. | — |
 | B-2026-08-30-27 | 2026-08-30 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`exp`/`sin`/...) are -- so an identical loop pays a call per iteration or not, decided only by whether the LLVM-18 pin happens to have an intrinsic for the method. | — |
+| B-2026-08-30-28 | 2026-08-30 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the store does NOT happen, on both argument spellings and all four surfaces. The priced remainder of B-2026-08-29-49, which traded a DOUBLE body over a live object for a LOST one over a dead object, in `fn_moves_param_into_outliving_place`'s documented leak-over-double-free direction; a per-callee static predicate cannot answer a per-path question | — |
 
 ### Relocated (2)
 
@@ -198,9 +198,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1842 surfaced
 
 </details>
 
-### Fixed (1777)
+### Fixed (1778)
 
-<details><summary>1777 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1778 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1963,6 +1963,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1842 surfaced
 | B-2026-08-29-41 | interp | low | The INTERPRETER computes `to_degrees` / `to_radians` / `cosh` at f64 and returns an f64-precision value whatever the receiver's width, so all three d… | 7c552c7 |
 | B-2026-08-29-46 | interp+codegen | medium | TWO OWNED PARAMS' `Drop` BODIES RUN IN OPPOSITE ORDER ON THE TWO BACKENDS -- `fn take(r: R, q: R) -> i64 { 7 }` called with two fresh temps prints `d… | 33f8781 |
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
+| B-2026-08-29-49 | interp+codegen | medium | An argument the callee STORES into an outliving place (`fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }`) runs the value's `Drop` body ONE… | 0343db57 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
 | B-2026-08-29-52 | codegen | high | Printing a `Vector[T, N]` gives THREE DIFFERENT ANSWERS -- the interpreter renders the lanes, the JIT prints a raw POINTER (the same one for two diff… | 60465148 |
 | B-2026-08-29-53 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range | 2e5490d |
