@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 84 | 4 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
-| use-after-free | 25 | 1 |
+| use-after-free | 25 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1267 | 28 |
+| codegen | 1267 | 27 |
 | typecheck | 280 | 2 |
 | interp | 269 | 14 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced · 34 open · 1788 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced · 33 open · 1789 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (34)
+### Open (33)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -155,7 +155,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 | B-2026-08-30-16 | 2026-08-30 | codegen | low | A FRESH-TEMP `shared enum` SCRUTINEE'S OWN `Drop` BODY STILL RUNS AT THE ENCLOSING SCOPE'S EXIT -- `match mkSe() { .. }` is interp `v1 dSe s1 s2` vs compiled `v1 s1 s2 dSe`; the value-enum half of this was fixed by B-2026-08-29-28, the shared half rides a different channel | — |
 | B-2026-08-30-17 | 2026-08-30 | interp+codegen | low | AN `if let` MISS DROPS THE SCRUTINEE TEMPORARY *AFTER* THE `else` ARM ON BOTH BACKENDS, WHERE design.md SAYS BEFORE IT -- `els dE` vs the specified `dE els`; the two backends AGREE, so no A/B gate can see it | — |
 | B-2026-08-30-18 | 2026-08-30 | codegen | medium | A struct literal built DIRECTLY at a `return` site, whose field is a `Vec` of `Drop` elements, runs the element's `Drop` body ONCE TOO MANY on every compiled backend -- `mid dR14 v14 dR14 post` against the interpreter's `mid v14 dR14 post`. The two working spellings both route the value through a named binding first (`let bx = ...; return bx`) or omit `return` entirely (the bare tail), so the return-position literal is the whole trigger; a non-container `Drop` field is correct in all three spellings | — |
-| B-2026-08-30-19 | 2026-08-30 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still takes the payload, so a later read of the source is a use-after-free that prints garbage on the JIT and both AOT legs while `--interp` is correct. The borrow classification admits only a DIRECT `{ptr,len,cap}` payload (`String` / `Vec`), and a struct that merely CONTAINS one is not admitted. The same struct inside a USER enum variant is correct, so it is the built-in `Option`/`Result` channel specifically; the `Result` leg fails differently (valgrind-clean, second read empty) | — |
 | B-2026-08-30-20 | 2026-08-30 | interp+codegen | medium | AN ARGUMENT PRODUCED BY AN ASSOCIATED CALL HAS NO OWNER ON ANY BACKEND -- `s1(H.mkr(1))` where `H.mkr` is an `impl` block's associated fn runs NO `Drop` body on interp, JIT and AOT (the free-function producer `s1(mkr2(1))` runs it) and leaks the payload at -O0; all three backends agree, so only an absolute expectation against the free-fn spelling sees it | none |
 | B-2026-08-30-21 | 2026-08-30 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolve field 'id' on this receiver`) and the result binding's own `Drop` body is silently LOST -- both vanish the moment the struct gains one heap field, and the free-function spelling is correct throughout | none |
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
@@ -196,9 +195,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 
 </details>
 
-### Fixed (1788)
+### Fixed (1789)
 
-<details><summary>1788 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1789 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1981,6 +1980,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
 | B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
 | B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
+| B-2026-08-30-19 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still… | 4f02313 |
 | B-2026-08-30-24 | codegen | medium | NO `f16` PROGRAM LINKS FOR A WASM TARGET: LLVM lowers `half` to the `__extendhfsf2` / `__truncsfhf2` compiler-rt builtins and the wasm link line has… | 240919c |
 | B-2026-08-30-26 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIT… | 532549e |
 | B-2026-08-30-27 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`ex… | 9b5fce2 |
