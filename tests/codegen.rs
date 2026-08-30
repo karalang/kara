@@ -118652,6 +118652,125 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-47, PARTIAL — a read-only `match` arm over an
+    /// `Option`/`Result` whose payload is a HEAP-OWNING NON-STRUCT.
+    ///
+    /// B-2026-08-30-19 taught `pattern_binds_direct_inline_heap_payload` about
+    /// a user struct that transitively owns heap. Its ENTRY POINT stayed
+    /// struct-only, though, while the field walker one level down was already
+    /// conservative — so `Result[Map[i64, String]]` matched read-only twice
+    /// SEGFAULTED, and that is the row asserted here.
+    ///
+    /// SIX SIBLING SHAPES ARE STILL BROKEN and are deliberately NOT in this
+    /// test, because they fail through a different mechanism (the gate in
+    /// front of this classifier never registers them at all): `Option[Map]`,
+    /// `Option[Set]` and `Option[SortedMap]` read back as the `None` arm, a
+    /// `Result` over a heap-owning user enum prints empty, and `Option[E]` /
+    /// `Option[Option[String]]` abort with a double free. See B-2026-08-30-47
+    /// before extending either this test or the classifier.
+    ///
+    /// The rest of the rows are CONTROLS that were already correct and must
+    /// stay correct — this change makes the classifier admit MORE, so the way
+    /// it can go wrong is by admitting something whose owner it then drops.
+    /// `Option[shared struct]` is the sharpest of them (an RC box, whose field
+    /// read is deep-cloned) and a payload-free enum is the second: a blanket
+    /// "an enum owns heap" rule would move it off the path it takes correctly.
+    #[test]
+    fn e2e_optres_nonstruct_heap_payload_read_only_arm_does_not_take_the_payload() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "Result[Map] — segfaulted before this change",
+                "fn main() {\n\
+                     let mut m0: Map[i64, String] = Map.new();\n\
+                     m0.insert(1, f\"rm\");\n\
+                     let a: Result[Map[i64, String], i64] = Ok(m0);\n\
+                     match a { Ok(p) => { println(p.len()); } Err(_) => {} }\n\
+                     match a { Ok(q) => println(q.len()), Err(_) => println(\"err\") }\n\
+                 }\n",
+                "1\n1\n",
+            ),
+            (
+                "control: Option[Vec[String]]",
+                "fn main() {\n\
+                     let a: Option[Vec[String]] = Some([f\"x\", f\"y\"]);\n\
+                     match a { Some(p) => { println(p.len()); } None => {} }\n\
+                     match a { Some(q) => println(q[1]), None => println(\"none\") }\n\
+                 }\n",
+                "2\ny\n",
+            ),
+            (
+                "control: Option[enum with no heap] must stay OUT",
+                "enum F { A { n: i64 }, B }\n\
+                 fn main() {\n\
+                     let a: Option[F] = Some(F.A { n: 7 });\n\
+                     match a { Some(p) => { match p { A { n } => println(n), B => println(\"b\") } } None => {} }\n\
+                     match a { Some(q) => { match q { A { n } => println(n), B => println(\"b\") } } None => {} }\n\
+                 }\n",
+                "7\n7\n",
+            ),
+            (
+                "control: Option[Option[i64]] must stay OUT",
+                "fn main() {\n\
+                     let a: Option[Option[i64]] = Some(Some(5));\n\
+                     match a { Some(p) => { match p { Some(s) => println(s), None => println(\"in\") } } None => {} }\n\
+                     match a { Some(q) => { match q { Some(s) => println(s), None => println(\"in\") } } None => {} }\n\
+                 }\n",
+                "5\n5\n",
+            ),
+            (
+                "control: Option[shared struct] — an RC box, must stay OUT",
+                "shared struct Shr { w: String }\n\
+                 fn main() {\n\
+                     let a: Option[Shr] = Some(Shr { w: f\"sh\" });\n\
+                     match a { Some(p) => { println(p.w); } None => {} }\n\
+                     match a { Some(q) => println(q.w), None => println(\"none\") }\n\
+                 }\n",
+                "sh\nsh\n",
+            ),
+            (
+                "control: Option[scalar] — no owner to drop",
+                "fn main() {\n\
+                     let a: Option[i64] = Some(9);\n\
+                     match a { Some(p) => { println(p); } None => {} }\n\
+                     match a { Some(q) => println(q), None => println(\"none\") }\n\
+                     let b: Option[u8] = Some(9u8);\n\
+                     match b { Some(p) => { println(p); } None => {} }\n\
+                     match b { Some(q) => println(q), None => println(\"none\") }\n\
+                 }\n",
+                "9\n9\n9\n9\n",
+            ),
+            (
+                "control: Option[struct with heap] — the shape B-2026-08-30-19 fixed",
+                "struct Sstr { s: String }\n\
+                 fn main() {\n\
+                     let a: Option[Sstr] = Some(Sstr { s: f\"ctrl\" });\n\
+                     match a { Some(p) => { println(p.s); } None => {} }\n\
+                     match a { Some(q) => println(q.s), None => println(\"none\") }\n\
+                 }\n",
+                "ctrl\nctrl\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter is the reference for this text"
+            );
+            if let Some(aot) = run_program(src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backend must keep the source's payload \
+                     across a read-only arm"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-30-26 — AN INTEGER <-> `bf16` CONVERSION WAS REFUSED BY BOTH
     /// COMPILED BACKENDS, IN EVERY DIRECTION, WHILE THE INTERPRETER PERFORMED IT.
     ///

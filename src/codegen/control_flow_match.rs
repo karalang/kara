@@ -2231,9 +2231,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .pattern_state
                         .pattern_binding_types
                         .get(&(p.span.offset, p.span.length))
-                        .is_some_and(|t| {
-                            t == "String" || t == "Vec" || self.named_struct_owns_heap(t, 8)
-                        })
+                        .is_some_and(|t| self.binding_type_name_owns_heap(t, 8))
             })
     }
 
@@ -2284,6 +2282,110 @@ impl<'ctx> super::Codegen<'ctx> {
             .any(|fte| self.field_te_owns_heap(fte, fuel - 1))
     }
 
+    /// Does a payload BINDING whose recorded surface type name is `name` own
+    /// heap that a read-only arm must not take?
+    ///
+    /// B-2026-08-30-47, PARTIAL — the entry point of
+    /// [`Self::named_struct_owns_heap`] was struct-only, while
+    /// [`Self::field_te_owns_heap`] one level DOWN was already conservative
+    /// ("anything not a scalar and not a known heap-free struct owns heap").
+    /// A payload the walker would have called heap-owning as a FIELD was
+    /// called heap-free as the payload ITSELF, so the arm took it.
+    ///
+    /// READ THE ROW BEFORE EXTENDING THIS. Seven shapes failed four ways —
+    /// `Option[Map]`/`Set`/`SortedMap` read back as the `None` arm,
+    /// `Result[E]` printed empty, `Option[E]` and `Option[Option[String]]`
+    /// aborted with a double free, and `Result[Map]` segfaulted. Closing this
+    /// asymmetry fixes exactly ONE of them (`Result[Map]`, segfault to
+    /// correct). The other six never reach this classifier at all: the gate in
+    /// front of it requires membership in `inline_{option,result}_payload_vars`,
+    /// and `track_inline_option_payload_var` registers nothing unless the
+    /// payload is an inline heap `Vec`/`String`. That is the load-bearing half
+    /// and it is NOT fixed here.
+    ///
+    /// This half is landed on its own terms: two ends of one judgement that
+    /// disagree are a latent defect whatever they currently reach. Six control
+    /// shapes that were already correct — including `Option[shared struct]`
+    /// and a payload-free enum — stay correct.
+    ///
+    /// Judging the NAME rather than the payload's `TypeExpr` is deliberate:
+    /// `pattern_binding_types` is what the classifier has in hand at this
+    /// point, and it records the head name for every named payload
+    /// (`Map`, `Set`, a user enum, `Option`). A generic ARGUMENT cannot change
+    /// the answer for any name reached here, because every container in the
+    /// `else` arm owns its buffer whatever it holds.
+    fn binding_type_name_owns_heap(&self, name: &str, fuel: u32) -> bool {
+        // A raw pointer has no owner to drop.
+        if name.starts_with('*') || is_scalar_surface_name(name) {
+            return false;
+        }
+        // A WHOLE-TUPLE binding is recorded under the literal name "Tuple",
+        // and it must stay out. Tuple payloads have their own consumption gate
+        // (`arm_only_borrows_result_tuple_payload`) and their bindings own
+        // THEMSELVES — each heap element gets its own `track_vec_var` — so
+        // classifying the arm as a borrow drops those owners. That is the
+        // exact hazard `pattern_binds_direct_inline_heap_payload`'s own doc
+        // describes, and it is not hypothetical: an earlier version of this
+        // function fell through to a conservative default here and turned
+        // `e2e_optres_tuple_payload_is_owned_exactly_once` into a program that
+        // produced NO OUTPUT AT ALL — the same signature B-2026-08-08-25
+        // recorded when it first drew this line.
+        if name == "Tuple" {
+            return false;
+        }
+        if let Some(known) = self.named_type_owns_heap(name, fuel) {
+            return known;
+        }
+        // An ALLOW-LIST, not a conservative default, and the tuple regression
+        // above is why. "Conservative" here does NOT mean "answer true when
+        // unsure": answering true classifies the arm as a borrow, which DROPS
+        // an owner whenever the payload turns out to own itself. Both answers
+        // are unsafe for some shape, so this admits only names measured to
+        // need it and leaves every unresolved name on the path it takes today.
+        matches!(
+            name,
+            "String" | "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet"
+        )
+    }
+
+    /// The owns-heap answer for a name this backend has a DECLARATION for, or
+    /// `None` when it has none. A `shared struct` answers `false`: its payload
+    /// is an RC box, a different ownership regime — a field read off one is
+    /// deep-cloned (B-2026-08-13-6) because the box may have other handles, so
+    /// classifying the arm as a borrow drops an owner the RC path still
+    /// expects. Measured: admitting them turns
+    /// `asan_shared_struct_heap_field_read_cloned_not_aliased` into an ASAN
+    /// memory error.
+    fn named_type_owns_heap(&self, name: &str, fuel: u32) -> Option<bool> {
+        if self.type_decls.shared_type_decl_names.contains(name)
+            || self.type_decls.shared_type_names.contains(name)
+        {
+            return Some(false);
+        }
+        if self.type_decls.struct_field_type_exprs.contains_key(name) {
+            return Some(self.named_struct_owns_heap(name, fuel));
+        }
+        let variants = self.enum_variant_field_type_exprs(name);
+        if !variants.is_empty() {
+            return Some(self.named_enum_owns_heap(&variants, fuel));
+        }
+        None
+    }
+
+    /// The enum sibling of [`Self::named_struct_owns_heap`]: an enum owns heap
+    /// when ANY variant carries a payload that does. This is what keeps
+    /// `Option[F]` for a payload-free or all-scalar `enum F` OUT — a control
+    /// that is correct today and that a blanket "an enum owns heap" rule would
+    /// have moved off the path it takes correctly.
+    fn named_enum_owns_heap(&self, variants: &[(u64, String, Vec<TypeExpr>)], fuel: u32) -> bool {
+        if fuel == 0 {
+            return true;
+        }
+        variants
+            .iter()
+            .any(|(_, _, tes)| tes.iter().any(|te| self.field_te_owns_heap(te, fuel - 1)))
+    }
+
     /// The field-type half of [`Self::named_struct_owns_heap`]. A scalar owns
     /// nothing; a known struct recurses; everything else (`String`, `Vec`,
     /// `Map`, an enum, an unresolved name) counts as owning, matching
@@ -2295,32 +2397,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             crate::ast::TypeKind::Path(p) => {
                 let head = p.segments.last().map(String::as_str).unwrap_or("");
-                if matches!(
-                    head,
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "i128"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "u128"
-                        | "usize"
-                        | "isize"
-                        | "f16"
-                        | "bf16"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                        | "char"
-                ) {
+                if is_scalar_surface_name(head) {
                     return false;
                 }
-                if self.type_decls.struct_field_type_exprs.contains_key(head) {
-                    return self.named_struct_owns_heap(head, fuel);
-                }
-                true
+                // Resolves a user ENUM as well as a struct (B-2026-08-30-47).
+                // Before that, an enum field fell to the `true` below, so a
+                // struct holding a payload-free enum counted as owning heap —
+                // conservative, and only a missed optimization here, but the
+                // SAME gap at the binding entry point was a use-after-free.
+                self.named_type_owns_heap(head, fuel).unwrap_or(true)
             }
             _ => true,
         }
@@ -2366,11 +2451,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Keyed on the scrutinee's `TypeExpr`, NOT on `pattern_binding_types`,
     /// because that table is a NARROWING record: it stores `u8`/`i32`/`f64` and
     /// every named type, but a plain 64-bit int is the default width and gets NO
-    /// entry at all. An absent entry therefore cannot witness scalar-ness — it
-    /// also covers a whole-tuple binding (`Some(t)` over `Option[(String,
-    /// i64)]`), which very much does own heap and is exactly what the gate
-    /// protects. Reading the variant's argument off the instantiation is a
-    /// POSITIVE witness instead.
+    /// entry at all. An absent entry therefore cannot witness scalar-ness.
+    /// Reading the variant's argument off the instantiation is a POSITIVE
+    /// witness instead.
+    ///
+    /// CORRECTION (B-2026-08-30-47, measured): this passage used to add that an
+    /// absent entry "also covers a whole-tuple binding (`Some(t)` over
+    /// `Option[(String, i64)]`)". It does not — `bind_pattern_types` records a
+    /// `Type::Tuple` binding under the literal name `"Tuple"`
+    /// (`typechecker/patterns.rs`), so the entry is PRESENT and it is that name,
+    /// not its absence, that keeps such a binding out of the heap-payload
+    /// classifier. The conclusion above is unaffected; the supporting claim was
+    /// wrong, and believing it cost a regression — `binding_type_name_owns_heap`
+    /// was first written with a conservative "unknown name owns heap" default on
+    /// the reasoning that a tuple could not reach it, which admitted `"Tuple"`
+    /// and emptied `e2e_optres_tuple_payload_is_owned_exactly_once`.
     ///
     /// Conservative in the safe direction on every axis: a single plain
     /// `Binding` only (so a destructuring `Some((v, k))` stays rejected), a
@@ -12232,4 +12327,31 @@ pub(super) fn collect_pattern_bindings(p: &crate::ast::Pattern, out: &mut Vec<St
         | PatternKind::RangePattern { .. }
         | PatternKind::Slice { .. } => {}
     }
+}
+
+/// The surface names that carry no owner: every integer width, every float
+/// width, `bool` and `char`. Shared by the payload-binding entry point and the
+/// struct/enum field walker so the two cannot drift apart — the drift between
+/// them was B-2026-08-30-47.
+fn is_scalar_surface_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "isize"
+            | "f16"
+            | "bf16"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
 }
