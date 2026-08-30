@@ -156,6 +156,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_conditional_branch(cond.into_int_value(), then_bb, else_bb)
             .unwrap();
+        // B-2026-08-30-2 — dominates both arms and re-executes per pass;
+        // see `arm_tail_owner_ctx`.
+        let pre_branch_bb = self.builder.get_insert_block().unwrap();
+        let arms_all_mint = self.if_arms_all_mint(then_block, else_branch);
 
         self.builder.position_at_end(then_bb);
         // The cleanup frame is pushed BEFORE the pattern bind (mirroring
@@ -404,6 +408,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .get_terminator()
             .is_some();
+        // B-2026-08-30-2 — hoisted out of the tail-suppression block below so
+        // the registration after the drain can still see it.
+        let mut then_disarmed = None;
         if !then_terminated {
             // Slice 3s: move-aware then-tail suppression — `if let Some(x) =
             // … { x }` moves the tracked binding into the if-let's value
@@ -438,6 +445,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 if owns_result {
                     self.suppress_source_vec_cleanup_for_arg_ex(fe, owns_result);
                 }
+                // B-2026-08-30-2 — the if-let THEN arm hand-rolls its frame, so it
+                // reaches neither `compile_block_with_frame`'s hook nor
+                // `compile_match`'s. Same record, registered after the drain below.
+                then_disarmed = self.vecstr_source_disarmed.take();
                 // B-2026-08-29-13 — the THIRD leaf hook for the bare-`shared`
                 // TRANSFER record, for exactly the reason the `Option[shared T]`
                 // note below gives: `compile_block_with_frame` covers plain `if`
@@ -498,6 +509,12 @@ impl<'ctx> super::Codegen<'ctx> {
             if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
                 then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
+            if let (Some(span), Some(v)) = (self.current_branch_expr_span, then_val) {
+                let pending = then_disarmed;
+                if own_value && !arms_all_mint {
+                    self.register_pending_arm_owner(pending, v, span, Some(pre_branch_bb));
+                }
+            }
         } else {
             self.drop_rc.scope_cleanup_actions.pop();
         }
@@ -508,6 +525,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(else_bb);
         let else_tail: Option<&Expr>;
+        let mut else_pending = None;
         let mut else_val = if let Some(eb) = else_branch {
             self.fn_ctx.tail_ret_inner = tail;
             match &eb.kind {
@@ -516,7 +534,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-08-29-5 — an if-let's ELSE arm hands its tail out to
                     // the same (absent) consumer the then-arm does.
                     self.branch_arm_value_discarded = !own_value;
-                    self.compile_block_with_frame(blk)?
+                    if own_value {
+                        self.arm_tail_owner_ctx = self
+                            .current_branch_expr_span
+                            .map(|span| (span, arms_all_mint, pre_branch_bb));
+                    }
+                    let v = self.compile_block_with_frame(blk)?;
+                    else_pending = self.arm_pending_tail_owner.take();
+                    v
                 }
                 _ => {
                     else_tail = Some(eb);
@@ -538,6 +563,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if !else_terminated {
             if let (Some(fe), Some(v)) = (else_tail, else_val) {
                 else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
+            }
+            if let (Some(span), Some(v)) = (self.current_branch_expr_span, else_val) {
+                if own_value && !arms_all_mint {
+                    self.register_pending_arm_owner(else_pending, v, span, Some(pre_branch_bb));
+                }
             }
         }
         let else_end = self.builder.get_insert_block().unwrap();
@@ -2118,6 +2148,22 @@ impl<'ctx> super::Codegen<'ctx> {
 
     // ── Control flow ──────────────────────────────────────────────
 
+    /// B-2026-08-30-2 — does EVERY arm of this `if` mint a fresh owned temp?
+    ///
+    /// The `If` arm of `branch_tail_mints_fresh_owned_temp`, re-expressed over
+    /// the pieces `compile_if` is handed rather than the node it never sees —
+    /// including the no-`else` case, which yields a placeholder at the merge
+    /// and so mints nothing. True means B-2026-08-29-27's widened consuming
+    /// gates will free the merged value at the use site, and an arm-level owner
+    /// must therefore stand down.
+    fn if_arms_all_mint(&self, then_block: &Block, else_branch: Option<&Expr>) -> bool {
+        let (Some(eb), Some(then_tail)) = (else_branch, then_block.final_expr.as_deref()) else {
+            return false;
+        };
+        self.branch_tail_mints_fresh_owned_temp(then_tail)
+            && self.branch_tail_mints_fresh_owned_temp(eb)
+    }
+
     pub(super) fn compile_if(
         &mut self,
         condition: &Expr,
@@ -2155,13 +2201,28 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_conditional_branch(cond_val, then_bb, else_bb)
             .unwrap();
+        // B-2026-08-30-2 — the block that dominates both arms and re-executes
+        // on every pass through this `if`; see `arm_tail_owner_ctx`.
+        let pre_branch_bb = self.builder.get_insert_block().unwrap();
 
         self.builder.position_at_end(then_bb);
         self.fn_ctx.tail_ret_inner = tail;
         // B-2026-08-29-5 — see `branch_arm_value_discarded`: this arm's tail
         // hands its value to nobody when the `if`'s own value is discarded.
         self.branch_arm_value_discarded = !own_value && !discard_stmt_owns_value;
+        // B-2026-08-30-2 — the two things an arm cannot work out for itself;
+        // see `arm_tail_owner_ctx`. Skipped entirely when the value is
+        // discarded, which B-2026-08-29-5 already owns end to end.
+        let arms_all_mint = self.if_arms_all_mint(then_block, else_branch);
+        if own_value || discard_stmt_owns_value {
+            self.arm_tail_owner_ctx = self
+                .current_branch_expr_span
+                .map(|span| (span, arms_all_mint, pre_branch_bb));
+        }
         let mut then_val = self.compile_block_with_frame(then_block)?;
+        // B-2026-08-30-2 — what this arm reported; registered a few lines
+        // below, once the deep-copy has settled which value escapes.
+        let then_pending = self.arm_pending_tail_owner.take();
         let then_terminated = self
             .builder
             .get_insert_block()
@@ -2179,6 +2240,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
                 then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
+            if let (Some(span), Some(v)) = (self.current_branch_expr_span, then_val) {
+                self.register_pending_arm_owner(then_pending, v, span, Some(pre_branch_bb));
+            }
         }
         let then_end_bb = self.builder.get_insert_block().unwrap();
         if !then_terminated {
@@ -2190,13 +2254,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // nested `else if` recurses through `compile_if` (which deep-copies its
         // own leaves), so it contributes no leaf here.
         let else_tail: Option<&Expr>;
+        let mut else_pending = None;
         let mut else_val = if let Some(else_expr) = else_branch {
             self.fn_ctx.tail_ret_inner = tail;
             match &else_expr.kind {
                 ExprKind::Block(blk) => {
                     else_tail = blk.final_expr.as_deref();
                     self.branch_arm_value_discarded = !own_value && !discard_stmt_owns_value;
-                    self.compile_block_with_frame(blk)?
+                    if own_value || discard_stmt_owns_value {
+                        self.arm_tail_owner_ctx = self
+                            .current_branch_expr_span
+                            .map(|span| (span, arms_all_mint, pre_branch_bb));
+                    }
+                    let v = self.compile_block_with_frame(blk)?;
+                    else_pending = self.arm_pending_tail_owner.take();
+                    v
                 }
                 ExprKind::If {
                     condition: c,
@@ -2227,6 +2299,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if !else_terminated {
             if let (Some(fe), Some(v)) = (else_tail, else_val) {
                 else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
+            }
+            if let (Some(span), Some(v)) = (self.current_branch_expr_span, else_val) {
+                self.register_pending_arm_owner(else_pending, v, span, Some(pre_branch_bb));
             }
         }
         let else_end_bb = self.builder.get_insert_block().unwrap();

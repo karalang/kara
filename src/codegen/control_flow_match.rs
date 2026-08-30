@@ -57,6 +57,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let tail = self.fn_ctx.tail_ret_inner.take();
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(scrutinee);
+        // B-2026-08-30-2 — the block that dominates every arm and re-executes
+        // on each pass through this `match`; see `arm_tail_owner_ctx`. Captured
+        // before any arm is compiled, and before the cascade's own blocks
+        // exist. It carries no terminator yet — the entry wiring below appends
+        // one after every arm is done — so the reset store lands at its end and
+        // the branch follows it.
+        let match_reset_bb = self.builder.get_insert_block();
+        // B-2026-08-30-2 — the `Match` arm of `branch_tail_mints_fresh_owned_temp`,
+        // asked once here because an arm cannot see its siblings. True means
+        // B-2026-08-29-27's widened gates free the merged value at the use
+        // site, so no arm may register an owner. See `arm_tail_owner_ctx`.
+        let arms_all_mint = !arms.is_empty()
+            && arms
+                .iter()
+                .all(|a| self.branch_tail_mints_fresh_owned_temp(&a.body));
         // B-2026-08-28-44 — see the `compile_if` sibling: only what THIS
         // match's arms hand out may arm the merge-point owner.
         self.branch_arm_clone_taken = None;
@@ -947,7 +962,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
 
+            // B-2026-08-30-2 — hand the arm context down only when the body is
+            // DIRECTLY a block, which is the only shape that reaches
+            // `compile_block_with_frame` as this arm rather than as something
+            // nested inside it. Every other body shape is handled by this
+            // function's own hook after the drain below; setting the one-shot
+            // for those would let a value-position block buried in the body
+            // consume it and file its owner under the match's key.
+            if own_value
+                && matches!(
+                    &arm.body.kind,
+                    ExprKind::Block(_)
+                        | ExprKind::Seq(_)
+                        | ExprKind::Unsafe(_)
+                        | ExprKind::LabeledBlock { .. }
+                )
+            {
+                self.arm_tail_owner_ctx = match (self.current_branch_expr_span, match_reset_bb) {
+                    (Some(span), Some(bb)) => Some((span, arms_all_mint, bb)),
+                    _ => None,
+                };
+            }
             let mut arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
+            self.arm_tail_owner_ctx = None;
+            // B-2026-08-30-2 — a BLOCK arm body reports through here; a bare one
+            // is picked up from `vecstr_source_disarmed` below. Either way the
+            // registration happens after this arm's OWN frame drains, which is
+            // the whole reason the block cannot do it itself.
+            let arm_pending = self.arm_pending_tail_owner.take();
             let arm_body_end = self.builder.get_insert_block().unwrap();
             if arm_body_end.get_terminator().is_none() {
                 // Move-aware: if the arm's tail expression is an
@@ -995,6 +1037,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if owns_result {
                     self.suppress_source_vec_cleanup_for_arg_ex(&arm.body, owns_result);
                 }
+                // B-2026-08-30-2 — the match sibling of the block-tail hook in
+                // `compile_block_with_frame`. A bare-identifier arm body never
+                // reaches that function at all, so the disarm the call above
+                // just performed has to be picked up here or the buffer it
+                // stranded stays stranded: `match n { 0 => mkA(n), _ => b1 }
+                // .contains("-")` leaked `b1` whole.
+                let arm_disarmed = self.vecstr_source_disarmed.take();
                 // B-2026-08-29-13 — the match-arm sibling of the block-tail
                 // record in `suppress_block_tail_cleanup`. An arm yielding a
                 // bare `shared` binding transfers the ref; without this the
@@ -1130,6 +1179,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`match opt { Some(v) => v }` — `v` is a payload binding, not
                 // in `owned_vecstr_params`). See `compile_if`.
                 arm_val = self.deepcopy_owned_param_branch_tail(&arm.body, arm_val, own_value)?;
+                // B-2026-08-30-2 — give this arm's escaping value an owner, in
+                // the frame that drains after the consumer rather than the
+                // arm's own (which was popped just above). Keyed by the MATCH's
+                // span so an owning destination takes it over through the usual
+                // funnel; a read-only one leaves it and the buffer dies at that
+                // frame's exit.
+                //
+                // A block-bodied arm has already done this from inside
+                // `compile_block_with_frame` and cleared the one-shot, which is
+                // what keeps the two paths from each registering an owner for
+                // the same buffer.
+                if own_value && !arms_all_mint {
+                    if let Some(span) = self.current_branch_expr_span {
+                        let pending = arm_pending.or(arm_disarmed);
+                        self.register_pending_arm_owner(pending, arm_val, span, match_reset_bb);
+                    }
+                }
                 // Re-read the current bb AFTER drain — the cleanup IR
                 // may have appended new basic blocks (e.g. `cleanup.free`
                 // / `cleanup.skip` for FreeVecBuffer's `cap > 0` guard),

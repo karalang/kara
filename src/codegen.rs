@@ -18,6 +18,7 @@ use display::Display;
 use drop_rc::DropRc;
 use fn_ctx::FnCtx;
 use fn_sig::FnSig;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
@@ -1505,8 +1506,14 @@ pub(super) struct Codegen<'ctx> {
     /// leaves exactly one owner. A `let` init, a `Vec.push` argument and a
     /// `return` all already call it; `println` does not, which is precisely the
     /// position that was leaking.
+    ///
+    /// B-2026-08-30-2 widened the value to a LIST. One construct can register
+    /// more than one owner — `if c { a } else { b }` over two Vec/String
+    /// bindings hands one out per arm, each with its own slot and its own
+    /// arm-local store — and a takeover has to neutralize every one of them,
+    /// not whichever happened to be inserted last.
     pub(crate) branch_tail_owner_slots:
-        std::collections::HashMap<(usize, usize), PointerValue<'ctx>>,
+        std::collections::HashMap<(usize, usize), Vec<PointerValue<'ctx>>>,
     /// The span of the `if` / `match` expression currently being lowered.
     /// `compile_if` / `compile_match` are handed the condition and the arms,
     /// never the branch node itself, so `compile_expr` stashes it here on the
@@ -1752,6 +1759,72 @@ pub(super) struct Codegen<'ctx> {
     /// would be wrong — `let x = { v.push(n); other };` applies a transfer for
     /// the push that has nothing to do with what the block hands out.
     pub(crate) shared_transfer_applied: bool,
+    /// B-2026-08-30-2 — did the most recent
+    /// `suppress_source_vec_cleanup_for_arg_ex` zero a Vec/String BINDING's
+    /// `cap`, and with which element type? The same record-rather-than-rederive
+    /// shape as `shared_transfer_applied` directly above, and read by exactly
+    /// one site: the value-position block tail, which needs to know that the
+    /// value it is about to hand out has just been left with no owner.
+    ///
+    /// Carries the frame INDEX that held the source's `FreeVecBuffer`, because
+    /// that is the frame the buffer was going to be freed in and therefore the
+    /// one a replacement owner has to land in. `None` when no LIVE frame holds
+    /// that cleanup — the source's frame has already drained (a binding declared
+    /// inside the block handing it out) or it never registered one (an owned
+    /// param, which is caller-retains). Either way there is nothing for an owner
+    /// to replace, and registering one anyway is a double free.
+    pub(crate) vecstr_source_disarmed:
+        Option<(Option<inkwell::types::BasicTypeEnum<'ctx>>, Option<usize>)>,
+    /// B-2026-08-30-2 — did the value-position block just compiled hand out a
+    /// Vec/String BINDING whose cleanup the tail suppressor disarmed? Set by
+    /// `suppress_block_tail_cleanup` from `vecstr_source_disarmed` above and
+    /// read once, by `compile_block_with_frame` after its own frame drains.
+    pub(crate) block_tail_binding_unowned:
+        Option<(Option<inkwell::types::BasicTypeEnum<'ctx>>, Option<usize>)>,
+    /// B-2026-08-30-2 — one-shot signal from `compile_if` / `compile_match` to
+    /// the arm body about to be compiled: `(takeover key, consumer frees it)`.
+    ///
+    /// An arm cannot answer either question for itself. The TAKEOVER KEY is the
+    /// whole branch's span, because that is what a consuming destination looks
+    /// up — an owner filed under the arm block's own span is invisible to it,
+    /// which is a double free rather than a miss (`let s = if c { mk(n) } else
+    /// { b }` frees `b` at the binding and again at the unclaimed owner).
+    /// CONSUMER FREES IT is `expr_is_fresh_owned_branch_tail` of the branch:
+    /// when every arm tail mints, B-2026-08-29-27's widened gates free the
+    /// merged value at the use site, so an arm-level owner would be the second
+    /// free. Neither is knowable from one arm, and a nested value-position
+    /// block inside an arm must NOT inherit either — hence one-shot, `take`n at
+    /// `compile_block_with_frame`'s entry exactly like
+    /// `branch_arm_value_discarded`.
+    ///
+    /// The third element is the basic block whose end the owner slot's RESET
+    /// store goes in — the one that dominates every arm and re-executes each
+    /// time the construct is reached. `track_vec_var`'s entry-block zero runs
+    /// ONCE per call, which is enough for a slot whose store is unconditional
+    /// and not enough for a per-arm one: on the next loop iteration a slot
+    /// whose arm did not run still holds the PREVIOUS iteration's already-freed
+    /// header, and the drain frees it again. Measured as a double free on
+    /// `while i < 3 { let t = mkB(i); if i > 0 { mkA(n) } else { t }.len(); }`.
+    pub(crate) arm_tail_owner_ctx: Option<((usize, usize), bool, BasicBlock<'ctx>)>,
+    /// B-2026-08-30-2 — an ARM block's answer travelling back the other way:
+    /// `(element type, the frame the source's cleanup lived in)`, or `None` when
+    /// this arm's tail left nothing for an owner to replace.
+    ///
+    /// The arm block cannot register the owner itself, because it does not know
+    /// how many frames still stand between it and the merge. `compile_if` has
+    /// none — its arms ARE `compile_block_with_frame` calls — but `compile_match`
+    /// pushes a PER-ARM frame around the body, and an owner registered from
+    /// inside the block lands in that frame and is freed at the end of the arm,
+    /// before the merge and before any consumer. Measured: `let g = match e
+    /// { A(n) => { let p = f"[{n}]"; p }, B => "z" }` aborted with a double free
+    /// while the `if` spelling of the same block was clean — the whole
+    /// difference being that one extra frame.
+    ///
+    /// So the block reports and the branch compiler registers, each after ITS
+    /// own drain. Set only when `arm_tail_owner_ctx` was, so a standalone
+    /// value-block still owns its own registration.
+    pub(crate) arm_pending_tail_owner:
+        Option<(Option<inkwell::types::BasicTypeEnum<'ctx>>, Option<usize>)>,
     /// B-2026-07-22-2 — the most recent FRESH call-result struct temp
     /// materialized by a field access in expression position
     /// (`println(mk().s)` / `take(mk().s)` / `mkv().v.len()`):
@@ -6065,6 +6138,10 @@ impl<'ctx> Codegen<'ctx> {
             last_fstr_acc: None,
             block_tail_shared_transfer: false,
             shared_transfer_applied: false,
+            vecstr_source_disarmed: None,
+            block_tail_binding_unowned: None,
+            arm_tail_owner_ctx: None,
+            arm_pending_tail_owner: None,
             freshtemp_field_access_slot: None,
             bce: BceState {
                 len_alias: HashMap::new(),

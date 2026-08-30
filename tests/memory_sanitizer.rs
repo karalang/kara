@@ -400,36 +400,276 @@ fn main() {
         );
     }
 
-    /// The two shapes [`asan_branch_tail_owned_temp_frees_once`]'s predicate
-    /// DECLINES, pinned at their leaking values (B-2026-08-29-27 residuals).
+    /// A value-position block or branch whose tail hands out a BINDING THAT
+    /// OUTLIVES THE HAND-OUT owns what escapes (B-2026-08-30-2).
     ///
-    /// Both still leak, and both must: the point of the pin is that the fix did
-    /// not turn either into a memory ERROR, which is the failure the fail-closed
-    /// test exists to prevent. `run_under_asan_no_leak_check` is therefore the
-    /// right runner — a clean exit here means no use-after-free and no double
-    /// free, and the leak is the known, deliberate remainder.
+    /// `suppress_block_tail_cleanup` zeroes the source's `cap` on the premise
+    /// its own doc states — "the consumer's binding remains the sole owner" —
+    /// which holds for a `let`, a by-value argument, a `return` and an
+    /// assignment, and does NOT hold for the read-only positions: a
+    /// `.contains()` receiver, a `println` argument, a concat operand, an
+    /// f-string part. There the value is read and dropped, so zeroing the source
+    /// stranded its buffer.
     ///
-    /// A tail that hands out a BINDING rather than minting a temp is the one
-    /// that has to keep leaking, and the `loc` rows are the measurement that
-    /// says so. Reading `loc` AFTER `{ loc }.contains(…)` is the whole point of
-    /// the fixture: it still prints correctly, so the wrapper disarmed the
-    /// binding's cleanup without ending its readable lifetime. Several of the
-    /// gates this fix widened free IMMEDIATELY at the use site
-    /// (`free_str_vec_buffer_if_heap`, `free_fresh_owned_str_arg`), so admitting
-    /// such a tail would DANGLE that later read — a use-after-free, strictly
-    /// worse than the leak it replaces. A MINTED temp cannot have a later reader,
-    /// which is exactly what the predicate tests for and why ONE disqualifying
-    /// tail declines the whole construct. `mixed` shows the same thing where only
-    /// one arm is a binding. Tracked as B-2026-08-30-2.
+    /// FIXING IT AT THE CONSUMER IS NOT AVAILABLE, which is why this needed an
+    /// owner rather than one more arm on B-2026-08-29-27's predicate. The source
+    /// binding is still READABLE after the hand-out — every `a*` / `b*` / `c*`
+    /// row reads it back on the same line and it prints correctly — while the
+    /// gates that predicate feeds free IMMEDIATELY at the use site. Admitting a
+    /// binding tail there would dangle that read: a use-after-free, strictly
+    /// worse than the leak. The owner is registered in the frame that held the
+    /// SOURCE's own cleanup instead, which is after every such read.
     ///
-    /// An F-STRING ARM (`if c { f"a{n}" } else { f"b{n}" }`) leaks for a
-    /// different reason and needs a different fix. The accumulator DOES register
-    /// its own cleanup, and the arm-tail suppressor then neutralizes it on the
-    /// way out — correct, the value escapes the arm — leaving nothing at the
-    /// merge. So unlike the binding case there is no dangling hazard here, only
-    /// a producer whose disarm has no counterpart; admitting it needs the
-    /// `last_fstr_acc` / `rhs_stages_fstr_acc` staging reasoned through rather
-    /// than one more arm kind in the predicate. Tracked as B-2026-08-30-3.
+    /// EVERY RECEIVER ROW USES `.contains()`, NOT `.len()`, and that is not a
+    /// style choice. `.len()` reads a word out of the already-loaded header and
+    /// touches no buffer, so a row written that way passes whether or not the
+    /// buffer is owned by anyone — three rows of an earlier draft were exactly
+    /// that, and reported clean against a compiler still leaking 54 B on the
+    /// same shapes. A consumer that reads the BYTES is what makes it an
+    /// assertion.
+    ///
+    /// EVERY BRANCH ROW TAKES THE ARM THAT NAMES THE BINDING, for a different
+    /// reason: the sibling MINTING arm of a mixed branch is a shape this fix
+    /// does NOT cover (see `asan_branch_tail_declined_shapes_do_not_double_free`),
+    /// so a row that took it would be pinning a leak in the test that asserts
+    /// there are none.
+    ///
+    /// The rows separate the four things that can go wrong:
+    ///
+    /// - `a*` — a bare block, plain and nested. `{ { x } }` is not decoration:
+    ///   `suppress_block_tail_cleanup` recurses through a block tail and
+    ///   re-emits the cap-zero, which the outer block cannot tell from a first
+    ///   disarm, so it registered a SECOND owner and double-freed. The outer now
+    ///   adopts the inner's slots — COPIED under its own key, not moved, because
+    ///   a consumer looks up whichever span IT holds and that is not always the
+    ///   outermost construct.
+    /// - `b*` / `c*` — all three branch compilers. Ownership is genuinely
+    ///   per-path: exactly one arm's value escapes and the other's binding dies
+    ///   in place, which is why the owner is stored in the arm's own basic block
+    ///   rather than once at the merge. `b3` takes a binding from EITHER arm and
+    ///   reads both back. The `if let` row (`c3`) is here because `compile_expr`
+    ///   never stashed a branch span for `IfLet`, so its arms had no takeover key
+    ///   and registered nothing at all.
+    /// - `d*` / `e*` — the consumer axis. `d*` are read-only (a `println`
+    ///   argument, a concat operand, an f-string part, and `d4`, a DISCARDED
+    ///   block) and must leave the owner alone; `e*` are the OWNING destinations
+    ///   — a `let`, a by-value argument, a `Vec.push`, a function tail — and must
+    ///   take it OVER. Without that half this trades the leak for a double free,
+    ///   and `e1`-`e5` are what catch it.
+    /// - `f1` — three iterations. A per-arm owner slot is written on one path
+    ///   only, so on the next pass an arm that did not run still holds the
+    ///   previous pass's already-freed header unless the slot is reset in the
+    ///   block that dominates the arms. Measured as a double free before that
+    ///   reset existed.
+    ///
+    /// `g*` and `h1` are TRIPWIRES for the two neighbouring fixes this one sits
+    /// between and must not disturb: an all-mint construct (B-2026-08-29-27),
+    /// whose value a consuming gate still frees at the use site, and a DISCARDED
+    /// branch (B-2026-08-29-5), whose source is deliberately left armed. Both
+    /// were measured double-freeing against an earlier draft.
+    ///
+    /// `i*` are the tripwire that matters most, because they are the shape this
+    /// fix had to be NARROWED to exclude. A tail naming a binding declared
+    /// INSIDE the block it is handed out of is what every codegen-internal
+    /// desugar synthesizes — `Vec.sorted()` lowers to `{ let mut __srt =
+    /// recv.clone(); __srt.sort(); __srt }`, and the iterator adaptors (`i5`),
+    /// `collect` into a non-Vec target, the nested-Vec index bind and the
+    /// generic-enum payload bind (`i4`) all build the same thing. Each already
+    /// arranges its own ownership at the producer, so a second owner is a double
+    /// free: an earlier draft took out 11 codegen and 12 memory-sanitizer tests
+    /// at once, `let s: Vec[i64] = v.sorted()` segfaulting among them. The owner
+    /// now registers only when the source's own cleanup frame is still LIVE,
+    /// which such a tail's never is. These rows assert that the decline stays a
+    /// decline.
+    #[test]
+    fn asan_branch_tail_binding_handout_frees_once() {
+        assert_clean_asan_run(
+            r#"
+enum E { A(String), B }
+fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+fn use_s(s: String) -> i64 { return s.len(); }
+fn tail_block(n: i64) -> String { let t = mkB(n); { t } }
+fn tail_branch(n: i64, c: bool) -> String { let t = mkB(n); if c { t } else { mkA(n) } }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let a1 = mkB(n);
+    let ra1 = { a1 }.contains("bbb");
+    println(f"a1={ra1} {a1}");
+    let a2 = mkB(n);
+    let ra2 = { { a2 } }.contains("bbb");
+    println(f"a2={ra2} {a2}");
+
+    let b1 = mkB(n);
+    let rb1 = if c { b1 } else { mkA(n) }.contains("bbb");
+    println(f"b1={rb1} {b1}");
+    let b2 = mkB(n);
+    let rb2 = if n < 0 { mkA(n) } else { b2 }.contains("bbb");
+    println(f"b2={rb2} {b2}");
+    let b3 = mkA(n);
+    let b4 = mkB(n);
+    let rb3 = if c { b3 } else { b4 }.contains("aaa");
+    println(f"b3={rb3} {b3} {b4}");
+
+    let c1 = mkB(n);
+    let rc1 = match n { 0 => mkA(n), _ => c1 }.contains("bbb");
+    println(f"c1={rc1} {c1}");
+    let c2 = mkB(n);
+    let rc2 = match n { 1 => c2, _ => mkA(n) }.contains("bbb");
+    println(f"c2={rc2} {c2}");
+    let c3 = mkB(n);
+    let o3: Option[i64] = Option.Some(n);
+    let rc3 = if let Option.Some(_x) = o3 { c3 } else { mkA(n) }.contains("bbb");
+    println(f"c3={rc3} {c3}");
+
+    let d1 = mkB(n);
+    println({ d1 });
+    println(f"d1={d1}");
+    let d2 = mkB(n);
+    let rd2 = "x" + { d2 };
+    println(f"d2={rd2}");
+    let d3 = mkB(n);
+    let rd3 = f"[{if c { d3 } else { mkA(n) }}]";
+    println(f"d3={rd3}");
+    let d4 = mkB(n);
+    { d4 };
+    println(f"d4={d4}");
+
+    let e1 = mkB(n);
+    let re1 = { e1 };
+    println(f"e1={re1}");
+    let e2 = mkB(n);
+    let re2 = if n < 0 { mkA(n) } else { e2 };
+    println(f"e2={re2}");
+    let e3 = mkB(n);
+    let re3 = use_s({ e3 });
+    println(f"e3={re3}");
+    let e4 = mkB(n);
+    let re4 = use_s(if n < 0 { mkA(n) } else { e4 });
+    println(f"e4={re4}");
+    let e5 = mkB(n);
+    let mut ev: Vec[String] = Vec.new();
+    ev.push(if n < 0 { mkA(n) } else { e5 });
+    println(f"e5={ev[0]}");
+    let re6 = tail_block(n);
+    println(f"e6={re6}");
+    let re7 = tail_branch(n, c);
+    println(f"e7={re7}");
+
+    let mut i = 0;
+    while i < 3 {
+        let f1 = mkB(n + i);
+        let rf1 = if i < 3 { f1 } else { mkA(n) }.contains("bbb");
+        println(f"f1={rf1}");
+        i = i + 1;
+    }
+
+    let rg1 = if c { mkA(n) } else { mkB(n) }.contains("aaa");
+    println(f"g1={rg1}");
+    let rg2 = { mkA(n) }.contains("aaa");
+    println(f"g2={rg2}");
+    let rg3 = use_s(if c { mkA(n) } else { mkB(n) });
+    println(f"g3={rg3}");
+    let h1 = mkB(n);
+    if c { mkA(n) } else { h1 };
+    println(f"h1={h1}");
+
+    let i1 = { let t = mkB(n); t };
+    println(f"i1={i1}");
+    let e = E.A("k");
+    let i2 = match e { E.A(x) => { let p = f"[{x}]"; p }, E.B => "z" };
+    println(f"i2={i2}");
+    let v: Vec[String] = ["b", "a"];
+    let i3: Vec[String] = v.sorted();
+    println(f"i3={i3[0]} {v[0]}");
+    let o4: Option[String] = Option.Some(mkB(n));
+    let i4 = match o4 { Option.Some(x) => x, Option.None => mkA(n) };
+    println(f"i4={i4}");
+    let vv: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let i5: Vec[Vec[i64]] = vv.iter().chunks(2i64).collect();
+    println(f"i5={i5.len()}");
+}
+"#,
+            &[
+                "a1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "a2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "b1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "b2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "b3=true A1-aaaaaaaaaaaa B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "c1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "c2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "c3=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "d1=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "d2=xB1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "d3=[B1-bbbbbbbbbbbbbbbbbbbbbbbb]",
+                "d4=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "e1=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "e2=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "e3=27",
+                "e4=27",
+                "e5=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "e6=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "e7=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "f1=true",
+                "f1=true",
+                "f1=true",
+                "g1=true",
+                "g2=true",
+                "g3=15",
+                "h1=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "i1=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "i2=[k]",
+                "i3=a b",
+                "i4=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "i5=2",
+            ],
+            "asan_branch_tail_binding_handout_frees_once",
+        );
+    }
+
+    /// The three shapes still DECLINED after B-2026-08-30-2, pinned at their
+    /// leaking values.
+    ///
+    /// They still leak, and they must: the point of the pin is that no fix in
+    /// this family turned any of them into a memory ERROR, which is the failure
+    /// a fail-closed decline exists to prevent. `run_under_asan_no_leak_check`
+    /// is therefore the right runner — a clean exit means no use-after-free and
+    /// no double free, and the leak is the known, deliberate remainder.
+    ///
+    /// An F-STRING ARM (`b`, `d`) is a PRODUCER-side gap. The accumulator DOES
+    /// register its own cleanup and the arm-tail suppressor then neutralizes it
+    /// on the way out — correct, the value escapes the arm — leaving nothing at
+    /// the merge. The owner B-2026-08-30-2 registers cannot stand in: it keys
+    /// off the Vec/String MOVE neutralizer, and an f-string tail takes the
+    /// `last_fstr_acc` path instead, a different disarm with different staging
+    /// (`rhs_stages_fstr_acc`) to reason through. Tracked as B-2026-08-30-3. The
+    /// call-argument spelling (`d`) is opt-level split — clean at `-O2`, still
+    /// leaking at `-O0` — which is not enough to call that half fixed.
+    ///
+    /// The MINTING ARM OF A MIXED BRANCH (`m1`, `m2`) has the same shape as the
+    /// fixed population and a frame problem the fixed population does not.
+    /// B-2026-08-29-27's gates require EVERY tail to mint, so a branch with one
+    /// binding arm declines and the other arm's fresh temp is left unowned —
+    /// but there is no source binding to take a frame from, and the innermost
+    /// frame is wrong: when the branch is itself wrapped
+    /// (`fn f() -> String { { match .. } }`) that is the WRAPPER's frame, which
+    /// drains before the value escapes. A draft that used it freed the arm's
+    /// temp inside `f` and the caller freed it again. The self-host seed-run
+    /// oracle caught that, and reducing it gave the wrapper as the whole
+    /// difference — the unwrapped spelling was clean, which is why a
+    /// single-level fixture would have missed it. The promising lead is the
+    /// SIBLING binding arm's frame, which by construction outlives the branch.
+    ///
+    /// A BLOCK-LOCAL TAIL (`m3`) is declined by construction: the owner replaces
+    /// a cleanup in a still-live frame and there is none. That is also the shape
+    /// every codegen-internal desugar synthesizes, so admitting it double-freed
+    /// 23 tests — see `asan_branch_tail_binding_handout_frees_once`'s `i*` rows.
+    /// Unlike the other two it has no dangling hazard, because the source cannot
+    /// be read again; it is the consuming GATE's to widen, not this owner's.
     #[test]
     fn asan_branch_tail_declined_shapes_do_not_double_free() {
         if !asan_available() {
@@ -437,30 +677,29 @@ fn main() {
             return;
         }
         let src = r#"
-fn mk(n: i64) -> String {
-    return f"p{n}-aaaaaaaaaaaaaaaaaaaaaaaa";
-}
-
-fn use_it(s: String) -> i64 {
-    return s.len();
-}
+fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+fn use_s(s: String) -> i64 { return s.len(); }
 
 fn main() {
     let n: i64 = env.args().len();
     let c = n > 0;
 
-    let loc = mk(n + 5);
-    let bare = { loc }.contains("p");
-    println(f"bare={bare} loc={loc}");
-
-    let loc2 = mk(n + 6);
-    let mixed = if c { mk(n) } else { loc2 }.contains("p");
-    println(f"mixed={mixed} loc2={loc2}");
-
     let b = if c { f"x{n}" } else { f"y{n}" }.contains("x");
     println(f"b={b}");
-    let d = use_it(if c { f"x{n}" } else { f"y{n}" });
+    let d = use_s(if c { f"x{n}" } else { f"y{n}" });
     println(f"d={d}");
+
+    let m1 = mkB(n);
+    let rm1 = if c { mkA(n) } else { m1 }.contains("aaa");
+    println(f"m1={rm1} {m1}");
+    let m2 = mkB(n);
+    let rm2 = match n { 1 => mkA(n), _ => m2 }.contains("aaa");
+    println(f"m2={rm2} {m2}");
+
+    let m3 = mkB(n);
+    let rm3 = { let t = mkA(n); t }.contains("aaa");
+    println(f"m3={rm3} {m3}");
 }
 "#;
         let Some((stdout, _stderr, status)) =
@@ -472,15 +711,16 @@ fn main() {
         assert!(
             status.success(),
             "[asan_branch_tail_declined_shapes] ASAN reported a memory error \
-             (exit {:?}). The declined shapes must keep LEAKING, not start \
+             (exit {:?}). The declined shape must keep LEAKING, not start \
              dangling or double-freeing.\nstdout:\n{stdout}",
             status.code()
         );
         for want in [
-            "bare=true loc=p6-aaaaaaaaaaaaaaaaaaaaaaaa",
-            "mixed=true loc2=p7-aaaaaaaaaaaaaaaaaaaaaaaa",
             "b=true",
             "d=2",
+            "m1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "m2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "m3=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
         ] {
             assert!(
                 stdout.contains(want),

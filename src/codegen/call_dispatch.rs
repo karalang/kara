@@ -2002,7 +2002,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // a bare shared call result carries no `owned_temp_drops` entry — that
             // table only records `Type::Shared`, which a user `shared enum` result
             // is not — so the hint-driven shared arm there never fires for it.)
-            if is_block_arg || is_fresh_heap_call_arg {
+            // B-2026-08-30-2 — a block whose tail handed out a BINDING already
+            // got its owner while the block was compiled
+            // (`own_escaping_tail_value`), registered in the frame the source's
+            // own cleanup lived in. Materializing a second one here is a double
+            // free, not a belt-and-braces: `use_it({ loc })` aborted with
+            // `free(): double free detected in tcache 2`. The block arm above
+            // exists for a tail that MINTS its value, which registers nothing
+            // and still needs this.
+            let tail_already_owned = self
+                .branch_tail_owner_slots
+                .contains_key(&(a.value.span.offset, a.value.span.length));
+            if (is_block_arg || is_fresh_heap_call_arg) && !tail_already_owned {
                 self.materialize_owned_temp(val, (a.value.span.offset, a.value.span.length));
             }
             if val.is_pointer_value() {
@@ -8108,6 +8119,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Codegen::shared_transfer_applied` for why it is recorded here and
         // read only at the two tail sites.
         self.shared_transfer_applied = false;
+        // B-2026-08-30-2 — same contract, Vec/String tier. See
+        // `Codegen::vecstr_source_disarmed`.
+        self.vecstr_source_disarmed = None;
         // B-2026-08-10-21 — the source of a `UseAfterMove` keeps its cleanup.
         //
         // Every one of this helper's ~87 call sites funnels here, which is why
@@ -8198,17 +8212,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // per-read clone below. `println(match c { .. => p[1].word })` leaks
         // without the owner; `let d = match …` double-frees without this
         // takeover, because the binding owns the same buffer.
-        if let Some(slot) = self
+        if let Some(slots) = self
             .branch_tail_owner_slots
             .get(&(arg_expr.span.offset, arg_expr.span.length))
+            .cloned()
         {
-            if let Ok(cap_ptr) =
-                self.builder
-                    .build_struct_gep(self.vec_struct_type(), *slot, 2, "branchown.cap")
-            {
-                let _ = self
-                    .builder
-                    .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+            for slot in slots {
+                if let Ok(cap_ptr) =
+                    self.builder
+                        .build_struct_gep(self.vec_struct_type(), slot, 2, "branchown.cap")
+                {
+                    let _ = self
+                        .builder
+                        .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+                }
             }
             return;
         }
@@ -8519,6 +8536,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let zero = i64_t.const_int(0, false);
                     let _ = self.builder.build_store(cap_ptr, zero);
+                    // B-2026-08-30-2 — the source has just been left with no
+                    // cleanup. Record it (with the element type the owner will
+                    // need) so a value-position block tail can give the
+                    // escaping value an owner; every other consume site
+                    // ignores this, because every other one owns the value.
+                    let owning_frame =
+                        self.drop_rc.scope_cleanup_actions.iter().position(|frame| {
+                            frame.iter().any(|a| {
+                                matches!(
+                                    a,
+                                    super::state::CleanupAction::FreeVecBuffer { vec_alloca, .. }
+                                        if *vec_alloca == slot.ptr
+                                )
+                            })
+                        });
+                    self.vecstr_source_disarmed = Some((
+                        self.var_types.vec_elem_types.get(var_name).copied(),
+                        owning_frame,
+                    ));
                 }
             }
             return;

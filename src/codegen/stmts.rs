@@ -754,6 +754,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // BEFORE anything is compiled, so only this block sees it and a nested
         // value-position block inside the arm gets the ordinary treatment.
         let arm_value_discarded = std::mem::take(&mut self.branch_arm_value_discarded);
+        // B-2026-08-30-2 — hygiene, the same one-shot discipline as the signal
+        // above: only the disarm this block's OWN tail performs may be read
+        // back below, never one left over from a sibling construct.
+        self.block_tail_binding_unowned = None;
+        // B-2026-08-30-2 — and the arm context, `take`n here for the same
+        // reason `branch_arm_value_discarded` is: a value-position block NESTED
+        // inside an arm is not that arm, and must answer both questions for
+        // itself. `None` means "standalone block", which can.
+        let arm_owner_ctx = std::mem::take(&mut self.arm_tail_owner_ctx);
         // B-2026-08-26-12 — is the FUNCTION-TAIL `Option[shared]` compensator
         // already armed for this block's tail? Read it BEFORE `compile_block`
         // `take()`s it. When it is armed, `compile_tail_final_expr` incs the
@@ -856,8 +865,92 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             self.drain_top_frame_with_emit();
+            // B-2026-08-30-2 — a tail that handed out a BINDING left the
+            // escaping buffer with no owner at all.
+            //
+            // `suppress_block_tail_cleanup` above zeroed the source's `cap` on
+            // the premise stated in its doc — "the consumer's binding remains
+            // the sole owner" — which holds for a `let`, a by-value argument, a
+            // `return` and an assignment, and does not hold for the read-only
+            // positions: a `.contains()` / `.len()` receiver, a `println`
+            // argument, an f-string part. There the value is read and dropped,
+            // so zeroing the source strands its buffer.
+            //
+            // Fixing it at the CONSUMER is not available, and that is this
+            // row's whole content: the source binding is still READABLE after
+            // the hand-out (`let a = { loc }.contains("p"); println(loc)` prints
+            // `loc` correctly today), and the widened consuming gates
+            // B-2026-08-29-27 added free IMMEDIATELY at the use site — so a
+            // consumer-side free would dangle that read rather than merely
+            // double-free. An owner registered here frees at the ENCLOSING
+            // frame's exit instead, which is after every such read.
+            //
+            // Registered AFTER the drain on purpose: `track_vec_var` pushes
+            // onto the innermost live frame, and this block's own frame has
+            // just been popped, so the owner lands in the frame that is still
+            // live while the value is consumed. Recorded for takeover rather
+            // than freed outright, because the owning destinations own the same
+            // buffer — without that half this trades the leak for a double
+            // free.
+            let tail_mints = block
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.branch_tail_mints_fresh_owned_temp(t));
+            // A standalone value-block answers both questions itself: its own
+            // span is what a consumer looks up, and its own tail decides
+            // whether B-2026-08-29-27's gates will free the value at the use
+            // site. An ARM cannot — see `arm_tail_owner_ctx`.
+            let (owner_key, consumer_frees, reset_bb) = match arm_owner_ctx {
+                Some((span, all_mint, bb)) => (span, all_mint, Some(bb)),
+                None => ((block.span.offset, block.span.length), tail_mints, None),
+            };
+            let disarmed = self.block_tail_binding_unowned.take();
+            // A tail that is ITSELF a value-position construct has already been
+            // given an owner by its own pass through here (or through the
+            // branch compilers). Adopt it under this construct's key rather
+            // than registering a second: `{ { t } }.len()` double-freed,
+            // because `suppress_block_tail_cleanup` recurses into the inner
+            // tail and the cap-zero it re-emits is indistinguishable from a
+            // first disarm.
+            //
+            // COPIED, NOT MOVED, and the difference is a double free. A consumer
+            // looks up whichever span IT holds, and that is not always the
+            // outermost construct: a function tail return hands
+            // `suppress_cleanup_for_tail_return` the body's tail expression, so
+            // `fn f() -> String { { match .. } }` was looked up under one span
+            // while the slots had been re-keyed to the other, the takeover
+            // missed, and the caller freed what this frame had already freed.
+            // Registering the same slot under both keys costs a redundant
+            // cap-zero at worst — the self-host seed-run oracle is what caught
+            // this, on a nested `match` with one minting arm.
+            let adopted = block
+                .final_expr
+                .as_deref()
+                .map(|t| (t.span.offset, t.span.length))
+                .filter(|tk| *tk != owner_key)
+                .and_then(|tk| self.branch_tail_owner_slots.get(&tk).cloned());
+            if let Some(slots) = adopted {
+                self.branch_tail_owner_slots
+                    .entry(owner_key)
+                    .or_default()
+                    .extend(slots);
+            } else if !consumer_frees {
+                if arm_owner_ctx.is_some() {
+                    // An ARM reports; its branch compiler registers, after ITS
+                    // own drain. See `arm_pending_tail_owner` — a `match` keeps
+                    // a per-arm frame standing that an owner registered here
+                    // would be freed by, at the end of the arm, before the
+                    // merge.
+                    self.arm_pending_tail_owner = disarmed;
+                } else if let Some((elem_ty, owning_frame)) = disarmed {
+                    if let Some(v) = result {
+                        self.own_escaping_tail_value(v, elem_ty, owner_key, owning_frame, reset_bb);
+                    }
+                }
+            }
         } else {
             self.drop_rc.scope_cleanup_actions.pop();
+            self.block_tail_binding_unowned = None;
         }
         // B-2026-08-27-49 — record the tail's user-type name while this block's
         // OWN scope is still live. One line below, `restore_var_env` discards
@@ -926,6 +1019,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Identifier(n) => {
                 self.suppress_source_vec_cleanup_for_arg(tail);
+                // B-2026-08-30-2 — the suppressor just left a Vec/String
+                // binding's buffer with no owner. Raise it to the block-level
+                // signal `compile_block_with_frame` reads after its frame
+                // drains; see `tail_binding_left_unowned` there.
+                if let Some(elem) = self.vecstr_source_disarmed.take() {
+                    self.block_tail_binding_unowned = Some(elem);
+                }
                 // B-2026-08-29-13 — a bare `shared` binding handed out here is
                 // TRANSFERRED, exactly as the `FieldAccess` arm below documents
                 // for a direct shared field: the suppressor above disarmed the
@@ -14751,7 +14851,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// An `if` with NO `else`, or whose chosen branch has no tail expression,
     /// yields unit: there is no merged value to own, so it declines. A `match`
     /// with no arms declines for the same reason.
-    fn branch_tail_mints_fresh_owned_temp(&self, e: &Expr) -> bool {
+    pub(super) fn branch_tail_mints_fresh_owned_temp(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Seq(b)

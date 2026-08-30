@@ -1382,6 +1382,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // site's escaping-ness is a static property of the source location, so
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
+        // B-2026-08-30-2 — same reasoning one map over: `branch_tail_owner_slots`
+        // holds ALLOCAS, so an entry surviving into the next function names a
+        // slot in a frame that no longer exists. It was a latent hazard while
+        // only a container-element clone at a branch merge registered (one
+        // insert per span, overwritten on the next monomorph); it stops being
+        // latent now that the value is a LIST that accumulates, since a takeover
+        // would then zero this function's slot AND the previous function's.
+        // Spans are per source location, so the two monomorphs of one generic
+        // body collide on exactly the same key.
+        self.branch_tail_owner_slots.clear();
         // The first of the three escaping sites: a function body's tail value
         // goes to the caller. The other two — `let` initializers and `return`
         // operands — are seeded per statement in `compile_stmt`.

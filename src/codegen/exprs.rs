@@ -1851,7 +1851,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // doesn't leak to the code after the `if let`. The if-let value
                 // is an SSA value; the consumer re-derives its own metadata.
                 let snap = self.snapshot_var_env();
+                // B-2026-08-30-2 — stash the branch NODE's span, exactly as the
+                // `If` and `Match` arms do. `compile_if_let` is handed the
+                // pattern, the scrutinee and the blocks, never the node, and an
+                // arm-level owner has to be keyed by the span a consuming
+                // destination will look up. Without this the key was `None` and
+                // an `if let` arm handing out a binding registered nothing:
+                // `if let Some(x) = o { t } else { mkA(n) }.len()` leaked `t`
+                // at both opt levels while the `if` spelling was clean.
+                let prev = self
+                    .current_branch_expr_span
+                    .replace((expr.span.offset, expr.span.length));
                 let r = self.compile_if_let(pattern, value, then_block, else_branch.as_deref());
+                self.current_branch_expr_span = prev;
                 self.restore_var_env(snap);
                 r
             }

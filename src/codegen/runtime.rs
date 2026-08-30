@@ -2212,6 +2212,38 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-30-2 — [`Self::track_vec_var`] with an explicit target FRAME.
+    ///
+    /// The default (innermost) frame is right for a slot the current scope
+    /// created, and wrong for a REPLACEMENT owner: when a value-position block
+    /// hands out a binding, the buffer was going to be freed at the frame
+    /// holding the source's own `FreeVecBuffer`, and that is where its
+    /// replacement has to be freed too. Landing in the innermost frame instead
+    /// can drain far too early — a transient call-ARGUMENT frame pops as soon
+    /// as the call returns, so `println({ loc }); println(loc)` freed the buffer
+    /// between the two statements and printed garbage on the second (measured,
+    /// 14 valgrind errors).
+    ///
+    /// Callers must have checked that `frame_idx` is still live — see
+    /// `own_escaping_tail_value`, which declines outright when it is not.
+    fn track_vec_var_in_frame(
+        &mut self,
+        vec_alloca: PointerValue<'ctx>,
+        elem_ty: Option<BasicTypeEnum<'ctx>>,
+        frame_idx: usize,
+    ) {
+        // Same contract as `track_vec_var`: an unconditional scope-exit drain
+        // must not be able to read an uninitialized slot.
+        self.zero_init_tracked_vec_slot(vec_alloca);
+        self.drop_rc.scope_cleanup_actions[frame_idx].push(CleanupAction::FreeVecBuffer {
+            vec_alloca,
+            elem_ty,
+            elem_is_tensor: false,
+            elem_map_drop: None,
+            elem_agg_drop: None,
+        });
+    }
+
     /// Track a `Vec[<user struct/enum>]` alloca for scope-exit cleanup:
     /// run each live element's synthesized `__karac_drop_<T>` (which frees
     /// every heap-bearing field — Vec/String, Map/Set, **and** enum payloads
@@ -4817,9 +4849,124 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(span) = self.current_branch_expr_span else {
             return;
         };
+        // `None` — the innermost frame, which at a merge is the one enclosing the
+        // branch. This caller has no source binding to replace, so it is not
+        // subject to the still-live-frame check below.
+        self.own_escaping_tail_value(merged, elem_ty, span, None, None);
+    }
+
+    /// B-2026-08-30-2 — register the owner an ARM reported through
+    /// [`Codegen::arm_pending_tail_owner`], now that the branch compiler's own
+    /// per-arm frame (if it keeps one) has drained.
+    ///
+    /// Only a tail that handed out a BINDING takes an owner here, and it goes to
+    /// the frame that held the source's cleanup — the source can still be read
+    /// after the hand-out, so freeing earlier dangles that read.
+    ///
+    /// A tail that MINTED its value is deliberately NOT handled. It has the same
+    /// frame problem and no source frame to answer it with: the innermost frame
+    /// at this point is whatever encloses the branch, and when the branch is
+    /// itself wrapped — `fn f() -> String { { match .. } }` — that is the
+    /// WRAPPER's frame, which drains before the value escapes. A draft that used
+    /// it freed the arm's temp inside `f` and the caller freed it again; the
+    /// self-host seed-run oracle is what caught it, and reducing it gave the
+    /// wrapper as the whole difference (the unwrapped spelling was clean).
+    /// Tracked separately — the mixed-branch minting arm still leaks.
+    pub(super) fn register_pending_arm_owner(
+        &mut self,
+        pending: Option<(Option<BasicTypeEnum<'ctx>>, Option<usize>)>,
+        val: BasicValueEnum<'ctx>,
+        span: (usize, usize),
+        reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) {
+        let Some((elem_ty, owning_frame)) = pending else {
+            return;
+        };
+        self.own_escaping_tail_value(val, elem_ty, span, owning_frame, reset_bb);
+    }
+
+    /// B-2026-08-30-2 — store an empty `{ptr,len,cap}` into `slot` at the END of
+    /// `bb`, so a per-arm owner slot starts each pass over its construct with
+    /// `cap == 0`.
+    ///
+    /// `track_vec_var`'s entry-block zero-init dominates every use but executes
+    /// ONCE per call, which is the right amount for a slot the scope stores
+    /// into unconditionally. A slot only one ARM stores into is different: on
+    /// the second pass through an enclosing loop, an arm that does not run
+    /// leaves the previous pass's header — already freed by the previous
+    /// drain — in place for this pass's drain to free again. Resetting in the
+    /// block that dominates the arms and re-executes per pass is what makes the
+    /// slot mean "this pass's escaping value, if any".
+    pub(super) fn reset_vec_slot_at_block_end(
+        &self,
+        slot: PointerValue<'ctx>,
+        bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) {
+        let b = self.context.create_builder();
+        match bb.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(bb),
+        }
+        let _ = b.build_store(slot, self.vec_struct_type().const_zero());
+    }
+
+    /// B-2026-08-30-2 — the span-explicit core of [`Self::own_branch_merged_clone`].
+    ///
+    /// Registering an owner for a value that escaped its producer is one act
+    /// with two callers: a branch MERGE (keyed by the branch node's span) and a
+    /// value-position BLOCK whose tail handed out a binding (keyed by the
+    /// block's). Both leave the value with no owner for the same reason — the
+    /// producer correctly gave its own cleanup up — and both hand it to a
+    /// destination that may or may not take ownership, which is why the slot is
+    /// recorded for takeover rather than simply freed.
+    ///
+    /// WHERE THE OWNER LANDS IS THE CORRECTNESS ARGUMENT. `track_vec_var`
+    /// pushes onto the INNERMOST live frame, so both callers must be past the
+    /// producer's own drain before calling: the branch merge is (the arms'
+    /// frames drained at their ends), and the block caller sits immediately
+    /// after `drain_top_frame_with_emit`. The owner therefore lands in the frame
+    /// ENCLOSING the construct — the one still live while the value is being
+    /// consumed, and the one whose exit is after any later read of a source
+    /// binding that outlived the hand-out.
+    ///
+    /// The store is emitted at the current insert point, which for a branch arm
+    /// is that arm's own basic block, while `track_vec_var` zero-inits the slot
+    /// in the entry block. An arm that does not run therefore leaves `cap == 0`
+    /// and its cleanup skips — which is how one owner per arm expresses
+    /// per-path ownership that a single question asked at the merge cannot.
+    pub(super) fn own_escaping_tail_value(
+        &mut self,
+        merged: BasicValueEnum<'ctx>,
+        elem_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+        span: (usize, usize),
+        owning_frame: Option<usize>,
+        reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) {
         // Only a `{ptr,len,cap}` value has a buffer to own; anything else the
         // arms could hand out is either scalar or owned elsewhere already.
         if merged.get_type() != self.vec_struct_type().into() {
+            return;
+        }
+        // THE OWNER ONLY REPLACES A CLEANUP THAT IS STILL PENDING. `owning_frame`
+        // is the frame that held the source's `FreeVecBuffer`; past the end of
+        // the live stack means that frame has already drained, which is the
+        // case of a tail naming a binding declared INSIDE the block handing it
+        // out. There is nothing to replace there — and registering anyway is a
+        // double free, because that shape is exactly what every codegen-internal
+        // desugar synthesizes. `Vec.sorted()` lowers to
+        // `{ let mut __srt = recv.clone(); __srt.sort(); __srt }`; the iterator
+        // adaptors, `collect` into a non-Vec target, the nested-Vec index bind
+        // and the generic-enum payload bind all build the same shape, and each
+        // already arranges its own ownership at the producer. Measured: 11
+        // codegen and 12 memory-sanitizer failures, `let s: Vec[i64] =
+        // v.sorted()` segfaulting among them.
+        //
+        // The row's own population is unaffected, and the reason is the same one
+        // that made a consumer-side free unavailable: it is specifically a
+        // source binding that OUTLIVES the hand-out and can still be read. A
+        // block-local tail has no later reader, so it is the consuming gate's
+        // to widen, not this owner's — tracked separately.
+        if owning_frame.is_some_and(|f| f >= self.drop_rc.scope_cleanup_actions.len()) {
             return;
         }
         let Some(fn_val) = self.current_fn else {
@@ -4829,8 +4976,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.builder.build_store(slot, merged).is_err() {
             return;
         }
-        self.track_vec_var(slot, elem_ty);
-        self.branch_tail_owner_slots.insert(span, slot);
+        match owning_frame {
+            Some(f) => self.track_vec_var_in_frame(slot, elem_ty, f),
+            None => self.track_vec_var(slot, elem_ty),
+        }
+        if let Some(bb) = reset_bb {
+            self.reset_vec_slot_at_block_end(slot, bb);
+        }
+        self.branch_tail_owner_slots
+            .entry(span)
+            .or_default()
+            .push(slot);
     }
 
     /// Will anything OWN the value this branch expression produces?
