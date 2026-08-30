@@ -8871,7 +8871,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// registered the drop action was compiled long before the branch that
     /// reveals the binding is conditionally moved, and an entry-block init is
     /// correct no matter how late it is emitted.
-    fn cond_move_drop_flag_for(&mut self, name: &str) -> Option<PointerValue<'ctx>> {
+    pub(super) fn cond_move_drop_flag_for(&mut self, name: &str) -> Option<PointerValue<'ctx>> {
         if let Some(p) = self.drop_rc.cond_move_drop_flags.get(name) {
             return Some(*p);
         }
@@ -8988,6 +8988,88 @@ impl<'ctx> super::Codegen<'ctx> {
         let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
     }
 
+    /// B-2026-08-30-28 — clear a conditionally-stored parameter's per-path
+    /// drop flag at the statement that actually stores it.
+    ///
+    /// The store sibling of [`Self::arm_conditional_move_tail_flag`]. The
+    /// registration in `compile_function`'s parameter loop arms the body on
+    /// every path; this is what disarms it on the one that handed the value to
+    /// a container, so `if c { sink.push(r); }` runs the body exactly once on
+    /// both paths — at the container's drain when it stored, at the callee's
+    /// scope exit when it did not.
+    ///
+    /// DELIBERATELY NOT RECURSIVE, and that is the whole correctness argument.
+    /// It matches only a store spelled DIRECTLY as this statement, so the
+    /// `false` store lands in the basic block that statement compiles into. A
+    /// version that searched nested branches would match at the enclosing
+    /// `if c { ... }` statement instead, emit the clear in the block that
+    /// evaluates the CONDITION, and disarm the body on both paths — which is
+    /// precisely the all-paths disarming this row exists to undo.
+    ///
+    /// LOOKUP-ONLY: it never creates a flag. A binding without one is not a
+    /// parameter the conditional-store registration admitted, so it keeps
+    /// today's behaviour byte-for-byte, and the new runtime bit cannot reach
+    /// any shape the new predicate did not opt in.
+    pub(super) fn arm_conditional_store_flag(&mut self, e: &Expr) {
+        /// Does `e` hand `name` over BY VALUE — bare, or nested inside an
+        /// aggregate or call being built around it? The same move shapes
+        /// `outliving_store::moves` recognizes, restated here because that
+        /// module is private to `ast::items` and this needs only the leaf test.
+        fn hands_over(e: &Expr, name: &str) -> bool {
+            match &e.kind {
+                ExprKind::Identifier(n) => n == name,
+                ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                    args.iter().any(|a| hands_over(&a.value, name))
+                }
+                ExprKind::StructLiteral { fields, .. } => {
+                    fields.iter().any(|f| hands_over(&f.value, name))
+                }
+                ExprKind::Tuple(elems) => elems.iter().any(|el| hands_over(el, name)),
+                _ => false,
+            }
+        }
+
+        // Two disarming sites, not one. The STORE is what this row is about;
+        // the RETURN is the other way a flagged parameter can leave on a path,
+        // and leaving it armed there is a DOUBLE body — the unrecoverable
+        // direction.
+        //
+        // Measured on a callee that does both — `if r.id > 200 { return
+        // Some(r); } if r.id > 100 { sink.push(r); }` — the compiled backends
+        // ran the callee's guarded body AND the caller's result binding for one
+        // object, printing `drop 300 ` (empty tag, the String already moved into
+        // the returned `Some`) ahead of the real one. The interpreter disarms
+        // its own registration on that path already, so without this the two
+        // backends disagree as well.
+        let names: Vec<String> = match &e.kind {
+            ExprKind::Return(Some(inner)) => self
+                .drop_rc
+                .cond_move_drop_flags
+                .keys()
+                .filter(|n| hands_over(inner, n))
+                .cloned()
+                .collect(),
+            ExprKind::MethodCall { args, .. } | ExprKind::Call { args, .. } => args
+                .iter()
+                .filter_map(|a| match &a.value.kind {
+                    ExprKind::Identifier(n)
+                        if self.drop_rc.cond_move_drop_flags.contains_key(n.as_str()) =>
+                    {
+                        Some(n.clone())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => return,
+        };
+        let bool_t = self.context.bool_type();
+        for n in names {
+            if let Some(flag) = self.drop_rc.cond_move_drop_flags.get(n.as_str()).copied() {
+                let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+            }
+        }
+    }
+
     /// B-2026-08-28-65 — the UNDER-FIRE horn of B-2026-08-28-51's mechanism.
     /// An explicit `return <ident>` NESTED in a branch (`if k { return r; }`)
     /// is a move on the path that takes it and a no-op on every other path,
@@ -9060,6 +9142,16 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
+        // B-2026-08-30-28 — DECLINE for a parameter whose body is owned by a
+        // per-path flag. This removal is all-paths; the flag exists precisely
+        // because the store is not. Retracting here would delete the action
+        // `arm_conditional_store_flag` just disarmed for the storing path and
+        // leave the non-storing path with no body at all, which is the defect
+        // the registration undoes. The flag already answered this question, and
+        // it answered it per path.
+        if self.drop_rc.cond_store_flag_params.contains(name) {
+            return;
+        }
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
                 CleanupAction::UserDrop { binding_name, .. } => binding_name != name,

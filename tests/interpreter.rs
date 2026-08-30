@@ -642,6 +642,44 @@ fn test_user_impl_display_dispatches_through_to_string() {
 }
 
 #[test]
+fn a_conditional_store_into_a_mut_ref_param_runs_one_body_on_both_paths() {
+    // B-2026-08-30-28. The interpreter twin of
+    // `e2e_conditional_store_that_misses_still_runs_one_body`, and the reason
+    // it exists as a separate test: this row's fix had to move BOTH backends,
+    // and a codegen-only fix would have left the interpreter losing the body —
+    // a run-vs-build divergence rather than a shared gap.
+    //
+    // `take` stores its by-value parameter into a `mut ref` container on ONE
+    // path. Before the fix nobody owned the body on the other: the caller stood
+    // down because `fn_moves_param_into_outliving_place` saw a store, and the
+    // callee registered nothing for the same reason, so `drop 7` simply never
+    // printed on any of the four surfaces.
+    //
+    // The STORING path is asserted in the same program, because the two paths
+    // fail in opposite directions — losing a body and doubling one — and a test
+    // that pins only the miss would pass a fix that doubled the hit.
+    let src = "struct Res { id: i64 }
+        impl Drop for Res { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }
+        fn take(sink: mut ref Vec[Res], r: Res) { if r.id > 100 { sink.push(r); } }
+        fn main() {
+            let mut sink: Vec[Res] = Vec.new();
+            take(mut sink, Res { id: 7 });
+            println(\"--missed--\");
+            let named: Res = Res { id: 9 };
+            take(mut sink, named);
+            println(\"--missed-named--\");
+            take(mut sink, Res { id: 200 });
+            println(f\"pushed {sink.len()}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "drop 7\n--missed--\ndrop 9\n--missed-named--\npushed 1\ndrop 200\n",
+        "each object runs its body exactly once: the two that were not stored die \
+         in the callee, the one that was stored dies at the container's drain"
+    );
+}
+
+#[test]
 fn a_user_impl_drop_on_a_map_key_fires_like_one_on_a_value() {
     // B-2026-08-26-41. `emit_map_val_user_drop_bodies_fn` had no key twin, so
     // an `impl Drop` on a KEY type never ran at map teardown while the same

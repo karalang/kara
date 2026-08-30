@@ -9308,6 +9308,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // they don't reach this fallback.)
             }
             StmtKind::Expr(expr) => {
+                // B-2026-08-30-28 — disarm a conditionally-stored parameter's
+                // per-path body flag at the statement that stores it. Placed
+                // here, at the innermost statement, so the `false` lands in the
+                // basic block this statement compiles into — which for
+                // `if c { sink.push(r); }` is the branch that actually stored.
+                // No-op for every binding without a flag, which is everything
+                // the conditional-store registration did not admit.
+                self.arm_conditional_store_flag(expr);
                 // General owned-temp tracking, slice 1 (see
                 // `docs/spikes/general-owned-temp-tracking.md`): a value
                 // produced in statement position by a fresh-owned-yielding

@@ -123971,6 +123971,154 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-08-30-28 — the OTHER path of the same conditional callee: the one
+    /// where the store does NOT happen. This is the half B-2026-08-29-49 priced
+    /// and left open, and it is the half with no owner at all — the caller stood
+    /// down because the callee MIGHT store, and the callee registered nothing
+    /// because the same per-callee predicate said the value leaves.
+    ///
+    /// Both spellings, because the spellings were wrong in OPPOSITE directions
+    /// before -49 and a test on one of them proves nothing about the other.
+    #[test]
+    fn e2e_conditional_store_that_misses_still_runs_one_body() {
+        for (label, call) in [
+            (
+                "named",
+                "let carg: Res = Res { id: 7 };\n     take(mut sink, carg);",
+            ),
+            ("temp", "take(mut sink, Res { id: 7 });"),
+        ] {
+            let src = format!(
+                "struct Res {{ id: i64 }}\n\
+                 impl Drop for Res {{\n\
+                 \x20   fn drop(mut ref self) {{ println(f\"drop {{self.id}}\"); }}\n\
+                 }}\n\
+                 fn take(sink: mut ref Vec[Res], r: Res) {{ if r.id > 100 {{ sink.push(r); }} }}\n\
+                 fn main() {{\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   {call}\n\
+                 \x20   println(f\"pushed {{sink.len()}}\");\n\
+                 }}\n"
+            );
+            assert_eq!(
+                run_program(&src),
+                Some("drop 7\npushed 0\n".to_string()),
+                "[{label}] a conditional store that MISSES must still run the body exactly once"
+            );
+        }
+    }
+
+    /// B-2026-08-30-28 — the guard must not reach a store that is really
+    /// UNCONDITIONAL. Two spellings of "always stores": the plain one, and an
+    /// `if`/`else` whose BOTH arms store. If the must-analysis mistook either
+    /// for conditional AND the flag failed to clear, the container's drain and
+    /// the callee frame would each run a body for one object.
+    #[test]
+    fn e2e_unconditional_store_still_runs_exactly_one_body() {
+        for (label, callee) in [
+            (
+                "plain",
+                "fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }",
+            ),
+            (
+                "both-arms",
+                "fn take(sink: mut ref Vec[Res], r: Res) { if r.id > 100 { sink.push(r); } else { sink.push(r); } }",
+            ),
+        ] {
+            let src = format!(
+                "struct Res {{ id: i64 }}\n\
+                 impl Drop for Res {{\n\
+                 \x20   fn drop(mut ref self) {{ println(f\"drop {{self.id}}\"); }}\n\
+                 }}\n\
+                 {callee}\n\
+                 fn main() {{\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   take(mut sink, Res {{ id: 7 }});\n\
+                 \x20   println(f\"pushed {{sink.len()}}\");\n\
+                 }}\n"
+            );
+            assert_eq!(
+                run_program(&src),
+                Some("pushed 1\ndrop 7\n".to_string()),
+                "[{label}] an unconditional store keeps exactly one owner (the container)"
+            );
+        }
+    }
+
+    /// B-2026-08-30-28 — the METHOD spelling, storing into `self`, and a store
+    /// NESTED two branches deep. The method reaches its stand-down by a
+    /// different route than the free function (B-2026-08-29-11), so it is a
+    /// genuinely separate leg rather than a restatement.
+    #[test]
+    fn e2e_conditional_store_method_and_nested_run_one_body_each() {
+        let src = "struct Res { id: i64 }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) { println(f\"drop {self.id}\"); }\n\
+             }\n\
+             struct Bag { xs: Vec[Res] }\n\
+             impl Bag {\n\
+             \x20   fn add(mut ref self, r: Res) { if r.id > 100 { self.xs.push(r); } }\n\
+             }\n\
+             fn nested(sink: mut ref Vec[Res], r: Res) { if r.id > 0 { if r.id > 100 { sink.push(r); } } }\n\
+             fn main() {\n\
+             \x20   let mut b: Bag = Bag { xs: Vec.new() };\n\
+             \x20   b.add(Res { id: 5 });\n\
+             \x20   println(\"m-miss\");\n\
+             \x20   let mut s: Vec[Res] = Vec.new();\n\
+             \x20   nested(mut s, Res { id: 6 });\n\
+             \x20   println(\"n-miss\");\n\
+             \x20   println(f\"b={b.xs.len()} s={s.len()}\");\n\
+             }\n"
+            .to_string();
+        assert_eq!(
+            run_program(&src),
+            Some("drop 5\nm-miss\ndrop 6\nn-miss\nb=0 s=0\n".to_string()),
+            "the method and nested-branch spellings each run one body on the non-storing path"
+        );
+    }
+
+    /// B-2026-08-30-28 — the ESCAPE-ROUTE GUARD. A parameter that can also
+    /// leave by being RETURNED must not get the conditional-store registration,
+    /// because the flag is cleared at the store and nothing clears it on the
+    /// returning path: the callee's guarded body and the caller's result
+    /// binding would both fire for one object.
+    ///
+    /// This is a measured regression, not a hypothetical. With the guard
+    /// absent, the `let`-then-return spelling below printed the body TWICE on
+    /// all four surfaces (`drop 301 ` with the String already moved into the
+    /// returned wrapper, then the real one), and the bare-return and
+    /// return-through-a-call spellings each doubled on at least one backend.
+    ///
+    /// The assertion is deliberately the PRE-FIX behaviour for these shapes:
+    /// one body for the value that escapes, and none for the one that dies
+    /// inside. Losing that body is the open remainder, tracked separately —
+    /// what must never regress is the count going ABOVE one.
+    #[test]
+    fn e2e_a_param_that_can_also_be_returned_is_not_given_a_store_flag() {
+        let src = "struct Res { id: i64, tag: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.tag}\"); }\n\
+             }\n\
+             struct Wrap { r: Res }\n\
+             fn via_let(sink: mut ref Vec[Res], r: Res) -> Option[Wrap] {\n\
+             \x20   if r.id > 200 { let w: Wrap = Wrap { r: r }; return Some(w); }\n\
+             \x20   if r.id > 100 { sink.push(r); }\n\
+             \x20   return None;\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut s: Vec[Res] = Vec.new();\n\
+             \x20   let q: Option[Wrap] = via_let(mut s, Res { id: 301, tag: \"ret\" });\n\
+             \x20   println(\"after\");\n\
+             \x20   println(f\"len {s.len()}\");\n\
+             }\n"
+        .to_string();
+        assert_eq!(
+            run_program(&src),
+            Some("drop 301 ret\nafter\nlen 0\n".to_string()),
+            "a returnable param must run its body exactly ONCE, never twice"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

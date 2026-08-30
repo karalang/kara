@@ -92,6 +92,25 @@ pub(crate) struct DropRc<'ctx> {
     /// exactly as they did before. That is what keeps this slice off the
     /// predicate question the row warns about.
     pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-08-30-28 — the parameters whose user `Drop` BODY is owned by a
+    /// per-path flag rather than by a static decision, so a later move site
+    /// must NOT retract their action.
+    ///
+    /// `compile_function`'s conditional-store registration arms a bodies-only
+    /// drop for a parameter stored into an outliving place on SOME path, and
+    /// `arm_conditional_store_flag` disarms it on the path that stored. The
+    /// store site then reaches `suppress_user_drop_for_var`, whose removal is
+    /// all-paths — it would delete the very action the flag exists to schedule,
+    /// putting the shape straight back to a lost body. This set is what lets
+    /// that one removal decline.
+    ///
+    /// A SET, not a reuse of `cond_move_drop_flags`: that map also holds the
+    /// conditional-RETURN bindings, whose ownership story is settled by
+    /// B-2026-08-28-51/-65 and which have always been safe to retract. Keying
+    /// the decline on this set alone means the only actions protected are the
+    /// ones this row's registration created, so no pre-existing retraction
+    /// changes behaviour.
+    pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
     /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
     /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
     /// more than once would otherwise collect one identical `{null, 0, 0}`

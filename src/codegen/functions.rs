@@ -1382,6 +1382,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // site's escaping-ness is a static property of the source location, so
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
+        self.drop_rc.cond_store_flag_params.clear();
         // B-2026-08-30-2 — same reasoning one map over: `branch_tail_owner_slots`
         // holds ALLOCAS, so an entry surviving into the next function names a
         // slot in a frame that no longer exists. It was a latent hazard while
@@ -2690,6 +2691,97 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-08-30-28 — the STORE sibling of the conditional
+                // -return registration directly above, and the same defect one
+                // escape route over.
+                //
+                // `fn_moves_param_into_outliving_place` answers per CALLEE and
+                // MAY-style ("some path stores"). That is the right question
+                // for whether the CALLER stands down, and the wrong one for who
+                // runs the `Drop` body: on the path where a conditional store
+                // does NOT happen, the caller had stood down and the callee
+                // registered nothing, so the value died with no owner for its
+                // body at all. Measured on the row's own repro: `drop 7` and
+                // `drop 9` absent on all four surfaces, both argument
+                // spellings.
+                //
+                // Registered exactly like the conditional-return case, for the
+                // same two reasons spelled out there:
+                //
+                //  * BODIES ONLY. The caller still owns the memory (it passed
+                //    the value by value under a caller-drops convention and only
+                //    declined the BODY), so installing the binding's own wrapper
+                //    would free fields the caller frees again — the double-free
+                //    that `emit_struct_user_drop_bodies_only_fn` exists to
+                //    avoid.
+                //  * GUARDED PER PATH. `arm_conditional_store_flag` clears the
+                //    flag in the storing statement's own basic block, so the
+                //    body fires only where the value actually died. Without the
+                //    guard this would fire on the storing path too and the
+                //    container's drain would run a second one.
+                //
+                // Gated on the store being CONDITIONAL. An unconditional
+                // `fn take(sink: mut ref Vec[R], r: R) { sink.push(r); }` keeps
+                // today's path — no registration, container owns it — so the
+                // only behaviour that changes is the shape that had no owner.
+                if func.generic_params.is_none()
+                    && !self.is_coroutine_compiled(&func.name)
+                    && crate::ast::fn_conditionally_moves_param_into_outliving_place(func, i)
+                {
+                    if let TypeKind::Path(path) = &param.ty.kind {
+                        if let Some(struct_name) = path.segments.first() {
+                            let has_user_drop = self
+                                .program_snapshot
+                                .as_deref()
+                                .map(|p| p.drop_method_keys.contains_key(struct_name))
+                                .unwrap_or(false);
+                            if has_user_drop
+                                && !self
+                                    .type_decls
+                                    .shared_types
+                                    .contains_key(struct_name.as_str())
+                            {
+                                if let Some(bodies) =
+                                    self.emit_struct_user_drop_bodies_only_fn(struct_name)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &param_name,
+                                        alloca,
+                                        bodies,
+                                        crate::codegen::state::UserDropKind::StructFieldBodies,
+                                    );
+                                    // Create the per-path flag EAGERLY, unlike
+                                    // the conditional-return case which lets its
+                                    // `return` site create it lazily. Two
+                                    // reasons, both load-bearing:
+                                    //
+                                    //  * The guard only engages when the flag
+                                    //    EXISTS — `emit_user_drop_call_guarded`
+                                    //    takes an unguarded call otherwise — so a
+                                    //    body registered here with no flag would
+                                    //    fire on the storing path too, doubling
+                                    //    it.
+                                    //  * It makes `cond_move_drop_flags` itself
+                                    //    the set of admitted parameters, which is
+                                    //    what lets `arm_conditional_store_flag`
+                                    //    stay lookup-only and therefore unable to
+                                    //    reach any binding this registration did
+                                    //    not opt in.
+                                    //
+                                    // The alloca goes in the ENTRY block, which
+                                    // dominates every path, so creating it here
+                                    // is correct no matter where the store sits.
+                                    let _ = self.cond_move_drop_flag_for(&param_name);
+                                    self.drop_rc
+                                        .cond_store_flag_params
+                                        .insert(param_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if self.is_coroutine_compiled(&func.name) {
                     if let TypeKind::Path(path) = &param.ty.kind {
                         if let Some(struct_name) = path.segments.first() {

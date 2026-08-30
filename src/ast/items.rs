@@ -2730,47 +2730,23 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
 /// owners free one value — a double free. Only the first is recoverable, so
 /// the predicate leans that way, exactly as `fn_returns_param_payload`'s
 /// mixed-path note records for its own channel.
-pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
-    let Some(param) = f.params.get(arg_index) else {
-        return false;
-    };
-    // A by-ref parameter is not owned by this frame, so the caller never
-    // registered a temp drop for it and there is nothing to suppress.
-    if matches!(
-        param.ty.kind,
-        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
-    ) {
-        return false;
-    }
-    let PatternKind::Binding(param_name) = &param.pattern.kind else {
-        return false;
-    };
-
-    // The set of roots whose storage outlives the call. `self` joins it only
-    // for a BORROWED receiver — see the doc comment.
-    let mut roots: Vec<&str> = Vec::new();
-    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
-        roots.push("self");
-    }
-    for p in &f.params {
-        if !matches!(
-            p.ty.kind,
-            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
-        ) {
-            continue;
-        }
-        if let PatternKind::Binding(n) = &p.pattern.kind {
-            roots.push(n.as_str());
-        }
-    }
-    if roots.is_empty() {
-        return false;
-    }
-
+/// B-2026-08-29-49 / B-2026-08-30-28 — the shared syntax helpers behind the
+/// three "does this callee store the param somewhere that outlives the call"
+/// questions.
+///
+/// They were nested inside [`fn_moves_param_into_outliving_place`] until
+/// B-2026-08-30-28 needed the SAME recognition for a second question (does
+/// EVERY path store it, not just some path). Hoisting rather than duplicating
+/// is what keeps the may- and must-analyses agreeing on which syntactic shapes
+/// count as a store: a shape added to `stores` is admitted by both at once, so
+/// the pair can never drift into disagreeing about what a store IS -- only
+/// about how many paths take one.
+mod outliving_store {
+    use super::*;
     /// Is `e` a place expression whose ROOT is one of `roots`? Walks through
     /// field, index and tuple-index projections, so `self.buckets[i].inner`
     /// resolves to root `self`.
-    fn place_root_outlives(e: &Expr, roots: &[&str]) -> bool {
+    pub(super) fn place_root_outlives(e: &Expr, roots: &[&str]) -> bool {
         match &e.kind {
             ExprKind::SelfValue => roots.contains(&"self"),
             ExprKind::Identifier(n) => roots.contains(&n.as_str()),
@@ -2786,7 +2762,7 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
     /// `expr_is_ident` so the three predicates recognize the same move shapes.
     /// A FIELD projection (`x.id`) is deliberately not a move: it copies one
     /// field and leaves the value behind.
-    fn moves(e: &Expr, name: &str) -> bool {
+    pub(super) fn moves(e: &Expr, name: &str) -> bool {
         match &e.kind {
             ExprKind::Identifier(n) => n == name,
             ExprKind::StructLiteral { fields, .. } => {
@@ -2799,7 +2775,7 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
     }
 
     /// Is `e` the bare parameter `name` itself?
-    fn is_bare(e: &Expr, name: &str) -> bool {
+    pub(super) fn is_bare(e: &Expr, name: &str) -> bool {
         matches!(&e.kind, ExprKind::Identifier(n) if n == name)
     }
 
@@ -2822,7 +2798,7 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
     /// arm that stores licenses the stand-down for every arm, so a mixed enum
     /// whose other arm lets the payload die leaks that body rather than
     /// double-freeing it.
-    fn stores_via_destructure<'a>(
+    pub(super) fn stores_via_destructure<'a>(
         scrutinee: &Expr,
         arms: impl Iterator<Item = (&'a Pattern, &'a Expr)>,
         name: &str,
@@ -2836,7 +2812,7 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
     }
 
     /// One expression: is it a store of `name` into an outliving place?
-    fn stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
+    pub(super) fn stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
         match &e.kind {
             // `self.xs.push(x)`, `store.insert(k, x)`, `self.slots[i].set(x)`.
             ExprKind::MethodCall { object, args, .. } => {
@@ -2898,7 +2874,103 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
         }
     }
 
-    fn walk_block(b: &Block, name: &str, roots: &[&str]) -> bool {
+    /// B-2026-08-30-28 — does `name` leave the frame by a route that is NOT a
+    /// store into an outliving place?
+    ///
+    /// The conditional-store registration hands the parameter's `Drop` body to
+    /// a runtime flag that is cleared at the STORE. Any OTHER way the value can
+    /// leave — returned, bound into a local that is then returned, handed to a
+    /// call whose result escapes — is a path where the flag stays armed while
+    /// some other frame has taken the value over, and the body runs TWICE. That
+    /// is the unrecoverable direction, so the registration declines whenever
+    /// such a route exists rather than trying to enumerate and clear them all.
+    ///
+    /// Measured, which is why this exists rather than being assumed safe: with
+    /// the registration ungated, `fn f(sink: mut ref Vec[R], r: R) -> Option[W]
+    /// { if .. { let w = W { r: r }; return Some(w); } if .. { sink.push(r); }
+    /// return None; }` ran the body TWICE for the returned object on all four
+    /// surfaces — `drop 301 ` with the string already moved out, then the real
+    /// one. The bare-return and return-through-a-call spellings each doubled on
+    /// at least one backend too.
+    ///
+    /// CONSERVATIVE-DECLINE: an unrecognized shape answers `true` and the
+    /// parameter keeps today's behaviour (its body lost on the non-storing
+    /// path). That is the same trade `fn_conditionally_returns_param_bare`'s
+    /// condition 3 makes, and for the identical reason — a lost body is
+    /// recoverable, a double is not.
+    pub(super) fn escapes_by_non_store_route(b: &Block, name: &str, roots: &[&str]) -> bool {
+        fn in_expr(e: &Expr, name: &str, roots: &[&str]) -> bool {
+            match &e.kind {
+                // A `return` whose operand hands the value over, at any depth
+                // (`return r`, `return Some(r)`, `return mk(r)`).
+                ExprKind::Return(Some(inner)) => moves(inner, name) || in_expr(inner, name, roots),
+                ExprKind::Return(None) => false,
+                // THE store itself is the admitted route; its arguments are not
+                // an escape. Anything else about the call still is.
+                ExprKind::MethodCall { object, args, .. } => {
+                    if place_root_outlives(object, roots)
+                        && args.iter().any(|a| moves(&a.value, name))
+                    {
+                        return false;
+                    }
+                    args.iter()
+                        .any(|a| moves(&a.value, name) || in_expr(&a.value, name, roots))
+                        || in_expr(object, name, roots)
+                }
+                ExprKind::Call { args, .. } => args
+                    .iter()
+                    .any(|a| moves(&a.value, name) || in_expr(&a.value, name, roots)),
+                ExprKind::Block(bb)
+                | ExprKind::Unsafe(bb)
+                | ExprKind::Try(bb)
+                | ExprKind::Seq(bb)
+                | ExprKind::Par(bb) => escapes_by_non_store_route(bb, name, roots),
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::IfLet {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    escapes_by_non_store_route(then_block, name, roots)
+                        || else_branch
+                            .as_deref()
+                            .is_some_and(|x| in_expr(x, name, roots))
+                }
+                ExprKind::Match { arms, .. } => arms.iter().any(|a| in_expr(&a.body, name, roots)),
+                ExprKind::While { body, .. }
+                | ExprKind::WhileLet { body, .. }
+                | ExprKind::For { body, .. }
+                | ExprKind::Loop { body, .. }
+                | ExprKind::LabeledBlock { body, .. } => {
+                    escapes_by_non_store_route(body, name, roots)
+                }
+                _ => false,
+            }
+        }
+        let stmt_escapes = b.stmts.iter().any(|st| match &st.kind {
+            // `let w = W { r: r };` — the value now lives in a local whose own
+            // fate this predicate cannot see.
+            StmtKind::Let { value, .. } => moves(value, name) || in_expr(value, name, roots),
+            StmtKind::Assign { target, value } => {
+                if place_root_outlives(target, roots) && moves(value, name) {
+                    return false;
+                }
+                moves(value, name) || in_expr(value, name, roots)
+            }
+            StmtKind::Expr(e) => in_expr(e, name, roots),
+            _ => false,
+        });
+        stmt_escapes
+            || b.final_expr
+                .as_deref()
+                .is_some_and(|fe| moves(fe, name) || in_expr(fe, name, roots))
+    }
+
+    pub(super) fn walk_block(b: &Block, name: &str, roots: &[&str]) -> bool {
         b.stmts.iter().any(|st| match &st.kind {
             StmtKind::Expr(e) => stores(e, name, roots),
             // `self.slot = x`, `self.xs[i] = x`.
@@ -2913,8 +2985,207 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
             .as_deref()
             .is_some_and(|fe| stores(fe, name, roots))
     }
+}
 
-    walk_block(&f.body, param_name, &roots)
+pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    // A by-ref parameter is not owned by this frame, so the caller never
+    // registered a temp drop for it and there is nothing to suppress.
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return false;
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+
+    // The set of roots whose storage outlives the call. `self` joins it only
+    // for a BORROWED receiver — see the doc comment.
+    let mut roots: Vec<&str> = Vec::new();
+    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+        roots.push("self");
+    }
+    for p in &f.params {
+        if !matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            continue;
+        }
+        if let PatternKind::Binding(n) = &p.pattern.kind {
+            roots.push(n.as_str());
+        }
+    }
+    if roots.is_empty() {
+        return false;
+    }
+
+    outliving_store::walk_block(&f.body, param_name, &roots)
+}
+
+/// B-2026-08-30-28 — the MUST half of [`fn_moves_param_into_outliving_place`]:
+/// does EVERY path through `f` store the parameter into a place that outlives
+/// the call?
+///
+/// Its sibling is a MAY-analysis (`any` at every branch), which is the right
+/// question for "may the caller stand down" and the wrong one for "who runs the
+/// `Drop` body". A conditional store has two paths and needs two answers, and a
+/// per-callee predicate that reports only "some path stores" cannot give them:
+/// the callee registered no drop for the param at all, so on the path that did
+/// NOT store, the value died with nobody to run its body.
+///
+/// BOTH ERROR DIRECTIONS ARE SAFE HERE, which is why the analysis can stay
+/// simple:
+///
+///  * Answering `false` for a store that is really unconditional makes the
+///    callee register the guarded body drop; the flag is then cleared at the
+///    store, so the body still fires exactly once. A wasted alloca, not a bug.
+///  * Answering `true` for a store that is really conditional declines the
+///    registration and leaves TODAY's behaviour on that shape — the body lost
+///    on the non-storing path. Not a regression, just an unfixed case.
+///
+/// Neither direction can double a body, because the registration is guarded and
+/// the caller stands down either way. That is the whole reason this is allowed
+/// to be a cheap syntactic walk instead of a dataflow pass.
+///
+/// A LOOP never counts: its body may execute zero times, so a store inside one
+/// is conditional by construction.
+pub fn fn_always_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return false;
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+    let mut roots: Vec<&str> = Vec::new();
+    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+        roots.push("self");
+    }
+    for p in &f.params {
+        if !matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            continue;
+        }
+        if let PatternKind::Binding(n) = &p.pattern.kind {
+            roots.push(n.as_str());
+        }
+    }
+    if roots.is_empty() {
+        return false;
+    }
+
+    /// One expression: does taking it ALWAYS store `name`?
+    fn always_stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
+        match &e.kind {
+            // The store itself, executed unconditionally by whoever reaches it.
+            ExprKind::MethodCall { object, args, .. } => {
+                outliving_store::place_root_outlives(object, roots)
+                    && args.iter().any(|a| outliving_store::moves(&a.value, name))
+            }
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
+                always_walk_block(b, name, roots)
+            }
+            // A `par` block's branches all run; the question is unchanged.
+            ExprKind::Par(b) => always_walk_block(b, name, roots),
+            // Both sides must store, and a missing `else` is a path that does not.
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                always_walk_block(then_block, name, roots)
+                    && else_branch
+                        .as_deref()
+                        .is_some_and(|x| always_stores(x, name, roots))
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty() && arms.iter().all(|a| always_stores(&a.body, name, roots))
+            }
+            // A loop body may run zero times.
+            _ => false,
+        }
+    }
+
+    fn always_walk_block(b: &Block, name: &str, roots: &[&str]) -> bool {
+        // Statements are sequential, so ONE that always stores makes the whole
+        // block always store.
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => always_stores(e, name, roots),
+            StmtKind::Assign { target, value } => {
+                outliving_store::place_root_outlives(target, roots)
+                    && outliving_store::moves(value, name)
+            }
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| always_stores(fe, name, roots))
+    }
+
+    always_walk_block(&f.body, param_name, &roots)
+}
+
+/// B-2026-08-30-28 — the param is stored into an outliving place on SOME path
+/// but not on EVERY path.
+///
+/// This is the shape whose `Drop` body had no owner at all: the caller stands
+/// down because [`fn_moves_param_into_outliving_place`] sees a store, and the
+/// callee registered nothing because that same predicate said the value leaves.
+/// On the path where the store does not happen, the value simply died.
+///
+/// Read by `compile_function`'s parameter loop (and the interpreter's twin) to
+/// register a BODIES-ONLY drop guarded by B-2026-08-28-51's per-path flag —
+/// exactly what `fn_conditionally_returns_param_bare` already does for the
+/// conditionally RETURNED param, which is the same defect one escape route
+/// over.
+pub fn fn_conditionally_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
+    if !fn_moves_param_into_outliving_place(f, arg_index)
+        || fn_always_moves_param_into_outliving_place(f, arg_index)
+    {
+        return false;
+    }
+    // The value must have NO other way out. See
+    // `outliving_store::escapes_by_non_store_route` for the three measured
+    // doubles this declines, and why declining is the recoverable direction.
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+    let mut roots: Vec<&str> = Vec::new();
+    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+        roots.push("self");
+    }
+    for p in &f.params {
+        if !matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            continue;
+        }
+        if let PatternKind::Binding(n) = &p.pattern.kind {
+            roots.push(n.as_str());
+        }
+    }
+    !outliving_store::escapes_by_non_store_route(&f.body, param_name, &roots)
 }
 
 /// The channel-endpoint type heads whose PARAMETERS may be named directly in

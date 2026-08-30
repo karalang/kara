@@ -2548,9 +2548,19 @@ impl<'a> super::Interpreter<'a> {
         let mut out = Vec::new();
         for (i, p) in f.params.iter().enumerate() {
             let Some(name) = p.name() else { continue };
-            if !crate::ast::fn_conditionally_returns_param_bare(f, i)
-                || crate::ast::fn_moves_param_into_outliving_place(f, i)
-            {
+            // B-2026-08-30-28 — TWO conditional escape routes are claimed
+            // here, not one. The original is the conditionally RETURNED param;
+            // the second is the conditionally STORED one, which had no owner on
+            // the path where the store did not happen: the caller stands down
+            // (`record_passthrough_arg_moves`' `escapes_into_outliving_place`
+            // leg) and, before this, the callee registered nothing, so the
+            // value simply died. Codegen's twin is the conditional-store
+            // registration in `compile_function`'s parameter loop, gated on the
+            // same pair of predicates so both backends claim the same set.
+            let cond_returned = crate::ast::fn_conditionally_returns_param_bare(f, i)
+                && !crate::ast::fn_moves_param_into_outliving_place(f, i);
+            let cond_stored = crate::ast::fn_conditionally_moves_param_into_outliving_place(f, i);
+            if !cond_returned && !cond_stored {
                 continue;
             }
             let Some(Value::Struct { name: tn, .. }) = self.env.get(name) else {
@@ -2618,7 +2628,14 @@ impl<'a> super::Interpreter<'a> {
             ) {
                 continue;
             }
-            if crate::ast::fn_moves_param_into_outliving_place(f, i) {
+            // B-2026-08-30-28 — `fn_always_...` rather than `fn_moves_...`,
+            // exactly the split the `fn_always_returns_param` comment below
+            // draws and for the same reason: the MAY-predicate answers true for
+            // a param stored on one path and left to die on another, and
+            // skipping the registration on that answer loses the body on the
+            // path where it died. A param stored on SOME path keeps its
+            // registration here and is disarmed per path by the store site.
+            if crate::ast::fn_always_moves_param_into_outliving_place(f, i) {
                 continue;
             }
             // Handed back on EVERY exit — the caller's result binding owns it.
