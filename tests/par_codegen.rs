@@ -12219,6 +12219,210 @@ fn main() {{
             );
         }
     }
+
+    /// B-2026-08-29-66 — a struct WRAPPING a `Vec` of `Drop` elements, built in
+    /// a callee and bound inside an auto-par group, ran the element's `Drop`
+    /// body on FREED memory: `lead mid v14 post dR94704920440165`, a different
+    /// garbage id on every run, with a valgrind `Invalid read of size 8`.
+    ///
+    /// The row filed this as POSITIONAL — "it happens when the caller's `let`
+    /// is not the first statement of its block" — which is a symptom. The
+    /// leading statement only decides whether a parallel GROUP forms around
+    /// the `let`; `KARAC_AUTO_PAR=0` is correct in both positions. What
+    /// actually broke was the branch-publish ownership handshake: the branch
+    /// handed the parent its `UserDrop`(`StructFieldBodies`) walk with
+    /// `type_name` blanked, which demoted it out of `fire_due_user_drops`'
+    /// type-keyed early-fire clauses, so it fell to the scope-exit drain and
+    /// LIFO ran it AFTER the `StructDrop` that frees `xs`.
+    ///
+    /// The leading `println` is load-bearing FOR THE GROUP, not for the bug —
+    /// without it no group forms and the shape never reaches this code path.
+    #[test]
+    fn test_e2e_auto_par_struct_wrapping_vec_of_drop_elems_is_not_freed_early() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Box3 { xs: Vec[R] }
+
+fn build(k: i64) -> Box3 {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    let bx: Box3 = Box3 { xs: v };
+    println("mid");
+    return bx
+}
+
+fn main() {
+    println("lead");
+    let a: Box3 = build(14);
+    println(f"v{a.xs[0].id}");
+    println("post");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "lead\nmid\nv14\ndR14\npost\n",
+                "a published struct slot's field-bodies walk must run at the \
+                 parent's last use, before its memory is freed; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-08-29-67, the `Vec[T]`-DIRECT sibling of the struct shape above
+    /// and the same defect one branch further along. A `Vec` slot suppressed
+    /// its own buffer free by zeroing `cap` and then `continue`d, skipping the
+    /// ownership-transfer scan entirely — so the element-bodies walker stayed
+    /// in the BRANCH frame and ran at branch exit, ahead of the parent's first
+    /// read: `start m3 dR3 v3 post` against the interpreter's
+    /// `start m3 v3 dR3 post`. `cap = 0` does not stop that walker; it reads
+    /// `data`/`len`, which stay live precisely so the parent can use them.
+    ///
+    /// That row also recorded "Same under `KARAC_AUTO_PAR=0`", which is wrong
+    /// in the same way -66's positional claim was: the sequential build prints
+    /// the interpreter's order. Both rows are this one mechanism.
+    #[test]
+    fn test_e2e_auto_par_vec_of_drop_elems_slot_bodies_run_at_parent_last_use() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn f3(k: i64) -> Vec[R] {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    println("m3");
+    return v
+}
+
+fn main() {
+    println("start");
+    let a: Vec[R] = f3(3);
+    println(f"v{a[0].id}");
+    println("post");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "start\nm3\nv3\ndR3\npost\n",
+                "a Vec slot's element-bodies walk belongs to the PARENT after \
+                 publish, not to the branch; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-08-29-66, two Vec slots in one group — the multi-slot form of the
+    /// test above, and the one that pins reverse-introduction order across
+    /// slots rather than merely "not before the use". Pre-fix both branches
+    /// fired at their own exits: `lead dR1 dR2 1 2 post`.
+    #[test]
+    fn test_e2e_auto_par_two_vec_of_drop_slots_keep_reverse_introduction_order() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn mk(k: i64) -> Vec[R] {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    return v
+}
+
+fn main() {
+    println("lead");
+    let a: Vec[R] = mk(1);
+    let b: Vec[R] = mk(2);
+    println(f"{a[0].id} {b[0].id}");
+    println("post");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "lead\n1 2\ndR2\ndR1\npost\n",
+                "two published Drop-bearing Vec slots must drop in reverse \
+                 introduction order at the parent's last use; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-08-29-66's UNPUBLISHED half. When the lifted binding is never
+    /// read again, every statement joins the group and the binding is not a
+    /// slot at all — so the transfer scan above has nothing to hand over and
+    /// the fix for the published shapes does not reach it. A branch fn
+    /// compiles exactly ONE statement and therefore has no statement loop, so
+    /// nothing ever called `fire_due_user_drops` inside it; the bodies walk
+    /// fell to the branch's own scope-exit drain, where LIFO put it after the
+    /// `StructDrop`. Pre-fix: `A callee-end dR22978400716 B`, garbage read off
+    /// the freed struct, while `KARAC_AUTO_PAR=0` printed `dR9`.
+    ///
+    /// A branch-local binding's whole live range is that one statement, which
+    /// is exactly the sequential path's `last_use[name] == this stmt`.
+    #[test]
+    fn test_e2e_auto_par_branch_local_drop_binding_fires_before_its_memory() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Box3 { xs: Vec[R] }
+
+fn build(k: i64) -> Box3 {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    let bx: Box3 = Box3 { xs: v };
+    println("callee-end");
+    return bx
+}
+
+fn main() {
+    println("A");
+    let a: Box3 = build(9);
+    println("B");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "A\ncallee-end\ndR9\nB\n",
+                "an unpublished branch-local Drop binding must run its bodies \
+                 before the branch frees them; got {out:?}"
+            );
+        }
+    }
+
+    /// Guard on the re-registration ORDER change that the -66 fix makes.
+    /// `register_slot_ownership` used to replay the branch frame's push order
+    /// verbatim; it now splits memory-first / bodies-last so the parent's LIFO
+    /// drain always walks before it frees. B-2026-07-31-40's Drop-valued `Map`
+    /// is the shape that pinned the old ordering — its value-bodies walker
+    /// reads live bucket bytes and must precede the handle free — so it has to
+    /// keep working under the new rule. (It does: the branch already pushes
+    /// that pair memory-first, so the split is a no-op for it.)
+    #[test]
+    fn test_e2e_auto_par_drop_valued_map_slot_still_walks_before_handle_free() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn main() {
+    let name: String = "ka" + "ra";
+    let mut m: Map[String, R] = Map.new();
+    m.insert("k", R { id: 7, tag: f"t" });
+    println(f"{name} {m.len()}");
+    println("post");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "kara 1\ndR7\npost\n",
+                "a Drop-valued Map slot's value-bodies walk must still precede \
+                 its handle free; got {out:?}"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

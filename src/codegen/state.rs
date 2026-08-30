@@ -1435,6 +1435,19 @@ pub(crate) enum SlotOwnership<'ctx> {
     User {
         drop_fn: FunctionValue<'ctx>,
         kind: UserDropKind,
+        /// The binding's Kāra type name, carried over from the sampled action
+        /// for the same reason `kind` is (B-2026-08-29-66). Re-registration
+        /// used to hardcode `String::new()` here — "no Kāra type name in scope"
+        /// — which silently demoted the parent's copy out of
+        /// `fire_due_user_drops`' TYPE-keyed early-fire clauses. A
+        /// `StructFieldBodies` walk is admitted to NLL placement only by that
+        /// clause, so the demoted copy fell through to the scope-exit drain,
+        /// where LIFO put it AFTER the `StructDrop` that frees the very fields
+        /// it walks: `struct Box3 { xs: Vec[R] }` built in a branch printed
+        /// `dR94704920440165` off freed memory. The name is on the action being
+        /// sampled, so carrying it makes the parent's registration identical to
+        /// the sequential one instead of a deliberately degraded copy.
+        type_name: String,
     },
     /// `FreeSoaGroups` — per-group buffer frees for SoA-laid-out Vecs.
     Soa {

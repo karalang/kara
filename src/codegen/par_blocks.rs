@@ -514,12 +514,29 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(transfers) = slot_ownership.get(binding_name) else {
             return;
         };
-        // Re-register EVERY transferred action, in the branch frame's push
-        // order, so the parent's LIFO drain replays the branch's intended
-        // sequencing (a Drop-valued Map's value-bodies walker runs before
-        // its handle free — the walker reads live bucket bytes;
-        // B-2026-07-31-40).
-        for transfer in transfers {
+        // Re-register EVERY transferred action, MEMORY first and BODIES
+        // last, so the parent's LIFO drain always runs a bodies walk before
+        // the memory it reads is freed (a Drop-valued Map's value-bodies
+        // walker reads live bucket bytes; B-2026-07-31-40).
+        //
+        // This used to replay the branch frame's push order verbatim, which
+        // is right for every pair the branch itself pushed memory-first and
+        // WRONG for the one it does not: a struct binding registers
+        // `UserDrop`(field bodies) BEFORE its `StructDrop`, because the
+        // sequential path never drains that pair at scope exit — NLL fires
+        // the bodies at the binding's last use and retires the action. Replay
+        // the same order into a frame that DOES drain it and LIFO inverts the
+        // intent, freeing `Box3.xs` before walking it (B-2026-08-29-66). The
+        // `type_name` carried on the transfer restores NLL eligibility so the
+        // usual case still fires early; this ordering is what keeps the
+        // fallback safe when no parent statement is left to fire at.
+        //
+        // Stable split: relative order within each half is preserved, so
+        // multi-action shapes keep their branch sequencing.
+        let (bodies, memory): (Vec<_>, Vec<_>) = transfers
+            .iter()
+            .partition(|t| matches!(t, SlotOwnership::User { .. }));
+        for transfer in memory.into_iter().chain(bodies) {
             self.register_one_slot_ownership(binding_name, parent_alloca, transfer);
         }
     }
@@ -580,20 +597,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 struct_alloca: parent_alloca,
                 drop_fn,
             },
-            SlotOwnership::User { drop_fn, kind } => CleanupAction::UserDrop {
+            SlotOwnership::User {
+                drop_fn,
+                kind,
+                ref type_name,
+            } => CleanupAction::UserDrop {
                 binding_name: binding_name.to_string(),
                 binding_ptr: parent_alloca,
                 drop_fn,
-                // Par-branch write-back registration: no Kāra type name in
-                // scope here. The empty name keeps this entry out of the NLL
-                // early-fire gate's TYPE-keyed clauses (`fire_due_user_drops`
-                // requires a known non-shared struct or enum name).
-                type_name: String::new(),
                 // Carried over from the action this slot was sampled from
-                // rather than assumed: a container element-bodies walk is
-                // admitted to NLL placement on its own, without a type name,
-                // so re-registering one as `OwnWrapper` here would retime it
-                // (B-2026-08-27-8).
+                // rather than assumed — BOTH fields, for the same reason.
+                // `kind`: a container element-bodies walk is admitted to NLL
+                // placement on its own, so re-registering one as `OwnWrapper`
+                // would retime it (B-2026-08-27-8). `type_name`: this used to
+                // be hardcoded `String::new()` on the grounds that no Kāra
+                // type name was in scope here — but one is, on the action
+                // being sampled, and blanking it demoted the parent's copy out
+                // of `fire_due_user_drops`' type-keyed clauses. A
+                // `StructFieldBodies` walk has no other route into NLL
+                // placement, so the demotion pushed it to the scope-exit
+                // drain, whose LIFO order runs it AFTER the `StructDrop` that
+                // frees the fields it reads (B-2026-08-29-66).
+                type_name: type_name.clone(),
                 kind,
             },
             SlotOwnership::Soa {
@@ -2280,11 +2305,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_none()
         {
             for slot in branch_slots {
+                // A Vec-shaped slot suppresses its own buffer free by zeroing
+                // `cap` (the parent's `track_vec_var` re-takes the buffer), and
+                // used to `continue` straight past everything below. That skip
+                // also skipped the ownership-TRANSFER scan at the end of this
+                // loop, so a `Vec[T]` whose elements have a `Drop` body left
+                // its `UserDrop`/`ContainerElemBodies` walker in the branch
+                // frame — where it ran at BRANCH exit, before the parent's
+                // first use of the vector: `let v: Vec[R] = mk(3);` in a group
+                // printed `dR3` ahead of the element it was about to read
+                // (B-2026-08-29-66 / B-2026-08-29-67). `cap = 0` does not stop
+                // that walker; it reads `data`/`len`, which stay live
+                // precisely so the parent can use them. Only the RC /
+                // inline-payload suppression block is Vec-inapplicable, so
+                // that is what the flag now skips.
+                let mut vec_shaped_slot = false;
                 if let Some(local) = self.variables.get(&slot.binding_name).copied() {
                     let vec_st: BasicTypeEnum<'ctx> = self.vec_struct_type().into();
                     if local.ty == vec_st {
                         self.zero_vec_alloca_cap(local.ptr);
-                        continue;
+                        vec_shaped_slot = true;
                     }
                 }
                 // RC-bearing slot sources: a `let binding = <expr>` whose
@@ -2337,7 +2377,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         .find(|c| !live.contains(c))
                         .unwrap_or(u64::MAX)
                 }
-                if let Some(frame) = self.drop_rc.scope_cleanup_actions.get(frame_idx) {
+                if let Some(frame) = self
+                    .drop_rc
+                    .scope_cleanup_actions
+                    .get(frame_idx)
+                    // Vec-shaped slots suppressed their buffer free by zeroing
+                    // `cap` above; none of the RC / inline-payload shapes this
+                    // scan handles can key on a Vec-typed local, and a stray
+                    // `nullify_local` store would land on the vec header's
+                    // `data` word.
+                    .filter(|_| !vec_shaped_slot)
+                {
                     for action in frame {
                         match action {
                             CleanupAction::RcDec { name, .. } if *name == slot.binding_name => {
@@ -2530,10 +2580,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 binding_name,
                                 drop_fn,
                                 kind,
+                                type_name,
                                 ..
                             } if *binding_name == slot.binding_name => Some(SlotOwnership::User {
                                 drop_fn: *drop_fn,
                                 kind: *kind,
+                                type_name: type_name.clone(),
                             }),
                             CleanupAction::FreeSoaGroups {
                                 soa_alloca,
@@ -2635,6 +2687,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     });
                 }
             }
+            // A branch-local binding — one this group did NOT publish to the
+            // parent — has its entire live range inside this single lifted
+            // statement, so the sequential path's NLL firing applies verbatim:
+            // `compile_block` / `compile_function_body` call
+            // `fire_due_user_drops` with `last_use[name] == this stmt`, which
+            // runs the `Drop` bodies and RETIRES the action before the
+            // scope-exit drain frees the memory they read. A branch fn
+            // compiles exactly ONE statement and so has no statement loop, and
+            // nothing here ever made that call — leaving the bodies walk to
+            // the LIFO drain below, where it lands AFTER the `StructDrop` that
+            // frees the very fields it walks. `let a: Box3 = build(9);` with
+            // `a` unused printed a garbage id off freed memory under auto-par
+            // while the same program built with `KARAC_AUTO_PAR=0` was correct
+            // (B-2026-08-29-66).
+            //
+            // Published slots are excluded: their action was just handed to
+            // the parent by the transfer scan above, and the parent's own NLL
+            // pass fires it at the real last use.
+            let branch_local_binding = match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    match &pattern.kind {
+                        PatternKind::Binding(n)
+                            if !branch_slots.iter().any(|s| s.binding_name == *n) =>
+                        {
+                            Some(n.clone())
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(name) = branch_local_binding {
+                let last_use = std::collections::HashMap::from([(name, 0usize)]);
+                self.fire_due_user_drops(&last_use, 0);
+            }
+
             // Recursion suppression (par-slice 4 — same shape as the
             // cancel-bb's cleanup site in `emit_branch_cancel_check`).
             // A user defer body containing a call would route the call

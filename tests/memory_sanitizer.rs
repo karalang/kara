@@ -63185,4 +63185,55 @@ fn main() {
             assert_clean_asan_run(&body, &want, label);
         }
     }
+
+    /// B-2026-08-29-66 under ASAN/LSan — the memory half of the auto-par
+    /// branch-publish handshake, which the ordering assertions in
+    /// `tests/par_codegen.rs` can only see indirectly (a garbage id printed
+    /// off freed memory). Both shapes go through
+    /// `assert_clean_asan_run_min_allocs_auto_par` because the defect exists
+    /// ONLY with the auto-parallelizer on: `KARAC_AUTO_PAR=0` was correct and
+    /// valgrind-clean throughout, which is what the row's "differs between
+    /// auto-par on and off" got backwards.
+    ///
+    /// `published` is the row's own repro — a struct wrapping a `Vec` of
+    /// `Drop` elements, lifted into a group and read afterwards, whose
+    /// field-bodies walk landed after the `StructDrop` that frees `xs`.
+    /// `branch-local` is the unpublished sibling: the binding is never read
+    /// again, so every statement joins the group, nothing is published, and
+    /// the walk fell to the branch's own scope-exit drain instead.
+    #[test]
+    fn asan_auto_par_struct_wrapping_vec_of_drop_elems_is_memory_balanced() {
+        const D: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct Box3 { xs: Vec[R] }\n\
+             fn build(k: i64) -> Box3 {\n\
+             \x20  let mut v: Vec[R] = Vec.new();\n\
+             \x20  v.push(R { id: k, tag: f\"t\" });\n\
+             \x20  let bx: Box3 = Box3 { xs: v };\n\
+             \x20  println(\"mid\");\n\
+             \x20  return bx\n\
+             }\n";
+        for (label, body, want) in [
+            (
+                "published",
+                format!(
+                    "{D}fn main() {{ println(\"lead\");\n\
+                     \x20            let a: Box3 = build(14);\n\
+                     \x20            println(f\"v{{a.xs[0].id}}\"); println(\"post\"); }}\n"
+                ),
+                vec!["lead", "mid", "v14", "dR14", "post"],
+            ),
+            (
+                "branch-local",
+                format!(
+                    "{D}fn main() {{ println(\"lead\");\n\
+                     \x20            let a: Box3 = build(9);\n\
+                     \x20            println(\"post\"); }}\n"
+                ),
+                vec!["lead", "mid", "dR9", "post"],
+            ),
+        ] {
+            assert_clean_asan_run_min_allocs_auto_par(&body, &want, label, 1);
+        }
+    }
 }
