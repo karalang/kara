@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 322 | 2 |
+| miscompile | 323 | 3 |
 | run-vs-build | 255 | 16 |
 | leak | 237 | 8 |
 | missing-feature | 189 | 2 |
 | double-free | 157 | 0 |
-| codegen-gap | 152 | 3 |
+| codegen-gap | 152 | 2 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | perf | 87 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1265 | 32 |
+| codegen | 1266 | 32 |
 | typecheck | 279 | 1 |
 | interp | 267 | 15 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1846 surfaced · 38 open · 1779 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1847 surfaced · 38 open · 1780 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (38)
 
@@ -160,7 +160,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1846 surfaced
 | B-2026-08-30-21 | 2026-08-30 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolve field 'id' on this receiver`) and the result binding's own `Drop` body is silently LOST -- both vanish the moment the struct gains one heap field, and the free-function spelling is correct throughout | none |
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
-| B-2026-08-30-24 | 2026-08-30 | codegen | medium | NO `f16` PROGRAM LINKS FOR A WASM TARGET: LLVM lowers `half` to the `__extendhfsf2` / `__truncsfhf2` compiler-rt builtins and the wasm link line has neither, so a bare runtime `as f16` conversion fails `karac build --target=wasm_wasi` with a raw rust-lld undefined-symbol dump. `bf16` links fine, because its conversions are emitted as integer shifts instead | — |
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
 | B-2026-08-30-26 | 2026-08-30 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIToFP`) while the interpreter performs it. `f16` is unaffected, and an explicit `f32` hop compiles -- so the four int-conversion opcodes are simply missing the widening the float-cast sites already have. | — |
 | B-2026-08-30-27 | 2026-08-30 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`exp`/`sin`/...) are -- so an identical loop pays a call per iteration or not, decided only by whether the LLVM-18 pin happens to have an intrinsic for the method. | — |
@@ -168,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1846 surfaced
 | B-2026-08-30-29 | 2026-08-30 | effect | high | THE EFFECT CHECKER DOES NOT ENFORCE design.md's "Drop bodies must not panic" RULE -- an `impl Drop` whose body calls `panic()`, indexes out of bounds, or calls a `panics` function is ACCEPTED by `karac check`, where the spec requires rejection at the definition site; the three shapes the spec itself enumerates all compile | — |
 | B-2026-08-30-30 | 2026-08-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpreter already HAS a correct `process.exit` arm, but it is keyed on `ExprKind::Path` and the callee arrives as a bare `Identifier`, so it never fires; no other spelling is accepted | — |
 | B-2026-08-30-31 | 2026-08-30 | codegen | medium | STDOUT ALREADY WRITTEN BY `println` IS SILENTLY LOST WHEN THE PROGRAM ENDS VIA `process.exit(code)` ON BOTH COMPILED BACKENDS -- `println("before"); process.exit(3)` exits 3 with ZERO bytes on stdout, while the same program without the exit prints normally; the canonical `println("fatal: .."); process.exit(1)` emits nothing at all | — |
+| B-2026-08-30-32 | 2026-08-30 | codegen | medium | LLVM-18 PROMOTES f16 ARITHMETIC TO f32 ON wasm32 AND NEVER ROUNDS THE RESULT BACK, so a wasm module holds values the type cannot represent: `65504f16 * 3f16` is a finite 196512 where it must overflow to `inf`, and every inexact quotient keeps f32 precision. Native and the interpreter both round; bf16 is unaffected because codegen widens and rounds it ITSELF rather than trusting the backend | — |
 
 ### Relocated (2)
 
@@ -200,9 +200,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1846 surfaced
 
 </details>
 
-### Fixed (1779)
+### Fixed (1780)
 
-<details><summary>1779 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1780 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1985,6 +1985,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1846 surfaced
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
 | B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
 | B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
+| B-2026-08-30-24 | codegen | medium | NO `f16` PROGRAM LINKS FOR A WASM TARGET: LLVM lowers `half` to the `__extendhfsf2` / `__truncsfhf2` compiler-rt builtins and the wasm link line has… | 240919c |
 
 </details>
 
