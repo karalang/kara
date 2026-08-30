@@ -1299,9 +1299,20 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(elem_ty) = self.branch_arm_clone_taken.take() {
                 self.own_branch_merged_clone(merged, elem_ty);
             }
+            // B-2026-08-29-28 — the scrutinee temporary dies HERE, at match
+            // exit, per design.md § Temporary Lifetime Rules. Emitted after the
+            // phi because a PHI must lead its block; that ordering is the only
+            // reason this sits at the two tail returns rather than beside
+            // `position_at_end(merge_bb)`.
+            if let Some((alloca, _)) = freshtemp_enum {
+                self.fire_freshtemp_scrutinee_body_at_exit(alloca);
+            }
             return Ok(merged);
         }
 
+        if let Some((alloca, _)) = freshtemp_enum {
+            self.fire_freshtemp_scrutinee_body_at_exit(alloca);
+        }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

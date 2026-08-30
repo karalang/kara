@@ -15905,6 +15905,117 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-28 — a FRESH-TEMP scrutinee's own `impl Drop` body runs at
+    /// the CONSTRUCT's exit, not at the end of the enclosing block.
+    ///
+    /// design.md § Temporary Lifetime Rules gives this its own table row:
+    /// "Match-expression scrutinee | Through every arm body (the scrutinee is
+    /// live across all arms; drops at match exit)". Codegen registered the body
+    /// on the enclosing SCOPE frame instead, so `match mk() { … }` followed by
+    /// three statements printed the body after all three. That is the direction
+    /// the same section's composition-with-NLL paragraph explicitly forbids —
+    /// "NLL never EXTENDS a temporary's live range past the position-specific
+    /// end — that direction would invalidate the lock-eagerness guarantee" —
+    /// so `match pool.acquire() { … }` held the lease to the end of the
+    /// function. The interpreter already implemented the table.
+    ///
+    /// `nested-in-expression` and `two-in-one-statement` are the two rows that
+    /// distinguish MATCH-EXIT firing from mere statement-end firing, and they
+    /// are why the fix has a second half: an earlier cut that only admitted the
+    /// temp to the statement-end drain printed `dR2 c2 dE` and
+    /// `dR3 dR4 dE dE a7` — right block, wrong point inside it.
+    ///
+    /// `place-binding-control` and `no-own-drop-enum-boundary` are the
+    /// unchanged boundaries: a NAMED scrutinee is owned elsewhere and keeps its
+    /// own placement, and an enum with no `Drop` of its own has no body to
+    /// place. Both printed identically before this fix.
+    ///
+    /// The terminator path (`return` inside the arm) is pinned SEPARATELY
+    /// below, codegen-only: the interpreter loses the `return` itself on this
+    /// shape (B-2026-08-30-14), so asserting it on all four surfaces would
+    /// write that bug into the contract as if it were the contract.
+    #[test]
+    fn e2e_freshtemp_scrutinee_body_fires_at_construct_exit() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             enum H { A(R), B }\n\
+             fn mk(n: i64) -> E { return E.A(R { id: n }) }\n\
+             fn mkH(n: i64) -> H { return H.A(R { id: n }) }\n\
+             fn sink(n: i64) -> i64 { return n }\n";
+        for (label, body, want) in [
+            (
+                "statement-match",
+                "match mk(1) { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v1\ndR1\ndE\npost\n",
+            ),
+            (
+                "nested-in-expression",
+                "println(f\"c{sink(match mk(2) { E.A(r) => { r.id } E.B => { 0 } })}\")\n",
+                "dR2\ndE\nc2\npost\n",
+            ),
+            (
+                "two-in-one-statement",
+                "let a = match mk(3) { E.A(r) => { r.id } E.B => { 0 } }\n\
+                 \x20       + match mk(4) { E.A(r) => { r.id } E.B => { 0 } };\n\
+                 println(f\"a{a}\")\n",
+                "dR3\ndE\ndR4\ndE\na7\npost\n",
+            ),
+            (
+                "nested-match",
+                "match mk(5) { E.A(r) => { match mk(6) { E.A(q) => { println(f\"i{q.id}\") } E.B => {} }\n\
+                 \x20   println(f\"o{r.id}\") } E.B => {} }\n",
+                "i6\ndR6\ndE\no5\ndR5\ndE\npost\n",
+            ),
+            (
+                "if-let",
+                "if let E.A(r) = mk(7) { println(f\"f{r.id}\") }\n",
+                "f7\ndR7\ndE\npost\n",
+            ),
+            (
+                "let-bound-value",
+                "let x = match mk(8) { E.A(r) => { r.id } E.B => { 0 } };\n\
+                 println(f\"x{x}\")\n",
+                "dR8\ndE\nx8\npost\n",
+            ),
+            (
+                "in-loop-body",
+                "let mut i = 0;\n\
+                 while i < 2 { match mk(9) { E.A(r) => { println(f\"w{r.id}\") } E.B => {} }\n\
+                 \x20   println(\"it\"); i = i + 1; }\n",
+                "w9\ndR9\ndE\nit\nw9\ndR9\ndE\nit\npost\n",
+            ),
+            (
+                "no-own-drop-enum-boundary",
+                "match mkH(11) { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+                "v11\ndR11\npost\n",
+            ),
+            (
+                "place-binding-control",
+                "let e = mk(12);\n\
+                 match e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v12\ndE\ndR12\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+        // Terminator path: the arm `return`s, so it never reaches the merge
+        // block and fires the body on its OWN edge instead — the reason firing
+        // exactly once per execution path is structural rather than a thing to
+        // check. Compiled-only expectation; see the doc comment above.
+        let src = format!(
+            "{H}fn main() {{ match mk(10) {{ E.A(r) => {{ println(f\"v{{r.id}}\"); return }} E.B => {{}} }}\n\
+             \x20 println(\"post\") }}\n"
+        );
+        assert_eq!(
+            run_program(&src).as_deref(),
+            Some("v10\ndR10\ndE\n"),
+            "arm-returns-fires-on-that-edge"
+        );
+    }
+
     /// B-2026-08-29-29 — a READ-THROUGH arm over a PROJECTION-PLACE enum
     /// scrutinee (`match s.e`, `match t.0`) leaves the payload with the value
     /// that owns it, and runs its `Drop` body exactly ONCE.
@@ -43085,8 +43196,22 @@ fn main() {
         // match — pre-fix `materialize_freshtemp_enum_scrutinee` gated on a
         // heap payload, so an all-scalar user-Drop enum was never materialized
         // and its Drop was silently skipped (a plain `let s = next(0)` binding
-        // ran it). The user Drop fires at enclosing-scope exit here (the slice-3
-        // arm-boundary timing polish stays deferred).
+        // ran it).
+        //
+        // B-2026-08-29-28 — the expectation moved from `Y 0 / AFTER / DROP` to
+        // `Y 0 / DROP / AFTER`. This test's own comment used to end "the user
+        // Drop fires at enclosing-scope exit here (the slice-3 arm-boundary
+        // timing polish stays deferred)", so it was pinning a placement it
+        // already recorded as provisional; that polish has now landed and the
+        // assertion follows it. design.md § `if let` and `let...else`,
+        // Scrutinee temporary scope: "In the then arm of `if let`: scrutinee
+        // temporaries ... drop at the arm's exit, BEFORE any cleanup in the
+        // surrounding scope." Three independent things agree on the new order —
+        // that sentence, the interpreter (which was already emitting it, and is
+        // the parity oracle), and the sibling
+        // `e2e_freshtemp_enum_scrutinee_while_let_runs_user_drop_per_iter`,
+        // which has always expected the per-iteration placement and passed
+        // through this change unmodified.
         if let Some(out) = run_program(
             "enum Step { Yield(i64), Stop }\n\
              impl Drop for Step { fn drop(mut ref self) { println(\"DROP\"); } }\n\
@@ -43096,8 +43221,8 @@ fn main() {
                  println(\"AFTER\");\n\
              }",
         ) {
-            // if-let hit: drop runs (once) at enclosing-scope exit, after AFTER.
-            assert_eq!(out, "Y 0\nAFTER\nDROP\n");
+            // if-let hit: the drop runs (once) at the ARM's exit, before AFTER.
+            assert_eq!(out, "Y 0\nDROP\nAFTER\n");
         }
     }
 

@@ -8385,7 +8385,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the argument site for the reason `ContainerElemBodies`
                         // gives for NLL placement at all — the fn is BODIES only
                         // and frees nothing.
-                        || binding_name == "__disc_tup_arg" =>
+                        || binding_name == "__disc_tup_arg"
+                        // B-2026-08-29-28 — the fresh-temp MATCH / `if let` /
+                        // `let…else` SCRUTINEE's own `impl Drop` body, minted by
+                        // `materialize_freshtemp_enum_scrutinee`. design.md
+                        // § Temporary Lifetime Rules gives it its own table row
+                        // ("Match-expression scrutinee | Through every arm body
+                        // … drops at match exit"), and the section's
+                        // composition-with-NLL paragraph forbids the direction
+                        // codegen had taken: "NLL never EXTENDS a temporary's
+                        // live range past the position-specific end — that
+                        // direction would invalidate the lock-eagerness
+                        // guarantee." Sitting on the scope frame extended it to
+                        // the enclosing block's exit, so `match pool.acquire()`
+                        // held the lease until the function returned. That is
+                        // the exact footgun the table exists to close, which is
+                        // why the fix is this row and not merely parity.
+                        //
+                        // Unambiguous by construction, unlike the
+                        // `__disc_tup_tmp` case above: the name is minted at
+                        // ONE site, only ever for a scrutinee, and a scrutinee
+                        // temporary is never live past its own statement. And
+                        // the move is strictly toward safety — the body already
+                        // ran after the payload's death (at scope exit), so
+                        // firing it sooner narrows that window rather than
+                        // opening one.
+                        || binding_name == "__freshtemp_enum_scrut" =>
                     {
                         fired.push((binding_ptr, drop_fn));
                     }
@@ -8400,6 +8425,63 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_call(*drop_fn, &[(*ptr).into()], "")
                 .unwrap();
+        }
+    }
+
+    /// Fire a fresh-temp SCRUTINEE's own `impl Drop` body at the construct's
+    /// exit, and retire the action so the scope-exit drain cannot re-fire it
+    /// (B-2026-08-29-28). `alloca` is the slot
+    /// [`Self::materialize_freshtemp_enum_scrutinee`] minted; matching on the
+    /// pointer rather than the name is what makes an inner `match` nested in an
+    /// outer one pick its OWN temp — the name is shared by every such slot,
+    /// the alloca is unique to one.
+    ///
+    /// design.md § Temporary Lifetime Rules, "Match-expression scrutinee |
+    /// Through every arm body (the scrutinee is live across all arms; drops at
+    /// match exit)". The statement-end drain in
+    /// [`Self::drain_statement_temp_user_drops`] gets the same answer whenever
+    /// the `match` IS the statement, which is nearly always; it cannot when one
+    /// statement holds two of them (`m() + m()` fired both bodies after the
+    /// sum, where the interpreter interleaves) or when a `match` sits inside a
+    /// larger expression (`println(sink(match …))` fired it after the line was
+    /// already printed). Both keep their entry on the frame as a fallback for
+    /// the paths that never reach the merge block.
+    ///
+    /// Firing exactly once per execution path is structural, not a thing to
+    /// check: an arm that `return`s/`break`s emits its cleanup — including this
+    /// action, still registered — on its own edge and never reaches the merge
+    /// block, while an arm that falls through reaches the merge block and fires
+    /// here. The retirement happens after every arm is compiled, so it cannot
+    /// take the action away from a diverging arm that already emitted it.
+    pub(super) fn fire_freshtemp_scrutinee_body_at_exit(&mut self, alloca: PointerValue<'ctx>) {
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_terminator())
+            .is_some()
+        {
+            return;
+        }
+        let mut due = None;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            let idx = frame.iter().position(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, .. }
+                    if binding_name == "__freshtemp_enum_scrut" && *binding_ptr == alloca)
+            });
+            if let Some(i) = idx {
+                if let CleanupAction::UserDrop {
+                    binding_ptr,
+                    drop_fn,
+                    ..
+                } = frame.remove(i)
+                {
+                    due = Some((binding_ptr, drop_fn));
+                }
+                break;
+            }
+        }
+        if let Some((ptr, drop_fn)) = due {
+            self.builder.build_call(drop_fn, &[ptr.into()], "").unwrap();
         }
     }
 

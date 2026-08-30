@@ -35963,6 +35963,104 @@ fn readthrough_arm_leaves_the_payload_with_its_enum() {
     }
 }
 
+/// B-2026-08-29-28 — a FRESH-TEMP scrutinee's own `impl Drop` body runs at
+/// the CONSTRUCT's exit, not at the end of the enclosing block.
+///
+/// design.md § Temporary Lifetime Rules gives this its own table row:
+/// "Match-expression scrutinee | Through every arm body (the scrutinee is
+/// live across all arms; drops at match exit)". Codegen registered the body
+/// on the enclosing SCOPE frame instead, so `match mk() { … }` followed by
+/// three statements printed the body after all three. That is the direction
+/// the same section's composition-with-NLL paragraph explicitly forbids —
+/// "NLL never EXTENDS a temporary's live range past the position-specific
+/// end — that direction would invalidate the lock-eagerness guarantee" —
+/// so `match pool.acquire() { … }` held the lease to the end of the
+/// function. The interpreter already implemented the table.
+///
+/// `nested-in-expression` and `two-in-one-statement` are the two rows that
+/// distinguish MATCH-EXIT firing from mere statement-end firing, and they
+/// are why the fix has a second half: an earlier cut that only admitted the
+/// temp to the statement-end drain printed `dR2 c2 dE` and
+/// `dR3 dR4 dE dE a7` — right block, wrong point inside it.
+///
+/// `place-binding-control` and `no-own-drop-enum-boundary` are the
+/// unchanged boundaries: a NAMED scrutinee is owned elsewhere and keeps its
+/// own placement, and an enum with no `Drop` of its own has no body to
+/// place. Both printed identically before this fix.
+///
+/// The parity twin of `codegen::e2e_freshtemp_scrutinee_body_fires_at_construct_exit`.
+/// This half was already GREEN before the fix and must stay so: it is the
+/// oracle the compiled half was moved onto, so a future change that "reconciles"
+/// the two by moving the interpreter has to break this first.
+#[test]
+fn freshtemp_scrutinee_body_fires_at_construct_exit() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         enum H { A(R), B }\n\
+         fn mk(n: i64) -> E { return E.A(R { id: n }) }\n\
+         fn mkH(n: i64) -> H { return H.A(R { id: n }) }\n\
+         fn sink(n: i64) -> i64 { return n }\n";
+    for (label, body, want) in [
+                (
+                "statement-match",
+                "match mk(1) { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v1\ndR1\ndE\npost\n",
+                ),
+                (
+                "nested-in-expression",
+                "println(f\"c{sink(match mk(2) { E.A(r) => { r.id } E.B => { 0 } })}\")\n",
+                "dR2\ndE\nc2\npost\n",
+                ),
+                (
+                "two-in-one-statement",
+                "let a = match mk(3) { E.A(r) => { r.id } E.B => { 0 } }\n\
+                 \x20       + match mk(4) { E.A(r) => { r.id } E.B => { 0 } };\n\
+                 println(f\"a{a}\")\n",
+                "dR3\ndE\ndR4\ndE\na7\npost\n",
+                ),
+                (
+                "nested-match",
+                "match mk(5) { E.A(r) => { match mk(6) { E.A(q) => { println(f\"i{q.id}\") } E.B => {} }\n\
+                 \x20   println(f\"o{r.id}\") } E.B => {} }\n",
+                "i6\ndR6\ndE\no5\ndR5\ndE\npost\n",
+                ),
+                (
+                "if-let",
+                "if let E.A(r) = mk(7) { println(f\"f{r.id}\") }\n",
+                "f7\ndR7\ndE\npost\n",
+                ),
+                (
+                "let-bound-value",
+                "let x = match mk(8) { E.A(r) => { r.id } E.B => { 0 } };\n\
+                 println(f\"x{x}\")\n",
+                "dR8\ndE\nx8\npost\n",
+                ),
+                (
+                "in-loop-body",
+                "let mut i = 0;\n\
+                 while i < 2 { match mk(9) { E.A(r) => { println(f\"w{r.id}\") } E.B => {} }\n\
+                 \x20   println(\"it\"); i = i + 1; }\n",
+                "w9\ndR9\ndE\nit\nw9\ndR9\ndE\nit\npost\n",
+                ),
+                (
+                "no-own-drop-enum-boundary",
+                "match mkH(11) { H.A(r) => { println(f\"v{r.id}\") } H.B => {} }\n",
+                "v11\ndR11\npost\n",
+                ),
+                (
+                "place-binding-control",
+                "let e = mk(12);\n\
+                 match e { E.A(r) => { println(f\"v{r.id}\") } E.B => {} }\n",
+                "v12\ndE\ndR12\npost\n",
+                ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-29, interpreter leg — the TUPLE-ELEMENT half, which is where
 /// the interpreter had a defect of its own rather than merely the compiled
 /// side's mirror.
