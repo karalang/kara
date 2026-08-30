@@ -3574,6 +3574,20 @@ impl<'a> super::Interpreter<'a> {
                                 self.eval_at_span_width(span, x, f64::$m, f32::$m)
                             };
                         }
+                        // The three inverse hyperbolics name a libm pair
+                        // instead of `f64::*`/`f32::*`. Rust implements those
+                        // as formulas rather than libm calls, so delegating to
+                        // std here would be a different ALGORITHM from the
+                        // `asinh`/`asinhf` call codegen emits — a whole-ULP
+                        // disagreement on a third of inputs, at f64 as well as
+                        // f32, not the last-bit rounding gap the rest of this
+                        // table had (B-2026-08-29-60). Rationale and the
+                        // measurement live in `float_math.rs`.
+                        macro_rules! at_width_libm {
+                            ($wide:path, $narrow:path) => {
+                                self.eval_at_span_width(span, x, $wide, $narrow)
+                            };
+                        }
                         let r = match method {
                             "sin" => at_width!(sin),
                             "cos" => at_width!(cos),
@@ -3593,9 +3607,18 @@ impl<'a> super::Interpreter<'a> {
                             "exp2" => at_width!(exp2),
                             "log10" => at_width!(log10),
                             "trunc" => at_width!(trunc),
-                            "asinh" => at_width!(asinh),
-                            "acosh" => at_width!(acosh),
-                            "atanh" => at_width!(atanh),
+                            "asinh" => at_width_libm!(
+                                crate::float_math::asinh_f64,
+                                crate::float_math::asinh_f32
+                            ),
+                            "acosh" => at_width_libm!(
+                                crate::float_math::acosh_f64,
+                                crate::float_math::acosh_f32
+                            ),
+                            "atanh" => at_width_libm!(
+                                crate::float_math::atanh_f64,
+                                crate::float_math::atanh_f32
+                            ),
                             "exp_m1" => at_width!(exp_m1),
                             "ln_1p" => at_width!(ln_1p),
                             _ => unreachable!("float_math unary classify/match drift"),

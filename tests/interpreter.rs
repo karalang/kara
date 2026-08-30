@@ -24486,6 +24486,65 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
 }
 
 #[test]
+fn test_inverse_hyperbolics_agree_with_the_libm_symbols_codegen_calls() {
+    // B-2026-08-29-60. Rust's std does NOT implement `asinh` / `acosh` /
+    // `atanh` in terms of libm the way it does `cosh` / `log10` / `atan`; it
+    // evaluates them as formulas. Codegen lowers them to `asinh` / `asinhf`,
+    // so delegating to `f64::asinh` here was a different ALGORITHM, not a
+    // different rounding — the gap B-2026-08-29-41 could not close by picking
+    // a width, because the width was already right.
+    //
+    // Unlike that row's last-ULP cases this was never f32-only: measured over
+    // a 120-point series, Rust's formula differed from libm on 14/17/3 of 120
+    // f64 inputs and 10/12/12 of 120 f32 inputs. The parent row recorded f64
+    // as clean, which was luck of the two receivers it sampled — the same
+    // trap it warned about, landing on its own claim.
+    //
+    // The expectation is COMPUTED from libm rather than hardcoded, so this
+    // pins the real invariant ("the interpreter agrees with the symbol
+    // codegen calls") against whatever libm the host has, instead of freezing
+    // one platform's bits into the suite. Every input below is one where the
+    // Rust formula and libm disagree at BOTH widths, so all 16 lines fail
+    // without the fix.
+    extern "C" {
+        fn asinh(x: f64) -> f64;
+        fn asinhf(x: f32) -> f32;
+        fn acosh(x: f64) -> f64;
+        fn acoshf(x: f32) -> f32;
+        fn atanh(x: f64) -> f64;
+        fn atanhf(x: f32) -> f32;
+    }
+    let cases: &[(&str, f64)] = &[
+        ("asinh", 8.8),
+        ("asinh", 9.9),
+        ("asinh", 17.1),
+        ("acosh", 1.1),
+        ("acosh", 1.6),
+        ("acosh", 3.7),
+        ("atanh", 0.03),
+        ("atanh", 0.04),
+    ];
+    let mut src = String::from("fn main() {\n");
+    let mut want = String::new();
+    for (i, (m, v)) in cases.iter().enumerate() {
+        src.push_str(&format!("    let d{i}: f64 = {v};\n"));
+        src.push_str(&format!("    println(d{i}.{m}());\n"));
+        src.push_str(&format!("    let s{i}: f32 = {v}f32;\n"));
+        src.push_str(&format!("    println(s{i}.{m}());\n"));
+        let (wide, narrow) = unsafe {
+            match *m {
+                "asinh" => (asinh(*v), asinhf(*v as f32) as f64),
+                "acosh" => (acosh(*v), acoshf(*v as f32) as f64),
+                _ => (atanh(*v), atanhf(*v as f32) as f64),
+            }
+        };
+        want.push_str(&format!("{wide}\n{narrow}\n"));
+    }
+    src.push_str("}\n");
+    assert_eq!(run(&src), want);
+}
+
+#[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors
     // (the last Sleef building block). `>>` is logical on unsigned lanes and

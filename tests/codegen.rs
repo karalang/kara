@@ -101316,6 +101316,60 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_inverse_hyperbolics_agree_with_the_interpreter() {
+        // The COMPILED half of the oracle pair for B-2026-08-29-60, and the
+        // half that states the A/B rule directly: the compiled program must
+        // print what `karac run --interp` prints. Codegen was already right
+        // here (it calls `asinh` / `asinhf`); the interpreter was evaluating
+        // Rust's std FORMULA, a different algorithm, so this pair could not be
+        // closed by choosing a rounding width.
+        //
+        // Expectations come from libm rather than being hardcoded, exactly as
+        // in the interpreter twin — the invariant is "both backends call the
+        // same symbol", and freezing one host's bits would assert something
+        // narrower and break on another libm. Every input is one where Rust's
+        // formula and libm disagree at both widths; character-identical to
+        // `tests/interpreter.rs::
+        //  test_inverse_hyperbolics_agree_with_the_libm_symbols_codegen_calls`.
+        extern "C" {
+            fn asinh(x: f64) -> f64;
+            fn asinhf(x: f32) -> f32;
+            fn acosh(x: f64) -> f64;
+            fn acoshf(x: f32) -> f32;
+            fn atanh(x: f64) -> f64;
+            fn atanhf(x: f32) -> f32;
+        }
+        let cases: &[(&str, f64)] = &[
+            ("asinh", 8.8),
+            ("asinh", 9.9),
+            ("asinh", 17.1),
+            ("acosh", 1.1),
+            ("acosh", 1.6),
+            ("acosh", 3.7),
+            ("atanh", 0.03),
+            ("atanh", 0.04),
+        ];
+        let mut src = String::from("fn main() {\n");
+        let mut want = String::new();
+        for (i, (m, v)) in cases.iter().enumerate() {
+            src.push_str(&format!("    let d{i}: f64 = {v};\n"));
+            src.push_str(&format!("    println(d{i}.{m}());\n"));
+            src.push_str(&format!("    let s{i}: f32 = {v}f32;\n"));
+            src.push_str(&format!("    println(s{i}.{m}());\n"));
+            let (wide, narrow) = unsafe {
+                match *m {
+                    "asinh" => (asinh(*v), asinhf(*v as f32) as f64),
+                    "acosh" => (acosh(*v), acoshf(*v as f32) as f64),
+                    _ => (atanh(*v), atanhf(*v as f32) as f64),
+                }
+            };
+            want.push_str(&format!("{wide}\n{narrow}\n"));
+        }
+        src.push_str("}\n");
+        assert_eq!(run_program(&src), Some(want));
+    }
+
+    #[test]
     fn test_e2e_vector_unary_math_lane_width_matches_the_interpreter() {
         // The COMPILED half of the oracle pair for B-2026-08-29-40. The bug was
         // the interpreter's (it kept f64 bits in a bf16 lane); codegen was right
