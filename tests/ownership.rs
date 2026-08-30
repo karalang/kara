@@ -9957,6 +9957,131 @@ fn plain_string_move_is_still_reported() {
     );
 }
 
+// ── B-2026-08-30-10: a read-only `match` arm borrows its scrutinee ──
+
+/// Binding a payload out is not by itself a move of the scrutinee. What moves
+/// it is the arm going on to HAND that binding somewhere; an arm that only
+/// READS what it bound leaves the scrutinee whole.
+///
+/// The classifier asked "does any arm bind anything?" instead, so every shape
+/// below drew `value 'b' moved here, used again here` — on programs the
+/// interpreter, the JIT and both AOT legs all run correctly, byte-identically,
+/// and valgrind-clean. It fired on ordinary idiomatic code (an
+/// `Option[String]` read once and then read again) and on fixtures already in
+/// this tree, and its help text was unactionable there: it named a "callee
+/// parameter" where there is no callee.
+///
+/// This is the same shape of disagreement as B-2026-08-18-32 (`String +`), and
+/// the backends are again the side that matches the language: design.md
+/// § Match Arm Binding Modes, and the borrow classification codegen has used
+/// since B-2026-08-08-25.
+///
+/// `if let` is NOT covered by this and stays unconditionally reading, so an
+/// `if let` arm that genuinely moves its binding out still draws nothing. That
+/// asymmetry is what ruled out a deliberate strict-move rule in the first
+/// place, but closing it would ADD diagnostics to existing code — a separate
+/// change from removing ones that were never true.
+#[test]
+fn readonly_match_arm_does_not_move_its_scrutinee() {
+    // `Option[String]` — the reported shape.
+    ownership_ok(
+        "fn main() {\n\
+             let b: Option[String] = Some(\"a\");\n\
+             match b { Some(p) => { println(p); } None => {} }\n\
+             match b { Some(q) => println(q), None => println(\"n\") }\n\
+         }",
+    );
+    // `Result`'s `Ok` payload, the sibling channel.
+    ownership_ok(
+        "fn main() {\n\
+             let r: Result[String, i64] = Ok(\"a\");\n\
+             match r { Ok(p) => { println(p); } Err(_) => {} }\n\
+             match r { Ok(q) => println(q), Err(_) => println(\"n\") }\n\
+         }",
+    );
+    // A `Vec` payload — the other direct `{ptr,len,cap}` shape.
+    ownership_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(3);\n\
+             let b: Option[Vec[i64]] = Some(v);\n\
+             match b { Some(p) => { println(f\"{p.len()}\"); } None => {} }\n\
+             match b { Some(q) => println(f\"{q[0]}\"), None => println(\"n\") }\n\
+         }",
+    );
+    // A USER enum, which takes an entirely different drop channel.
+    ownership_ok(
+        "enum E { A(String), B }\n\
+         fn main() {\n\
+             let e: E = E.A(\"a\");\n\
+             match e { E.A(p) => { println(p); } E.B => {} }\n\
+             match e { E.A(q) => println(q), E.B => println(\"n\") }\n\
+         }",
+    );
+    // A TUPLE payload, whose bindings own themselves.
+    ownership_ok(
+        "fn main() {\n\
+             let b: Option[(String, i64)] = Some((\"a\", 1));\n\
+             match b { Some(p) => { println(p.0); } None => {} }\n\
+             match b { Some(q) => println(q.0), None => println(\"n\") }\n\
+         }",
+    );
+    // The RETURN spelling of the second use, which is how the row was found.
+    ownership_ok(
+        "fn c() -> Option[String] {\n\
+             let b: Option[String] = Some(\"a\");\n\
+             match b { Some(p) => { println(p); } None => {} }\n\
+             b\n\
+         }\n\
+         fn main() { match c() { Some(x) => println(x), None => println(\"n\") } }",
+    );
+}
+
+/// THE ANTI-VACUITY GUARD. The narrowing is "an arm that MOVES what it bound",
+/// not "a match never moves", so each of the three ways an arm can hand its
+/// binding on must still be reported. Without these the fix would read as a
+/// blanket suppression of use-after-move for every `match`.
+#[test]
+fn match_arm_that_moves_its_binding_is_still_reported() {
+    for (label, src) in [
+        (
+            "consuming call",
+            "fn eat(s: String) { println(s) }\n\
+             fn main() {\n\
+                 let b: Option[String] = Some(\"a\");\n\
+                 match b { Some(p) => { eat(p); } None => {} }\n\
+                 match b { Some(q) => println(q), None => println(\"n\") }\n\
+             }",
+        ),
+        (
+            "pushed into a container",
+            "fn main() {\n\
+                 let mut out: Vec[String] = Vec.new();\n\
+                 let b: Option[String] = Some(\"a\");\n\
+                 match b { Some(p) => { out.push(p); } None => {} }\n\
+                 match b { Some(q) => println(q), None => println(\"n\") }\n\
+             }",
+        ),
+        (
+            "yielded as the match's own value",
+            "fn main() {\n\
+                 let b: Option[String] = Some(\"a\");\n\
+                 let _t: String = match b { Some(p) => p, None => \"\" };\n\
+                 match b { Some(q) => println(q), None => println(\"n\") }\n\
+             }",
+        ),
+    ] {
+        let errors = ownership_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("moved here, used again")),
+            "{label}: a moved arm binding must still be reported; got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
 #[test]
 fn slice_pattern_binding_shadows_a_consumed_outer_name() {
     // A SLICE PATTERN BINDS. `cfg::pattern_bindings` — the helper the ownership

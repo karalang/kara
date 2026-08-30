@@ -174,6 +174,7 @@ pub fn classify_function_body_with(
         once_callable_closures,
         closure_span_stack: Vec::new(),
         closure_local_stack: Vec::new(),
+        arm_consumed_names: Vec::new(),
     };
     classifier.walk_block(body, Mode::Reading);
     classifier.classification
@@ -236,6 +237,15 @@ struct UseClassifier<'a> {
     /// `|x: i64| acc.push(x)` twin passed only because `i64` is Copy and never
     /// consumed). Pushed on entry to a `Closure` arm, popped on exit.
     closure_local_stack: Vec<HashSet<String>>,
+    /// B-2026-08-30-10 — stack of the binding names CONSUMED inside each
+    /// currently-open `match` arm body. One frame is pushed per arm; every
+    /// `Consume` identifier-leaf recorded while frames are open adds its name
+    /// to ALL of them, so a consume inside a nested arm still counts for the
+    /// enclosing one. The `Match` walker pops each frame and asks whether the
+    /// arm actually moved anything it BOUND — which is what decides whether the
+    /// scrutinee was consumed. See the `Match` arm for why the question is
+    /// asked that way.
+    arm_consumed_names: Vec<HashSet<String>>,
 }
 
 impl<'a> UseClassifier<'a> {
@@ -277,6 +287,18 @@ impl<'a> UseClassifier<'a> {
     fn record_named(&mut self, span: &crate::token::Span, kind: UseKind, name: Option<&str>) {
         let key = SpanKey::from_span(span);
         self.classification.kinds.insert(key, kind);
+        // B-2026-08-30-10 — feed the open `match`-arm frames. Every identifier
+        // leaf reaches here with its name, so this sees exactly the consumes
+        // the rest of the pass sees; deriving the arm's escape answer from the
+        // classifier's OWN notion of a consume is what keeps the two from
+        // drifting as new consuming positions are added.
+        if kind == UseKind::Consume && !self.arm_consumed_names.is_empty() {
+            if let Some(n) = name {
+                for frame in &mut self.arm_consumed_names {
+                    frame.insert(n.to_string());
+                }
+            }
+        }
         if kind == UseKind::Consume && self.consume_origin_ctx != ConsumeOrigin::Direct {
             if self.consume_origin_ctx == ConsumeOrigin::ClosureCapture
                 && name.is_some_and(|n| self.is_closure_local(n))
@@ -792,18 +814,51 @@ impl<'a> UseClassifier<'a> {
                 let any_arm_binds = arms
                     .iter()
                     .any(|arm| self.pattern_binds_anything(&arm.pattern));
-                let scrut_mode = if any_arm_binds && !scrut_is_borrow {
+                // B-2026-08-30-10 — binding a payload out is not by itself a
+                // move of the scrutinee. What moves it is the arm going on to
+                // hand that binding somewhere: an arm that only READS what it
+                // bound leaves the scrutinee whole, which is the semantics the
+                // interpreter implements and the borrow classification codegen
+                // has used since B-2026-08-08-25.
+                //
+                // Asking "does any arm bind anything?" instead reported
+                // `let b: Option[String] = Some(f"a");
+                //  match b { Some(p) => println(p), None => {} }
+                //  match b { .. }` as a use-after-move — on a program every
+                // backend compiles and runs correctly. It fired on ordinary
+                // idiomatic code and on fixtures already in the tree.
+                //
+                // The arms are walked FIRST so the answer is available before
+                // the scrutinee is classified. Order is safe because
+                // `classification.kinds` is span-keyed, so insertion order does
+                // not affect the result, and an arm body cannot introduce a
+                // type the scrutinee expression depends on.
+                //
+                // `if let` / `while let` stay unconditionally `Reading` below
+                // and are NOT made symmetric here. That direction is a false
+                // NEGATIVE — an `if let` arm that genuinely moves its binding
+                // out draws no warning — and turning it on would ADD
+                // diagnostics to existing code, which is a separate change from
+                // removing ones that were never true.
+                let mut any_arm_moves_its_binding = false;
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.walk_expr(g, Mode::Reading);
+                    }
+                    let bound = crate::cfg::pattern_bindings(&arm.pattern);
+                    self.arm_consumed_names.push(HashSet::new());
+                    self.walk_expr(&arm.body, mode);
+                    let consumed = self.arm_consumed_names.pop().unwrap_or_default();
+                    if bound.iter().any(|n| consumed.contains(n.as_str())) {
+                        any_arm_moves_its_binding = true;
+                    }
+                }
+                let scrut_mode = if any_arm_binds && any_arm_moves_its_binding && !scrut_is_borrow {
                     Mode::Consuming
                 } else {
                     Mode::Reading
                 };
                 self.walk_expr(scrutinee, scrut_mode);
-                for arm in arms {
-                    if let Some(g) = &arm.guard {
-                        self.walk_expr(g, Mode::Reading);
-                    }
-                    self.walk_expr(&arm.body, mode);
-                }
             }
 
             ExprKind::While {
@@ -1827,11 +1882,54 @@ mod tests {
         );
     }
 
+    /// B-2026-08-30-10 — the read-only half of
+    /// `match_arm_binding_consumes_scrutinee` below. An arm that BINDS a
+    /// payload but only READS it leaves the scrutinee whole, so nothing here
+    /// may be recorded as a Consume; the second `match` is the use that the
+    /// old "does any arm bind?" rule reported as a use-after-move.
+    #[test]
+    fn readonly_match_arm_does_not_consume_scrutinee() {
+        let src = "fn main() {\n\
+                       let opt: Option[String] = Some(\"hi\");\n\
+                       match opt { Some(s) => { println(s); } None => {} }\n\
+                       match opt { Some(t) => { println(t); } None => {} }\n\
+                   }";
+        let (class, _, _) = classify(src);
+        let consumes = class.values().filter(|k| **k == UseKind::Consume).count();
+        assert_eq!(
+            consumes, 0,
+            "a read-only arm must not consume its scrutinee; got {consumes} consume(s)"
+        );
+    }
+
+    /// B-2026-08-30-10 — the guard in the other direction: an arm that hands
+    /// its binding to a consuming callee DOES move the scrutinee, so the
+    /// warning must survive. Distinct from the test below, whose arm yields the
+    /// binding as the match's own value.
+    #[test]
+    fn arm_that_moves_its_binding_still_consumes_scrutinee() {
+        let src = "fn eat(s: String) { println(s) }\n\
+                   fn main() {\n\
+                       let opt: Option[String] = Some(\"hi\");\n\
+                       match opt { Some(s) => { eat(s); } None => {} }\n\
+                       match opt { Some(t) => { println(t); } None => {} }\n\
+                   }";
+        let (class, _, _) = classify(src);
+        let consumes = class.values().filter(|k| **k == UseKind::Consume).count();
+        assert!(
+            consumes >= 1,
+            "an arm that moves its binding out must consume the scrutinee; got {consumes}"
+        );
+    }
+
     #[test]
     fn match_arm_binding_consumes_scrutinee() {
-        // Non-Copy scrutinee (`Option[String]`) — match has at least one
-        // arm that binds (`Some(s)`), so the scrutinee identifier is
-        // recorded as Consume per design.md § Consume Predicate step 4.
+        // Non-Copy scrutinee (`Option[String]`) — the `Some(s)` arm YIELDS `s`
+        // as the match's value, so the binding escapes the arm and the
+        // scrutinee identifier is recorded as Consume per design.md § Consume
+        // Predicate step 4. B-2026-08-30-10 narrowed the rule from "any arm
+        // binds" to "an arm moves what it bound"; this shape satisfies both,
+        // which is why it reads the same before and after.
         let src = "fn main() {\n\
                        let opt: Option[String] = Some(\"hi\");\n\
                        let _ = match opt { Some(s) => s, None => \"\" };\n\
