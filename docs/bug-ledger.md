@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 250 | 14 |
 | leak | 234 | 6 |
 | missing-feature | 188 | 1 |
-| double-free | 157 | 1 |
+| double-free | 157 | 0 |
 | codegen-gap | 149 | 0 |
 | diagnostics | 112 | 0 |
-| false-positive | 100 | 0 |
+| false-positive | 101 | 1 |
 | perf | 86 | 1 |
 | soundness | 80 | 0 |
 | other | 64 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1249 | 25 |
+| codegen | 1249 | 24 |
 | typecheck | 278 | 0 |
 | interp | 260 | 11 |
 | other | 70 | 0 |
-| ownership | 67 | 0 |
+| ownership | 68 | 1 |
 | cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1824 surfaced · 27 open · 1768 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1825 surfaced · 27 open · 1769 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (27)
 
@@ -155,8 +155,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1824 surfaced
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | medium | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
-| B-2026-08-30-8 | 2026-08-30 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit free by zeroing its cap, a later assignment silently re-arms it, and the return then hands the same buffer to the caller. All three are required; removing any one is clean, and the arm that actually executes is irrelevant. THIS, not B-2026-08-29-56, is what `selfhost_parser_matches_rust_parser_items` has been dying on -- bisected to `///` doc comments, i.e. `Parser.collect_leading_doc_comments` | — |
 | B-2026-08-30-9 | 2026-08-30 | interp | medium | The INTERPRETER renders an unsigned `Vector` lane above `i64::MAX` as a SIGNED reinterpretation -- `Vector[u64, 2]` holding `u64::MAX` prints `Vector(-1, 1)` while the SAME program's scalar and INDEXED-lane reads of the same value both print 18446744073709551615, and both compiled backends now print the unsigned value too; `Value::Vector` holds untyped `Value::Int` lanes, so its Display cannot recover a signedness the index path gets right | — |
+| B-2026-08-30-10 | 2026-08-30 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used again here` on a program every backend compiles and runs correctly. B-2026-08-08-25 deliberately classifies such an arm as a BORROW in codegen; `ownership.rs` still records it as a move. The `if let` spelling of the same thing does NOT warn, which is what rules out a deliberate strict-move rule. Diagnostics-only, and the help text it prints is unactionable | — |
 
 ### Relocated (2)
 
@@ -189,9 +189,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1824 surfaced
 
 </details>
 
-### Fixed (1768)
+### Fixed (1769)
 
-<details><summary>1768 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1769 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1963,6 +1963,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1824 surfaced
 | B-2026-08-30-1 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPT… | 80bb5ec6 |
 | B-2026-08-30-5 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/… | 42e103d |
 | B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
+| B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
 
 </details>
 
