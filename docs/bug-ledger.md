@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 324 | 3 |
-| run-vs-build | 256 | 17 |
+| miscompile | 324 | 2 |
+| run-vs-build | 256 | 16 |
 | leak | 237 | 8 |
-| missing-feature | 189 | 2 |
+| missing-feature | 189 | 1 |
 | double-free | 157 | 0 |
 | codegen-gap | 152 | 1 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | perf | 87 | 1 |
-| soundness | 83 | 3 |
+| soundness | 84 | 4 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
 | use-after-free | 25 | 1 |
@@ -110,23 +110,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1267 | 30 |
+| codegen | 1267 | 29 |
 | typecheck | 279 | 1 |
-| interp | 269 | 16 |
+| interp | 269 | 15 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
-| resolver | 28 | 1 |
-| effect | 27 | 1 |
+| effect | 28 | 1 |
+| resolver | 28 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1849 surfaced · 37 open · 1783 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1850 surfaced · 35 open · 1786 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (35)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -161,12 +161,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1849 surfaced
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
-| B-2026-08-30-29 | 2026-08-30 | effect | high | THE EFFECT CHECKER DOES NOT ENFORCE design.md's "Drop bodies must not panic" RULE -- an `impl Drop` whose body calls `panic()`, indexes out of bounds, or calls a `panics` function is ACCEPTED by `karac check`, where the spec requires rejection at the definition site; the three shapes the spec itself enumerates all compile | — |
-| B-2026-08-30-30 | 2026-08-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpreter already HAS a correct `process.exit` arm, but it is keyed on `ExprKind::Path` and the callee arrives as a bare `Identifier`, so it never fires; no other spelling is accepted | — |
-| B-2026-08-30-31 | 2026-08-30 | codegen | medium | STDOUT ALREADY WRITTEN BY `println` IS SILENTLY LOST WHEN THE PROGRAM ENDS VIA `process.exit(code)` ON BOTH COMPILED BACKENDS -- `println("before"); process.exit(3)` exits 3 with ZERO bytes on stdout, while the same program without the exit prints normally; the canonical `println("fatal: .."); process.exit(1)` emits nothing at all | — |
 | B-2026-08-30-32 | 2026-08-30 | codegen | medium | LLVM-18 PROMOTES f16 ARITHMETIC TO f32 ON wasm32 AND NEVER ROUNDS THE RESULT BACK, so a wasm module holds values the type cannot represent: `65504f16 * 3f16` is a finite 196512 where it must overflow to `inf`, and every inexact quotient keeps f32 precision. Native and the interpreter both round; bf16 is unaffected because codegen widens and rounds it ITSELF rather than trusting the backend | — |
 | B-2026-08-30-33 | 2026-08-30 | interp+codegen | medium | A by-value param with TWO exits -- conditionally STORED into a `mut ref` place and also RETURNED on another path -- runs NO `Drop` body on the path where it dies inside the callee. The shape B-2026-08-30-28's per-path flag deliberately DECLINES: nothing clears the flag on a non-store exit, so admitting it DOUBLES the body instead (measured, all four surfaces). Unanimous across backends, so no A/B gate reports it | — |
 | B-2026-08-30-34 | 2026-08-30 | interp | medium | A `u64` value >= 2^63 converts to EVERY float type as its negative two's-complement under the interpreter (`u64::MAX as f64` prints -1) while all three compiled surfaces print the correct 18446744073709552000. `Value::Int`'s signed carrier is converted instead of the value -- the cast-path residual of B-2026-07-04-8, whose u64 model covered printing, comparison and sorting but never mentions casts. | — |
+| B-2026-08-30-35 | 2026-08-30 | effect | high | AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE CONTRIBUTES NO EFFECTS TO INFERENCE -- `println(f"{touch()}")` infers [writes(Stdout)] where the `let`-hoisted form infers [writes(Db), writes(Stdout)], so a DECLARED `with writes(Resource)` is dropped exactly as readily as `panics`; public-fn effect verification then passes an under-declared row | — |
 
 ### Relocated (2)
 
@@ -199,9 +197,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1849 surfaced
 
 </details>
 
-### Fixed (1783)
+### Fixed (1786)
 
-<details><summary>1783 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1786 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1988,6 +1986,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1849 surfaced
 | B-2026-08-30-26 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIT… | 532549e |
 | B-2026-08-30-27 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`ex… | 9b5fce2 |
 | B-2026-08-30-28 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the sto… | fd205752 |
+| B-2026-08-30-29 | effect | high | THE EFFECT CHECKER DOES NOT ENFORCE design.md's "Drop bodies must not panic" RULE -- an `impl Drop` whose body calls `panic()`, indexes out of bounds… | 198b899 |
+| B-2026-08-30-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpre… | 198b899 |
+| B-2026-08-30-31 | codegen | medium | AUTO-PAR RUNS `process.exit(code)` BEFORE THE `println`s THAT PRECEDE IT WHENEVER ANY STATEMENT FOLLOWS THE EXIT, silently discarding ALL prior stdou… | 198b899 |
 
 </details>
 
