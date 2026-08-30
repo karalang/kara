@@ -1037,7 +1037,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.tracing.current_span = Some(expr.span);
                 self.compile_unaryop(op, val)
             }
-            ExprKind::Call { callee, args } => self.compile_call(callee, args, &expr.span),
+            ExprKind::Call { callee, args } => {
+                // Argument temporaries die AS THIS CALL RETURNS, not at the
+                // enclosing statement's `;` (B-2026-08-29-55). The mark is
+                // taken before the arguments are lowered and drained once the
+                // call has been emitted, so the window holds exactly this
+                // call's own argument temps; a nested call in argument
+                // position opens its own window here and drains first.
+                let arg_temp_mark = self.call_arg_temp_mark();
+                let v = self.compile_call(callee, args, &expr.span)?;
+                self.drain_call_arg_temp_user_drops(arg_temp_mark);
+                Ok(v)
+            }
             ExprKind::If {
                 condition,
                 then_block,
@@ -1880,7 +1891,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 args,
                 args_close_span,
                 ..
-            } => self.compile_method_call(object, method, args, &expr.span, args_close_span),
+            } => {
+                // Method sibling of the `Call` arm's per-call drain
+                // (B-2026-08-29-55) — the position table's argument row does
+                // not distinguish the two spellings.
+                let arg_temp_mark = self.call_arg_temp_mark();
+                let v =
+                    self.compile_method_call(object, method, args, &expr.span, args_close_span)?;
+                self.drain_call_arg_temp_user_drops(arg_temp_mark);
+                Ok(v)
+            }
             ExprKind::Index { object, index } => self.compile_index(object, index),
             ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
             ExprKind::Path { segments, .. } => self.compile_path_expr(segments, &expr.span),
@@ -1937,7 +1957,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ExprKind::Call { callee, args } = &desugared.kind else {
                     unreachable!("desugar_pipe always yields a Call")
                 };
-                self.compile_call(callee, args, &expr.span)
+                // Pipe desugars to a Call; give it the same per-call
+                // argument-temp window the `Call` arm takes (B-2026-08-29-55).
+                let arg_temp_mark = self.call_arg_temp_mark();
+                let v = self.compile_call(callee, args, &expr.span)?;
+                self.drain_call_arg_temp_user_drops(arg_temp_mark);
+                Ok(v)
             }
 
             // B-2026-08-17-28 — `a?.f` / `a?.m(args)`. Lowered to the `match`

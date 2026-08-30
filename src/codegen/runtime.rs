@@ -8343,6 +8343,91 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Named-binding actions and memory-channel actions (StructDrop /
     /// EnumDrop / frees) are untouched — only these two temp names drain.
     pub(super) fn drain_statement_temp_user_drops(&mut self, mark: usize) {
+        self.drain_temp_user_drops(mark, false);
+    }
+
+    /// Per-CALL firing of argument temporaries' `Drop` bodies, run as the call
+    /// returns rather than at the enclosing statement's `;` (B-2026-08-29-55).
+    ///
+    /// design.md § Temporary Lifetime Rules gives an argument its own position
+    /// row — "Function/method call argument | After the call returns" — and the
+    /// same section's composition-with-NLL paragraph forbids going past it:
+    /// "NLL never EXTENDS a temporary's live range past the position-specific
+    /// end — that direction would invalidate the lock-eagerness guarantee."
+    /// Draining these on the STATEMENT frame applied the neighbouring
+    /// "Statement-position expression (`expr;`) | At the `;`" row instead,
+    /// which is strictly longer. A statement whose ONLY expression is the call
+    /// cannot show the difference (the `;` follows the call return with nothing
+    /// in between) -- but that is a narrower exemption than it looks, and the
+    /// row that filed this guessed it was the reason the bug survived. Any
+    /// enclosing expression that runs after the call re-opens the gap, so the
+    /// single-call spelling `println(f"{take(R { id: 41 })}")` showed it too:
+    /// the body belongs BEFORE the printed value and the compiled backends put
+    /// it after. Seven codegen/asan control cases had that compiled-side-only
+    /// ordering baked in as their expectation while `--interp` printed the
+    /// body first, so the divergence was recorded as intent in seven places.
+    /// Two calls in one statement is merely the shape that makes it obvious:
+    ///
+    /// ```text
+    /// let v = take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 });
+    /// ```
+    ///
+    /// ran `in-take in-take dR4 dR3 dR2 dR1` under JIT and AOT against the
+    /// interpreter's `in-take dR2 dR1 in-take dR4 dR3` — so the first call's
+    /// guard was still checked out while the second call ran, the held-too-long
+    /// footgun the table exists to close, one position over from the tail
+    /// expression it was written against.
+    ///
+    /// The drain ORDER is untouched and must stay untouched: within one call's
+    /// window the temps still pop LIFO, which is what makes two arguments run
+    /// right-to-left (B-2026-08-29-46, design.md's "single LIFO stack ordered
+    /// by program-order of introduction"). Only the drain POINT moves. The
+    /// statement-end drain stays as the backstop for every temp registered
+    /// outside a call window, and re-running it after these is free — the
+    /// entries are retired here, and `frame.len() <= mark` short-circuits.
+    ///
+    /// `call_return_only` narrows the name set to the three ARGUMENT registrars
+    /// (`track_inline_owned_aggregate_arg_inst`, `queue_ref_rvalue_arg_cleanup`
+    /// and the tuple-argument walk). The fresh-temp RECEIVER
+    /// (`__urecv_drop_tmp`) and the fresh-temp SCRUTINEE
+    /// (`__freshtemp_enum_scrut`) are deliberately left to the statement drain:
+    /// each has its OWN row in the position table with a different end, and
+    /// neither is an argument.
+    pub(super) fn drain_call_arg_temp_user_drops(&mut self, mark: (usize, usize)) {
+        let (depth, len) = mark;
+        // The length half of the mark is an index into ONE PARTICULAR frame --
+        // whichever was last when it was taken. An argument containing a
+        // control-flow construct (`f(if c { .. } else { .. })`) pushes and pops
+        // a scope frame while the arguments lower, so a path that left the
+        // stack deeper or shallower than it found it would turn `len` into an
+        // index into some OTHER frame and fire drops belonging to an enclosing
+        // scope. Compare the depth and decline rather than guess: the
+        // statement-end drain still runs after this and collects anything
+        // declined here, so the conservative direction costs only the drain
+        // point for that one call.
+        if self.drop_rc.scope_cleanup_actions.len() != depth {
+            return;
+        }
+        self.drain_temp_user_drops(len, true);
+    }
+
+    /// Frame STACK DEPTH plus frame length, to hand back to
+    /// [`Self::drain_call_arg_temp_user_drops`] once the call has been emitted
+    /// — the mark is taken before the call's arguments are lowered, so the
+    /// window spans exactly this call's own argument temporaries. The depth
+    /// travels with the length because the length alone is meaningless against
+    /// a different frame; see the drain for what that would do.
+    pub(super) fn call_arg_temp_mark(&self) -> (usize, usize) {
+        (
+            self.drop_rc.scope_cleanup_actions.len(),
+            self.drop_rc
+                .scope_cleanup_actions
+                .last()
+                .map_or(0, |f| f.len()),
+        )
+    }
+
+    fn drain_temp_user_drops(&mut self, mark: usize, call_return_only: bool) {
         if self
             .builder
             .get_insert_block()
@@ -8369,7 +8454,6 @@ impl<'ctx> super::Codegen<'ctx> {
                         ..
                     } if binding_name == "__owned_agg_tmp"
                         || binding_name == "__refarg_tmp"
-                        || binding_name == "__urecv_drop_tmp"
                         // B-2026-08-28-19 — the tuple-literal ARGUMENT walk,
                         // whose elements provably die inside the callee. It sat
                         // on the scope frame while the interpreter fired it at
@@ -8410,7 +8494,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // ran after the payload's death (at scope exit), so
                         // firing it sooner narrows that window rather than
                         // opening one.
-                        || binding_name == "__freshtemp_enum_scrut" =>
+                        // Receiver and scrutinee temps are NOT arguments and
+                        // do not share the argument row's live-range end, so a
+                        // per-call drain must not claim them (B-2026-08-29-55).
+                        || (!call_return_only
+                            && (binding_name == "__urecv_drop_tmp"
+                                || binding_name == "__freshtemp_enum_scrut")) =>
                     {
                         fired.push((binding_ptr, drop_fn));
                     }

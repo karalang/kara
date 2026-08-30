@@ -34779,37 +34779,107 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
     ] {
         assert_eq!(run(&src), want, "case {label}");
     }
-    // PINNED AT THE DEFECT — a neighbouring divergence this fix does NOT close,
-    // measured identical before and after it and filed on its own. It is pinned
-    // here, beside the fixed cases, because it lives in the same "who drops an
-    // argument temporary, and when" surface and a future change to it will move
-    // it; the codegen twin pins the OTHER side of the number, so the pair
-    // records the divergence rather than one backend's half. (This block held a
-    // second entry, B-2026-08-29-54, until that divergence was closed and its
-    // case moved up into the live list above.)
-    // TIMING, not order: design.md's table ends an argument temporary's live
-    // range "After the call returns", so with two calls in one expression the
-    // first call's temps must die before the second call's are built. This
-    // backend does exactly that (`in-take dR2 dR1 in-take dR4 dR3`); the
-    // compiled backends hold all four to the statement's `;`
-    // (`in-take in-take dR4 dR3 dR2 dR1`), which extends a temporary past the
-    // position rule's ceiling. B-2026-08-29-55.
+    // TIMING rather than order (B-2026-08-29-55, formerly pinned here as
+    // `pin-arg-temps-die-at-call-return-not-statement-end` — this backend was
+    // the CORRECT half of that divergence, and the pin recorded it while the
+    // compiled half held all four temps to the statement's `;`). design.md's
+    // table ends an argument temporary's live range "After the call returns",
+    // so with two calls in one expression the first call's temps die before the
+    // second call's are built.
     //
-    // A single assertion rather than the one-element loop the block above uses
-    // — this list held two entries until B-2026-08-29-54's divergence was
-    // closed, and a `for` over one element is a clippy warning (CI runs
-    // `-D warnings`). Restore the loop form if a second pin ever joins it.
+    // These strings are byte-identical to the codegen twin's, which is what
+    // makes the pair a regression test rather than two opinions: every body ran
+    // exactly once on both backends throughout, so only an absolute expectation
+    // on both sides can hold the ORDERING. Nothing here changed when the
+    // compiled side was fixed — this block is the oracle it was fixed against,
+    // and it is kept in the live list so a future change to this backend has to
+    // move both halves together.
+    for (label, src, want) in [
+        (
+            "two-calls-one-statement-free",
+            format!(
+                "{HDR}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                 \x20   println(f\"v={{v}}\")\n\
+                 }}\n"
+            ),
+            "in-take\ndR2\ndR1\nin-take\ndR4\ndR3\nv=14\n",
+        ),
+        (
+            "two-calls-one-statement-method",
+            format!(
+                "{HDR}struct H {{ n: i64 }}\n\
+                 impl H {{ fn take(ref self, r: R, q: R) -> i64 {{ println(\"in-m\"); 7 }} }}\n\
+                 fn main() {{\n\
+                 \x20   let h = H {{ n: 0 }};\n\
+                 \x20   let v = h.take(R {{ id: 1 }}, R {{ id: 2 }}) + h.take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                 \x20   println(f\"v={{v}}\")\n\
+                 }}\n"
+            ),
+            "in-m\ndR2\ndR1\nin-m\ndR4\ndR3\nv=14\n",
+        ),
+        (
+            "two-calls-one-statement-assoc",
+            format!(
+                "{HDR}struct H {{ n: i64 }}\n\
+                 impl H {{ fn s2(r: R, q: R) -> i64 {{ println(\"in-s\"); 7 }} }}\n\
+                 fn main() {{\n\
+                 \x20   let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}) + H.s2(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                 \x20   println(f\"v={{v}}\")\n\
+                 }}\n"
+            ),
+            "in-s\ndR2\ndR1\nin-s\ndR4\ndR3\nv=14\n",
+        ),
+        (
+            "deep-nest-inner-call-drains-first",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); 1 }}\n\
+                 fn main() {{\n\
+                 \x20   let v = one(mk(one(mk(1)) + 1));\n\
+                 \x20   println(f\"v={{v}}\")\n\
+                 }}\n"
+            ),
+            "in-one\ndR1\nin-one\ndR2\nv=1\n",
+        ),
+    ] {
+        assert_eq!(run(&src), want, "case {label}");
+    }
+    // PINNED AT THE DEFECT — the interpreter half of a neighbouring bug this
+    // fix does NOT close, so the pair records it on both sides rather than one
+    // backend's half. An argument that is a CONTROL-FLOW or BLOCK expression
+    // rather than a direct call/literal loses its `Drop` body ENTIRELY, on this
+    // backend as much as on the compiled ones — which is what makes it a
+    // BOTH-BACKENDS fix rather than a parity repair, and why no A/B gate and no
+    // kata can see it. `one(mk(6))` and the let-bound `one(e0)` are CONTROLS:
+    // their failure would mean the per-call window regressed something, while
+    // the first three record the standing defect. BUGID_TBD.
     let pin_src = format!(
-        "{HDR}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+        "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+         fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+         enum P {{ A, B }}\n\
          fn main() {{\n\
-         \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
-         \x20   println(f\"v={{v}}\")\n\
+         \x20   let a = one(if true {{ mk(1) }} else {{ mk(2) }});\n\
+         \x20   println(f\"a={{a}}\")\n\
+         \x20   let p = P.A;\n\
+         \x20   let b = one(match p {{ P.A => mk(3), P.B => mk(4) }});\n\
+         \x20   println(f\"b={{b}}\")\n\
+         \x20   let c = one({{ let t = mk(5); t }});\n\
+         \x20   println(f\"c={{c}}\")\n\
+         \x20   let d = one(mk(6));\n\
+         \x20   println(f\"d={{d}}\")\n\
+         \x20   let e0 = if true {{ mk(7) }} else {{ mk(8) }};\n\
+         \x20   let e = one(e0);\n\
+         \x20   println(f\"e={{e}}\")\n\
          }}\n"
     );
     assert_eq!(
         run(&pin_src),
-        "in-take\ndR2\ndR1\nin-take\ndR4\ndR3\nv=14\n",
-        "case pin-arg-temps-die-at-call-return-not-statement-end",
+        // a/b/c: the body is LOST (the defect). d/e: it runs (the controls).
+        "in-one\na=1\nin-one\nb=3\nin-one\nc=5\n\
+         in-one\ndR6\nd=6\nin-one\ndR7\ne=7\n",
+        "case control-flow-argument-loses-its-drop-body",
     );
 }
 

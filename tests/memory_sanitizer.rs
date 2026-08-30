@@ -3049,7 +3049,9 @@ fn main() {
                 "{H}fn main() {{ let f = |r: R| {{ r.id }};\n\
              \x20            println(f\"{{f(R {{ id: 41, name: f\"n{{41}}\" }})}}\"); }}\n"
             ),
-            &["41", "drop 41 n41"],
+            // ORDER CORRECTED by B-2026-08-29-55 -- argument temp dies at call
+            // return, before the enclosing `println`; matches `--interp`.
+            &["drop 41 n41", "41"],
             "struct-arg",
         );
         // The same through a destructure in the body.
@@ -3057,7 +3059,8 @@ fn main() {
             &format!("{H}struct W {{ r: R, n: i64 }}\n\
              fn main() {{ let f = |w: W| {{ let W {{ r, n }} = w; r.id + n }};\n\
              \x20            println(f\"{{f(W {{ r: R {{ id: 41, name: f\"n{{41}}\" }}, n: 1 }})}}\"); }}\n"),
-            &["42", "drop 41 n41"],
+            // ORDER CORRECTED by B-2026-08-29-55 -- see the sibling above.
+            &["drop 41 n41", "42"],
             "struct-arg-destructured",
         );
         // CONSTRAINT — a tuple argument already had an owner. Registering a
@@ -3081,7 +3084,9 @@ fn main() {
                 "{H}fn take(r: R) -> i64 {{ r.id }}\n\
              fn main() {{ println(f\"{{take(R {{ id: 41, name: f\"n{{41}}\" }})}}\"); }}\n"
             ),
-            &["41", "drop 41 n41"],
+            // ORDER CORRECTED by B-2026-08-29-55 -- see the siblings above; the
+            // free-function spelling was diverging from `--interp` too.
+            &["drop 41 n41", "41"],
             "free-fn-control",
         );
     }

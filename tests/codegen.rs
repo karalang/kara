@@ -12303,11 +12303,17 @@ fn main() {
             // CONTROL — the callee CONSUMES the argument, so the body belongs to
             // this frame and a false escape would take it away entirely.
             (
+                // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+                // CALL RETURNS (design.md's "Function/method call argument | After the
+                // call returns"), which is BEFORE the enclosing `println` runs. The old
+                // expectation held it to the statement's `;`; `--interp` printed the
+                // body first all along, so that line recorded a run-vs-build divergence
+                // rather than a decision.
                 "callee-consumes",
                 "fn uses(x: R) -> i64 { return x.id; }\n\
                  fn consumer(y: R) -> i64 { return uses(y); }\n\
                  fn main() { println(f\"{consumer(R { id: 50 })}\"); }\n",
-                "50\ndrop 50\n",
+                "drop 50\n50\n",
             ),
             // CONTROL — no forwarding at all, the shape that always worked.
             (
@@ -15091,18 +15097,30 @@ fn main() {
             // CONTROL — a by-value TUPLE param source. Already correct at one
             // body (the caller owns the entry copy); a leaf fire would double it.
             (
+            // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+            // CALL RETURNS (design.md's "Function/method call argument | After the
+            // call returns"), which is BEFORE the enclosing `println` runs. The old
+            // expectation held it to the statement's `;`; `--interp` printed the
+            // body first all along, so that line recorded a run-vs-build divergence
+            // rather than a decision.
                 "param-tuple-control",
                 "fn take(p: (R, i64)) -> i64 { let (_, n) = p; n }\n\
                  fn main() { println(f\"{take((R { id: 41 }, 1))}\") }\n",
-                "1\ndrop 41\n",
+                "drop 41\n1\n",
             ),
             // CONTROL — the same for a by-value STRUCT param.
             (
+            // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+            // CALL RETURNS (design.md's "Function/method call argument | After the
+            // call returns"), which is BEFORE the enclosing `println` runs. The old
+            // expectation held it to the statement's `;`; `--interp` printed the
+            // body first all along, so that line recorded a run-vs-build divergence
+            // rather than a decision.
                 "param-struct-control",
                 "struct W { r: R, n: i64 }\n\
                  fn take(w: W) -> i64 { let W { r: _, n } = w; n }\n\
                  fn main() { println(f\"{take(W { r: R { id: 41 }, n: 1 })}\") }\n",
-                "1\ndrop 41\n",
+                "drop 41\n1\n",
             ),
             // An ENUM element's live-variant payload bodies, through the
             // discard. The bodies helper early-returned on any non-struct, so
@@ -17355,7 +17373,9 @@ fn main() {
                  \x20            println(f\"{f(W { r: R { id: 41 }, n: 1 })}\"); println(\"end\"); }\n"
             )
             .as_deref(),
-            Some("42\ndrop 41\nend\n"),
+            // ORDER CORRECTED by B-2026-08-29-55 (see the tuple-list sites above):
+            // the closure argument temp dies as the call returns, before `println`.
+            Some("drop 41\n42\nend\n"),
             "closure-param-source-control"
         );
     }
@@ -17434,10 +17454,16 @@ fn main() {
             // here so a future ownership change cannot move the compiled side
             // without someone noticing.
             (
+            // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+            // CALL RETURNS (design.md's "Function/method call argument | After the
+            // call returns"), which is BEFORE the enclosing `println` runs. The old
+            // expectation held it to the statement's `;`; `--interp` printed the
+            // body first all along, so that line recorded a run-vs-build divergence
+            // rather than a decision.
                 "param-source-control",
                 "fn take(w: W) -> i64 { let W { r, n } = w; n }\n\
                  fn main() { println(f\"{take(mk())}\") }\n",
-                "1\ndrop 41\n",
+                "drop 41\n1\n",
             ),
             // CONTROL — the TUPLE spelling, which got this cascade in
             // B-2026-08-28-1 and is the model the struct path now shares.
@@ -17714,10 +17740,16 @@ fn main() {
             ),
             // CONTROL — a fresh ARGUMENT.
             (
+                // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+                // CALL RETURNS (design.md's "Function/method call argument | After the
+                // call returns"), which is BEFORE the enclosing `println` runs. The old
+                // expectation held it to the statement's `;`; `--interp` printed the
+                // body first all along, so that line recorded a run-vs-build divergence
+                // rather than a decision.
                 "argument-control",
                 "fn take(e: E) -> i64 { 7 }\n\
                  fn main() { println(f\"{take(E.B)}\") }\n",
-                "7\ndrop E\n",
+                "drop E\n7\n",
             ),
             // CONTROL — a tuple wildcard LEAF (B-2026-08-28-31's shape).
             (
@@ -17804,26 +17836,44 @@ fn main() {
         for (label, body, want) in [
             // The row's own repro.
             (
+            // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+            // CALL RETURNS (design.md's "Function/method call argument | After the
+            // call returns"), which is BEFORE the enclosing `println` runs. The old
+            // expectation held it to the statement's `;`; `--interp` printed the
+            // body first all along, so that line recorded a run-vs-build divergence
+            // rather than a decision.
                 "struct-arg",
                 "fn main() { let f = |r: R| { r.id };\n\
                  \x20            println(f\"{f(R { id: 41 })}\"); println(\"end\"); }\n",
-                "41\ndrop 41\nend\n",
+                "drop 41\n41\nend\n",
             ),
             // The same with a destructure in the body.
             (
+            // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+            // CALL RETURNS (design.md's "Function/method call argument | After the
+            // call returns"), which is BEFORE the enclosing `println` runs. The old
+            // expectation held it to the statement's `;`; `--interp` printed the
+            // body first all along, so that line recorded a run-vs-build divergence
+            // rather than a decision.
                 "struct-arg-destructured",
                 "struct W { r: R, n: i64 }\n\
                  fn main() { let f = |w: W| { let W { r, n } = w; r.id + n };\n\
                  \x20            println(f\"{f(W { r: R { id: 41 }, n: 1 })}\"); println(\"end\"); }\n",
-                "42\ndrop 41\nend\n",
+                "drop 41\n42\nend\n",
             ),
             // CONTROL — the free-function spelling, correct all along, and what
             // identifies the closure as the variable.
             (
+            // ORDER CORRECTED by B-2026-08-29-55 -- the argument temp dies AS THE
+            // CALL RETURNS (design.md's "Function/method call argument | After the
+            // call returns"), which is BEFORE the enclosing `println` runs. The old
+            // expectation held it to the statement's `;`; `--interp` printed the
+            // body first all along, so that line recorded a run-vs-build divergence
+            // rather than a decision.
                 "free-fn-control",
                 "fn take(r: R) -> i64 { r.id }\n\
                  fn main() { println(f\"{take(R { id: 41 })}\"); println(\"end\"); }\n",
-                "41\ndrop 41\nend\n",
+                "drop 41\n41\nend\n",
             ),
             // CONTROL — a TUPLE argument, which already had an owner. This is
             // the row that goes to two bodies if the registration is not
@@ -39870,35 +39920,124 @@ fn main() {
         ] {
             assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
         }
-        // PINNED AT THE DEFECT — the compiled half of a neighbouring divergence
-        // this fix does NOT close. The interpreter twin pins the other half of
-        // the number, so the pair records the divergence rather than one
-        // backend's opinion of it. (This block held a second entry,
-        // B-2026-08-29-54, until that divergence was closed and its case moved
-        // up into the live list above.)
-        // TIMING, not order: design.md's temporary-lifetime table ends an
-        // argument temporary's live range "After the call returns", so with two
-        // calls in one expression the first call's temps must die before the
-        // second call's are built. This backend holds all four to the
-        // statement's `;`, extending them past the position rule's ceiling;
-        // `--interp` now matches the table. B-2026-08-29-55.
+        // TIMING rather than order (B-2026-08-29-55, formerly pinned here at the
+        // defect as `pin-arg-temps-held-to-statement-end`). design.md's
+        // temporary-lifetime table ends an argument temporary's live range
+        // "After the call returns", so with two calls in one expression the
+        // FIRST call's temps must die before the SECOND call's are built. This
+        // backend held all four to the statement's `;` — the direction the
+        // section's composition-with-NLL paragraph forbids ("NLL never EXTENDS
+        // a temporary's live range past the position-specific end") — so the
+        // first call's guard was still checked out while the second ran.
         //
-        // A single assertion rather than the one-element loop the sibling block
-        // above uses — this list held two entries until B-2026-08-29-54's
-        // divergence was closed, and a `for` over one element is a clippy
-        // warning (CI runs `-D warnings`). Restore the loop form if a second
-        // pin ever joins it.
+        // The expectations below are the SAME strings the interpreter twin
+        // asserts, which is the whole point: every body ran exactly once on
+        // both backends before the fix and only the point differed, so no
+        // count-based assertion and no A/B parity gate could see this. Only an
+        // absolute expectation on both sides holds it.
+        //
+        // The three call spellings are here together because the position
+        // table's argument row does not distinguish them and the fix hooks each
+        // one separately (`compile_call`, `compile_method_call`, and the assoc
+        // path `compile_call` reaches). `deep-nest` is the shape that pins the
+        // WINDOW rather than the drain: an argument that is itself a call must
+        // drain inside the outer call's window, interleaved, not batched with
+        // it.
+        for (label, src, want) in [
+            (
+                "two-calls-one-statement-free",
+                format!(
+                    "{hdr}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+                     fn main() {{\n\
+                     \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "in-take\ndR2\ndR1\nin-take\ndR4\ndR3\nv=14\n",
+            ),
+            (
+                "two-calls-one-statement-method",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn take(ref self, r: R, q: R) -> i64 {{ println(\"in-m\"); 7 }} }}\n\
+                     fn main() {{\n\
+                     \x20   let h = H {{ n: 0 }};\n\
+                     \x20   let v = h.take(R {{ id: 1 }}, R {{ id: 2 }}) + h.take(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "in-m\ndR2\ndR1\nin-m\ndR4\ndR3\nv=14\n",
+            ),
+            (
+                "two-calls-one-statement-assoc",
+                format!(
+                    "{hdr}struct H {{ n: i64 }}\n\
+                     impl H {{ fn s2(r: R, q: R) -> i64 {{ println(\"in-s\"); 7 }} }}\n\
+                     fn main() {{\n\
+                     \x20   let v = H.s2(R {{ id: 1 }}, R {{ id: 2 }}) + H.s2(R {{ id: 3 }}, R {{ id: 4 }});\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "in-s\ndR2\ndR1\nin-s\ndR4\ndR3\nv=14\n",
+            ),
+            (
+                "deep-nest-inner-call-drains-first",
+                format!(
+                    "{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                     fn one(r: R) -> i64 {{ println(\"in-one\"); 1 }}\n\
+                     fn main() {{\n\
+                     \x20   let v = one(mk(one(mk(1)) + 1));\n\
+                     \x20   println(f\"v={{v}}\");\n\
+                     }}"
+                ),
+                "in-one\ndR1\nin-one\ndR2\nv=1\n",
+            ),
+        ] {
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+        // PINNED AT THE DEFECT — a neighbouring bug this fix does NOT close,
+        // and the one it is most likely to be confused with. An argument that
+        // is a CONTROL-FLOW or BLOCK expression rather than a direct
+        // call/literal loses its `Drop` body ENTIRELY: the value arrives
+        // through the construct's merge block and no argument registrar claims
+        // it, so no frame owns the body at all. That is strictly worse than
+        // the misordering this row fixed, and it hides better — it is
+        // unanimous on all four surfaces, so no A/B parity gate can see it,
+        // and valgrind is clean, so the memory channel fires and only the user
+        // body is missing. Measured identical on a stashed-`src` pre-fix
+        // build, so it is not fallout from the per-call window.
+        //
+        // The two spellings that DO work are asserted beside it deliberately:
+        // `one(mk(6))` and the let-bound `one(e0)` are CONTROLS whose failure
+        // would mean this fix regressed, while the first three record the
+        // standing defect. BUGID_TBD.
         let pin_src = format!(
-            "{hdr}fn take(r: R, q: R) -> i64 {{ println(\"in-take\"); 7 }}\n\
+            "{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+             fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+             enum P {{ A, B }}\n\
              fn main() {{\n\
-             \x20   let v = take(R {{ id: 1 }}, R {{ id: 2 }}) + take(R {{ id: 3 }}, R {{ id: 4 }});\n\
-             \x20   println(f\"v={{v}}\");\n\
+             \x20   let a = one(if true {{ mk(1) }} else {{ mk(2) }});\n\
+             \x20   println(f\"a={{a}}\");\n\
+             \x20   let p = P.A;\n\
+             \x20   let b = one(match p {{ P.A => mk(3), P.B => mk(4) }});\n\
+             \x20   println(f\"b={{b}}\");\n\
+             \x20   let c = one({{ let t = mk(5); t }});\n\
+             \x20   println(f\"c={{c}}\");\n\
+             \x20   let d = one(mk(6));\n\
+             \x20   println(f\"d={{d}}\");\n\
+             \x20   let e0 = if true {{ mk(7) }} else {{ mk(8) }};\n\
+             \x20   let e = one(e0);\n\
+             \x20   println(f\"e={{e}}\");\n\
              }}"
         );
         assert_eq!(
             run_program(&pin_src).as_deref(),
-            Some("in-take\nin-take\ndR4\ndR3\ndR2\ndR1\nv=14\n"),
-            "case pin-arg-temps-held-to-statement-end",
+            // a/b/c: the body is LOST (the defect). d/e: it runs (the controls).
+            Some(
+                "in-one\na=1\nin-one\nb=3\nin-one\nc=5\n\
+                 in-one\ndR6\nd=6\nin-one\ndR7\ne=7\n"
+            ),
+            "case control-flow-argument-loses-its-drop-body",
         );
     }
 
