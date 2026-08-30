@@ -2141,6 +2141,141 @@ pub(super) fn apply_optimization_passes(
             .run_passes("default<O1>", target_machine, opts2)
             .map_err(|e| format!("LLVM binary-search re-optimization pass failed: {e}."))?;
     }
+
+    // B-2026-08-30-32 — the f16 rounding guard runs LAST, after every pass
+    // that could have undone it. See the function's own doc-comment for why
+    // this one is placed after optimization where its bf16 sibling
+    // (`verify_no_native_bf16_ops`) runs before it.
+    if crate::target::active_target_is_wasm() {
+        verify_no_native_f16_arith(module)?;
+    }
+    Ok(())
+}
+
+/// Reject any native `half` ARITHMETIC instruction surviving into the backend
+/// on a target that would promote it to `f32` and never round back
+/// (B-2026-08-30-32). wasm32 only — every other target LLVM 18 supports
+/// legalizes `half` with `SoftPromoteHalf`, which rounds after each operation.
+///
+/// WHY THIS RUNS AFTER OPTIMIZATION, where the bf16 guard runs before it.
+/// `verify_no_native_bf16_ops` checks what CODEGEN EMITTED, and that is the
+/// right question for bf16: the ops it forbids are unselectable, so LLVM has
+/// no transform that could introduce one. f16 is the opposite case. The
+/// widened form codegen emits here is *semantically equal* to a native `half`
+/// op, so InstCombine is entitled to shrink it back — and at `default<O2>` it
+/// does, for all five arithmetic operators, which is precisely why
+/// `emit_f32_to_f16_opaque` rounds through a call instead of an `fptrunc`. A
+/// check that ran before the pipeline would therefore pass on IR the pipeline
+/// then breaks. Running it here asks the only question that matters: is the
+/// module the BACKEND receives free of unrounded f16 arithmetic?
+///
+/// So this guard covers two failure modes, not one: a codegen site that
+/// forgets to widen, and a future LLVM that learns to see through the call.
+/// The second is not hypothetical — it is one `TargetLibraryInfo` entry away.
+///
+/// TWO PASSES, because an f16 op reaches the backend in two spellings: a
+/// plain `fmul half`, and an intrinsic like `llvm.sqrt.f16` that an opcode
+/// sweep does not see. bf16 was immune to the second by accident —
+/// `verify_no_native_bf16_ops` matches intrinsics by name and every
+/// `llvm.*.bf16` contains "bf16" — while nothing matched `llvm.sqrt.f16`.
+///
+/// Comparisons and `fneg` are deliberately absent from the opcode list. They
+/// are exact: `fneg` flips a sign bit and a compare produces an `i1`, so
+/// neither can carry an unrepresentable value, and the wasm backend normalizes
+/// each operand through f16 before comparing it (measured).
+fn verify_no_native_f16_arith(module: &Module<'_>) -> Result<(), String> {
+    use inkwell::types::BasicTypeEnum;
+    use inkwell::values::InstructionOpcode as Op;
+
+    let ctx = module.get_context();
+    let f16_t: BasicTypeEnum<'_> = ctx.f16_type().into();
+    let is_f16 = |t: BasicTypeEnum<'_>| {
+        t == f16_t || (t.is_vector_type() && t.into_vector_type().get_element_type() == f16_t)
+    };
+
+    // PASS 1 — INEXACT f16 INTRINSICS, found by NAME at the module level.
+    //
+    // An intrinsic is a native f16 op wearing a call's clothing, and it is the
+    // half that is easiest to miss: `llvm.sqrt.f16` looks like a call, not
+    // like an `fmul`, so an opcode sweep walks straight past it. It cost
+    // `65504f16.sqrt()` its correct answer (255.875) in favour of the
+    // unrounded f32 255.93748474… on wasm.
+    //
+    // ALLOW-LIST, not a deny-list, so a newly-emitted inexact intrinsic fails
+    // closed rather than slipping through. The permitted ones return one of
+    // their operands or move a sign bit, so they cannot produce a value
+    // outside the f16 grid no matter how the backend legalizes them.
+    // Declarations are read by NAME only — never by touching a call's
+    // operands, which is what keeps this safe on coroutine intrinsics (the
+    // hazard `verify_no_native_bf16_ops`'s first pass documents).
+    const EXACT_AT_ANY_WIDTH: &[&str] = &[
+        ".fabs.",
+        ".minnum.",
+        ".maxnum.",
+        ".minimum.",
+        ".maximum.",
+        ".copysign.",
+        ".fmin.",
+        ".fmax.",
+    ];
+    let mut f = module.get_first_function();
+    while let Some(fv) = f {
+        let name = fv.get_name().to_string_lossy().into_owned();
+        if name.starts_with("llvm.")
+            && name.contains("f16")
+            && !name.contains("bf16")
+            && !EXACT_AT_ANY_WIDTH.iter().any(|ex| name.contains(ex))
+        {
+            return Err(format!(
+                "internal error: the inexact f16 intrinsic `{name}` survived \
+                 into the wasm backend. LLVM 18 legalizes wasm32 `half` with \
+                 `PromoteFloat`, which computes at `f32` and does not round \
+                 back, so its result would not be representable as an `f16` \
+                 (`65504f16.sqrt()` yields 255.93748474… where the f16 answer \
+                 is 255.875). Route the call through \
+                 `build_float_intrinsic_bf16_safe`, which widens the operands \
+                 and rounds the result. If the intrinsic really is exact at \
+                 every width — it returns one of its operands, or only moves a \
+                 sign bit — add it to `EXACT_AT_ANY_WIDTH` instead."
+            ));
+        }
+        f = fv.get_next_function();
+    }
+
+    // PASS 2 — plain arithmetic. These carry only float operands and a float
+    // result, so the type API is safe on them; `Call` is deliberately not in
+    // the opcode list (pass 1 covers it).
+    let mut f = module.get_first_function();
+    while let Some(fv) = f {
+        for bb in fv.get_basic_blocks() {
+            let mut i = bb.get_first_instruction();
+            while let Some(inst) = i {
+                if matches!(
+                    inst.get_opcode(),
+                    Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FRem
+                ) && BasicTypeEnum::try_from(inst.get_type()).is_ok_and(is_f16)
+                {
+                    return Err(format!(
+                        "internal error: a native `half` {:?} survived into the \
+                         wasm backend in `{}`. LLVM 18 legalizes wasm32 `half` \
+                         with `PromoteFloat`, which computes in `f32` and does \
+                         NOT round the result back, so the value would not be \
+                         representable as an `f16` (`65504f16 * 3f16` yields a \
+                         finite 196512). f16 arithmetic must be widened to \
+                         `f32` and rounded through `emit_f32_to_f16_opaque` — \
+                         see `f16_arith_needs_explicit_rounding`. If codegen \
+                         does emit the widened form, the optimizer shrank it \
+                         back: the rounding call is what blocks that fold, so \
+                         check it was not replaced by an `fptrunc`.",
+                        inst.get_opcode(),
+                        fv.get_name().to_string_lossy(),
+                    ));
+                }
+                i = inst.get_next_instruction();
+            }
+        }
+        f = fv.get_next_function();
+    }
     Ok(())
 }
 

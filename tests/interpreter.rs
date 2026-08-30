@@ -24639,6 +24639,65 @@ fn test_vector_f16_transcendentals_are_computed_without_overflowing_the_lane() {
     );
 }
 
+// f16 ARITHMETIC must produce a value the type can actually hold — the oracle
+// half of B-2026-08-30-32, whose compiled twin is
+// `wasm_f16_arithmetic_build_and_run_e2e` in `tests/cli.rs`.
+//
+// The bug was wasm-only: LLVM 18 legalizes wasm32 `half` with `PromoteFloat`,
+// which computes in `f32` and never rounds the result back, so a wasm module
+// carried values no `f16` can represent while the interpreter and the native
+// binary were correct. This test therefore passes with or without the codegen
+// fix BY DESIGN — its job is to pin what the answers ARE, so the compiled
+// backend has something to be compared against that is not itself a compiled
+// backend.
+//
+// The receiver is the literal `1` rather than `env.args().len()`: the compiled
+// fixture needs `env.args()` to defeat constant folding, but an in-process
+// interpreter test would read the TEST BINARY's argv, which is not 1.
+#[test]
+fn test_f16_arithmetic_results_are_representable_in_f16() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let n: i64 = 1;\n\
+             \x20   let one: f32 = n as f32;\n\
+             \x20   let big: f16 = (one * 65504.0f32) as f16;\n\
+             \x20   let three: f16 = (one * 3.0f32) as f16;\n\
+             \x20   let a: f16 = (one * 3.5f32) as f16;\n\
+             \x20   let b: f16 = (one * 1.25f32) as f16;\n\
+             \x20   let p: f16 = (one * 0.1f32) as f16;\n\
+             \x20   let q: f16 = (one * 0.3f32) as f16;\n\
+             \x20   let tiny: f16 = (one * 0.00006103515625f32) as f16;\n\
+             \x20   println(f\"ovf {big * three} {big + three}\");\n\
+             \x20   println(f\"div {a / b} {p / q}\");\n\
+             \x20   println(f\"inx {p + q} {p * q} {p - q}\");\n\
+             \x20   println(f\"unf {tiny * tiny}\");\n\
+             \x20   let mut s: f16 = p;\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 8 {\n\
+             \x20       s = s + p;\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(f\"acc {s}\");\n\
+             \x20   println(f\"mth {big.sqrt()} {a.exp()} {a.ln()} {a.floor()}\");\n\
+             \x20   let u: Vector[f16, 4] = Vector[f16, 4](big, p, a, tiny);\n\
+             \x20   let v: Vector[f16, 4] = Vector[f16, 4](three, q, b, tiny);\n\
+             \x20   let w = u * v;\n\
+             \x20   let z = u + v;\n\
+             \x20   println(f\"vec {w[0]} {w[1]} {w[3]} {z[1]}\");\n\
+             }\n"),
+        // 65504 is the largest finite f16, so the product overflows and the
+        // sum rounds back down to it; tiny*tiny underflows past the smallest
+        // subnormal. Pre-fix, wasm gave a finite 196512, 65507, and 2^-28.
+        "ovf inf 65504\n\
+         div 2.80078125 0.333251953125\n\
+         inx 0.39990234375 0.029998779296875 -0.2000732421875\n\
+         unf 0\n\
+         acc 0.900390625\n\
+         mth 255.875 33.125 1.2529296875 3\n\
+         vec inf 0.029998779296875 0 0.39990234375\n"
+    );
+}
+
 // A scalar float method must be COMPUTED at the receiver's declared width, not
 // computed in f64 and rounded into it afterwards. The tree-walk carries every
 // float as an f64, so the second is the tempting shortcut — and it is exact for

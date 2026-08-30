@@ -179,4 +179,146 @@ fn main() {
             "the threaded pass must emit for the wasip1-threads triple; IR:\n{ir}"
         );
     }
+
+    /// f16 ARITHMETIC must be widened to `f32` and rounded back through an
+    /// explicit `__truncsfhf2` call on wasm — never left as a native `half`
+    /// binop for the backend to legalize (B-2026-08-30-32).
+    ///
+    /// LLVM 18 legalizes wasm32 `half` with `PromoteFloat`, which computes in
+    /// `f32` and does not round the result back, so a native `fmul half`
+    /// leaves a value the type cannot hold: `65504f16 * 3f16` came out as a
+    /// finite 196512 where the largest finite f16 is 65504 and the answer must
+    /// be `inf`.
+    ///
+    /// WHY THE ROUNDING IS A CALL AND NOT AN `fptrunc`, which is what makes
+    /// this pin worth having: an `fptrunc (fadd (fpext a) (fpext b))` is
+    /// semantically identical to `fadd half`, and InstCombine shrinks it back
+    /// to exactly that whenever the wide type is exact for the narrow one —
+    /// which `f32` is for `f16` (24 significand bits ≥ 2·11 + 2). Measured at
+    /// `default<O2>`, the pipeline karac runs: all five of add/sub/mul/div/rem
+    /// fold. So a fix that emitted the obvious spelling would be undone before
+    /// the backend saw it, and would still pass a value test written against
+    /// an un-optimized module. The call is what survives, and this test pins
+    /// the call rather than the widening for that reason.
+    #[test]
+    fn wasm_f16_arithmetic_rounds_through_an_unfoldable_call() {
+        let ir = wasm_ir_for_with_concurrency(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let a: f16 = (one * 65504.0f32) as f16;
+    let b: f16 = (one * 3.0f32) as f16;
+    println(f"{a + b} {a - b} {a * b} {a / b}");
+}
+"#,
+        );
+        // No native `half` arithmetic may reach the backend.
+        for native in ["fadd half", "fsub half", "fmul half", "fdiv half"] {
+            assert!(
+                !ir.contains(native),
+                "`{native}` must not survive on wasm — LLVM promotes it to f32 \
+                 and never rounds back; IR:\n{ir}"
+            );
+        }
+        // Each of the four ops rounds through its own call.
+        assert_eq!(
+            ir.matches("call i32 @__truncsfhf2").count(),
+            4,
+            "each f16 arithmetic op must round through `__truncsfhf2`; IR:\n{ir}"
+        );
+        // The arithmetic itself happens at f32.
+        assert!(
+            ir.contains("fadd float") && ir.contains("fdiv float"),
+            "f16 arithmetic must be computed at f32 on wasm; IR:\n{ir}"
+        );
+    }
+
+    /// The MATH INTRINSICS need the same widening, and are the half an opcode
+    /// sweep walks past: `llvm.sqrt.f16` looks like a call, not like an
+    /// `fmul`, so it survived the first pass of this fix. Measured,
+    /// `65504f16.sqrt()` returned the unrounded f32 255.93748474… on wasm
+    /// where both other backends give 255.875, and 9 of 11 printed lines
+    /// across the fourteen f16 math methods differed from native.
+    ///
+    /// The two that AGREED are exactly the exact-at-any-width families —
+    /// `floor`/`ceil`/`round`/`trunc` and `copysign` — which is the
+    /// prediction the guard's allow-list rests on, so it is pinned here.
+    #[test]
+    fn wasm_f16_math_intrinsics_are_widened_and_rounded() {
+        let ir = wasm_ir_for_with_concurrency(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let a: f16 = (one * 65504.0f32) as f16;
+    let b: f16 = (one * 3.7f32) as f16;
+    println(f"{a.sqrt()} {a.exp()} {a.ln()} {b.floor()} {b.copysign(a)}");
+}
+"#,
+        );
+        // No INEXACT f16 intrinsic may reach the backend.
+        for native in [
+            "llvm.sqrt.f16",
+            "llvm.exp.f16",
+            "llvm.log.f16",
+            "llvm.floor.f16",
+            "llvm.copysign.f16",
+        ] {
+            assert!(
+                !ir.contains(native),
+                "`{native}` must not survive on wasm — LLVM promotes it to f32 \
+                 and never rounds back; IR:\n{ir}"
+            );
+        }
+        // They are called at f32 instead, and each rounds back through the
+        // same unfoldable call the arithmetic path uses.
+        assert!(
+            ir.contains("llvm.sqrt.f32") && ir.contains("llvm.exp.f32"),
+            "f16 math must be computed at f32 on wasm; IR:\n{ir}"
+        );
+        assert_eq!(
+            ir.matches("call i32 @__truncsfhf2").count(),
+            5,
+            "one rounding call per math method; IR:\n{ir}"
+        );
+    }
+
+    /// The `<N x half>` lane form needs the same treatment for the same
+    /// reason: the vector legalizer scalarizes the lane op into the scalar
+    /// `half` nodes whose legalization is the lossy one, so `Vector[f16, 4]`
+    /// multiplication carried the identical unrounded result.
+    ///
+    /// Only the ROUNDING is per-lane — the arithmetic stays a `<4 x float>`
+    /// vector op, which wasm does have — so the pin checks both halves.
+    #[test]
+    fn wasm_f16_vector_lane_arithmetic_rounds_per_lane() {
+        let ir = wasm_ir_for_with_concurrency(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let a: f16 = (one * 65504.0f32) as f16;
+    let b: f16 = (one * 3.0f32) as f16;
+    let u: Vector[f16, 4] = Vector[f16, 4](a, b, a, b);
+    let v: Vector[f16, 4] = Vector[f16, 4](b, b, b, b);
+    let w = u * v;
+    println(f"{w[0]}");
+}
+"#,
+        );
+        assert!(
+            !ir.contains("fmul <4 x half>"),
+            "a native `<4 x half>` lane op must not survive on wasm; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("fmul <4 x float>"),
+            "the lane arithmetic itself must stay a vector op at f32; IR:\n{ir}"
+        );
+        assert_eq!(
+            ir.matches("call i32 @__truncsfhf2").count(),
+            4,
+            "one rounding call per lane of the 4-lane result; IR:\n{ir}"
+        );
+    }
 }

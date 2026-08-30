@@ -6017,6 +6017,133 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True when codegen must round `f16` ARITHMETIC itself rather than
+    /// leave a native `half` op for the backend to legalize
+    /// (B-2026-08-30-32).
+    ///
+    /// LLVM 18 legalizes `half` two different ways. `SoftPromoteHalf` — what
+    /// x86_64 and aarch64 use — widens each operand, computes in `f32` and
+    /// ROUNDS THE RESULT BACK after every operation, so `fadd half` closes
+    /// with `__truncsfhf2` (x86) or `fcvt h, s` (aarch64). `PromoteFloat` —
+    /// what wasm32 uses — keeps the value in an `f32` carrier and rounds only
+    /// where the narrow type is forced: a store, a comparison, a call. Between
+    /// two arithmetic ops it rounds NOTHING, so a wasm module carries values
+    /// no `f16` can hold: `65504f16 * 3f16` is a finite 196512 where the
+    /// largest finite f16 is 65504 and the answer must be `inf`.
+    ///
+    /// WHY THE bf16 RECIPE DOES NOT TRANSFER, though the two bugs look alike.
+    /// bf16 is widened unconditionally by [`Self::compile_vector_binop`] and
+    /// the scalar binary-op path, and that widening survives because bf16's
+    /// conversions are emitted as INTEGER bit manipulation
+    /// ([`Self::emit_f32_to_bf16`]) — the mid-end cannot see an `fpext` /
+    /// `fptrunc` pair to collapse. f16 has legal `fpext` / `fptrunc`, and
+    /// InstCombine shrinks `fptrunc (binop (fpext a) (fpext b))` back to
+    /// `binop half` whenever the wide type is exact for the narrow one, which
+    /// `f32` is for `f16` (24 significand bits ≥ 2·11 + 2, Figueroa's
+    /// condition). MEASURED: at `default<O2>` — the pipeline karac runs — all
+    /// five of `fadd` / `fsub` / `fmul` / `fdiv` / `frem` fold straight back,
+    /// so emitting the widened form here would be undone before the backend
+    /// ever saw it. That is why the rounding below goes through a call the
+    /// optimizer must leave alone, and why this is gated on the target rather
+    /// than done everywhere: x86_64 and aarch64 already round correctly, and
+    /// widening them would only add work for LLVM to undo.
+    pub(super) fn f16_arith_needs_explicit_rounding(&self) -> bool {
+        crate::target::active_target_is_wasm()
+    }
+
+    /// Round an `f32` to `f16` with a narrowing the mid-end CANNOT fold away:
+    /// an explicit call to compiler-rt's `__truncsfhf2`, whose result is the
+    /// f16 bit pattern in an `i32`.
+    ///
+    /// A plain `fptrunc` is the obvious spelling and is wrong here for the
+    /// reason [`Self::f16_arith_needs_explicit_rounding`] documents — it is
+    /// exactly the half of the pattern InstCombine matches on. A call is
+    /// opaque to that fold. Three alternatives were measured and rejected:
+    ///
+    /// - `llvm.experimental.constrained.fptrunc` survives the optimizer, and
+    ///   then dies at ISel with `LLVM ERROR: Cannot select: strict_fp16_to_fp`
+    ///   — the same hard abort with no diagnostic that bf16 gives, so it
+    ///   trades a wrong answer for a compiler crash.
+    /// - An inline integer round-to-nearest-even sequence, the shape
+    ///   [`Self::emit_f32_to_bf16`] uses, would avoid the call. bf16's version
+    ///   is a bias-add on the top 16 bits because a bf16 IS a truncated f32;
+    ///   f16 has a different exponent width, so the same job needs overflow-to-
+    ///   inf and subnormal renormalization written out — new, unvalidated IEEE
+    ///   rounding code in the one place where a mistake is itself a fresh
+    ///   miscompile.
+    /// - Rounding through a `store half` / `load half` pair works at ISel (the
+    ///   backend does round at a store) but not in the mid-end, which forwards
+    ///   the store to the load and leaves the `fptrunc` exposed to the fold.
+    ///
+    /// `__truncsfhf2` costs nothing extra on this target: the wasm backend
+    /// already emits a call to it for every `f16` store, and it is the same
+    /// call x86_64 makes after every `fadd half`. So the emitted module gets
+    /// the instruction sequence a CORRECT target produces, from the same
+    /// implementation — `runtime/src/f16.rs`'s definition, whose rounding was
+    /// validated against host compiler-rt over all 2^32 `f32` bit patterns
+    /// (B-2026-08-30-24). The wasm archives define it; nothing else links it.
+    fn emit_f32_to_f16_opaque(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let i32_t = self.context.i32_type();
+        let trunc_fn = self.module.get_function("__truncsfhf2").unwrap_or_else(|| {
+            self.module.add_function(
+                "__truncsfhf2",
+                i32_t.fn_type(&[self.context.f32_type().into()], false),
+                None,
+            )
+        });
+        let bits = self
+            .builder
+            .build_call(trunc_fn, &[fv.into()], &format!("{name}.f2h"))
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let narrow = self
+            .builder
+            .build_int_truncate(bits, self.context.i16_type(), &format!("{name}.f2h.i16"))
+            .unwrap();
+        self.builder
+            .build_bit_cast(narrow, self.context.f16_type(), name)
+            .unwrap()
+            .into_float_value()
+    }
+
+    /// The `<N x half>` twin of [`Self::emit_f32_to_f16_opaque`], rounding
+    /// each lane and reassembling the vector.
+    ///
+    /// Per-lane because the rounding is per-lane and `__truncsfhf2` is scalar.
+    /// That is not the cost it looks like: wasm32 has no `f16` SIMD, so LLVM
+    /// scalarizes every `<N x half>` lane op into exactly these calls already.
+    /// Only the ROUNDING is scalarized here — the arithmetic itself stays a
+    /// `<N x float>` vector op, which wasm does have.
+    fn emit_f32_vector_to_f16_opaque(
+        &self,
+        vv: inkwell::values::VectorValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::VectorValue<'ctx> {
+        let n = vv.get_type().get_size();
+        let i32_t = self.context.i32_type();
+        let mut out = self.context.f16_type().vec_type(n).get_undef();
+        for lane in 0..n {
+            let idx = i32_t.const_int(lane as u64, false);
+            let elem = self
+                .builder
+                .build_extract_element(vv, idx, &format!("{name}.l{lane}"))
+                .unwrap()
+                .into_float_value();
+            let rounded = self.emit_f32_to_f16_opaque(elem, &format!("{name}.r{lane}"));
+            out = self
+                .builder
+                .build_insert_element(out, rounded, idx, &format!("{name}.i{lane}"))
+                .unwrap();
+        }
+        out
+    }
+
     /// Forbid LLVM's constant folder from evaluating this call site.
     ///
     /// LLVM folds a math call whose argument is compile-time known by running
@@ -6109,6 +6236,28 @@ impl<'ctx> super::Codegen<'ctx> {
     /// intrinsic computes at f32 and rounds once, where a native bf16
     /// intrinsic would round its intermediate.
     ///
+    /// f16 IS WIDENED TOO, ON WASM ONLY (B-2026-08-30-32). Everything the
+    /// paragraph above says about an intrinsic being "a native op wearing a
+    /// call's clothing" applies unchanged to `llvm.sqrt.f16` — and it applies
+    /// to a DIFFERENT hazard, which is why f16 was left native here when bf16
+    /// was not. `llvm.sqrt.f16` selects fine everywhere; on wasm32 it is
+    /// legalized by `PromoteFloat`, which computes at f32 and does not round
+    /// back, so `65504f16.sqrt()` returned the unrounded f32 255.93748474…
+    /// where both other backends give 255.875. Measured, and it is the exact
+    /// analogue of the arithmetic half of that row.
+    ///
+    /// bf16 was immune to this by accident rather than design:
+    /// `verify_no_native_bf16_ops`'s first pass matches intrinsics BY NAME,
+    /// and every `llvm.*.bf16` contains "bf16", so bf16 was forced down the
+    /// widened path from the moment that guard landed. Nothing matched
+    /// `llvm.sqrt.f16`, so f16 kept the native spelling and the wrong answer.
+    ///
+    /// Five of the fourteen callers -- `floor` / `ceil` / `round` / `trunc` /
+    /// `copysign` -- are exact at any width and neither need the widening nor
+    /// are harmed by it (an exact result rounds to itself). Widening all
+    /// fourteen keeps ONE rule at this call site rather than a table of
+    /// exceptions to get wrong later.
+    ///
     /// `no_fold`: forbid LLVM's constant folder from evaluating this call when
     /// its arguments are compile-time known. See
     /// [`Self::mark_call_no_constant_fold`] for why an inexact float method
@@ -6120,12 +6269,23 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         no_fold: bool,
     ) -> inkwell::values::FloatValue<'ctx> {
+        // f16 is widened only where the backend would not round the result
+        // back (wasm); elsewhere the native `llvm.*.f16` is both correct and
+        // cheaper. bf16 is widened on every target — it cannot be selected.
+        let round_f16 = self.f16_arith_needs_explicit_rounding()
+            && args.iter().all(|a| a.get_type() == self.context.f16_type());
         let (widened, narrow): (Vec<inkwell::values::FloatValue<'ctx>>, bool) = {
             let mut any = false;
             let v = args
                 .iter()
                 .enumerate()
                 .map(|(i, a)| {
+                    if round_f16 {
+                        return self
+                            .builder
+                            .build_float_ext(*a, self.context.f32_type(), &format!("{name}.a{i}32"))
+                            .unwrap();
+                    }
                     let (w, did) = self.widen_bf16_scalar(*a, &format!("{name}.a{i}32"));
                     any |= did;
                     w
@@ -6146,6 +6306,12 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mark_call_no_constant_fold(call);
         }
         let r = call.try_as_basic_value().unwrap_basic().into_float_value();
+        if round_f16 {
+            // The opaque round, not an `fptrunc` — InstCombine shrinks
+            // `fptrunc (intrinsic (fpext x))` back to the native f16 form for
+            // several of these, which is exactly what must not happen here.
+            return self.emit_f32_to_f16_opaque(r, &format!("{name}.h"));
+        }
         self.narrow_bf16_scalar(r, narrow, &format!("{name}.bf"))
     }
 
@@ -6633,6 +6799,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // in both directions because a bf16 is a truncated f32.
             let (lv, wide) = self.widen_bf16_vector(lv, "vbf.l");
             let (rv, _) = self.widen_bf16_vector(rv, "vbf.r");
+            // B-2026-08-30-32 — `<N x half>` lane arithmetic carries the same
+            // unrounded result as the scalar form on a target that promotes
+            // `half` without rounding back (wasm32), and for the same reason:
+            // the vector legalizer scalarizes the lane op into the scalar
+            // `half` nodes whose legalization is the lossy one. Widen to
+            // `<N x float>` and round each lane explicitly. Only reachable
+            // when `widen_bf16_vector` did nothing — the two 16-bit formats
+            // never share an op.
+            let elem_is_f16 = |v: VectorValue<'ctx>| {
+                let e = v.get_type().get_element_type();
+                e.is_float_type() && e.into_float_type() == self.context.f16_type()
+            };
+            let f16_lanes = !wide && self.f16_arith_needs_explicit_rounding() && elem_is_f16(lv);
+            let (lv, rv) = if f16_lanes {
+                let wide_t = self.context.f32_type().vec_type(lv.get_type().get_size());
+                (
+                    self.builder.build_float_ext(lv, wide_t, "vh.l").unwrap(),
+                    self.builder.build_float_ext(rv, wide_t, "vh.r").unwrap(),
+                )
+            } else {
+                (lv, rv)
+            };
             match op {
                 // Arithmetic yields a value in the ELEMENT type, so it rounds
                 // back. The comparisons below do not: their result is an
@@ -6645,7 +6833,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         BinOp::Div => self.builder.build_float_div(lv, rv, "vdiv").unwrap(),
                         _ => self.builder.build_float_rem(lv, rv, "vrem").unwrap(),
                     };
-                    self.narrow_bf16_vector(r, wide, "vbf.res").into()
+                    if f16_lanes {
+                        self.emit_f32_vector_to_f16_opaque(r, "vh.res").into()
+                    } else {
+                        self.narrow_bf16_vector(r, wide, "vbf.res").into()
+                    }
                 }
                 // Comparisons → per-lane mask `<N x i1>`. Ordered float
                 // predicates match the scalar float compares.
@@ -10362,19 +10554,42 @@ impl<'ctx> super::Codegen<'ctx> {
         // legalization of bf16, so x86 results are unchanged.
         let bf16_op =
             lf.get_type() == self.context.bf16_type() && rf.get_type() == self.context.bf16_type();
+        // B-2026-08-30-32 — f16 needs the same treatment on a target whose
+        // backend promotes `half` to `f32` and never rounds back (wasm32).
+        // Unlike bf16 this is target-gated and the round uses a call rather
+        // than an `fptrunc`; `f16_arith_needs_explicit_rounding` explains both.
+        let f16_op = self.f16_arith_needs_explicit_rounding()
+            && lf.get_type() == self.context.f16_type()
+            && rf.get_type() == self.context.f16_type();
         let (lf, rf) = if bf16_op {
             (
                 self.emit_bf16_to_f32(lf, "fop.l.bf2f"),
                 self.emit_bf16_to_f32(rf, "fop.r.bf2f"),
             )
+        } else if f16_op {
+            // `fpext half` IS selectable (this is not bf16's problem), and on
+            // wasm it costs nothing: the ABI already carries a `half` in an
+            // `f32`, so the widening compiles to no instruction at all.
+            let f32_t = self.context.f32_type();
+            (
+                self.builder
+                    .build_float_ext(lf, f32_t, "fop.l.h2f")
+                    .unwrap(),
+                self.builder
+                    .build_float_ext(rf, f32_t, "fop.r.h2f")
+                    .unwrap(),
+            )
         } else {
             (lf, rf)
         };
-        // Comparisons stay in f32 (widening is exact, so f32 compare ≡ bf16
-        // compare); only arithmetic results round back down.
+        // Comparisons stay in f32 (widening is exact for both 16-bit formats,
+        // so an f32 compare ≡ the narrow compare); only arithmetic results
+        // round back down.
         let round_back = |cg: &Self, v: inkwell::values::FloatValue<'ctx>| {
             if bf16_op {
                 cg.emit_f32_to_bf16(v, "fop.res")
+            } else if f16_op {
+                cg.emit_f32_to_f16_opaque(v, "fop.res")
             } else {
                 v
             }

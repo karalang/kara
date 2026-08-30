@@ -20525,6 +20525,159 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Full build-path E2E for f16 ARITHMETIC on the wasm target
+/// (B-2026-08-30-32) — the values a wasm module computes must be the values
+/// the native binary and the interpreter compute.
+///
+/// LLVM 18 legalizes `half` two different ways. x86_64 and aarch64 use
+/// `SoftPromoteHalf`, which widens each operand, computes in `f32` and ROUNDS
+/// THE RESULT BACK after every operation. wasm32 uses `PromoteFloat`, which
+/// keeps the value in an `f32` carrier and rounds only where the narrow type
+/// is forced — a store, a compare, a call — and NOT between two arithmetic
+/// ops. A wasm module therefore carried values no `f16` can hold: every line
+/// of this fixture came out different before the fix, `65504f16 * 3f16` as a
+/// finite 196512 where the largest finite f16 is 65504 and the answer must be
+/// `inf`.
+///
+/// WHY THE FIXTURE LOOKS LIKE THIS. Every receiver derives from
+/// `env.args().len()`, so nothing constant-folds — a literal fixture measures
+/// LLVM's folder rather than the emitted arithmetic (B-2026-08-29-61). The
+/// lines were chosen for the four ways an unrounded intermediate becomes
+/// visible: overflow that must saturate to `inf`, a quotient that is not
+/// f16-representable, an underflow that must flush to zero, and an
+/// accumulation whose drift compounds. `Vector[f16, 4]` is here because the
+/// lane form has the identical defect through a different path — the vector
+/// legalizer scalarizes the lane op into the same scalar `half` nodes.
+///
+/// The `mth` line covers the second spelling of the same defect: a math method
+/// reaches the backend as an `llvm.sqrt.f16` intrinsic, which an opcode sweep
+/// walks straight past. `65504f16.sqrt()` returned the unrounded f32
+/// 255.93748474… where the f16 answer is 255.875, and 9 of the 11 lines in a
+/// fourteen-method probe differed from native. `floor` is on the line as the
+/// control — it is exact at any width and agreed both before and after.
+///
+/// Note what is deliberately NOT asserted: `(a + b) * b` on operands whose
+/// every intermediate happens to be f16-representable, and a comparison
+/// between two such values, both agreed BEFORE the fix. They are the
+/// "agrees by luck of the inputs" trap (B-2026-08-29-40), and a fixture built
+/// out of them would have passed against the broken compiler.
+///
+/// `args: ['prog']` so `env.args().len()` is 1 under node exactly as it is
+/// under the native binary.
+#[test]
+fn wasm_f16_arithmetic_build_and_run_e2e() {
+    let tmp = wasm_test_dir("f16arith");
+    let path = tmp.join("f16arith.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let big: f16 = (one * 65504.0f32) as f16;
+    let three: f16 = (one * 3.0f32) as f16;
+    let a: f16 = (one * 3.5f32) as f16;
+    let b: f16 = (one * 1.25f32) as f16;
+    let p: f16 = (one * 0.1f32) as f16;
+    let q: f16 = (one * 0.3f32) as f16;
+    let tiny: f16 = (one * 0.00006103515625f32) as f16;
+
+    println(f"ovf {big * three} {big + three}");
+    println(f"div {a / b} {p / q}");
+    println(f"inx {p + q} {p * q} {p - q}");
+    println(f"unf {tiny * tiny}");
+    let mut s: f16 = p;
+    let mut i: i64 = 0;
+    while i < 8 {
+        s = s + p;
+        i = i + 1;
+    }
+    println(f"acc {s}");
+    println(f"mth {big.sqrt()} {a.exp()} {a.ln()} {a.floor()}");
+    let u: Vector[f16, 4] = Vector[f16, 4](big, p, a, tiny);
+    let v: Vector[f16, 4] = Vector[f16, 4](three, q, b, tiny);
+    let w = u * v;
+    let z = u + v;
+    println(f"vec {w[0]} {w[1]} {w[3]} {z[1]}");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_f16_arithmetic_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "wasm build failed (an `a native `half` … survived into the wasm \
+         backend` here is the codegen guard firing — f16 arithmetic reached \
+         the backend un-widened): {stderr}",
+    );
+    let wasm_path = tmp.join("f16arith.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected f16arith.wasm next to the build cwd"
+    );
+
+    let runner = tmp.join("run_wasi.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: ['prog'], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_f16_arithmetic_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wasm module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    // Byte-identical to the native binary and to `karac run --interp`.
+    // Every one of these six lines differed before the fix.
+    assert_eq!(
+        node_stdout,
+        "ovf inf 65504\n\
+         div 2.80078125 0.333251953125\n\
+         inx 0.39990234375 0.029998779296875 -0.2000732421875\n\
+         unf 0\n\
+         acc 0.900390625\n\
+         mth 255.875 33.125 1.2529296875 3\n\
+         vec inf 0.029998779296875 0 0.39990234375\n",
+        "wasm f16 arithmetic must match the native semantics; \
+         stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full build-path E2E for `String.split` on the wasm target (Weave
 /// dogfood follow-up). The split FFI (`karac_runtime_string_split`)
 /// allocates the `Vec[String]` from the unified wasi-libc heap
