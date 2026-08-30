@@ -123641,6 +123641,179 @@ fn main() {
             );
         }
     }
+
+    // ── An argument STORED into an outliving place (B-2026-08-29-49) ────
+    //
+    // `fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }` hands the
+    // argument to a container the caller already holds, so the container's
+    // drain is the one owner and the caller must not also fire the body.
+    // `fn_moves_param_into_outliving_place` has said so since B-2026-08-26-9 —
+    // but only the FRESH-TEMP registrar ever asked. An identifier argument is
+    // skipped by that walk and drops through its own binding, which consulted
+    // nothing, so ONE callee compiled ONCE gave two answers depending on how
+    // the argument was spelled at the call:
+    //
+    //     take(mut sink, Res { id: 1 });   // `pushed 1  drop 1`      one body
+    //     let c = Res { id: 2 };
+    //     take(mut sink, c);               // `drop 2  pushed 1  drop 2`  two
+    //
+    // Unanimous on interp / JIT / AOT / `KARAC_AUTO_PAR=0`, so no A/B gate
+    // reports it; the fresh-temp spelling is the oracle that makes it visible.
+    //
+    // The row was filed as a METHOD defect over an enum payload. It is neither:
+    // the free-function spelling counts identically, and the enum is a SECOND,
+    // independent hole — `moves()` matches the param by NAME, so a callee that
+    // destructures it first (`match b { Full(r) => sink.push(r) }`) stores `r`,
+    // never `b`, and the predicate answered false for a value that plainly
+    // escapes. With it blind, even the fresh-temp enum spelling ran two bodies.
+
+    /// Leg 1 — the NAMED-binding spelling alone.
+    #[test]
+    fn e2e_named_arg_stored_into_mut_ref_param_runs_one_body() {
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64 }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\"); }\n\
+                 }\n\
+                 fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }\n\
+                 fn main() {\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   let carg: Res = Res { id: 7 };\n\
+                 \x20   take(mut sink, carg);\n\
+                 \x20   println(f\"pushed {sink.len()}\");\n\
+                 }\n"
+            ),
+            Some("pushed 1\ndrop 7\n".to_string())
+        );
+    }
+
+    /// Leg 2 — the ORACLE pairing, and the sharpest form of the defect: both
+    /// spellings against ONE callee in ONE program. Before the fix this printed
+    /// `--after temp arg--  drop 2  --after named arg--  pushed 2  drop 1
+    /// drop 2`, the extra body sitting between the two markers where only the
+    /// named call could have produced it.
+    #[test]
+    fn e2e_stored_arg_agrees_between_temp_and_named_spellings() {
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64 }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\"); }\n\
+                 }\n\
+                 fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }\n\
+                 fn main() {\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   take(mut sink, Res { id: 1 });\n\
+                 \x20   println(\"--after temp arg--\");\n\
+                 \x20   let carg: Res = Res { id: 2 };\n\
+                 \x20   take(mut sink, carg);\n\
+                 \x20   println(\"--after named arg--\");\n\
+                 \x20   println(f\"pushed {sink.len()}\");\n\
+                 }\n"
+            ),
+            Some("--after temp arg--\n--after named arg--\npushed 2\ndrop 1\ndrop 2\n".to_string())
+        );
+    }
+
+    /// Leg 3 — the SECOND hole on its own. A FRESH-TEMP enum argument whose
+    /// payload is stored: the caller does consult the predicate here, so this
+    /// fails only because the predicate could not see through the `match`.
+    /// Keeping it separate from leg 1 is what stops a future edit from fixing
+    /// one hole and reporting both closed.
+    #[test]
+    fn e2e_temp_enum_arg_payload_stored_into_mut_ref_param_runs_one_body() {
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64 }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\"); }\n\
+                 }\n\
+                 enum Box2 { Full(Res), Empty }\n\
+                 fn take(sink: mut ref Vec[Res], b: Box2) {\n\
+                 \x20   match b { Box2.Full(r) => { sink.push(r); } Box2.Empty => {} }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   take(mut sink, Box2.Full(Res { id: 7 }));\n\
+                 \x20   println(f\"pushed {sink.len()}\");\n\
+                 }\n"
+            ),
+            Some("pushed 1\ndrop 7\n".to_string())
+        );
+    }
+
+    /// Leg 4 — the shape the row was actually filed on: a METHOD arm moving an
+    /// owned enum param's payload into a `mut ref` param. It reaches the same
+    /// count by a THIRD route — the method caller already stands down on every
+    /// by-value arg (B-2026-08-29-11), so here it was the callee FRAME that
+    /// fired, because the blind predicate did not mark `b` as escaping.
+    #[test]
+    fn e2e_method_enum_arg_payload_stored_into_mut_ref_param_runs_one_body() {
+        assert_eq!(
+            run_program(
+                "struct Res { id: i64 }\n\
+                 impl Drop for Res {\n\
+                 \x20   fn drop(mut ref self) { println(f\"drop {self.id}\"); }\n\
+                 }\n\
+                 enum Box2 { Full(Res), Empty }\n\
+                 struct T { n: i64 }\n\
+                 impl T {\n\
+                 \x20   fn take(ref self, sink: mut ref Vec[Res], b: Box2) {\n\
+                 \x20       match b { Box2.Full(r) => { sink.push(r); } Box2.Empty => {} }\n\
+                 \x20   }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let t: T = T { n: 1 };\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   let carg: Box2 = Box2.Full(Res { id: 7 });\n\
+                 \x20   t.take(mut sink, carg);\n\
+                 \x20   println(f\"pushed {sink.len()}\");\n\
+                 }\n"
+            ),
+            Some("pushed 1\ndrop 7\n".to_string())
+        );
+    }
+
+    /// Leg 5 — a CONDITIONAL store, on the path where it fires. This is the
+    /// direction that decides the predicate's conservatism, so it is asserted
+    /// rather than left to the doc comment: the named spelling printed
+    /// `drop 200  pushed 1  drop 200` — a double body over a value living in
+    /// `sink` — while the temp spelling of the same callee was already correct.
+    ///
+    /// The other path (the store does NOT fire) LOSES the body, on both
+    /// spellings, and that is deliberate: no per-callee static predicate can be
+    /// right on both paths, and `fn_moves_param_into_outliving_place` documents
+    /// the leak-over-double-free lean it is answering with. Tracked separately
+    /// rather than hidden here.
+    #[test]
+    fn e2e_conditional_store_that_fires_runs_one_body_on_both_spellings() {
+        for (label, call) in [
+            (
+                "named",
+                "let carg: Res = Res { id: 200 };\n     take(mut sink, carg);",
+            ),
+            ("temp", "take(mut sink, Res { id: 200 });"),
+        ] {
+            let src = format!(
+                "struct Res {{ id: i64 }}\n\
+                 impl Drop for Res {{\n\
+                 \x20   fn drop(mut ref self) {{ println(f\"drop {{self.id}}\"); }}\n\
+                 }}\n\
+                 fn take(sink: mut ref Vec[Res], r: Res) {{ if r.id > 100 {{ sink.push(r); }} }}\n\
+                 fn main() {{\n\
+                 \x20   let mut sink: Vec[Res] = Vec.new();\n\
+                 \x20   {call}\n\
+                 \x20   println(f\"pushed {{sink.len()}}\");\n\
+                 }}\n"
+            );
+            assert_eq!(
+                run_program(&src),
+                Some("pushed 1\ndrop 200\n".to_string()),
+                "[{label}] a conditional store that FIRES must leave exactly one owner"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

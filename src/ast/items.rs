@@ -2798,6 +2798,43 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
         }
     }
 
+    /// Is `e` the bare parameter `name` itself?
+    fn is_bare(e: &Expr, name: &str) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+    }
+
+    /// B-2026-08-29-49 — the param's PAYLOAD, bound out by a pattern, stored
+    /// into an outliving place.
+    ///
+    /// `moves` matches the param by NAME, so a callee that destructures it
+    /// first (`match b { Full(r) => sink.push(r) }`) stores `r` and never `b`,
+    /// and the whole predicate answered false for a value that plainly
+    /// escapes. That is one of the two holes behind the double body this row
+    /// was filed on: with the predicate blind, even the FRESH-TEMP spelling —
+    /// which does consult it — kept the caller's drop alongside the container's.
+    ///
+    /// Only when the scrutinee is the BARE param: `match other { .. }` binds
+    /// nothing of ours, and a projection (`match b.inner { .. }`) copies a
+    /// field rather than moving the param, the same line `moves` already draws
+    /// for `x.id`.
+    ///
+    /// Conservative-true exactly like its parent, and for the same reason: an
+    /// arm that stores licenses the stand-down for every arm, so a mixed enum
+    /// whose other arm lets the payload die leaks that body rather than
+    /// double-freeing it.
+    fn stores_via_destructure<'a>(
+        scrutinee: &Expr,
+        arms: impl Iterator<Item = (&'a Pattern, &'a Expr)>,
+        name: &str,
+        roots: &[&str],
+    ) -> bool {
+        if !is_bare(scrutinee, name) {
+            return false;
+        }
+        arms.into_iter()
+            .any(|(pat, body)| pat.binding_names().iter().any(|b| stores(body, b, roots)))
+    }
+
     /// One expression: is it a store of `name` into an outliving place?
     fn stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
         match &e.kind {
@@ -2827,18 +2864,30 @@ pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bo
             }
             ExprKind::IfLet {
                 value,
+                pattern,
                 then_block,
                 else_branch,
-                ..
             } => {
                 stores(value, name, roots)
                     || walk_block(then_block, name, roots)
+                    || (is_bare(value, name)
+                        && pattern
+                            .binding_names()
+                            .iter()
+                            .any(|b| walk_block(then_block, b, roots)))
                     || else_branch
                         .as_deref()
                         .is_some_and(|x| stores(x, name, roots))
             }
             ExprKind::Match { scrutinee, arms } => {
-                stores(scrutinee, name, roots) || arms.iter().any(|a| stores(&a.body, name, roots))
+                stores(scrutinee, name, roots)
+                    || arms.iter().any(|a| stores(&a.body, name, roots))
+                    || stores_via_destructure(
+                        scrutinee,
+                        arms.iter().map(|a| (&a.pattern, &a.body)),
+                        name,
+                        roots,
+                    )
             }
             ExprKind::While { body, .. }
             | ExprKind::WhileLet { body, .. }

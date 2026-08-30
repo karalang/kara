@@ -7322,7 +7322,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         // The AST does not agree — `Function::params` excludes
                         // `self` — and the predicate shifts back by one itself
                         // rather than making every caller know that.
-                        if self.callee_returns_enum_arg_payload(&qualified, pidx) {
+                        // B-2026-08-29-49 — the store-into-an-outliving-place
+                        // route joins the returns-a-payload one, matching the
+                        // free-fn gate in `compile_call`. `i`, not `pidx`: the
+                        // predicate is keyed on the raw AST method whose
+                        // `params` exclude the receiver, the same index the
+                        // `callee_takes_over_arg_drop_body` call below uses.
+                        if self.callee_returns_enum_arg_payload(&qualified, pidx)
+                            || self.call_arg_moves_into_outliving_place(&qualified, i, false)
+                        {
                             if let ExprKind::Identifier(var_name) = &a.value.kind {
                                 let var_name = var_name.clone();
                                 self.suppress_container_elem_bodies_for_var(&var_name);

@@ -3475,6 +3475,22 @@ impl<'a> super::Interpreter<'a> {
                 let ExprKind::Identifier(n) = &arg.value.kind else {
                     return None;
                 };
+                // B-2026-08-29-49 — the SECOND escape route for an
+                // identifier arg, and the interp twin of the third clause in
+                // `compile_call`'s gate. The walk this function exists to
+                // correct (`run_fresh_temp_arg_drops`) consults
+                // `fn_moves_param_into_outliving_place` for a FRESH-TEMP arg
+                // and has since B-2026-08-26-9; an identifier arg is skipped by
+                // that walk entirely and drops through its own binding, which
+                // consulted nothing. So one callee, two spellings, two answers:
+                // `take(mut sink, Res { id: 1 })` ran one body and
+                // `take(mut sink, carg)` ran two — the binding's NLL fire at
+                // the call plus the container's at its drain.
+                let escapes_into_outliving_place = self.program.items.iter().any(|item| {
+                    matches!(item, crate::ast::Item::Function(f)
+                        if f.name == fn_name
+                            && crate::ast::fn_moves_param_into_outliving_place(f, i))
+                });
                 let is_passthrough = self.program.items.iter().any(|item| {
                     // B-2026-08-09-15 — `fn_returns_param_payload` is the same
                     // rule one level down: the callee hands back not the param
@@ -3487,7 +3503,7 @@ impl<'a> super::Interpreter<'a> {
                                 && (crate::ast::fn_returns_param(f, i)
                                     || crate::ast::fn_returns_param_payload(f, i)))
                 });
-                if !is_passthrough {
+                if !is_passthrough && !escapes_into_outliving_place {
                     return None;
                 }
                 // B-2026-08-29-15 / -50 — asked separately from the
@@ -3508,12 +3524,17 @@ impl<'a> super::Interpreter<'a> {
                 //    either way, which is why standing the caller down here is
                 //    not the unconditional stand-down B-2026-08-28-22 measured
                 //    a LOST body for.
-                let callee_owns_body = self.program.items.iter().any(|item| {
-                    matches!(item, crate::ast::Item::Function(f)
-                        if f.name == fn_name
-                            && (crate::ast::fn_always_returns_param(f, i)
-                                || crate::ast::fn_conditionally_returns_param_bare(f, i)))
-                });
+                // The escape route carries the same guarantee the two return
+                // predicates do — the value's new HOME runs the body — so it
+                // licenses the whole-value disarm directly rather than only the
+                // container-walk one.
+                let callee_owns_body = escapes_into_outliving_place
+                    || self.program.items.iter().any(|item| {
+                        matches!(item, crate::ast::Item::Function(f)
+                            if f.name == fn_name
+                                && (crate::ast::fn_always_returns_param(f, i)
+                                    || crate::ast::fn_conditionally_returns_param_bare(f, i)))
+                    });
                 Some((n.clone(), callee_owns_body))
             })
             .collect();

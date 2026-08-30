@@ -2227,7 +2227,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`match b { Box2.Full(r) => return r }`). `fn_returns_param` cannot
             // see that — `b` reaches no return site — so the caller kept firing
             // its walk while the result's binding fired too.
-            if !borrow_skip && (flows_into_return || self.callee_returns_enum_arg_payload(&name, i))
+            // B-2026-08-29-49 — the THIRD route into this gate, and the one
+            // that makes the two argument spellings agree. `flows_into_return`
+            // and `callee_returns_enum_arg_payload` both ask whether the value
+            // leaves through the RETURN; `escapes_frame` (computed above) adds
+            // the store-into-an-outliving-place route, which the FRESH-TEMP
+            // registrar has consulted since B-2026-08-26-9 and this one never
+            // did. So `take(mut sink, Res { id: 1 })` ran one body while
+            // `take(mut sink, carg)` ran two, for the same callee compiled
+            // once — the caller's binding fired at its NLL last use (the call)
+            // and the container fired again at its drain.
+            if !borrow_skip
+                && (flows_into_return
+                    || self.callee_returns_enum_arg_payload(&name, i)
+                    || self.call_arg_moves_into_outliving_place(&name, i, false))
             {
                 if let ExprKind::Identifier(var_name) = &a.value.kind {
                     let var_name = var_name.clone();
@@ -3142,6 +3155,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|f| {
                 crate::ast::fn_always_returns_param(f, arg_index)
                     || crate::ast::fn_conditionally_returns_param_bare(f, arg_index)
+                    // B-2026-08-29-49 — the value's new HOME is the other frame
+                    // here. `sink.push(r)` leaves it owned by a container the
+                    // caller already holds, so the container's drain runs the
+                    // body and this binding must not. Same guarantee the two
+                    // return predicates give, reached through a borrow instead
+                    // of through the result.
+                    || crate::ast::fn_moves_param_into_outliving_place(f, arg_index)
             })
     }
 
