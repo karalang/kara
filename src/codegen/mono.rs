@@ -4051,6 +4051,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "u64"
                 | "usize"
                 | "isize"
+                // f16 / bf16 are here for the same reason the narrow ints are:
+                // `llvm_type_to_mangle_str` cannot tell them apart from `f64`
+                // (it only special-cases `f32`), so without the NAME channel
+                // every `half` and `bfloat` instantiation mangled to `$f64` and
+                // collided — with each other and with a genuine `f64` one. The
+                // second instantiation then reused the first's body and codegen
+                // inserted `fpext`/`fptrunc` at the call to force the arguments
+                // into the winner's width, so `g(a, b)` at `bf16` silently
+                // computed at `f16` (B-2026-08-30-36).
+                | "f16"
+                | "bf16"
                 | "f32"
                 | "f64"
                 | "bool"
@@ -4569,8 +4580,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 w => format!("i{}", w),
             },
             BasicTypeEnum::FloatType(t) => {
-                // Distinguish f32 from f64 by comparing with context-canonical types.
-                if t == self.context.f32_type() {
+                // Every float width that is not `f64` must name itself, or two
+                // instantiations share a symbol and the second silently reuses
+                // the first's body. `f16` and `bf16` were both answering "f64"
+                // here (B-2026-08-30-36); they are distinct LLVM types (`half`
+                // vs `bfloat`) with distinct arithmetic, so they are compared
+                // against the canonical types exactly as `f32` already was.
+                if t == self.context.f16_type() {
+                    "f16".to_string()
+                } else if t == self.context.bf16_type() {
+                    "bf16".to_string()
+                } else if t == self.context.f32_type() {
                     "f32".to_string()
                 } else {
                     "f64".to_string()

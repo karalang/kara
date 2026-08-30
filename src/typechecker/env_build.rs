@@ -1653,6 +1653,8 @@ impl<'a> super::TypeChecker<'a> {
             ("usize", Type::UInt(UIntSize::Usize)),
         ];
         let floats: &[(&str, Type)] = &[
+            ("f16", Type::Float(FloatSize::F16)),
+            ("bf16", Type::Float(FloatSize::BF16)),
             ("f32", Type::Float(FloatSize::F32)),
             ("f64", Type::Float(FloatSize::F64)),
         ];

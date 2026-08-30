@@ -23713,6 +23713,105 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_generic_mono_symbols_are_distinct_per_float_width() {
+        // Every float width instantiating one generic must get its OWN mono
+        // symbol. `llvm_type_to_mangle_str` only ever special-cased `f32`, so
+        // `half`, `bfloat` and `double` all answered "f64" — and the NAME
+        // channel that exists to correct exactly this erasure for the narrow
+        // INTS (`is_scalar_primitive_mangle_name`, B-2026-07-03-24) did not
+        // list `f16`/`bf16` either. Both instantiations therefore mangled to
+        // `g_add$f64`, the second reused the first's body, and codegen bridged
+        // the mismatch at the CALL with `fpext`/`fptrunc`: `g_add` at bf16
+        // silently computed at f16 (B-2026-08-30-36).
+        //
+        // The bodies were always typed correctly — a program using ONE of
+        // {f16, bf16, f64} was fine — so only a program mixing two of them
+        // showed it, which is why an isolated per-width test would not have
+        // caught this and all four widths are instantiated here together.
+        let ir = ir_for(
+            "fn g_add[T: Add](a: T, b: T) -> T { a + b }\n\
+             fn main() {\n\
+                 let h: f16 = 1.5; let b: bf16 = 1.5;\n\
+                 let s: f32 = 1.5; let d: f64 = 1.5;\n\
+                 println(f\"{g_add(h,h)} {g_add(b,b)} {g_add(s,s)} {g_add(d,d)}\");\n\
+             }",
+        );
+        for (sym, ty) in [
+            ("g_add$f16", "half"),
+            ("g_add$bf16", "bfloat"),
+            ("g_add$f32", "float"),
+            ("g_add$f64", "double"),
+        ] {
+            assert!(
+                ir.contains(&format!("@\"{sym}\"({ty} ")),
+                "expected a distinct `{sym}` monomorph taking `{ty}`; IR:\n{ir}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_arithmetic_at_reduced_precision() {
+        // The compiled twin of `tests/interpreter.rs`'s
+        // `test_generic_arithmetic_computes_at_the_instantiated_float_width`
+        // — same program, same expected output, so the tree-walk's
+        // generic-body rounding and codegen's monomorphization stay pinned to
+        // each other (B-2026-08-30-36).
+        //
+        // Receivers are derived from `env.args().len()` so the optimizer cannot
+        // constant-fold the arithmetic away and assert nothing (B-2026-08-29-61);
+        // the interpreter twin uses a literal `1` because an in-process test
+        // reads the test binary's own argv.
+        let out = run_program(
+            "fn g_add[T: Add](a: T, b: T) -> T { a + b }\n\
+             fn g_sub[T: Sub](a: T, b: T) -> T { a - b }\n\
+             fn g_mul[T: Mul](a: T, b: T) -> T { a * b }\n\
+             fn g_div[T: Div](a: T, b: T) -> T { a / b }\n\
+             fn g_rem[T: Rem](a: T, b: T) -> T { a % b }\n\
+             fn g_neg[T: Neg](a: T) -> T { -a }\n\
+             fn g_poly[T: Add + Mul](a: T, b: T) -> T { g_add(g_mul(a, b), b) }\n\
+             fn g_sum[T: Add](xs: Vec[T], zero: T) -> T {\n\
+                 let mut acc = zero;\n\
+                 for x in xs { acc = acc + x; }\n\
+                 acc\n\
+             }\n\
+             fn main() {\n\
+                 let n: i64 = env.args().len() as i64;\n\
+                 let one: f32 = n as f32;\n\
+                 let p: f16 = (one * 0.1f32) as f16;\n\
+                 let q: f16 = (one * 0.3f32) as f16;\n\
+                 let bp: bf16 = (one * 0.1f32) as bf16;\n\
+                 let bq: bf16 = (one * 0.3f32) as bf16;\n\
+                 let sp: f32 = one * 0.1f32;\n\
+                 let sq: f32 = one * 0.3f32;\n\
+                 println(f\"h {g_add(p,q)} {g_sub(p,q)} {g_mul(p,q)} {g_div(p,q)} {g_rem(p,q)} {g_neg(p)}\");\n\
+                 println(f\"b {g_add(bp,bq)} {g_sub(bp,bq)} {g_mul(bp,bq)} {g_div(bp,bq)} {g_rem(bp,bq)} {g_neg(bp)}\");\n\
+                 println(f\"s {g_add(sp,sq)} {g_sub(sp,sq)} {g_mul(sp,sq)} {g_div(sp,sq)} {g_rem(sp,sq)} {g_neg(sp)}\");\n\
+                 let big: f16 = (one * 65504.0f32) as f16;\n\
+                 let three: f16 = (one * 3.0f32) as f16;\n\
+                 let tiny: f16 = (one * 0.00001f32) as f16;\n\
+                 println(f\"o {g_mul(big,three)} {g_mul(tiny,tiny)}\");\n\
+                 println(f\"y {g_poly(p,q)} {g_poly(bp,bq)} {g_poly(sp,sq)}\");\n\
+                 let mut hx: Vec[f16] = vec![];\n\
+                 let mut bx: Vec[bf16] = vec![];\n\
+                 let mut i: i64 = 0;\n\
+                 while i < 10 { hx.push(p); bx.push(bp); i = i + 1; }\n\
+                 println(f\"a {g_sum(hx, (one * 0.0f32) as f16)} {g_sum(bx, (one * 0.0f32) as bf16)}\");\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "h 0.39990234375 -0.2000732421875 0.029998779296875 0.333251953125 0.0999755859375 -0.0999755859375\n\
+                 b 0.400390625 -0.201171875 0.0301513671875 0.33203125 0.10009765625 -0.10009765625\n\
+                 s 0.4000000059604645 -0.20000001788139343 0.030000001192092896 0.3333333134651184 0.10000000149011612 -0.10000000149011612\n\
+                 o inf 0\n\
+                 y 0.330078125 0.330078125 0.33000001311302185\n\
+                 a 1 1.0078125"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_f16_arithmetic_roundtrip() {
         // Values exactly representable in f16 (halves/quarters) so the printed
         // result is exact. 1.5 + 2.25 = 3.75; 3.0 * 4.0 = 12.

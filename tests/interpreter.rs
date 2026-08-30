@@ -24710,6 +24710,76 @@ fn test_vector_f16_transcendentals_are_computed_without_overflowing_the_lane() {
 // The receiver is the literal `1` rather than `env.args().len()`: the compiled
 // fixture needs `env.args()` to defeat constant folding, but an in-process
 // interpreter test would read the TEST BINARY's argv, which is not 1.
+// A generic body must compute at the width it was INSTANTIATED at, not at the
+// tree-walk's f64 carrier. `Value::Float` is an f64 and the typechecker records
+// the operand type inside `fn g[T: Add](a: T, b: T) -> T { a + b }` as the PARAM
+// `T`, so `span_float_width` answered `None` and the rounding this file's other
+// f16/f32 tests pin was skipped entirely one level of abstraction up
+// (B-2026-08-30-36).
+//
+// It was never an f16 problem. At f32 the same body already read
+// `0.4000000134110451` here against every compiled backend's
+// `0.4000000059604645`, and an f32 product that overflows printed a finite
+// 9e76 where they printed `inf`. f16 and bf16 only made it loud: 11 and 8
+// significand bits diverge on nearly every operation, and 65504 * 3 is an
+// overflow anyone can reach.
+//
+// Codegen has no matching hole — it monomorphizes, so the body is compiled
+// against the concrete width — which made this a run-vs-build divergence. Every
+// value below is the compiled backends' answer, and `tests/codegen.rs`'s
+// `test_e2e_generic_arithmetic_at_reduced_precision` runs the same program
+// through a real binary so the two stay pinned to each other.
+#[test]
+fn test_generic_arithmetic_computes_at_the_instantiated_float_width() {
+    assert_eq!(
+        run("fn g_add[T: Add](a: T, b: T) -> T { a + b }\n\
+             fn g_sub[T: Sub](a: T, b: T) -> T { a - b }\n\
+             fn g_mul[T: Mul](a: T, b: T) -> T { a * b }\n\
+             fn g_div[T: Div](a: T, b: T) -> T { a / b }\n\
+             fn g_rem[T: Rem](a: T, b: T) -> T { a % b }\n\
+             fn g_neg[T: Neg](a: T) -> T { -a }\n\
+             fn g_poly[T: Add + Mul](a: T, b: T) -> T { g_add(g_mul(a, b), b) }\n\
+             fn g_sum[T: Add](xs: Vec[T], zero: T) -> T {\n\
+             \x20   let mut acc = zero;\n\
+             \x20   for x in xs { acc = acc + x; }\n\
+             \x20   acc\n\
+             }\n\
+             fn main() {\n\
+             \x20   let n: i64 = 1;\n\
+             \x20   let one: f32 = n as f32;\n\
+             \x20   let p: f16 = (one * 0.1f32) as f16;\n\
+             \x20   let q: f16 = (one * 0.3f32) as f16;\n\
+             \x20   let bp: bf16 = (one * 0.1f32) as bf16;\n\
+             \x20   let bq: bf16 = (one * 0.3f32) as bf16;\n\
+             \x20   let sp: f32 = one * 0.1f32;\n\
+             \x20   let sq: f32 = one * 0.3f32;\n\
+             \x20   println(f\"h {g_add(p,q)} {g_sub(p,q)} {g_mul(p,q)} {g_div(p,q)} {g_rem(p,q)} {g_neg(p)}\");\n\
+             \x20   println(f\"b {g_add(bp,bq)} {g_sub(bp,bq)} {g_mul(bp,bq)} {g_div(bp,bq)} {g_rem(bp,bq)} {g_neg(bp)}\");\n\
+             \x20   println(f\"s {g_add(sp,sq)} {g_sub(sp,sq)} {g_mul(sp,sq)} {g_div(sp,sq)} {g_rem(sp,sq)} {g_neg(sp)}\");\n\
+             \x20   let big: f16 = (one * 65504.0f32) as f16;\n\
+             \x20   let three: f16 = (one * 3.0f32) as f16;\n\
+             \x20   let tiny: f16 = (one * 0.00001f32) as f16;\n\
+             \x20   println(f\"o {g_mul(big,three)} {g_mul(tiny,tiny)}\");\n\
+             \x20   println(f\"y {g_poly(p,q)} {g_poly(bp,bq)} {g_poly(sp,sq)}\");\n\
+             \x20   let mut hx: Vec[f16] = vec![];\n\
+             \x20   let mut bx: Vec[bf16] = vec![];\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 10 { hx.push(p); bx.push(bp); i = i + 1; }\n\
+             \x20   println(f\"a {g_sum(hx, (one * 0.0f32) as f16)} {g_sum(bx, (one * 0.0f32) as bf16)}\");\n\
+             }\n"),
+        // 65504 is the largest finite f16, so the generic product overflows;
+        // tiny*tiny underflows past the smallest subnormal. Pre-fix this
+        // surface printed 196512 and 1.0027e-10 for those two, and f32-or-wider
+        // digits on every other line.
+        "h 0.39990234375 -0.2000732421875 0.029998779296875 0.333251953125 0.0999755859375 -0.0999755859375\n\
+         b 0.400390625 -0.201171875 0.0301513671875 0.33203125 0.10009765625 -0.10009765625\n\
+         s 0.4000000059604645 -0.20000001788139343 0.030000001192092896 0.3333333134651184 0.10000000149011612 -0.10000000149011612\n\
+         o inf 0\n\
+         y 0.330078125 0.330078125 0.33000001311302185\n\
+         a 1 1.0078125\n"
+    );
+}
+
 #[test]
 fn test_f16_arithmetic_results_are_representable_in_f16() {
     assert_eq!(

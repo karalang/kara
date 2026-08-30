@@ -483,6 +483,36 @@ impl<'a> super::Interpreter<'a> {
         };
         match ty {
             Type::Float(size) => Some(*size),
+            // A narrow float reached through a GENERIC BODY. Inside
+            // `fn g[T: Add](a: T, b: T) -> T { a + b }` the typechecker records
+            // the operand type as the PARAM `T`, not the instantiation, so this
+            // returned `None` and the operator kept full f64 bits in a narrow
+            // slot — the exact defect the rest of this function exists to
+            // prevent, reintroduced one level of abstraction up. It is not an
+            // f16 problem: `g(0.1f32, 0.3f32)` already read
+            // `0.4000000134110451` under `--interp` against the compiled
+            // backends' `0.4000000059604645`, and an f32 product that overflows
+            // printed a finite 9e76 where every compiled backend printed `inf`.
+            // f16/bf16 only made it loud, because 11 and 8 significand bits
+            // diverge on nearly every operation (B-2026-08-30-36).
+            //
+            // Codegen has no matching hole: it MONOMORPHIZES, so the body is
+            // compiled against the concrete width and rounds by construction —
+            // which is what made this a run-vs-build divergence rather than a
+            // shared bug, and why the fix belongs on this side alone.
+            //
+            // `type_subs_stack` is the same per-call generic-substitution stack
+            // the bound-method dispatch above resolves receivers through
+            // (B-2026-07-03-24); it is pushed for free-function calls too, and
+            // already flattens transitive bindings, so a generic calling a
+            // generic resolves to the concrete width in one lookup.
+            Type::TypeParam(name) => match self.resolve_type_param(name)?.as_str() {
+                "f16" => Some(crate::typechecker::types::FloatSize::F16),
+                "bf16" => Some(crate::typechecker::types::FloatSize::BF16),
+                "f32" => Some(crate::typechecker::types::FloatSize::F32),
+                "f64" => Some(crate::typechecker::types::FloatSize::F64),
+                _ => None,
+            },
             _ => None,
         }
     }

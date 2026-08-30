@@ -6241,6 +6241,51 @@ fn f16_bf16_types_and_literals_typecheck() {
     typecheck_ok("fn f(a: bf16, b: bf16) -> bool { a < b }");
 }
 
+// The six arithmetic operator traits are registered for `f16` and `bf16`, so a
+// generic numeric helper is callable at either width. Before B-2026-08-30-36 the
+// `floats` list in `env_build.rs` held only `f32`/`f64`, so `f16` and `bf16` were
+// the only numeric primitives absent from `Add`'s impl list — every integer
+// width, both wide floats and `String` were there — and `g(a, b)` at either
+// width was rejected with "`f16` does not implement `Add`". design.md § f16 /
+// bf16 promises "`Add`, `Sub`, `Mul`, `Div`, `Neg` … same surface as
+// `f32`/`f64`"; the `PartialEq` / `PartialOrd` / `Copy` half of that sentence
+// already held, which is why only the arithmetic half is added here.
+//
+// The gap was invisible without a generic: the operators do NOT dispatch through
+// the trait table (`primitive_type_name` in `lowering.rs` has no `f16` arm, so
+// `a + b` is never rewritten to `f16.add(a, b)`), so direct arithmetic
+// typechecked and ran correctly at both widths all along.
+#[test]
+fn f16_bf16_satisfy_the_arithmetic_operator_traits() {
+    for (bound, body) in [
+        ("Add", "a + b"),
+        ("Sub", "a - b"),
+        ("Mul", "a * b"),
+        ("Div", "a / b"),
+        ("Rem", "a % b"),
+    ] {
+        for width in ["f16", "bf16", "f32", "f64"] {
+            typecheck_ok(&format!(
+                "fn g[T: {bound}](a: T, b: T) -> T {{ {body} }}\n\
+                 fn main() {{ let x: {width} = 1.5; let _ = g(x, x); }}"
+            ));
+        }
+    }
+    for width in ["f16", "bf16", "f32", "f64"] {
+        typecheck_ok(&format!(
+            "fn g[T: Neg](a: T) -> T {{ -a }}\n\
+             fn main() {{ let x: {width} = 1.5; let _ = g(x); }}"
+        ));
+    }
+    // Several bounds at once, and a generic calling a generic — both reach the
+    // same impl table, and both were rejected for the same reason.
+    typecheck_ok(
+        "fn m[T: Mul](a: T, b: T) -> T { a * b }\n\
+         fn p[T: Add + Mul](a: T, b: T) -> T { m(a, b) + b }\n\
+         fn main() { let x: f16 = 1.5; let y: bf16 = 1.5; let _ = p(x, x); let _ = p(y, y); }",
+    );
+}
+
 #[test]
 fn f16_widens_to_f32_at_a_boundary_but_not_in_arithmetic() {
     // B-2026-08-14-13 renamed and corrected this test, because what it asserted

@@ -20678,6 +20678,127 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A GENERIC numeric helper instantiated at `f16` must round on wasm exactly as
+/// the direct operator does. B-2026-08-30-32 taught codegen to round f16
+/// arithmetic explicitly on wasm (LLVM's `PromoteFloat` legalization keeps the
+/// value in an f32 carrier and never rounds between two arithmetic ops); this
+/// pins that the same rounding reaches a MONOMORPHIZED body, which
+/// B-2026-08-30-36 first made reachable by registering the operator traits for
+/// `f16`.
+///
+/// `bf16` is deliberately absent: a `bf16` PARAMETER crossing a function
+/// boundary that LLVM does not inline is unselectable on wasm
+/// (`LLVM ERROR: Cannot select: bf16_to_fp`), which predates all of this and
+/// reproduces today on `main` with a bound-free `fn pick[T](a: T, b: T) -> T`.
+/// That is B-2026-08-30-42; when it is fixed, add the bf16 lines from
+/// `tests/codegen.rs`'s `test_e2e_generic_arithmetic_at_reduced_precision` here.
+#[test]
+fn wasm_f16_generic_arithmetic_build_and_run_e2e() {
+    let tmp = wasm_test_dir("f16generic");
+    let path = tmp.join("f16generic.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn g_add[T: Add](a: T, b: T) -> T { a + b }
+fn g_sub[T: Sub](a: T, b: T) -> T { a - b }
+fn g_mul[T: Mul](a: T, b: T) -> T { a * b }
+fn g_div[T: Div](a: T, b: T) -> T { a / b }
+fn g_neg[T: Neg](a: T) -> T { -a }
+fn g_poly[T: Add + Mul](a: T, b: T) -> T { g_add(g_mul(a, b), b) }
+fn g_sum[T: Add](xs: Vec[T], zero: T) -> T {
+    let mut acc = zero;
+    for x in xs { acc = acc + x; }
+    acc
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let p: f16 = (one * 0.1f32) as f16;
+    let q: f16 = (one * 0.3f32) as f16;
+    let big: f16 = (one * 65504.0f32) as f16;
+    let three: f16 = (one * 3.0f32) as f16;
+    let tiny: f16 = (one * 0.00001f32) as f16;
+    println(f"h {g_add(p,q)} {g_sub(p,q)} {g_mul(p,q)} {g_div(p,q)} {g_neg(p)}");
+    println(f"o {g_mul(big,three)} {g_mul(tiny,tiny)}");
+    println(f"y {g_poly(p,q)}");
+    let mut hx: Vec[f16] = vec![];
+    let mut i: i64 = 0;
+    while i < 10 { hx.push(p); i = i + 1; }
+    println(f"a {g_sum(hx, (one * 0.0f32) as f16)}");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_f16_generic_arithmetic_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "wasm build failed (an `a native `half` … survived into the wasm \
+         backend` here is the codegen guard firing inside a monomorphized \
+         body): {stderr}",
+    );
+    let wasm_path = tmp.join("f16generic.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected f16generic.wasm next to the build cwd"
+    );
+
+    let runner = tmp.join("run_wasi.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: ['prog'], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_f16_generic_arithmetic_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wasm module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    // Byte-identical to the native binary and to `karac run --interp`.
+    assert_eq!(
+        node_stdout,
+        "h 0.39990234375 -0.2000732421875 0.029998779296875 0.333251953125 -0.0999755859375\n\
+         o inf 0\n\
+         y 0.330078125\n\
+         a 1\n"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full build-path E2E for `String.split` on the wasm target (Weave
 /// dogfood follow-up). The split FFI (`karac_runtime_string_split`)
 /// allocates the `Vec[String]` from the unified wasi-libc heap
