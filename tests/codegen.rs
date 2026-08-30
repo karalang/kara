@@ -984,6 +984,108 @@ mod codegen_tests {
         }
     }
 
+    /// `dbg()` of a `Set` / `SortedSet` / `SortedMap` must give the SAME text on
+    /// every backend (B-2026-08-30-46) — the `Debug`-mode twin of the `Display`
+    /// comparison above.
+    ///
+    /// The compiled backends were already right here; the interpreter guarded
+    /// those three arms of `render_typed_mode` with `if !debug` and so rendered
+    /// a `u64` element at or above 2^63 through an untyped catch-all that reads
+    /// the signed carrier — `Set{-1}` under `dbg` against `Set{...615}` from
+    /// `f"{s}"` in the same program, and against `Set{...615}` from a compiled
+    /// binary in BOTH modes.
+    ///
+    /// Asserted as a twin rather than a pin because the two sides reach this
+    /// text by different machinery — codegen's `emit_display_fn_for_type_expr`
+    /// dispatcher against the interpreter's typed walker — so only comparing
+    /// them catches one drifting.
+    ///
+    /// `dbg` writes to STDERR, which is why this reads `stderr` rather than
+    /// going through `run_program`.
+    #[test]
+    fn e2e_dbg_of_set_and_sorted_containers_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "Set[u64] above i64::MAX",
+                "let mut s: Set[u64] = Set.new();\n\
+                 s.insert(18446744073709551615u64);\n\
+                 dbg(s);",
+                "Set{18446744073709551615}",
+            ),
+            (
+                "SortedSet[u64] above i64::MAX",
+                "let mut s: SortedSet[u64] = SortedSet.new();\n\
+                 s.insert(18446744073709551615u64);\n\
+                 dbg(s);",
+                "SortedSet{18446744073709551615}",
+            ),
+            (
+                "SortedMap[u64, u64] above i64::MAX",
+                "let mut s: SortedMap[u64, u64] = SortedMap.new();\n\
+                 s.insert(18446744073709551615u64, 18446744073709551615u64);\n\
+                 dbg(s);",
+                "SortedMap{18446744073709551615: 18446744073709551615}",
+            ),
+            // The `Map` control: its arm never carried the `!debug` guard, so
+            // it was correct on both backends throughout. A change that fixed
+            // the three above by breaking the shared `Value::Int` arm would
+            // fail here.
+            (
+                "Map[u64, u64] control",
+                "let mut s: Map[u64, u64] = Map.new();\n\
+                 s.insert(18446744073709551615u64, 18446744073709551615u64);\n\
+                 dbg(s);",
+                "{18446744073709551615: 18446744073709551615}",
+            ),
+            // Exactly 2^63 — the first value that misses the signed carrier.
+            // The all-ones row alone would pass against a fix special-casing it.
+            (
+                "Set[u64] exactly at the signed boundary",
+                "let mut s: Set[u64] = Set.new();\n\
+                 s.insert(9223372036854775808u64);\n\
+                 dbg(s);",
+                "Set{9223372036854775808}",
+            ),
+            // A genuinely signed element must still read as signed.
+            (
+                "Set[i64] negative control",
+                "let mut s: Set[i64] = Set.new();\n\
+                 s.insert(-1);\n\
+                 dbg(s);",
+                "Set{-1}",
+            ),
+            // Leaf QUOTING is the property the `!debug` guard was deferring to
+            // protect. It is identical on both paths and on both backends,
+            // which is what made the deferral unnecessary.
+            (
+                "Set[String] leaf quoting",
+                "let mut s: Set[String] = Set.new();\n\
+                 s.insert(f\"a\");\n\
+                 dbg(s);",
+                "Set{\"a\"}",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (_out, interp_dbg) =
+                karac::run_program_with_dbg(&src, karac::interpreter::DbgOutputMode::Terminal);
+            let interp = interp_dbg.join("\n");
+            assert!(
+                interp.contains(want),
+                "{label}: the interpreter must render the element through its \
+                 declared type — got {interp:?}, wanted {want:?}",
+            );
+            if let Some(run) = run_program_capturing(&src) {
+                assert!(
+                    run.stderr.contains(want),
+                    "{label}: the compiled backend disagrees with the \
+                     interpreter — got {:?}, wanted {want:?}",
+                    run.stderr,
+                );
+            }
+        }
+    }
+
     /// `Vector[T, N]` integer lane arithmetic must give the SAME value in both
     /// backends (B-2026-08-26-8).
     ///

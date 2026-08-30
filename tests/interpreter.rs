@@ -2628,6 +2628,69 @@ fn main() {
     );
 }
 
+/// B-2026-08-30-46 — `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERED A
+/// `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE, while `f"{s}"` on the SAME
+/// container in the SAME program rendered it unsigned.
+///
+/// The sibling of B-2026-08-30-9 one arm over: those three arms of
+/// `render_typed_mode` were guarded `if !debug`, so under `dbg` they fell past
+/// the typed walker to the untyped `debug_fmt` catch-all, which sees a bare
+/// signed `Value::Int` carrier and cannot know the element was unsigned.
+///
+/// The guard's stated reason was that routing them through the typed walker
+/// "would also start quoting their leaves". MEASURED: it does not — the
+/// catch-all it fell to is `debug_fmt`, which already quotes, so both paths
+/// print `Set{"a"}`. That is why the string rows below are here: they pin the
+/// property the deferral was protecting, which was never actually at risk.
+///
+/// `Map` is the CONTROL and the reason this is a defect rather than a
+/// convention: its arm never carried the guard, so it printed the unsigned
+/// value under `dbg` all along while its three siblings did not. BOTH compiled
+/// backends also print unsigned in both modes, so this was an
+/// interpreter-only run-vs-build divergence.
+///
+/// One element per container deliberately: `Set` iteration order is per-process
+/// random (design.md § Map), so a multi-element row would assert an order the
+/// language does not define.
+#[test]
+fn dbg_of_a_set_or_sorted_container_renders_wide_unsigned_elements_as_unsigned() {
+    let src = "fn main() {
+            let big: u64 = 18446744073709551615u64;
+            let mut s: Set[u64] = Set.new(); s.insert(big);
+            let mut ss: SortedSet[u64] = SortedSet.new(); ss.insert(big);
+            let mut sm: SortedMap[u64, u64] = SortedMap.new(); sm.insert(big, big);
+            let mut m: Map[u64, u64] = Map.new(); m.insert(big, big);
+            dbg(s); dbg(ss); dbg(sm); dbg(m);
+            let neg: i64 = -1;
+            let mut si: Set[i64] = Set.new(); si.insert(neg);
+            dbg(si);
+            let mut st: Set[String] = Set.new(); st.insert(f\"a\");
+            let mut smt: SortedMap[String, String] = SortedMap.new(); smt.insert(f\"k\", f\"v\");
+            dbg(st); dbg(smt);
+        }";
+    let (_out, dbg) = run_program_with_dbg(src, DbgOutputMode::Terminal);
+    let hay = dbg.join("\n");
+    for needle in [
+        "Set{18446744073709551615}",
+        "SortedSet{18446744073709551615}",
+        "SortedMap{18446744073709551615: 18446744073709551615}",
+        // The `Map` control, correct before this row and after it.
+        "{18446744073709551615: 18446744073709551615}",
+        // A genuinely signed element still reads as signed: a fix that simply
+        // reinterpreted every carrier as unsigned would fail here.
+        "Set{-1}",
+        // Leaf quoting is UNCHANGED — the property the `!debug` guard was
+        // deferring to protect, and which it was not in fact protecting.
+        "Set{\"a\"}",
+        "SortedMap{\"k\": \"v\"}",
+    ] {
+        assert!(
+            hay.contains(needle),
+            "missing {needle:?} in dbg output:\n{hay}"
+        );
+    }
+}
+
 /// B-2026-08-30-26 — the interpreter half of the int <-> `bf16` conversion
 /// fixture, and a PARITY PIN rather than a regression test: the interpreter was
 /// never wrong here. It performed every one of these while both compiled

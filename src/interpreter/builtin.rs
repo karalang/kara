@@ -448,12 +448,25 @@ impl<'a> super::Interpreter<'a> {
             // these replace (`Set{…}` / `SortedSet{…}` / `SortedMap{k: v}`,
             // `, `-separated) so nothing but the element dispatch changes.
             //
-            // `debug` keeps the old path deliberately: `Debug` is a different
-            // trait that must NOT reach the user impl, and routing these three
-            // through the typed walker in that mode would also start quoting
-            // their leaves — a real improvement, but a separate change from
-            // this one, and not one to make silently.
-            Value::Set(items) if !debug => {
+            // These three ran in `!debug` mode only until B-2026-08-30-46, on
+            // the stated grounds that routing them through the typed walker
+            // under `dbg` "would also start quoting their leaves". Measured:
+            // it does not. The catch-all they fell to is `debug_fmt`, which
+            // ALREADY quotes a string leaf, so both paths print `Set{"a"}` and
+            // the deferral bought nothing — while costing the one thing the
+            // typed walker is for. A `Set[u64]` holding `u64::MAX` printed
+            // `Set{-1}` under `dbg` (the carrier is signed; see the `Value::Int`
+            // arm) while `f"{s}"` in the same program printed the unsigned
+            // value, and BOTH compiled backends printed unsigned in both modes
+            // — the same interpreter-only divergence as the `Vector` arm above
+            // (B-2026-08-30-9), for the same reason: not being on this path.
+            //
+            // `Map` never had the guard, which is what makes it the control:
+            // it was already correct under `dbg` while its three siblings were
+            // not. Reaching a user `impl Display` is NOT a risk here — the
+            // dispatch at the top of this function is itself `if !debug`, so
+            // `Debug` stays a different trait however these arms are reached.
+            Value::Set(items) => {
                 let items: Vec<Value> = items.read().unwrap().iter_observable().cloned().collect();
                 let et = Self::display_element_type(ty).cloned();
                 let mut parts: Vec<String> = Vec::new();
@@ -462,7 +475,7 @@ impl<'a> super::Interpreter<'a> {
                 }
                 format!("Set{{{}}}", parts.join(", "))
             }
-            Value::SortedSet(set) if !debug => {
+            Value::SortedSet(set) => {
                 let items: Vec<Value> = set.keys().map(|k| k.0.clone()).collect();
                 let et = Self::display_element_type(ty).cloned();
                 let mut parts: Vec<String> = Vec::new();
@@ -471,7 +484,7 @@ impl<'a> super::Interpreter<'a> {
                 }
                 format!("SortedSet{{{}}}", parts.join(", "))
             }
-            Value::SortedMap(map) if !debug => {
+            Value::SortedMap(map) => {
                 let entries: Vec<(Value, Value)> =
                     map.iter().map(|(k, v)| (k.0.clone(), v.clone())).collect();
                 let (kt, vt) = match ty {
