@@ -79,6 +79,17 @@ pub mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
 mod fatal;
+// IEEE-754 half-precision conversion builtins (`__truncsfhf2` /
+// `__extendhfsf2`). LLVM legalizes every `half` op on wasm32 into these
+// two libcalls and neither Rust's `compiler_builtins` for
+// `wasm32-wasip1` nor wasi-libc supplies them, so without this module no
+// f16 program links for a wasm target at all (B-2026-08-30-24). The
+// `#[no_mangle]` exports are wasm-gated inside the module — native
+// targets keep the platform's own builtins — and the pure conversions
+// stay compiled under cfg(test) so they are testable without a wasm
+// host, the split `seq_scheduler` uses.
+#[cfg(any(target_family = "wasm", test))]
+mod f16;
 pub mod file;
 pub mod pool;
 pub mod rate_limiter;

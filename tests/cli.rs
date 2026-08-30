@@ -20398,6 +20398,133 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Regression (B-2026-08-30-24): NO `f16` PROGRAM LINKED FOR A WASM
+/// TARGET. LLVM legalizes every `half` operation on wasm32 into the
+/// compiler-rt libcalls `__truncsfhf2` / `__extendhfsf2`, and nothing on
+/// the wasm link line defined them — not Rust's `compiler_builtins` rlib
+/// for `wasm32-wasip1`, not wasi-libc, and there is no
+/// `libclang_rt.builtins-wasm32.a` in the rustup self-contained sysroot
+/// to add. So `karac build --target=wasm_wasi` died with a raw
+/// `rust-lld: undefined symbol` dump, and a bare runtime `as f16`
+/// conversion was enough to trigger it: printing one needs the widening
+/// call. `runtime/src/f16.rs` now supplies both, wasm-gated.
+///
+/// The receiver derives from `env.args().len()` (1 under both the native
+/// run and the runner below) rather than a literal, and that is
+/// load-bearing rather than stylistic: with a literal, LLVM constant-folds
+/// the conversion, emits no libcall, and the module links whether or not
+/// the fix is present. A fixture built from constants reported this bug
+/// as absent for as long as it existed.
+///
+/// Cases are the branches of the conversion, not a sample: a plain
+/// normal, a value that needs round-to-nearest-even, the SMALLEST
+/// subnormal and the largest (the renormalization path — a first draft
+/// of `f16_bits_to_f32` had the exponent and mantissa shift each off by
+/// one, which was right on all 63490 normal/Inf/NaN patterns and wrong on
+/// all 2046 subnormal ones), overflow to Inf, the largest finite f16, and
+/// negative zero. Every value below is byte-identical to what the native
+/// binary and `karac run --interp` print.
+///
+/// Deliberately no ARITHMETIC: `a / b` on f16 diverges between wasm and
+/// native for a separate reason — LLVM-18 promotes f16 arithmetic to f32
+/// on wasm32 and then does NOT round the result back, so the quotient
+/// keeps f32 precision. That is tracked on its own row; pinning it here
+/// would bake the divergence into a passing test.
+#[test]
+fn wasm_f16_conversion_build_and_run_e2e() {
+    let tmp = wasm_test_dir("f16conv");
+    let path = tmp.join("f16conv.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = n as f32;
+    let normal: f16 = (one * 3.5f32) as f16;
+    let rne: f16 = (one * 1.0009765625f32) as f16;
+    let subnormal: f16 = (one * 0.000000059604645f32) as f16;
+    let tiny: f16 = (one * 0.00006097555f32) as f16;
+    let over: f16 = (one * 70000.0f32) as f16;
+    let edge: f16 = (one * 65504.0f32) as f16;
+    let negzero: f16 = (one * -0.0f32) as f16;
+    println(f"{normal} {rne} {subnormal} {tiny} {over} {edge} {negzero}");
+    println(f"{normal as f32} {subnormal as f64} {edge as f32}");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_f16_conversion_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "wasm build failed (an `undefined symbol: __truncsfhf2` / \
+         `__extendhfsf2` here is B-2026-08-30-24 itself — rebuild the wasm \
+         runtime archives): {stderr}",
+    );
+    let wasm_path = tmp.join("f16conv.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected f16conv.wasm next to the build cwd"
+    );
+
+    // `args: ['prog']` so `env.args().len()` is 1 here exactly as it is
+    // under the native binary — the fixture compares the two outputs, so
+    // an argc that differed would show up as an f16 failure.
+    let runner = tmp.join("run_wasi.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: ['prog'], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_f16_conversion_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wasm module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout,
+        "3.5 1.0009765625 0.00000005960464477539063 0.00006097555160522461 \
+         inf 65504 -0\n\
+         3.5 0.00000005960464477539063 65504\n",
+        "wasm f16 conversions must match the native semantics; \
+         stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full build-path E2E for `String.split` on the wasm target (Weave
 /// dogfood follow-up). The split FFI (`karac_runtime_string_split`)
 /// allocates the `Vec[String]` from the unified wasi-libc heap
