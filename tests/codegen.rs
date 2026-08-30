@@ -15931,9 +15931,16 @@ fn main() {
     /// place. Both printed identically before this fix.
     ///
     /// The terminator path (`return` inside the arm) is pinned SEPARATELY
-    /// below, codegen-only: the interpreter loses the `return` itself on this
-    /// shape (B-2026-08-30-14), so asserting it on all four surfaces would
-    /// write that bug into the contract as if it were the contract.
+    /// below. It was written codegen-only because the interpreter lost the
+    /// `return` itself on this shape, so asserting it on all four surfaces
+    /// would have written that bug into the contract as if it were the
+    /// contract. B-2026-08-30-14 has since FIXED that, and the shape now
+    /// measures `v10 dR10 dE` on all four surfaces; the row stays here because
+    /// what it pins is codegen-specific (the arm's cleanup is emitted on the
+    /// arm's OWN edge, never reaching the merge block), and the four-surface
+    /// coverage lives in
+    /// `e2e_diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow`
+    /// and its interpreter twin.
     #[test]
     fn e2e_freshtemp_scrutinee_body_fires_at_construct_exit() {
         const H: &str = "struct R { id: i64 }\n\
@@ -16014,6 +16021,156 @@ fn main() {
             Some("v10\ndR10\ndE\n"),
             "arm-returns-fires-on-that-edge"
         );
+    }
+
+    /// B-2026-08-30-14, the compiled ORACLE — the twin of
+    /// `interpreter::diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow`.
+    ///
+    /// The direction here is the mirror of B-2026-08-29-28's: there the
+    /// interpreter was the oracle and codegen was moved onto it; here BOTH
+    /// compiled backends were already right and the INTERPRETER was moved onto
+    /// them. So this half was green before the fix and after it, and that is
+    /// the point — it is what the interpreter was reconciled against, so a
+    /// later change that "fixes" the pair by moving codegen has to break these
+    /// assertions first.
+    ///
+    /// Every row is a spelling of one thing: an arm that diverges over a
+    /// fresh-temp scrutinee with its own `Drop` body. Nine of the twelve
+    /// silently DISCARDED the signal on the interpreter (`return` skipped,
+    /// loop never broken, `?` turned an `Err` into `Ok(0)`); codegen emits the
+    /// arm's cleanup on that arm's own edge and has always been correct, which
+    /// is why this half needed no change. The other three — `while-let` and
+    /// the two boundary rows — were already green on both sides and are
+    /// carried here so the pair stays symmetric.
+    ///
+    /// The struct-scrutinee row from the interpreter twin is deliberately
+    /// ABSENT: both compiled backends run no body at all for a fresh-temp
+    /// struct scrutinee (B-2026-08-30-15), so it cannot be asserted here
+    /// without encoding that separate defect. When -15 closes, that row moves
+    /// in and the interpreter-only test above collapses into its table.
+    #[test]
+    fn e2e_diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow() {
+        const H: &str = "enum E { A(i64), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             enum H { A(i64), B }\n\
+             fn mk(n: i64) -> E { return E.A(n) }\n\
+             fn mkH(n: i64) -> H { return H.A(n) }\n";
+        for (label, prog, want) in [
+            (
+                "return",
+                "fn f() { match mk(7) { E.A(n) => { println(f\"v{n}\"); return } E.B => {} }\n\
+                 \x20 println(\"AFTER\") }\n\
+                 fn main() { f(); println(\"done\") }\n",
+                "v7\ndE\ndone\n",
+            ),
+            (
+                "return-value",
+                "fn f() -> i64 { match mk(7) { E.A(n) => { return n } E.B => { return 0 } } }\n\
+                 fn main() { println(f\"t{f()}\") }\n",
+                "dE\nt7\n",
+            ),
+            (
+                "break",
+                "fn main() {\n\
+                 \x20 let mut i = 0;\n\
+                 \x20 while i < 3 {\n\
+                 \x20   match mk(7) { E.A(n) => { println(f\"v{n}\"); break } E.B => {} }\n\
+                 \x20   println(\"AFTER\"); i = i + 1;\n\
+                 \x20 }\n\
+                 \x20 println(\"done\")\n\
+                 }\n",
+                "v7\ndE\ndone\n",
+            ),
+            (
+                "continue",
+                "fn main() {\n\
+                 \x20 let mut i = 0;\n\
+                 \x20 while i < 2 {\n\
+                 \x20   i = i + 1;\n\
+                 \x20   match mk(7) { E.A(n) => { println(f\"v{n}\"); continue } E.B => {} }\n\
+                 \x20   println(\"AFTER\");\n\
+                 \x20 }\n\
+                 \x20 println(\"done\")\n\
+                 }\n",
+                "v7\ndE\nv7\ndE\ndone\n",
+            ),
+            (
+                "labeled-break",
+                "fn main() {\n\
+                 \x20 let mut i = 0;\n\
+                 \x20 outer: while i < 3 {\n\
+                 \x20   let mut j = 0;\n\
+                 \x20   while j < 3 {\n\
+                 \x20     match mk(7) { E.A(n) => { println(f\"v{n}\"); break outer; } E.B => {} };\n\
+                 \x20     j = j + 1;\n\
+                 \x20   }\n\
+                 \x20   i = i + 1;\n\
+                 \x20 }\n\
+                 \x20 println(\"done\")\n\
+                 }\n",
+                "v7\ndE\ndone\n",
+            ),
+            (
+                "question-mark",
+                "fn g(x: i64) -> Result[i64, String] { if x > 5 { return Err(\"big\") } return Ok(x) }\n\
+                 fn f() -> Result[i64, String] {\n\
+                 \x20 match mk(7) { E.A(n) => { println(f\"v{n}\"); let q = g(n)?; return Ok(q) } E.B => {} }\n\
+                 \x20 println(\"AFTER\");\n\
+                 \x20 return Ok(0)\n\
+                 }\n\
+                 fn main() { match f() { Ok(v) => { println(f\"ok{v}\") } Err(e) => { println(f\"err{e}\") } } }\n",
+                "v7\ndE\nerrbig\n",
+            ),
+            (
+                "nested-match",
+                "fn f() {\n\
+                 \x20 match mk(1) { E.A(a) => { match mk(2) { E.A(b) => { println(f\"v{a}{b}\"); return } E.B => {} } } E.B => {} }\n\
+                 \x20 println(\"AFTER\")\n\
+                 }\n\
+                 fn main() { f(); println(\"done\") }\n",
+                "v12\ndE\ndE\ndone\n",
+            ),
+            (
+                "return-inside-nested-block",
+                "fn f() { match mk(7) { E.A(n) => { if n > 0 { println(f\"v{n}\"); return } } E.B => {} }\n\
+                 \x20 println(\"AFTER\") }\n\
+                 fn main() { f(); println(\"done\") }\n",
+                "v7\ndE\ndone\n",
+            ),
+            (
+                "if-let",
+                "fn f() { if let E.A(n) = mk(7) { println(f\"v{n}\"); return } println(\"AFTER\") }\n\
+                 fn main() { f() }\n",
+                "v7\ndE\n",
+            ),
+            (
+                "while-let",
+                "fn f() { while let E.A(n) = mk(7) { println(f\"v{n}\"); return } println(\"AFTER\") }\n\
+                 fn main() { f(); println(\"done\") }\n",
+                "v7\ndE\ndone\n",
+            ),
+            (
+                "named-scrutinee-control",
+                "fn f() { let e = mk(7);\n\
+                 \x20 match e { E.A(n) => { println(f\"v{n}\"); return } E.B => {} }\n\
+                 \x20 println(\"AFTER\") }\n\
+                 fn main() { f() }\n",
+                "v7\ndE\n",
+            ),
+            (
+                "no-own-drop-control",
+                "fn f() { match mkH(7) { H.A(n) => { println(f\"v{n}\"); return } H.B => {} }\n\
+                 \x20 println(\"AFTER\") }\n\
+                 fn main() { f() }\n",
+                "v7\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{prog}")).as_deref(),
+                Some(want),
+                "{label}"
+            );
+        }
     }
 
     /// B-2026-08-29-29 — a READ-THROUGH arm over a PROJECTION-PLACE enum

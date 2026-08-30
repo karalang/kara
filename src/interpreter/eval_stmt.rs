@@ -2563,8 +2563,52 @@ impl<'a> super::Interpreter<'a> {
             if let Some(self_pat) = param_patterns.first() {
                 self.bind_pattern(self_pat, value);
             }
+            // B-2026-08-30-14 — a `Drop` body must be TRANSPARENT to a
+            // control-flow signal that is already in flight.
+            //
+            // The block evaluator drains `pending_cf` into its own `Result`
+            // (this file's `Ok(_) => self.pending_cf.take()`), and the call
+            // below discards that `Result`. So running a body while a `return`
+            // / `break` / `continue` was propagating CONSUMED the signal: the
+            // `return` never happened, the loop ran to completion, and a
+            // value-carrying `return` yielded unit. The body was lost too,
+            // in the same motion: `eval_call` short-circuits on a set
+            // `pending_cf` right after evaluating the callee and before
+            // dispatching it, so every `println` in the body returned without
+            // emitting. One cause, both symptoms -- which is why the body's
+            // output vanished AND the statement after the `return` ran.
+            //
+            // Every OTHER drop-body site already satisfies this invariant by
+            // construction: `run_cleanup` is reached only AFTER the block
+            // evaluator has taken the signal out of `pending_cf`. The
+            // fresh-temp scrutinee hooks in `eval_expr.rs` are the exception --
+            // they can call in with it still set (measurably the `match` and
+            // `if let` ones; the `while let` spelling stayed correct
+            // throughout, which is pinned as a fixture row). Bracketing here rather than at those three sites makes the
+            // invariant structural, so a fourth caller cannot forget it, and
+            // costs nothing at the ~45 sites where the signal is already clear.
+            let interrupted_cf = self.pending_cf.take();
             let _ = self.eval_body_growing(&body);
             self.env.pop_scope();
+            if let Some(cf) = interrupted_cf {
+                // `eval_body_growing` bottoms out in `eval_block_inner`, which
+                // drains ANY signal the body itself raised into the `Result`
+                // discarded on the line above -- so `pending_cf` is None here
+                // and this restore is in practice unconditional. The
+                // `is_unwind` test is a guard for the day that stops being
+                // true, and it encodes the precedence `call_function` already
+                // applies: a fault raised INSIDE the body outranks the
+                // ordinary control flow it interrupted. It is deliberately NOT
+                // load-bearing today -- a drop body that panics is a program
+                // design.md § Drop and Destructors requires the effect checker
+                // to REJECT outright ("no 'abort on panic in drop' fallback to
+                // discover at runtime"), so teaching this path to propagate
+                // one would be implementing the fallback the spec forbids
+                // rather than fixing the missing static check.
+                if !self.pending_cf.as_ref().is_some_and(ControlFlow::is_unwind) {
+                    self.pending_cf = Some(cf);
+                }
+            }
         }
     }
 

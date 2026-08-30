@@ -36113,6 +36113,207 @@ fn freshtemp_scrutinee_body_fires_at_construct_exit() {
     }
 }
 
+/// B-2026-08-30-14 — a `return` / `break` / `continue` / `?` inside a match
+/// arm was SILENTLY DISCARDED by the interpreter when the scrutinee was a
+/// FRESH TEMP whose type carries its own `Drop` body.
+///
+/// This is a CONTROL-FLOW defect, not the drop-ORDER kind the rest of this
+/// family is made of: the statement after the `return` ran, the loop never
+/// broke, and `return n` handed back UNIT. `karac run` is the default
+/// executor, so it is what a user sees first.
+///
+/// ONE CAUSE, and it is not in `eval_match`. The fresh-temp scrutinee's own
+/// body is run by `run_user_drop_body_only` AFTER the arm, while the arm's
+/// signal is still sitting in `pending_cf`. The block evaluator drains
+/// `pending_cf` into its own `Result` (`eval_stmt.rs`'s
+/// `Ok(_) => self.pending_cf.take()`) and that call discards the `Result` —
+/// so the body ATE the signal. The body was lost too, in the same motion:
+/// the console builtins decline to emit while `pending_cf` is set, so it ran
+/// into a silenced world and `dE` never appeared either. The fix brackets the
+/// body with a save/restore of `pending_cf`, which is the invariant every
+/// OTHER drop-body site already satisfies by construction (`run_cleanup` is
+/// reached only after the signal has been taken out).
+///
+/// THE ROW'S GATE WAS TOO NARROW IN ONE DIRECTION AND THE SPELLINGS TOO FEW
+/// IN ANOTHER, both found by sweeping rather than by reading:
+///   * `struct-scrutinee` — the row's gate says the scrutinee's ENUM must
+///     carry the `Drop`. A fresh-temp STRUCT scrutinee with its own `Drop`
+///     lost the `return` identically; the trigger is the scrutinee having a
+///     body of its own, not its being an enum.
+///   * `question-mark` — `?` desugars to an early return and was discarded
+///     the same way, which turned an `Err` propagation into `Ok(0)`. That is
+///     a WRONG VALUE out of the idiomatic error-propagation operator, and the
+///     row lists only `return` / `break` / `continue`.
+///
+/// NINE OF THE TWELVE ROWS ARE RED WITHOUT THE FIX, measured shape by shape
+/// on a stashed-and-rebuilt tree rather than assumed: the interpreter printed
+/// `v7 AFTER done` where `v7 dE done` is due, and `labeled-break` ran its 3x3
+/// loop nest to completion — nine `v7`s. The test as a whole fails pre-fix on
+/// its first row.
+///
+/// THE THREE THAT WERE ALREADY GREEN are kept deliberately, and only two of
+/// them are boundaries in the designed sense. `named-scrutinee-control` and
+/// `no-own-drop-control` are those two — a named scrutinee is owned elsewhere
+/// and never reached the interrupted path, and a type with no `Drop` has no
+/// body to run into the signal. `while-let` is the SURPRISE: the `match` and
+/// `if let` spellings of this program both lost the `return` and the
+/// `while let` spelling did not, so the three sibling constructs did NOT
+/// behave alike here. It is pinned so that stays true — a later change that
+/// unified these paths could regress the one that was already correct.
+///
+/// `struct-scrutinee` is INTERPRETER-ONLY on purpose. Both compiled backends
+/// run no body at all for a fresh-temp struct scrutinee (B-2026-08-30-15), so
+/// pinning this shape on all four surfaces would write that separate bug into
+/// the contract. What is asserted here is only the half this fix owns — the
+/// `return` happens — and the compiled twin deliberately omits the row.
+///
+/// `named-scrutinee-control` and `no-own-drop-control` are the unchanged
+/// boundaries, both measured identical before and after: a named scrutinee is
+/// owned elsewhere and was never routed through the interrupted path, and a
+/// type with no `Drop` of its own has no body to run into the signal.
+#[test]
+fn diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow() {
+    const H: &str = "enum E { A(i64), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         enum H { A(i64), B }\n\
+         fn mk(n: i64) -> E { return E.A(n) }\n\
+         fn mkH(n: i64) -> H { return H.A(n) }\n";
+    for (label, prog, want) in [
+        (
+            "return",
+            "fn f() { match mk(7) { E.A(n) => { println(f\"v{n}\"); return } E.B => {} }\n\
+             \x20 println(\"AFTER\") }\n\
+             fn main() { f(); println(\"done\") }\n",
+            "v7\ndE\ndone\n",
+        ),
+        (
+            "return-value",
+            "fn f() -> i64 { match mk(7) { E.A(n) => { return n } E.B => { return 0 } } }\n\
+             fn main() { println(f\"t{f()}\") }\n",
+            "dE\nt7\n",
+        ),
+        (
+            "break",
+            "fn main() {\n\
+             \x20 let mut i = 0;\n\
+             \x20 while i < 3 {\n\
+             \x20   match mk(7) { E.A(n) => { println(f\"v{n}\"); break } E.B => {} }\n\
+             \x20   println(\"AFTER\"); i = i + 1;\n\
+             \x20 }\n\
+             \x20 println(\"done\")\n\
+             }\n",
+            "v7\ndE\ndone\n",
+        ),
+        (
+            "continue",
+            "fn main() {\n\
+             \x20 let mut i = 0;\n\
+             \x20 while i < 2 {\n\
+             \x20   i = i + 1;\n\
+             \x20   match mk(7) { E.A(n) => { println(f\"v{n}\"); continue } E.B => {} }\n\
+             \x20   println(\"AFTER\");\n\
+             \x20 }\n\
+             \x20 println(\"done\")\n\
+             }\n",
+            "v7\ndE\nv7\ndE\ndone\n",
+        ),
+        (
+            "labeled-break",
+            "fn main() {\n\
+             \x20 let mut i = 0;\n\
+             \x20 outer: while i < 3 {\n\
+             \x20   let mut j = 0;\n\
+             \x20   while j < 3 {\n\
+             \x20     match mk(7) { E.A(n) => { println(f\"v{n}\"); break outer; } E.B => {} };\n\
+             \x20     j = j + 1;\n\
+             \x20   }\n\
+             \x20   i = i + 1;\n\
+             \x20 }\n\
+             \x20 println(\"done\")\n\
+             }\n",
+            "v7\ndE\ndone\n",
+        ),
+        (
+            "question-mark",
+            "fn g(x: i64) -> Result[i64, String] { if x > 5 { return Err(\"big\") } return Ok(x) }\n\
+             fn f() -> Result[i64, String] {\n\
+             \x20 match mk(7) { E.A(n) => { println(f\"v{n}\"); let q = g(n)?; return Ok(q) } E.B => {} }\n\
+             \x20 println(\"AFTER\");\n\
+             \x20 return Ok(0)\n\
+             }\n\
+             fn main() { match f() { Ok(v) => { println(f\"ok{v}\") } Err(e) => { println(f\"err{e}\") } } }\n",
+            "v7\ndE\nerrbig\n",
+        ),
+        (
+            "nested-match",
+            "fn f() {\n\
+             \x20 match mk(1) { E.A(a) => { match mk(2) { E.A(b) => { println(f\"v{a}{b}\"); return } E.B => {} } } E.B => {} }\n\
+             \x20 println(\"AFTER\")\n\
+             }\n\
+             fn main() { f(); println(\"done\") }\n",
+            "v12\ndE\ndE\ndone\n",
+        ),
+        (
+            "return-inside-nested-block",
+            "fn f() { match mk(7) { E.A(n) => { if n > 0 { println(f\"v{n}\"); return } } E.B => {} }\n\
+             \x20 println(\"AFTER\") }\n\
+             fn main() { f(); println(\"done\") }\n",
+            "v7\ndE\ndone\n",
+        ),
+        (
+            "if-let",
+            "fn f() { if let E.A(n) = mk(7) { println(f\"v{n}\"); return } println(\"AFTER\") }\n\
+             fn main() { f() }\n",
+            "v7\ndE\n",
+        ),
+        (
+            "while-let",
+            "fn f() { while let E.A(n) = mk(7) { println(f\"v{n}\"); return } println(\"AFTER\") }\n\
+             fn main() { f(); println(\"done\") }\n",
+            "v7\ndE\ndone\n",
+        ),
+        (
+            "named-scrutinee-control",
+            "fn f() { let e = mk(7);\n\
+             \x20 match e { E.A(n) => { println(f\"v{n}\"); return } E.B => {} }\n\
+             \x20 println(\"AFTER\") }\n\
+             fn main() { f() }\n",
+            "v7\ndE\n",
+        ),
+        (
+            "no-own-drop-control",
+            "fn f() { match mkH(7) { H.A(n) => { println(f\"v{n}\"); return } H.B => {} }\n\
+             \x20 println(\"AFTER\") }\n\
+             fn main() { f() }\n",
+            "v7\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{prog}")), want, "{label}");
+    }
+}
+
+/// B-2026-08-30-14, the STRUCT half — interpreter-only, and the doc comment on
+/// `diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow` says why:
+/// both compiled backends run no body at all here (B-2026-08-30-15), so the
+/// four-surface twin would have to encode that separate defect to pass.
+///
+/// Kept as its own test rather than a row in the table above so the split is
+/// visible at the point where it matters, and so closing -15 is a one-line
+/// move of this shape INTO the shared table rather than an archaeology
+/// exercise.
+#[test]
+fn diverging_arm_over_a_freshtemp_struct_scrutinee_keeps_its_control_flow() {
+    let src = "struct S { id: i64 }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\") } }\n\
+         fn mk(n: i64) -> S { return S { id: n } }\n\
+         fn f() { match mk(7) { S { id } => { println(f\"v{id}\"); return } }\n\
+         \x20 println(\"AFTER\") }\n\
+         fn main() { f(); println(\"done\") }\n";
+    // Pre-fix this printed `v7\nAFTER\ndone\n` — the `return` was discarded and
+    // the body never ran, exactly as for an enum scrutinee.
+    assert_eq!(run(src), "v7\ndS7\ndone\n");
+}
+
 /// B-2026-08-29-29, interpreter leg — the TUPLE-ELEMENT half, which is where
 /// the interpreter had a defect of its own rather than merely the compiled
 /// side's mirror.
