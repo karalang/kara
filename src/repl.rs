@@ -1669,9 +1669,22 @@ impl Session {
             }
 
             // Round-trip the program through the ownership checker so cross-
-            // cell `UseAfterMove` errors fire in REPL context the same way
-            // they fire on `.kara` files. Strictness is identical to the
-            // .kara surface; only diagnostic *presentation* is enriched.
+            // cell `UseAfterMove` errors fire in REPL context, with the
+            // *presentation* enriched by `render_ownership_errors_repl`.
+            //
+            // B-2026-08-29-64 — this comment used to claim "strictness is
+            // identical to the .kara surface". It is not, and the difference is
+            // deliberate on both sides. This gate rejects on ANY entry in
+            // `owned.errors`; the .kara surface filters through
+            // `kind_blocks_production`, which makes `UseAfterMove` ADVISORY
+            // there (warning, `All checks passed`, exit 0, working binary — the
+            // defensive copy carries it). So a cell the REPL refuses is a
+            // program `karac build` accepts. The REPL is the stricter surface:
+            // it keeps a moved-from binding from becoming readable-by-accident
+            // mid-session, rolls the failing cell out of history, and offers
+            // `--auto-clone` as the opt-in escape. Pinned by
+            // `cross_cell_uam_strictness_unchanged` in tests/repl.rs; design.md
+            // § REPL now documents the divergence rather than denying it.
             // Rendering happens via `render_ownership_errors_repl`, which
             // appends a notebook-aware tail to UAM errors whose consume site
             // and use site land in different cells.

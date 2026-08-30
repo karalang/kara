@@ -682,6 +682,12 @@ fn same_cell_uam_uses_baseline_diagnostic() {
 fn cross_cell_uam_strictness_unchanged() {
     // The diagnostic enrichment must not change rejection behavior — the
     // program still errors and the failing cell does not enter history.
+    //
+    // B-2026-08-29-64 — "unchanged" here means unchanged BY THE ENRICHMENT
+    // SLICE, not "equal to the .kara surface". The two differ on purpose: on a
+    // .kara file `UseAfterMove` is advisory (`kind_blocks_production`), so the
+    // same program warns, passes `check` and builds. This assertion pins the
+    // REPL's stricter half of that split.
     let mut s = pinned_session();
     s.evaluate_cell_captured("fn consume(s: String) {}");
     s.evaluate_cell_captured("let s = \"hi\";");
@@ -690,7 +696,8 @@ fn cross_cell_uam_strictness_unchanged() {
     let r = s.evaluate_cell_captured("let _u = consume(s);");
     assert!(
         !r.errors.is_empty(),
-        "expected the diagnostic to still reject the program (strictness == .kara)",
+        "expected the diagnostic to still reject the program (REPL rejects; the \
+         .kara surface warns and builds — see B-2026-08-29-64)",
     );
     assert!(
         r.stdout.is_empty(),

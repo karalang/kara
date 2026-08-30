@@ -1545,6 +1545,131 @@ fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-08-29-64 — an ADVISORY ownership diagnostic must report the same
+/// severity on both output lanes.
+///
+/// `UseAfterMove` is deliberately NON-FATAL for production
+/// (`kind_blocks_production`): the text lane prints `warning[ownership]`,
+/// `karac check` says "All checks passed" and exits 0, and `karac build`
+/// produces a working binary, on the documented promise that codegen
+/// defensive-copies the reuse. The JSON lane hardcoded `severity: "error"` for
+/// every entry in `ownership.errors`, so the one advisory kind that rides that
+/// vector reported as a hard error while the command exited 0.
+///
+/// This is B-2026-08-25-24 one phase over — the same hardcoded-`error` shape,
+/// the same reason it matters: the Mend loop reads the JSON, so that lane IS
+/// the interface, and a diagnostic that claims `error` while exiting 0 tells an
+/// automated fixer the build failed when it did not.
+///
+/// The fatal control is what keeps this honest: an ordinary BLOCKING ownership
+/// error must keep `error[ownership]`, `"severity": "error"` and a nonzero
+/// exit, so the fix cannot have relabelled the whole phase indiscriminately.
+#[test]
+fn advisory_ownership_diagnostic_reports_same_severity_on_both_lanes() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-own-advisory-severity-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // ── ADVISORY: use-after-move. Non-fatal by design. ──
+    let uam = tmp.join("uam.kara");
+    std::fs::write(
+        &uam,
+        "fn consume_vec(x: Vec[i64]) -> i64 { return x.len(); }\n\
+         fn main() {\n\
+         \x20   let mut v: Vec[i64] = Vec.new();\n\
+         \x20   v.push(1);\n\
+         \x20   let n = consume_vec(v);\n\
+         \x20   println(f\"consumed={n} after={v.len()}\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    // (a) text lane: a warning, and the command SUCCEEDS.
+    let out = karac_bin()
+        .args(["check", uam.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        err.contains("warning[ownership]"),
+        "use-after-move must print as a warning on the text lane, got: {err}"
+    );
+    assert!(
+        out.status.success(),
+        "an advisory ownership diagnostic must not fail `check`: {err}"
+    );
+
+    // (b) JSON lane: the SAME severity. This is the regression.
+    let out = karac_bin()
+        .args(["check", "--output=json", uam.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("check --output=json must emit JSON ({e}): {stdout}"));
+    let d = v["diagnostics"]
+        .as_array()
+        .and_then(|a| a.iter().find(|d| d["code"] == "E0500"))
+        .unwrap_or_else(|| panic!("no E0500 use-after-move diagnostic in JSON: {stdout}"));
+    assert_eq!(
+        d["severity"], "warning",
+        "use-after-move exits 0 and prints `warning[ownership]` on the text lane, \
+         so the Mend lane must not call it an error: {stdout}"
+    );
+    assert!(
+        out.status.success(),
+        "the JSON lane must exit 0 for an advisory diagnostic too: {stdout}"
+    );
+
+    // ── CONTROL: a BLOCKING ownership error is untouched on both lanes. ──
+    let hard = tmp.join("hard.kara");
+    std::fs::write(
+        &hard,
+        "fn main() {\n\
+         \x20   let v: Vec[i64] = Vec.new();\n\
+         \x20   v.push(1);\n\
+         \x20   println(f\"{v.len()}\");\n\
+         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", hard.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        err.contains("error[ownership]"),
+        "a blocking ownership error must still print as an error: {err}"
+    );
+    assert!(
+        !out.status.success(),
+        "a blocking ownership error must still fail `check`: {err}"
+    );
+    let out = karac_bin()
+        .args(["check", "--output=json", hard.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("check --output=json must emit JSON ({e}): {stdout}"));
+    let d = v["diagnostics"]
+        .as_array()
+        .and_then(|a| a.iter().find(|d| d["phase"] == "ownership"))
+        .unwrap_or_else(|| panic!("no ownership diagnostic in JSON: {stdout}"));
+    assert_eq!(
+        d["severity"], "error",
+        "a blocking ownership error must stay an error on the Mend lane: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// B-2026-08-17-21 — the chained-receiver lint must see LOWERED shapes.
 ///
 /// `ORIGIN.inner.v.to_string()` parses as a 4-segment `Call(Path)` because the

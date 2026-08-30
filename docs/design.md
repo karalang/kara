@@ -11692,10 +11692,10 @@ consume_vec(v);  // moves v
 print(v.len());  // use-after-move error
 ```
 
-The error is correct and identical to the error the same code would produce in a `.kara` file. The REPL frontend renders it with a **notebook-aware hint** rather than the bare compiler diagnostic:
+The REPL **rejects the cell** for this, and renders it with a **notebook-aware hint** rather than the bare compiler diagnostic:
 
 ```
-error[E0382]: use of moved value `v`
+ownership error: value `v` moved here, used again here (E0500)
   cell 4, line 1: print(v.len())
                         ^
   note: `v` was consumed in cell 3 by `consume_vec(v)`
@@ -11703,7 +11703,22 @@ error[E0382]: use of moved value `v`
           consume_vec(v.clone())
 ```
 
-No implicit clones. Strictness is identical to compiled code; only the diagnostic presentation is notebook-aware.
+No implicit clones.
+
+**The REPL is STRICTER than the compiled surface here, and deliberately so.** This
+paragraph previously claimed the two were identical; they are not (B-2026-08-29-64).
+On a `.kara` file `UseAfterMove` is ADVISORY — `kind_blocks_production` excludes it,
+so `karac check` prints `warning[ownership]`, reports `All checks passed` and exits
+0, and `karac build` produces a working binary, on the documented promise that
+codegen defensive-copies the reuse (see § Ownership, and `uam_consume_sites`). The
+REPL instead refuses the cell and rolls it back out of history, so the moved-from
+binding never becomes readable-by-accident mid-session; `karac repl --auto-clone`
+is the opt-in escape. Both behaviours are intentional and separately tested — only
+the claim that they matched was wrong.
+
+The diagnostic's code is **E0500** on every surface that emits one (`karac explain
+E0500`, and `"code": "E0500"` on the `--output=json` lane). E0382 is not a code this
+compiler mints.
 
 **Opt-in auto-clone mode.** Users who prefer Python-like prototyping ergonomics may enable `karac repl --auto-clone` (flag) or `%set auto-clone on` (Jupyter magic). In this mode, the interpreter inserts `.clone()` at the consume site when the consumed binding is referenced again in a later cell, and emits a `perf[auto-clone-in-repl]` note identifying the inserted clone. Auto-clone is never silent, and the inserted clones appear verbatim in the session export so that saved files compile without modification.
 

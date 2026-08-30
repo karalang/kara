@@ -2195,7 +2195,29 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
-                severity: "error",
+                // B-2026-08-29-64 — read the SAME classifier the text lane
+                // uses, rather than hardcoding `error`.
+                //
+                // `kind_blocks_production` makes `UseAfterMove` advisory: the
+                // text lane prints `warning[ownership]`, `check` says "All
+                // checks passed" and exits 0, and `build` emits a working
+                // binary, on the documented promise that codegen
+                // defensive-copies the reuse. This emitter called every entry
+                // in `ownership.errors` an error regardless, so that one
+                // advisory kind claimed `"severity": "error"` in a record whose
+                // command exited 0.
+                //
+                // Exactly B-2026-08-25-24 one phase over — same hardcoded
+                // constant, same consequence: the Mend loop reads the JSON, so
+                // this lane IS the interface, and an automated fixer told
+                // `error` on a successful build has been handed a false
+                // failure. The sibling `ownership.notes` emitter below already
+                // reports `"note"`, so this was the last disagreeing lane.
+                severity: if crate::ownership::kind_blocks_production(&err.kind) {
+                    "error"
+                } else {
+                    "warning"
+                },
                 phase: "ownership",
                 code,
                 category: "ownership",
