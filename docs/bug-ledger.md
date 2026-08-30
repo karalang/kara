@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 324 | 1 |
-| run-vs-build | 256 | 15 |
+| miscompile | 324 | 0 |
+| run-vs-build | 256 | 14 |
 | leak | 237 | 8 |
 | missing-feature | 190 | 2 |
 | double-free | 157 | 0 |
@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | perf | 87 | 1 |
-| soundness | 85 | 3 |
+| soundness | 86 | 4 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
 | use-after-free | 25 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1267 | 27 |
+| codegen | 1268 | 26 |
 | typecheck | 280 | 2 |
-| interp | 269 | 14 |
+| interp | 270 | 14 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced · 32 open · 1791 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1853 surfaced · 31 open · 1793 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (32)
+### Open (31)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced
 | B-2026-08-29-45 | 2026-08-29 | interp+codegen | medium | A BINDING MOVED INTO A `Vec` LITERAL RUNS ITS `Drop` BODY TWICE -- both `let v = [r]` (param) and `let m = R { .. }; let v = [m]` (plain local) print two bodies where one is due, while `let v = [R { .. }]` with a FRESH element is correct; the element walk arms without the source's ownership being taken over | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
-| B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
@@ -160,8 +159,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
-| B-2026-08-30-33 | 2026-08-30 | interp+codegen | medium | A by-value param with TWO exits -- conditionally STORED into a `mut ref` place and also RETURNED on another path -- runs NO `Drop` body on the path where it dies inside the callee. The shape B-2026-08-30-28's per-path flag deliberately DECLINES: nothing clears the flag on a non-store exit, so admitting it DOUBLES the body instead (measured, all four surfaces). Unanimous across backends, so no A/B gate reports it | — |
 | B-2026-08-30-36 | 2026-08-30 | typecheck | medium | `f16` AND `bf16` IMPLEMENT NONE OF THE SIX ARITHMETIC OPERATOR TRAITS (`Add`/`Sub`/`Mul`/`Div`/`Rem`/`Neg`), so neither can satisfy a generic `T: Add` bound and no generic numeric helper is callable at either width — design.md § f16 / bf16 promises "Add, Sub, Mul, Div, Neg ... same surface as f32/f64". The operators work when spelled DIRECTLY (`a + b` on two `f16` compiles and runs correctly on all three backends); only the trait surface is missing, so the gap is invisible until a generic is involved. `PartialEq` / `PartialOrd` / `Copy` — the rest of that same design.md sentence — are all present | — |
+| B-2026-08-30-38 | 2026-08-30 | interp+codegen | medium | AN ARGUMENT THAT IS A CONTROL-FLOW OR BLOCK EXPRESSION LOSES ITS `Drop` BODY ENTIRELY -- `one(if c { mk(1) } else { mk(2) })`, the `match` spelling and the bare-block spelling all run NO body on ALL FOUR surfaces, while the direct `one(mk(1))` and the let-bound-then-passed spelling both run it; the memory is freed either way, so only the user body is lost | none |
 
 ### Relocated (2)
 
@@ -194,9 +193,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced
 
 </details>
 
-### Fixed (1791)
+### Fixed (1793)
 
-<details><summary>1791 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1793 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1964,6 +1963,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced
 | B-2026-08-29-52 | codegen | high | Printing a `Vector[T, N]` gives THREE DIFFERENT ANSWERS -- the interpreter renders the lanes, the JIT prints a raw POINTER (the same one for two diff… | 60465148 |
 | B-2026-08-29-53 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range | 2e5490d |
 | B-2026-08-29-54 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 }… | 5962bb9 |
+| B-2026-08-29-55 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { i… | 4b73d1e2 |
 | B-2026-08-29-56 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(… | bc1c37c |
 | B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
 | B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
@@ -1988,6 +1988,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced
 | B-2026-08-30-30 | resolver+interp | medium | `process.exit(code)` WORKS ON BOTH COMPILED BACKENDS AND RAISES AN INTERNAL "this is a compiler bug" RUNTIME ERROR ON THE INTERPRETER -- the interpre… | 198b899 |
 | B-2026-08-30-31 | codegen | high | AUTO-PAR RUNS `process.exit(code)` BEFORE THE `println`s THAT PRECEDE IT WHENEVER ANY STATEMENT FOLLOWS THE EXIT, silently discarding ALL prior stdou… | 198b899 |
 | B-2026-08-30-32 | codegen | medium | LLVM-18 PROMOTES f16 ARITHMETIC AND MATH METHODS TO f32 ON wasm32 AND NEVER ROUNDS THE RESULT BACK, so a wasm module holds values the type cannot rep… | c1a9f3e |
+| B-2026-08-30-33 | interp+codegen | medium | A by-value param with TWO exits -- conditionally STORED into a `mut ref` place and also RETURNED on another path -- runs NO `Drop` body on the path w… | f77f6a4b |
 | B-2026-08-30-34 | interp | medium | A `u64` value >= 2^63 converts to EVERY float type as its negative two's-complement under the interpreter (`u64::MAX as f64` prints -1) while all thr… | 74f6989 |
 | B-2026-08-30-35 | effect | high | AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE CONTRIBUTES NO EFFECTS TO INFERENCE -- `println(f"{touch()}")` infers [writes(Stdout)] where the… | ae33af9 |
 | B-2026-08-30-37 | effect | medium | TWO MORE EFFECT WALKERS TREAT AN f-STRING AS A LEAF, and `ae33af9` fixed only the third -- `modbind_synth::walk_expr` loses a module-binding read wri… | 7366410 |

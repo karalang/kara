@@ -34854,7 +34854,7 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
     // BOTH-BACKENDS fix rather than a parity repair, and why no A/B gate and no
     // kata can see it. `one(mk(6))` and the let-bound `one(e0)` are CONTROLS:
     // their failure would mean the per-call window regressed something, while
-    // the first three record the standing defect. BUGID_TBD.
+    // the first three record the standing defect. B-2026-08-30-38.
     let pin_src = format!(
         "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
          fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\

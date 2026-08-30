@@ -40010,7 +40010,7 @@ fn main() {
         // The two spellings that DO work are asserted beside it deliberately:
         // `one(mk(6))` and the let-bound `one(e0)` are CONTROLS whose failure
         // would mean this fix regressed, while the first three record the
-        // standing defect. BUGID_TBD.
+        // standing defect. B-2026-08-30-38.
         let pin_src = format!(
             "{hdr}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
              fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
