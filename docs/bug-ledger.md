@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | perf | 87 | 1 |
-| soundness | 84 | 3 |
+| soundness | 85 | 3 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
 | use-after-free | 25 | 0 |
@@ -119,12 +119,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
-| effect | 28 | 0 |
+| effect | 29 | 0 |
 | resolver | 28 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced · 32 open · 1790 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1852 surfaced · 32 open · 1791 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (32)
 
@@ -194,9 +194,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 
 </details>
 
-### Fixed (1790)
+### Fixed (1791)
 
-<details><summary>1790 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1791 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1990,6 +1990,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 | B-2026-08-30-32 | codegen | medium | LLVM-18 PROMOTES f16 ARITHMETIC AND MATH METHODS TO f32 ON wasm32 AND NEVER ROUNDS THE RESULT BACK, so a wasm module holds values the type cannot rep… | c1a9f3e |
 | B-2026-08-30-34 | interp | medium | A `u64` value >= 2^63 converts to EVERY float type as its negative two's-complement under the interpreter (`u64::MAX as f64` prints -1) while all thr… | 74f6989 |
 | B-2026-08-30-35 | effect | high | AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE CONTRIBUTES NO EFFECTS TO INFERENCE -- `println(f"{touch()}")` infers [writes(Stdout)] where the… | ae33af9 |
+| B-2026-08-30-37 | effect | medium | TWO MORE EFFECT WALKERS TREAT AN f-STRING AS A LEAF, and `ae33af9` fixed only the third -- `modbind_synth::walk_expr` loses a module-binding read wri… | 7366410 |
 
 </details>
 
