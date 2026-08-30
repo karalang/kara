@@ -14232,6 +14232,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// last binding at this point, which is also the binder
     /// `compute_snapshot_sets_for_cell` keyed on.
     ///
+    /// This runs for REPLAYED bindings too, not only first ones. Moving the
+    /// capture to end of cell fixed a mutation made in the cell that
+    /// DECLARES the binding; a mutation made in any later cell was still
+    /// lost, because a replayed name never entered `snapshot_capture` and
+    /// the global was therefore written exactly once (B-2026-08-30-1). The
+    /// write-back is what makes the global track the binding instead of its
+    /// initializer — and for the two by-value heap kinds it is also what
+    /// keeps the global from pointing at a buffer a later cell freed or
+    /// reallocated away.
+    ///
     /// No-op outside REPL mode — `snapshot_capture` is empty for every
     /// other build.
     pub(super) fn emit_pending_snapshot_captures(&mut self) {
@@ -14259,7 +14269,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
 
-        let global = self.get_or_define_snapshot_global(name, kind);
+        // A name that is ALSO in `snapshot_replay` already has a defining
+        // global installed in the runner's JITDylib from the cell that
+        // declared it, and this cell's module carries only an external
+        // declaration of it (emitted by `try_compile_snapshot_replay`).
+        // Take the declare form so the write-back stores THROUGH that
+        // symbol; emitting a second definition would install a duplicate
+        // into the same JITDylib. (`get_or_define_snapshot_global` would
+        // in practice return the declaration the replay path already put
+        // in the module, but that is an emission-order accident — the
+        // choice belongs on the classification, not on which helper runs
+        // first.)
+        let global = if self.snapshot_replay.contains_key(name) {
+            self.get_or_declare_snapshot_global(name, kind)
+        } else {
+            self.get_or_define_snapshot_global(name, kind)
+        };
         let loaded =
             match self
                 .builder

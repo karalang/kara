@@ -350,12 +350,11 @@ pub fn compile_to_ir_for_repl_cell(
 /// [`compile_to_ir_for_repl_cell`] that threads two snapshot sets
 /// through to the codegen pass.
 ///
-/// `snapshot_capture`: top-level `let <name> = <expr>` bindings in
-///   the current cell whose post-bind value should be stored to an
-///   externally-visible LLVM global `__karac_repl_snapshot_<name>`.
-///   The original RHS still runs (this is the binding's first
-///   evaluation in the session). Subsequent cells will discover
-///   the global via `snapshot_replay`.
+/// `snapshot_capture`: top-level `let <name> = <expr>` bindings whose
+///   value should be stored to an externally-visible LLVM global
+///   `__karac_repl_snapshot_<name>` at END OF CELL, after every
+///   statement has run. Subsequent cells discover the global via
+///   `snapshot_replay`.
 ///
 /// `snapshot_replay`: top-level `let <name> = <expr>` bindings
 ///   whose RHS should be SKIPPED in this cell's codegen — the
@@ -364,10 +363,14 @@ pub fn compile_to_ir_for_repl_cell(
 ///   source still carries the let stmt so resolver/typechecker
 ///   accept downstream references to the binding.
 ///
-/// Mutual exclusion: a name appears in at most one of the two maps
-/// per cell; replay wins when the parent's set-builder sees both
-/// possible (the binding was both replayed AND newly defined in
-/// the same cell, which Kāra's resolver rejects anyway).
+/// The two sets OVERLAP, and the overlap is the point: a replayed
+/// binding is normally in `snapshot_capture` too, so the global is
+/// refreshed with the binding's end-of-cell value. Without that
+/// write-back the global would be written exactly once, by the
+/// declaring cell, and a mutation made in any later cell would be
+/// dropped at the boundary (B-2026-08-30-1). A name in both maps is
+/// loaded at the `let` and stored back at the tail; a name in
+/// `snapshot_capture` alone is a first binding, whose RHS runs.
 ///
 /// The original [`compile_to_ir_for_repl_cell`] entry delegates here
 /// with empty snapshot maps; non-REPL callers don't need to know
@@ -2081,9 +2084,10 @@ pub(super) struct Codegen<'ctx> {
     /// than re-evaluating the original RHS — important when the RHS
     /// has side effects (`let log = read_file("big.json")` should
     /// not reread the file on every cell that uses `log`). Empty
-    /// in every non-REPL codegen entry. Mutually exclusive with
-    /// `snapshot_replay` per binding name (the parent assembles the
-    /// two sets so they never overlap; replay always wins).
+    /// in every non-REPL codegen entry. OVERLAPS `snapshot_replay`
+    /// by design: a replayed binding is captured again at end of
+    /// cell so its global tracks the binding's current value rather
+    /// than freezing at the declaring cell (B-2026-08-30-1).
     pub(crate) snapshot_capture: HashMap<String, SnapshotPrimKind>,
     /// Slice c-repl.B.5.1: REPL value-snapshot replay set. Maps a
     /// top-level `let <name> = <expr>` binding name to its primitive
@@ -2095,6 +2099,11 @@ pub(super) struct Codegen<'ctx> {
     /// still carries the original `let <name> = <expr>` text — the
     /// resolver / typechecker need it to typecheck downstream uses
     /// — but codegen never lowers the original `<expr>`.
+    ///
+    /// Membership here also switches the end-of-cell capture from
+    /// the define form of the global to the declare form: the
+    /// defining copy already lives in the runner's JITDylib, so this
+    /// cell stores THROUGH an external declaration of it.
     pub(crate) snapshot_replay: HashMap<String, SnapshotPrimKind>,
 }
 

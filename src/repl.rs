@@ -2297,16 +2297,37 @@ impl Session {
             if last_binder_idx.get(name.as_str()) != Some(&idx) {
                 continue;
             }
-            // Replay path wins: if this binding already has a global
-            // installed in the runner, we ALWAYS route through the
-            // load-from-global codepath rather than re-emit the RHS
-            // and reinstall the global. (A CURRENT-cell `let` that
-            // re-binds a snapshotted name cannot land here: the
-            // shadow clear in `clear_rebound_let_snapshots` dropped
-            // the name from `jit_snapshotted_lets` before this cell
-            // compiled.)
+            // Replay path wins for the RHS: if this binding already has
+            // a global installed in the runner, the `let` loads from the
+            // global rather than re-running the original initializer. (A
+            // CURRENT-cell `let` that re-binds a snapshotted name cannot
+            // land here: the shadow clear in
+            // `clear_rebound_let_snapshots` dropped the name from
+            // `jit_snapshotted_lets` before this cell compiled.)
+            //
+            // The name goes into `capture` TOO, so the global is written
+            // back at end of cell. Replay used to be exclusive — `continue`
+            // here, no capture — which meant the global was written exactly
+            // ONCE, by the cell that declared the binding, and every later
+            // cell loaded a value that could no longer change
+            // (B-2026-08-30-1). A mutation in any cell after the declaring
+            // one was therefore lost: `let mut n = 0;` then `n = 5;` in the
+            // next cell read back 0. Worse for the two by-value heap kinds
+            // — a later-cell `s = s + f"b"` / `v.push(…)` frees or reallocs
+            // the buffer the global still points at, so subsequent cells
+            // read FREED memory rather than merely stale memory.
+            //
+            // Map/Set hid the gap: their globals hold a handle POINTER, so
+            // an in-place `m.insert(…)` is visible through the stale global
+            // and those two shapes were correct by aliasing while the seven
+            // by-value shapes (i64/f64/bool/char/String/Vec) were not.
+            //
+            // Capture is idempotent for an unmutated replayed binding: the
+            // slot still holds exactly what the load produced, so the
+            // write-back stores the same bytes.
             if let Some(kind) = self.jit_snapshotted_lets.get(name) {
                 replay.insert(name.clone(), *kind);
+                capture.insert(name.clone(), *kind);
                 continue;
             }
             let Some(ty) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {

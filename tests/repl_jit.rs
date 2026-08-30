@@ -279,6 +279,199 @@ fn repl_jit_string_mut_let_carries_in_cell_mutation_across_cells() {
     );
 }
 
+/// B-2026-08-30-1 — a mutation made in a cell AFTER the declaring one must
+/// survive to the next cell.
+///
+/// `emit_pending_snapshot_captures` (B-2026-07-29-20) moved the capture from
+/// the `let` to end of cell, which fixed a mutation made in the SAME cell as
+/// the declaration — the shape the four
+/// `*_carries_in_cell_mutation_across_cells` tests above pin. It left the
+/// replay classification exclusive: once a name had a global,
+/// `compute_snapshot_sets_for_cell` routed it to `replay` and `continue`d, so
+/// it never entered `capture` and the global was written exactly ONCE, by the
+/// declaring cell. Every later cell loaded a value it could not write back.
+///
+/// Map and Set hid the gap and are kept here as controls: their globals hold
+/// a handle POINTER, so an in-place `insert` is visible through a stale
+/// global and those two shapes were correct by aliasing. The seven by-value
+/// shapes were not — they reverted to the initializer, and the two heap ones
+/// did worse than revert (see the two tests below).
+#[test]
+fn repl_jit_later_cell_mutation_survives_snapshot_replay() {
+    // (label, declare cell, mutate cell, read cell, expected stdout)
+    let cases: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "i64",
+            "let mut n: i64 = 0;",
+            "n = 5;",
+            "println(f\"{n}\");",
+            "5",
+        ),
+        (
+            "f64",
+            "let mut f: f64 = 0.0;",
+            "f = 2.5;",
+            "println(f\"{f}\");",
+            "2.5",
+        ),
+        (
+            "bool",
+            "let mut b: bool = false;",
+            "b = true;",
+            "println(f\"{b}\");",
+            "true",
+        ),
+        (
+            "char",
+            "let mut c: char = 'a';",
+            "c = 'z';",
+            "println(f\"{c}\");",
+            "z",
+        ),
+        (
+            "String reassign",
+            "let mut s = f\"a\";",
+            "s = s + f\"b\";",
+            "println(f\"{s}\");",
+            "ab",
+        ),
+        (
+            "String push_str",
+            "let mut s: String = String.new();",
+            "s.push_str(\"hi\");",
+            "println(f\"{s}\");",
+            "hi",
+        ),
+        (
+            "Vec",
+            "let mut v: Vec[i64] = Vec.new();",
+            "v.push(7);",
+            "println(f\"{v.len()}\");",
+            "1",
+        ),
+        // Controls: correct before the fix (handle-pointer aliasing) and
+        // must stay correct after it.
+        (
+            "Map (control)",
+            "let mut m: Map[i64, i64] = Map.new();",
+            "m.insert(1, 3);",
+            "println(f\"{m.len()}\");",
+            "1",
+        ),
+        (
+            "Set (control)",
+            "let mut q: Set[i64] = Set.new();",
+            "q.insert(9);",
+            "println(f\"{q.len()}\");",
+            "1",
+        ),
+    ];
+
+    for (label, declare, mutate, read, want) in cases {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        for (idx, src) in [declare, mutate].iter().enumerate() {
+            let r = s.evaluate_cell_captured(src);
+            assert!(
+                r.errors.is_empty(),
+                "[{label}] cell {} should run cleanly: {:?}",
+                idx + 1,
+                r.errors,
+            );
+        }
+        let r = s.evaluate_cell_captured(read);
+        assert!(
+            r.errors.is_empty(),
+            "[{label}] read cell should run cleanly: {:?}",
+            r.errors,
+        );
+        assert_eq!(
+            r.stdout.trim(),
+            *want,
+            "[{label}] the cell-2 mutation must survive to cell 3 (the \
+             snapshot global was written once, by cell 1, and never \
+             refreshed)",
+        );
+    }
+}
+
+/// B-2026-08-30-1, the half that is worse than staleness: a later-cell Vec
+/// growth left the snapshot global pointing at a FREED buffer.
+///
+/// Cell 1 fills exactly to `cap`, so cell 2's pushes realloc and free the
+/// original allocation. With no write-back the global still held the old
+/// `{ptr, len, cap}`, so cell 3 read freed heap: it reported `len=4` and
+/// `v[0]` came back as a raw pointer value (94542648599680 on the measuring
+/// run), not 1. Asserting the ELEMENTS, not just the length, is what
+/// distinguishes reading freed memory from merely reading a stale length.
+#[test]
+fn repl_jit_later_cell_vec_growth_does_not_strand_the_snapshot_global() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "let mut v: Vec[i64] = Vec.new(); v.push(1); v.push(2); v.push(3); v.push(4);",
+    );
+    assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("v.push(5); v.push(6); v.push(7); v.push(8); v.push(9);");
+    assert!(r.errors.is_empty(), "growth cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(f\"{v.len()}|{v[0]}|{v[8]}\");");
+    assert!(r.errors.is_empty(), "read cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "9|1|9",
+        "cell 3 must see the grown buffer, not the freed one",
+    );
+}
+
+/// B-2026-08-30-1, the same freed-buffer shape for String: a later-cell
+/// reassignment frees the buffer the global points at.
+///
+/// Pre-fix cell 3 printed `len=10` (the stale length) with the bytes
+/// `A\0\0\0\0\0\0\0\xf3\x0f` — freed heap, not `abcdefghij`. The length is
+/// asserted alongside the text so a regression that merely truncates is not
+/// mistaken for this one.
+#[test]
+fn repl_jit_later_cell_string_reassign_does_not_strand_the_snapshot_global() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let mut s = f\"abcdefghij\";");
+    assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("s = s + f\"KLM\";");
+    assert!(r.errors.is_empty(), "reassign cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(f\"{s.len()}|{s}\");");
+    assert!(r.errors.is_empty(), "read cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "13|abcdefghijKLM",
+        "cell 3 must see the reassigned string, not the freed buffer",
+    );
+}
+
+/// B-2026-08-30-1 — the write-back must chain: a value mutated in cell 2 and
+/// again in cell 3 has to carry BOTH mutations into cell 4. One-shot capture
+/// and once-per-cell capture are indistinguishable on a single mutation, so
+/// this is the case that pins the write-back as repeating rather than moved.
+#[test]
+fn repl_jit_snapshot_write_back_chains_across_cells() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    for src in [
+        "let mut n: i64 = 1; let mut t = f\"a\";",
+        "n = n + 1; t = t + f\"b\";",
+        "n = n * 10; t = t + f\"c\";",
+    ] {
+        let r = s.evaluate_cell_captured(src);
+        assert!(r.errors.is_empty(), "cell {src:?}: {:?}", r.errors);
+    }
+    let r = s.evaluate_cell_captured("println(f\"{n}|{t}\");");
+    assert!(r.errors.is_empty(), "read cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "20|abc",
+        "both cell-2 and cell-3 mutations must reach cell 4",
+    );
+}
+
 #[test]
 fn repl_jit_snapshot_covers_f64_bool_char() {
     // Slice c-repl.B.5.1 — verify the snapshot replay path handles
