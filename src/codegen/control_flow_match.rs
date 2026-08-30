@@ -2165,7 +2165,33 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Shared membership half of the two caller-retains classifiers: is
-    /// `scrutinee` a bare local that owns an inline `Option`/`Result` payload?
+    /// `scrutinee` a bare local that owns an `Option`/`Result` payload?
+    ///
+    /// ALL FOUR REPRESENTATIONS, not just the inline one (B-2026-08-30-47).
+    /// An `Option`/`Result` payload is owned through one of several parallel
+    /// channels, each with its own registry and its own scope-exit action:
+    ///
+    ///   `inline_{option,result}_payload_vars`  `String`/`Vec` overlaid on the
+    ///                                          payload words
+    ///   `inline_option_map_payload_vars`       a `Map`/`Set` handle
+    ///   `inline_option_agg_payload_vars`       a user struct/enum the
+    ///                                          recursive drop family frees
+    ///
+    /// B-2026-08-08-25 built the read-only-arm borrow classification on the
+    /// first channel alone, and B-2026-08-30-19 widened what counts as a heap
+    /// payload WITHIN it. Neither reached the other two, so a read-only arm
+    /// over `Option[Map]` / `Option[Set]` / `Option[SortedMap]` /
+    /// `Option[E]` / `Option[Option[String]]` still TOOK the payload: measured
+    /// as the source reading back `None` on the `Map` family, an empty print
+    /// for `Result[E]`, and a double-free abort for the two enum shapes.
+    ///
+    /// Membership is the right question to widen because each channel already
+    /// registers its own payload correctly — the defect was never a missing
+    /// registration, it was this predicate knowing about two registries out of
+    /// four. The disarm sites are the other half: each channel's suppressor
+    /// must honour `pattern_binding_source_retains_inline_payload` the way the
+    /// inline one has since B-2026-08-08-25, or the classification decides
+    /// "borrow" and the source is disarmed anyway.
     fn scrutinee_is_inline_optres_local(&self, scrutinee: &Expr) -> bool {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return false;
@@ -2179,6 +2205,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_or(name.as_str(), |s| s.as_str());
         self.payload_vars.inline_option_payload_vars.contains(name)
             || self.payload_vars.inline_result_payload_vars.contains(name)
+            || self
+                .payload_vars
+                .inline_option_map_payload_vars
+                .contains(name)
+            || self
+                .payload_vars
+                .inline_option_agg_payload_vars
+                .contains(name)
     }
 
     /// Does `pattern` bind a `Some`/`Ok`/`Err` payload out at all? (Shape only —
@@ -10306,6 +10340,30 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
+        // B-2026-08-30-47 — the `Map`/`Set` copy of the guard the inline
+        // suppressor has carried since B-2026-08-08-25, and for the same
+        // reason: suppression TRANSFERS the payload to the arm binding, so
+        // when the classifier proved the arms only borrow it there is nobody
+        // to transfer to, and the source's tag is set to `None` anyway.
+        //
+        // It is the `if let` spelling this catches, which is worth stating
+        // because the `match` spelling does NOT need it — that path reaches
+        // this suppressor only when the bindings are owned. Measured: with
+        // the membership widening below but WITHOUT this guard,
+        // `if let Some(p) = a { … }` over an `Option[Map]` still read back
+        // `none` on the second `if let`, while every `match` shape passed.
+        //
+        // The struct/enum sibling `suppress_inline_option_agg_payload_cleanup`
+        // deliberately has NO copy of this: its `if let` call site is already
+        // gated on `block_only_borrows_option_agg_payload` (B-2026-07-03-31),
+        // so a guard here would be unreachable. Adding one "for symmetry" was
+        // tried and measured to change nothing.
+        if self
+            .pattern_state
+            .pattern_binding_source_retains_inline_payload
+        {
+            return;
+        }
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return;
         };

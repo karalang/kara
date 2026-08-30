@@ -118769,13 +118769,22 @@ fn main() {
     /// conservative — so `Result[Map[i64, String]]` matched read-only twice
     /// SEGFAULTED, and that is the row asserted here.
     ///
-    /// SIX SIBLING SHAPES ARE STILL BROKEN and are deliberately NOT in this
-    /// test, because they fail through a different mechanism (the gate in
-    /// front of this classifier never registers them at all): `Option[Map]`,
-    /// `Option[Set]` and `Option[SortedMap]` read back as the `None` arm, a
-    /// `Result` over a heap-owning user enum prints empty, and `Option[E]` /
-    /// `Option[Option[String]]` abort with a double free. See B-2026-08-30-47
-    /// before extending either this test or the classifier.
+    /// The three `Option[Map]` / `[Set]` / `[SortedMap]` rows come from the
+    /// second half of the same row. An `Option`/`Result` payload is owned
+    /// through one of four parallel channels, each with its own registry and
+    /// scope-exit action, and the read-only classifier knew about two of them
+    /// — so those three took the payload and the source read back as `None`.
+    /// Widening the membership predicate is only half of that: each channel's
+    /// disarm must also honour the retains flag, or the classifier decides
+    /// "borrow" and the source is disarmed anyway.
+    ///
+    /// WHAT IS STILL BROKEN is a DIFFERENT defect and is deliberately not
+    /// here: a read-only arm that DESTRUCTURES the payload rather than binding
+    /// it whole (`Some(S { s })`, `Some((s, n))`, or an inner `match` over the
+    /// bound payload) still takes the heap, on EVERY representation — struct
+    /// payloads read back garbage, tuple and enum payloads abort with a double
+    /// free. The classifier requires a whole-payload `Binding` by construction,
+    /// so no widening of it reaches that shape. See B-2026-08-30-52.
     ///
     /// The rest of the rows are CONTROLS that were already correct and must
     /// stay correct — this change makes the classifier admit MORE, so the way
@@ -118794,6 +118803,55 @@ fn main() {
                      let a: Result[Map[i64, String], i64] = Ok(m0);\n\
                      match a { Ok(p) => { println(p.len()); } Err(_) => {} }\n\
                      match a { Ok(q) => println(q.len()), Err(_) => println(\"err\") }\n\
+                 }\n",
+                "1\n1\n",
+            ),
+            (
+                "Option[Map] — read back as None before B-2026-08-30-47",
+                "fn main() {\n\
+                     let mut m0: Map[i64, String] = Map.new();\n\
+                     m0.insert(1, f\"mv\");\n\
+                     let a: Option[Map[i64, String]] = Some(m0);\n\
+                     match a { Some(p) => { println(p.len()); } None => {} }\n\
+                     match a { Some(q) => println(q.len()), None => println(\"none\") }\n\
+                 }\n",
+                "1\n1\n",
+            ),
+            (
+                "Option[Set] — same channel as Option[Map]",
+                "fn main() {\n\
+                     let mut s0: Set[String] = Set.new();\n\
+                     s0.insert(f\"sv\");\n\
+                     let a: Option[Set[String]] = Some(s0);\n\
+                     match a { Some(p) => { println(p.len()); } None => {} }\n\
+                     match a { Some(q) => println(q.len()), None => println(\"none\") }\n\
+                 }\n",
+                "1\n1\n",
+            ),
+            (
+                "Option[SortedMap] — same channel again",
+                "fn main() {\n\
+                     let mut m0: SortedMap[i64, String] = SortedMap.new();\n\
+                     m0.insert(1, f\"sv\");\n\
+                     let a: Option[SortedMap[i64, String]] = Some(m0);\n\
+                     match a { Some(p) => { println(p.len()); } None => {} }\n\
+                     match a { Some(q) => println(q.len()), None => println(\"none\") }\n\
+                 }\n",
+                "1\n1\n",
+            ),
+            // The `if let` spelling, and the ONLY row that exercises the
+            // retains guard on the `Map` channel's disarm: the `match` path
+            // reaches that suppressor only with owned bindings, so every
+            // `match` row above passes with the guard removed and this one
+            // does not.
+            (
+                "Option[Map] via if let — needs the disarm guard",
+                "fn main() {\n\
+                     let mut m0: Map[i64, String] = Map.new();\n\
+                     m0.insert(1, f\"mv\");\n\
+                     let a: Option[Map[i64, String]] = Some(m0);\n\
+                     if let Some(p) = a { println(p.len()); }\n\
+                     if let Some(q) = a { println(q.len()); } else { println(\"none\"); }\n\
                  }\n",
                 "1\n1\n",
             ),
