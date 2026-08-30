@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 327 | 3 |
-| run-vs-build | 257 | 14 |
+| miscompile | 328 | 4 |
+| run-vs-build | 259 | 15 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
-| double-free | 157 | 0 |
+| double-free | 158 | 1 |
 | codegen-gap | 152 | 1 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1272 | 30 |
+| codegen | 1274 | 32 |
 | typecheck | 281 | 2 |
-| interp | 273 | 16 |
+| interp | 275 | 17 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1860 surfaced · 36 open · 1795 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1864 surfaced · 39 open · 1796 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (36)
+### Open (39)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -166,6 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1860 surfaced
 | B-2026-08-30-43 | 2026-08-30 | interp | medium | A METHOD ON A GENERIC `impl` COMPUTES AT f64 UNDER `--interp` AT EVERY NARROW FLOAT WIDTH — `impl[T: Add + Mul] Pair[T] { fn combine(...) -> T }` at f32 reads 0.13000000312924387 against both compiled backends' 0.12999999523162842. Only FREE-FUNCTION calls push a generic-substitution frame (`push_type_subs_for_call` has exactly one call site), so an impl's own `T` is never resolvable and the tree-walk's narrow-float rounding is skipped | — |
 | B-2026-08-30-44 | 2026-08-30 | interp | medium | AN UNSIGNED VALUE PRINTS AS `-1` FROM INSIDE A GENERIC BODY UNDER `--interp` — `fn show[T](x: T) -> String { f"{x}" }` renders `u64::MAX` and `u128::MAX` as `-1`, while the identical interpolation outside the generic prints them correctly and both compiled backends print them correctly at every call site | — |
 | B-2026-08-30-45 | 2026-08-30 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}" }` prints `u128::MAX` as `-1` in the COMPILED binary when an `i128` instantiation is also present, and correctly when it is not. Exactly the erasure B-2026-08-30-36 fixed for `f16`/`bf16`, one type family over, in the same two functions | — |
+| B-2026-08-30-47 | 2026-08-30 | codegen | high | A READ-ONLY `match` ARM OVER AN `Option`/`Result` WHOSE PAYLOAD IS A HEAP-OWNING NON-STRUCT STILL TAKES THE PAYLOAD -- six shapes, three failure modes: `Option[Map]`/`[Set]`/`[SortedMap]` read back as `None`, `Result[E]` prints empty, and `Option[E]` / `Option[Option[String]]` abort with a double free. A seventh, `Result[Map]`, SEGFAULTED and is fixed. B-2026-08-30-19 reached the STRUCT payload only | — |
+| B-2026-08-30-48 | 2026-08-30 | interp | medium | AN INTEGER REACHING A FLOAT SLOT THROUGH AN AGGREGATE OR A VARIANT PAYLOAD IS STILL CONVERTED WRONG UNDER `--interp` -- a tuple / `Array` literal element converts with the AGGREGATE's signedness (so `u64::MAX` reads -1), and an `Option` payload / `Map` value / enum variant field is not converted AT ALL. B-2026-08-30-34 fixed ten direct sites | — |
+| B-2026-08-30-49 | 2026-08-30 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 -- `let a: f64 = if true { n } else { 0.0 }` with `n: i64 = 7` prints 0 on JIT and AOT and 7 under `--interp`. The `let a: f64 = n` control is correct on every surface | — |
 
 ### Relocated (2)
 
@@ -198,9 +201,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1860 surfaced
 
 </details>
 
-### Fixed (1795)
+### Fixed (1796)
 
-<details><summary>1795 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1796 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1999,6 +2002,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1860 surfaced
 | B-2026-08-30-35 | effect | high | AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE CONTRIBUTES NO EFFECTS TO INFERENCE -- `println(f"{touch()}")` infers [writes(Stdout)] where the… | ae33af9 |
 | B-2026-08-30-36 | typecheck | medium | `f16` AND `bf16` IMPLEMENT NONE OF THE SIX ARITHMETIC OPERATOR TRAITS (`Add`/`Sub`/`Mul`/`Div`/`Rem`/`Neg`), so neither can satisfy a generic `T: Add… | ea9d378 |
 | B-2026-08-30-37 | effect | medium | TWO MORE EFFECT WALKERS TREAT AN f-STRING AS A LEAF, and `ae33af9` fixed only the third -- `modbind_synth::walk_expr` loses a module-binding read wri… | 7366410 |
+| B-2026-08-30-46 | interp | medium | `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERS A `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE under `--interp`, while `f"{s}"` on the SAME… | 0d25859 |
 
 </details>
 
