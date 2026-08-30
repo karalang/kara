@@ -3469,7 +3469,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // back in the receiver's type, so the `select` below still
                     // sees two operands of one type.
                     let signed_one: BasicValueEnum<'ctx> = self
-                        .build_float_intrinsic_bf16_safe("llvm.copysign", &[one, fv], "sgn.cs")
+                        // `false`: `copysign` only moves a sign bit, so the
+                        // fold and the call agree — see
+                        // `float_math::constant_fold_is_exact`.
+                        .build_float_intrinsic_bf16_safe(
+                            "llvm.copysign",
+                            &[one, fv],
+                            "sgn.cs",
+                            false,
+                        )
                         .into();
                     // `fcmp uno x, x` is true iff `x` is NaN — return `x` then.
                     let is_nan = self
@@ -3768,7 +3776,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if let BasicValueEnum::FloatValue(fv) = v {
                 // bf16 goes through f32: `llvm.sqrt.bf16` aborts ISel on
                 // aarch64 and wasm32 (B-2026-08-29-34).
-                let r = self.build_float_intrinsic_bf16_safe("llvm.sqrt", &[fv], "fsqrt");
+                // `false`: a binary64 square root rounded to binary32 IS the
+                // correctly-rounded binary32 result (53 >= 2*24 + 2), so this
+                // one may still be constant-folded (B-2026-08-29-61).
+                let r = self.build_float_intrinsic_bf16_safe("llvm.sqrt", &[fv], "fsqrt", false);
                 return Ok(r.into());
             }
         }
@@ -3953,13 +3964,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.module.add_function(sym, fn_ty, None)
                         }
                     };
-                    let r = self
+                    let call = self
                         .builder
                         .build_call(fn_val, &call_args, "flibm")
-                        .unwrap()
-                        .try_as_basic_value()
-                        .unwrap_basic()
-                        .into_float_value();
+                        .unwrap();
+                    // B-2026-08-29-61 — same rule as the intrinsic arm below:
+                    // every method reaching this arm is transcendental, so none
+                    // of them may be folded through the host's `double` libm.
+                    if !crate::float_math::constant_fold_is_exact(method) {
+                        self.mark_call_no_constant_fold(call);
+                    }
+                    let r = call.try_as_basic_value().unwrap_basic().into_float_value();
                     let r = if half {
                         self.build_float_cast_bf16_safe(r, v.get_type().into_float_type(), "flibm")
                     } else {
@@ -3988,14 +4003,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 // on aarch64 and wasm32 (B-2026-08-29-34). Every entry in the
                 // table above is affected, which is why the widening lives at
                 // the shared call rather than in the per-method arms.
+                // B-2026-08-29-61 — a transcendental must not be constant-folded
+                // by LLVM, which would evaluate it in the HOST's double
+                // precision and round, giving a compile-time-known receiver a
+                // different answer from a runtime one in the same binary.
+                // `floor`/`ceil`/`round`/`trunc`/`copysign` are exact at any
+                // width, so they keep the fold.
+                let no_fold = !crate::float_math::constant_fold_is_exact(method);
                 let r = match kind {
                     crate::float_math::FloatMathKind::Binary => {
                         let av = self.compile_expr(&args[0].value)?.into_float_value();
-                        self.build_float_intrinsic_bf16_safe(intrinsic_name, &[fv, av], "fmath")
+                        self.build_float_intrinsic_bf16_safe(
+                            intrinsic_name,
+                            &[fv, av],
+                            "fmath",
+                            no_fold,
+                        )
                     }
-                    crate::float_math::FloatMathKind::Unary => {
-                        self.build_float_intrinsic_bf16_safe(intrinsic_name, &[fv], "fmath")
-                    }
+                    crate::float_math::FloatMathKind::Unary => self
+                        .build_float_intrinsic_bf16_safe(intrinsic_name, &[fv], "fmath", no_fold),
                 };
                 return Ok(r.into());
             }

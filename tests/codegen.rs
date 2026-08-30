@@ -29606,6 +29606,147 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-61 — ONE BINARY MUST NOT RETURN TWO ANSWERS FOR ONE VALUE.
+    ///
+    /// LLVM constant-folds a math call whose argument it can see through by
+    /// running the HOST's `double` implementation and rounding to the call's
+    /// type, while the call it cannot see through goes to the target's
+    /// width-correct symbol. Two roundings against one, so `karac build`
+    /// printed `(2.0f32).cosh()` as 3.762195587158203 from the fold and
+    /// 3.7621958255767822 from the call — in the same binary, which also
+    /// printed `lit == dyn` as true.
+    ///
+    /// EVERY ROW HERE IS A MEASURED PRE-FIX DIVERGENCE, not a plausible one:
+    /// these 18 are the complete set found by sweeping all 27 `float_math`
+    /// methods over 20 receivers each at f32 (18 of 540 rows). Seven methods
+    /// are involved — the row that opened this bug named three, so a fixture
+    /// built from the report alone would have missed `atan2`, `tanh`, `atan`
+    /// and `asin`.
+    ///
+    /// The assertion is that the two columns AGREE, never that either equals
+    /// a literal: the value is the host libm's and differs across platforms,
+    /// but a fold and a call on one machine must not.
+    ///
+    /// The last four rows are the control that keeps the fix from being a
+    /// blanket suppression. `floor`/`ceil`/`round`/`trunc` (and `copysign`)
+    /// return a value exactly representable at the receiver's width, so the
+    /// wider computation and the narrow one agree and they KEEP the fold —
+    /// see `float_math::constant_fold_is_exact`. They agreed before this fix
+    /// and must still agree; that they are still folded rather than called was
+    /// confirmed on the disassembly (no `floorf`/`ceilf` in the binary).
+    ///
+    /// `one` is derived from `env.args()` so the compiler cannot see through
+    /// it; the first line pins it to 1 so a run with arguments fails loudly
+    /// instead of silently comparing different receivers.
+    #[test]
+    fn e2e_compile_time_known_float_math_is_not_folded_at_double_precision() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let one: f32 = (n as f32);
+    println(f"one {one}");
+    let a1: f32 = 0.8f32;
+    let b1: f32 = 0.8f32 * one;
+    println(f"asin 0.8 {a1.asin()} {b1.asin()}");
+    let a2: f32 = 0.3333333f32;
+    let b2: f32 = 0.3333333f32 * one;
+    println(f"atan 0.3333333 {a2.atan()} {b2.atan()}");
+    let a3: f32 = 7.0f32;
+    let b3: f32 = 7.0f32 * one;
+    println(f"sinh 7.0 {a3.sinh()} {b3.sinh()}");
+    let a4: f32 = 13.0f32;
+    let b4: f32 = 13.0f32 * one;
+    println(f"sinh 13.0 {a4.sinh()} {b4.sinh()}");
+    let a5: f32 = 1.1f32;
+    let b5: f32 = 1.1f32 * one;
+    println(f"sinh 1.1 {a5.sinh()} {b5.sinh()}");
+    let a6: f32 = 8.5f32;
+    let b6: f32 = 8.5f32 * one;
+    println(f"sinh 8.5 {a6.sinh()} {b6.sinh()}");
+    let a7: f32 = 2.0f32;
+    let b7: f32 = 2.0f32 * one;
+    println(f"cosh 2.0 {a7.cosh()} {b7.cosh()}");
+    let a8: f32 = 5.0f32;
+    let b8: f32 = 5.0f32 * one;
+    println(f"cosh 5.0 {a8.cosh()} {b8.cosh()}");
+    let a9: f32 = 10.0f32;
+    let b9: f32 = 10.0f32 * one;
+    println(f"cosh 10.0 {a9.cosh()} {b9.cosh()}");
+    let a10: f32 = 0.7f32;
+    let b10: f32 = 0.7f32 * one;
+    println(f"tanh 0.7 {a10.tanh()} {b10.tanh()}");
+    let a11: f32 = 3.0f32;
+    let b11: f32 = 3.0f32 * one;
+    println(f"log10 3.0 {a11.log10()} {b11.log10()}");
+    let a12: f32 = 0.7f32;
+    let b12: f32 = 0.7f32 * one;
+    println(f"log10 0.7 {a12.log10()} {b12.log10()}");
+    let a13: f32 = 1.3f32;
+    let b13: f32 = 1.3f32 * one;
+    println(f"log10 1.3 {a13.log10()} {b13.log10()}");
+    let a14: f32 = 0.9f32;
+    let b14: f32 = 0.9f32 * one;
+    println(f"log10 0.9 {a14.log10()} {b14.log10()}");
+    let a15: f32 = 1.5f32;
+    let b15: f32 = 1.5f32 * one;
+    let c15: f32 = 1.3f32;
+    let d15: f32 = 1.3f32 * one;
+    println(f"atan2 1.5,1.3 {a15.atan2(c15)} {b15.atan2(d15)}");
+    let a16: f32 = 3.0f32;
+    let b16: f32 = 3.0f32 * one;
+    let c16: f32 = 10.0f32;
+    let d16: f32 = 10.0f32 * one;
+    println(f"atan2 3.0,10.0 {a16.atan2(c16)} {b16.atan2(d16)}");
+    let a17: f32 = 0.1f32;
+    let b17: f32 = 0.1f32 * one;
+    let c17: f32 = 11.0f32;
+    let d17: f32 = 11.0f32 * one;
+    println(f"atan2 0.1,11.0 {a17.atan2(c17)} {b17.atan2(d17)}");
+    let a18: f32 = 0.7f32;
+    let b18: f32 = 0.7f32 * one;
+    let c18: f32 = 13.0f32;
+    let d18: f32 = 13.0f32 * one;
+    println(f"atan2 0.7,13.0 {a18.atan2(c18)} {b18.atan2(d18)}");
+    let a19: f32 = 2.7f32;
+    let b19: f32 = 2.7f32 * one;
+    println(f"floor 2.7 {a19.floor()} {b19.floor()}");
+    let a20: f32 = 2.7f32;
+    let b20: f32 = 2.7f32 * one;
+    println(f"ceil 2.7 {a20.ceil()} {b20.ceil()}");
+    let a21: f32 = 2.5f32;
+    let b21: f32 = 2.5f32 * one;
+    println(f"round 2.5 {a21.round()} {b21.round()}");
+    let a22: f32 = 2.7f32;
+    let b22: f32 = 2.7f32 * one;
+    println(f"trunc 2.7 {a22.trunc()} {b22.trunc()}");
+}
+"#,
+        ) {
+            let mut lines = out.lines();
+            assert_eq!(
+                lines.next(),
+                Some("one 1"),
+                "the runtime multiplier must be exactly 1, else the two \
+                 columns are not the same receiver:\n{out}"
+            );
+            let mut checked = 0usize;
+            for line in lines {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                assert_eq!(f.len(), 4, "unexpected row shape: {line:?}");
+                assert_eq!(
+                    f[2], f[3],
+                    "{} of {}: the compile-time-known receiver folded to {} but \
+                     the runtime receiver computed {} — the same value has two \
+                     answers in one binary",
+                    f[0], f[1], f[2], f[3]
+                );
+                checked += 1;
+            }
+            assert_eq!(checked, 22, "expected 22 comparison rows, got {checked}");
+        }
+    }
+
     /// Integer `.pow(exp)` codegen: repeated-multiply loop, `u32` exponent,
     /// `pow(0) == 1`, width-correct on narrow receivers. Mirrors the interpreter
     /// (`tests/interpreter.rs::test_int_pow_values_and_zero_exponent`).

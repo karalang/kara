@@ -5970,6 +5970,41 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Forbid LLVM's constant folder from evaluating this call site.
+    ///
+    /// LLVM folds a math call whose argument is compile-time known by running
+    /// the HOST's `double` implementation and rounding the result to the
+    /// call's type (`ConstantFoldFP` -> `GetConstantFoldFPValue`). For an f32
+    /// call that is two roundings where the executed call has one, so a
+    /// program gets a different answer for the SAME value depending on whether
+    /// the compiler could see through to it -- `karac build` printed
+    /// `2.0f32.cosh()` as 3.762195587158203 from the fold and
+    /// 3.7621958255767822 from the call, in one binary, while agreeing the two
+    /// receivers were equal (B-2026-08-29-61). It also breaks the project's
+    /// `run == build` rule, since the JIT runs no mid-end pipeline and so
+    /// never folds.
+    ///
+    /// `nobuiltin` on the CALL SITE is the whole lever: `canConstantFoldCallTo`
+    /// returns false for a no-builtin call before it looks at anything else,
+    /// for an overloaded intrinsic exactly as for a named libm symbol. Putting
+    /// it on the call rather than on the declaration is deliberate -- LLVM's
+    /// library-attribute inference still runs on the `coshf` declaration, so
+    /// the call keeps its `memory(read)` / `nounwind` / `willreturn` and stays
+    /// hoistable out of a loop; only the fold and the libcall-simplifier
+    /// rewrites are given up.
+    ///
+    /// Suppressing the fold, rather than folding correctly in karac, is what
+    /// makes the answer independent of the HOST: the value is produced by the
+    /// target's libm on every path, which a compile-time evaluation in the
+    /// compiler process could not promise for a cross-compiled target (wasm).
+    pub(super) fn mark_call_no_constant_fold(&self, call: inkwell::values::CallSiteValue<'ctx>) {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+        let attr = self
+            .context
+            .create_enum_attribute(Attribute::get_named_enum_kind_id("nobuiltin"), 0);
+        call.add_attribute(AttributeLoc::Function, attr);
+    }
+
     /// Call an overloaded LLVM float intrinsic WITHOUT ever instantiating it
     /// at `bfloat`.
     ///
@@ -5986,11 +6021,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Widening to `f32` also makes these MORE accurate, not less: the
     /// intrinsic computes at f32 and rounds once, where a native bf16
     /// intrinsic would round its intermediate.
+    ///
+    /// `no_fold`: forbid LLVM's constant folder from evaluating this call when
+    /// its arguments are compile-time known. See
+    /// [`Self::mark_call_no_constant_fold`] for why an inexact float method
+    /// must not be folded (B-2026-08-29-61).
     pub(super) fn build_float_intrinsic_bf16_safe(
         &self,
         base: &str,
         args: &[inkwell::values::FloatValue<'ctx>],
         name: &str,
+        no_fold: bool,
     ) -> inkwell::values::FloatValue<'ctx> {
         let (widened, narrow): (Vec<inkwell::values::FloatValue<'ctx>>, bool) = {
             let mut any = false;
@@ -6013,13 +6054,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_else(|| panic!("{base} declaration for float type"));
         let call_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
             widened.iter().map(|v| (*v).into()).collect();
-        let r = self
-            .builder
-            .build_call(decl, &call_args, name)
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_float_value();
+        let call = self.builder.build_call(decl, &call_args, name).unwrap();
+        if no_fold {
+            self.mark_call_no_constant_fold(call);
+        }
+        let r = call.try_as_basic_value().unwrap_basic().into_float_value();
         self.narrow_bf16_scalar(r, narrow, &format!("{name}.bf"))
     }
 

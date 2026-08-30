@@ -53,6 +53,34 @@ pub fn classify(method: &str) -> Option<FloatMathKind> {
     })
 }
 
+/// Is `method`'s result unchanged by being computed in a WIDER format and
+/// rounded down to the receiver's width?
+///
+/// This is the double-rounding question, and it decides whether LLVM's
+/// constant folder may be left to evaluate a compile-time-known receiver
+/// (B-2026-08-29-61). The folder computes every one of these through the
+/// HOST's `double` function and rounds the result to the receiver's type,
+/// while a receiver the compiler cannot see through goes to the target's
+/// width-correct symbol (`coshf`, `llvm.log10.f32`). Two roundings versus
+/// one, so for an inexact method the same expression takes two different
+/// values inside a single binary depending on whether its argument happened
+/// to be foldable -- measured on `sinh`, `log10`, `atan2`, `cosh`, `tanh`,
+/// `atan` and `asin` at f32.
+///
+/// `floor` / `ceil` / `round` / `trunc` return a value that is exactly
+/// representable at the receiver's width, and `copysign` only moves a sign
+/// bit, so for these five the wider computation and the narrow one agree on
+/// every input and the fold is free. Everything else is transcendental and
+/// must be computed once, by the target's libm.
+///
+/// (`sqrt` is not in this table, but belongs on the exact side for a less
+/// obvious reason: rounding a binary64 square root to binary32 is correctly
+/// rounded because 53 >= 2*24 + 2. That is a property of `sqrt` alone -- it
+/// does not extend to any transcendental here.)
+pub fn constant_fold_is_exact(method: &str) -> bool {
+    matches!(method, "floor" | "ceil" | "round" | "trunc" | "copysign")
+}
+
 // ---------------------------------------------------------------------------
 // libm shims for the inverse hyperbolics
 // ---------------------------------------------------------------------------
@@ -128,4 +156,44 @@ pub fn atanh_f64(x: f64) -> f64 {
 /// `atanhf` at f32, from libm — the symbol codegen calls.
 pub fn atanh_f32(x: f32) -> f32 {
     unsafe { c_atanhf(x) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// B-2026-08-29-61 — the exact/inexact split is what decides whether LLVM
+    /// may constant-fold a call, so it is pinned rather than left to drift.
+    ///
+    /// A method wrongly on the EXACT side gets folded through the host's
+    /// `double` libm and silently returns a different value from the same
+    /// expression with a runtime argument. A method wrongly on the INEXACT
+    /// side only loses a fold. The asymmetry is why every name in the table
+    /// is listed here explicitly instead of the test checking a handful.
+    #[test]
+    fn constant_fold_exactness_is_pinned_for_every_float_math_method() {
+        let exact = ["floor", "ceil", "round", "trunc", "copysign"];
+        for m in exact {
+            assert!(
+                classify(m).is_some(),
+                "{m} is claimed exact but is not a float-math method"
+            );
+            assert!(constant_fold_is_exact(m), "{m} must keep the fold");
+        }
+        for m in [
+            "sin", "cos", "tan", "exp", "ln", "log2", "asin", "acos", "atan", "sinh", "cosh",
+            "tanh", "exp2", "log10", "asinh", "acosh", "atanh", "exp_m1", "ln_1p", "pow", "atan2",
+            "hypot",
+        ] {
+            assert!(
+                classify(m).is_some(),
+                "{m} is claimed inexact but is not a float-math method"
+            );
+            assert!(
+                !constant_fold_is_exact(m),
+                "{m} is transcendental — folding it at double precision gives a \
+                 different answer from the emitted call (B-2026-08-29-61)"
+            );
+        }
+    }
 }
