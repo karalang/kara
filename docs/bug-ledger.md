@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 149 | 0 |
 | diagnostics | 112 | 0 |
 | false-positive | 100 | 0 |
-| perf | 86 | 2 |
+| perf | 86 | 1 |
 | soundness | 80 | 0 |
 | other | 64 | 0 |
 | crash | 61 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1249 | 27 |
+| codegen | 1249 | 26 |
 | typecheck | 278 | 0 |
 | interp | 259 | 10 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced · 28 open · 1767 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced · 27 open · 1767 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (28)
+### Open (27)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -149,7 +149,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
-| B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-29-66 | 2026-08-29 | codegen | high | A struct WRAPPING a `Vec` of `Drop` elements, built in a callee and returned, runs the element's `Drop` body on FREED memory in the compiled backends -- printing a garbage id that differs between runs, with a valgrind `Invalid read of size 8`. The trigger is positional: it happens when the caller's `let` is NOT the first statement of its block, and disappears when it is. The interpreter is correct either way | — |
 | B-2026-08-29-67 | 2026-08-29 | codegen | medium | A `Vec[T]` of `Drop` elements returned from a callee runs the element's `Drop` body BEFORE the caller's first use of the vector on the compiled backends, and AFTER it on the interpreter -- `m3 dR3 v3` against `m3 v3 dR3`. Right count, wrong place, and the compiled read lands on an element whose body has already run | — |
@@ -170,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced
 
 </details>
 
-### Wontfix (10)
+### Wontfix (11)
 
-<details><summary>10 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>11 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -186,6 +185,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced
 | B-2026-08-21-3 | 2026-08-21 | codegen | low | MEASURED NEGATIVE RESULT -- hoisting the ASCII test to the top of the `String.push` codegen arm removes 34% of the program's retired instructions and makes it 10% SLOWER; the string-build inner loop is latency-bound, not instruction-bound, so instruction-count reasoning does not predict its wall time |
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize |
 | B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type -- the last two shapes in the shared family the compiled `Debug` renderers do not cover. MEASURED UNREACHABLE and closed without an implementation: `dbg(x)` hands `x` to a call, which is exactly the escape the headerless purity gate demotes on, so a type can be headerless or `dbg`-able but never both (16 probe programs, both arms, controls green). `has_weak_header` is false for every type today. The guard is KEPT as insurance -- making `dbg` a borrowing intrinsic would stop it demoting and turn the arm into a silent one-word field-offset miscompile -- and the exclusion is now pinned by tests instead of assumed. |
+| B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.67x on current main: LLVM's X86CmovConversion rewrites the branchless loop back into a branch, and only `/ 2`'s signed sign-correction lengthens the dependency chain enough to stop it -- so the "slower" spelling wins by accident. NOT statically decidable: forcing the branchless form is 1.86x FASTER on this kata and 2.02x SLOWER on kata #275, and flipping only the input data from random to a ramp reverses the sign within this one program |
 
 </details>
 
