@@ -209,7 +209,11 @@ impl std::fmt::Debug for ExitPath {
 /// every non-path type expression all pass through unchanged, so nothing that
 /// works today can change. Tuples recurse element-wise so an annotated
 /// `(f64, f64)` binding converts both halves.
-pub(crate) fn coerce_int_value_to_declared_float(val: Value, te: &TypeExpr) -> Value {
+pub(crate) fn coerce_int_value_to_declared_float(
+    val: Value,
+    te: &TypeExpr,
+    src_unsigned_width: Option<u32>,
+) -> Value {
     /// The element type of a fixed-size array annotation, in either spelling
     /// the parser produces: the dedicated `TypeKind::Array` node, and the
     /// `Array[T, N]` PATH form that Kāra's `[]` generic syntax yields.
@@ -239,7 +243,7 @@ pub(crate) fn coerce_int_value_to_declared_float(val: Value, te: &TypeExpr) -> V
     }
     match (&val, &te.kind) {
         (Value::Int(_), _) => match float_head(te) {
-            Some(head) => super::eval_expr::cast_value(val, head),
+            Some(head) => super::eval_expr::cast_value(val, head, src_unsigned_width),
             None => val,
         },
         (Value::Tuple(_), TypeKind::Tuple(elem_tes)) => {
@@ -253,7 +257,7 @@ pub(crate) fn coerce_int_value_to_declared_float(val: Value, te: &TypeExpr) -> V
                 items
                     .into_iter()
                     .zip(elem_tes.iter())
-                    .map(|(v, t)| coerce_int_value_to_declared_float(v, t))
+                    .map(|(v, t)| coerce_int_value_to_declared_float(v, t, src_unsigned_width))
                     .collect(),
             )
         }
@@ -272,7 +276,9 @@ pub(crate) fn coerce_int_value_to_declared_float(val: Value, te: &TypeExpr) -> V
                 .read()
                 .unwrap()
                 .iter()
-                .map(|v| coerce_int_value_to_declared_float(v.clone(), &element))
+                .map(|v| {
+                    coerce_int_value_to_declared_float(v.clone(), &element, src_unsigned_width)
+                })
                 .collect();
             *rc.write().unwrap() = converted;
             val

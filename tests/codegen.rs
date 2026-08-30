@@ -118200,6 +118200,58 @@ fn main() {{
         }
     }
 
+    /// B-2026-08-30-34 — the compiled twin of the u64->float conversion
+    /// fixture, and a PARITY PIN rather than a regression test: codegen was
+    /// never wrong here. `uitofp` carries the source's signedness in the
+    /// instruction, so every one of these was already correct while the
+    /// interpreter answered -1 for ten different routes into a float slot.
+    ///
+    /// It is pinned because the interpreter fix reaches the same answers by a
+    /// different mechanism — reading the recorded type at each site to
+    /// reinterpret a signed `i128` carrier — so the two agree by construction
+    /// only as long as both keep doing so. If either drifts, this and its
+    /// interpreter twin move apart and both fail.
+    ///
+    /// Twin: `tests/interpreter.rs::u64_above_2_63_converts_to_every_float_type_as_unsigned`.
+    #[test]
+    fn e2e_u64_above_2_63_converts_to_float_as_unsigned() {
+        if let Some(out) = run_program(
+            r#"
+fn tailf(v: u64) -> f64 { v }
+fn retf(v: u64) -> f64 { return v; }
+fn takef(x: f64) -> f64 { x }
+struct S { f: f64 }
+impl S { fn setm(mut ref self, x: f64) -> f64 { self.f = x; self.f } }
+fn main() {
+    let n = env.args().len() as i64;
+    let zero: i64 = n - 1;
+    let mx: u64 = (18446744073709551615u64 + (zero as u64));
+    let hi: u64 = (9223372036854775808u64 + (zero as u64));
+    let lo: u64 = (9223372036854775807u64 + (zero as u64));
+    println(f"cast {(mx as f64)} {(hi as f64)} {(lo as f64)}");
+    println(f"f32  {(mx as f32)} {(hi as f32)}");
+    println(f"half {(mx as f16)} {(mx as bf16)}");
+    println(f"meth {mx.to_f64()} {mx.to_f32()}");
+    let slot: f64 = mx;
+    println(f"slot {slot}");
+    println(f"call {takef(mx)} {tailf(mx)} {retf(mx)}");
+    let mut s: S = S { f: mx };
+    println(f"fldi {s.f}");
+    s.f = hi;
+    println(f"flda {s.f} {s.setm(mx)}");
+    let w: u128 = (mx as u128);
+    println(f"u128 {w} {(w as f64)}");
+    let mut vf: Vec[f64] = [];
+    vf.push(mx);
+    println(f"push {vf[0]}");
+    println(f"ints {mx} {(mx as i64)} {(mx as u32)} {(mx / 3u64)}");
+}
+"#,
+        ) {
+            assert_eq!(out, "cast 18446744073709552000 9223372036854776000 9223372036854776000\nf32  18446744073709552000 9223372036854776000\nhalf inf 18446744073709552000\nmeth 18446744073709552000 18446744073709552000\nslot 18446744073709552000\ncall 18446744073709552000 18446744073709552000 18446744073709552000\nfldi 18446744073709552000\nflda 9223372036854776000 18446744073709552000\nu128 18446744073709551615 18446744073709552000\npush 18446744073709552000\nints 18446744073709551615 -1 4294967295 6148914691236517205\n");
+        }
+    }
+
     /// B-2026-08-30-26 — AN INTEGER <-> `bf16` CONVERSION WAS REFUSED BY BOTH
     /// COMPILED BACKENDS, IN EVERY DIRECTION, WHILE THE INTERPRETER PERFORMED IT.
     ///

@@ -72,7 +72,13 @@ impl<'a> super::Interpreter<'a> {
             return val.clone();
         };
         match val {
-            Value::Int(n) => super::round_float_to_declared_size(*n as f64, *size),
+            // B-2026-08-30-34 — the container-slot twin of the assign-RHS fix:
+            // convert the VALUE, so pushing a `u64` >= 2^63 into a `Vec[f64]`
+            // does not store its negative two's-complement image.
+            Value::Int(n) => super::round_float_to_declared_size(
+                super::eval_expr::carrier_to_f64(*n, self.span_unsigned_int_width(&arg.value.span)),
+                *size,
+            ),
             other => other.clone(),
         }
     }

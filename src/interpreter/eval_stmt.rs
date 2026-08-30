@@ -34,7 +34,7 @@ impl<'a> super::Interpreter<'a> {
     /// otherwise write an `Int` into a slot the program declared `f64`.
     /// Non-flagged RHSs and already-`Float` values pass through, so it is inert
     /// everywhere else and idempotent where it fires.
-    fn coerce_float_assign_rhs(&self, value: &crate::ast::Expr, val: Value) -> Value {
+    pub(super) fn coerce_float_assign_rhs(&self, value: &crate::ast::Expr, val: Value) -> Value {
         let Some(size) = self
             .typecheck_result
             .float_coerced_arg_sites
@@ -43,7 +43,13 @@ impl<'a> super::Interpreter<'a> {
             return val;
         };
         match val {
-            Value::Int(n) => super::round_float_to_declared_size(n as f64, *size),
+            // B-2026-08-30-34 — convert the VALUE, not the carrier: a `u64` at
+            // or above 2^63 rides as its negative two's-complement image, so
+            // `n as f64` here answered -1 for `u64::MAX`.
+            Value::Int(n) => super::round_float_to_declared_size(
+                super::eval_expr::carrier_to_f64(n, self.span_unsigned_int_width(&value.span)),
+                *size,
+            ),
             other => other,
         }
     }
@@ -375,7 +381,14 @@ impl<'a> super::Interpreter<'a> {
             // Container twin: a bare-identifier tail moves the container out
             // as the block's result.
             self.record_container_bodies_move_sources(moved_out);
+            // B-2026-08-30-34 — a block's TAIL is the other way a function
+            // hands back a value (`fn f(v: u64) -> f64 { v }`), and the
+            // caller-side widening cannot recover the source's signedness from
+            // the value alone. Inert unless the typechecker recorded THIS span
+            // as an integer landing in a float slot, so it is a no-op for every
+            // block that is not one.
             let v = self.eval_expr_inner(expr);
+            let v = self.coerce_float_assign_rhs(expr, v);
             if let Some(cf) = self.pending_cf.take() {
                 let path = ExitPath::classify(&cf);
                 self.signal_cancellation_if_error(&cf);
@@ -688,7 +701,14 @@ impl<'a> super::Interpreter<'a> {
         //    the enclosing scope for use after the block; the tail form
         //    `par { …; (a, b) }` still evaluates its value here).
         let result = if let Some(ref expr) = block.final_expr {
+            // B-2026-08-30-34 — a block's TAIL is the other way a function
+            // hands back a value (`fn f(v: u64) -> f64 { v }`), and the
+            // caller-side widening cannot recover the source's signedness from
+            // the value alone. Inert unless the typechecker recorded THIS span
+            // as an integer landing in a float slot, so it is a no-op for every
+            // block that is not one.
             let v = self.eval_expr_inner(expr);
+            let v = self.coerce_float_assign_rhs(expr, v);
             if let Some(cf) = self.pending_cf.take() {
                 return Err(cf);
             }
@@ -4194,8 +4214,12 @@ impl<'a> super::Interpreter<'a> {
                 // divergence: `let x: f64 = some_u8; x == 200.0` ABORTED here
                 // (no mixed Int/Float operator arm) on a program `karac check`
                 // passes and `karac build` runs correctly.
+                // B-2026-08-30-34 — the RHS's unsigned width, so a `u64`
+                // widening into a float-annotated slot converts the value
+                // rather than its two's-complement carrier.
+                let src_u = self.span_unsigned_int_width(&value.span);
                 let val = match ty.as_ref() {
-                    Some(te) => super::exec::coerce_int_value_to_declared_float(val, te),
+                    Some(te) => super::exec::coerce_int_value_to_declared_float(val, te, src_u),
                     None => val,
                 };
                 let rhs_is_place = matches!(
@@ -4683,7 +4707,10 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
-                if !self.assign_to_place(target, val) {
+                // B-2026-08-30-34 — the RHS's own unsigned width, so
+                // `s.f = some_u64` into an `f64` field converts the value.
+                let src_u = self.span_unsigned_int_width(&value.span);
+                if !self.assign_to_place(target, val, src_u) {
                     unreachable!(
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column
@@ -4737,7 +4764,7 @@ impl<'a> super::Interpreter<'a> {
                 // `v[i].x += 1`), not just bare bindings. Previously only the
                 // `Identifier` target was handled — field/index compound
                 // assigns were silently dropped.
-                if !self.assign_to_place(target, result) {
+                if !self.assign_to_place(target, result, None) {
                     unreachable!(
                         "unsupported compound-assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column

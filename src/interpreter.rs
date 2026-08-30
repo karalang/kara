@@ -2632,8 +2632,9 @@ impl<'a> Interpreter<'a> {
             self.pending_let_ty = field_tys.get(&field.name).cloned();
             let val = self.eval_expr_inner(&field.value);
             self.pending_let_ty = saved_let_ty;
+            let src_u = self.span_unsigned_int_width(&field.value.span);
             let val = match field_tys.get(&field.name) {
-                Some(te) => exec::coerce_int_value_to_declared_float(val, te),
+                Some(te) => exec::coerce_int_value_to_declared_float(val, te, src_u),
                 None => val,
             };
             field_vals.insert(field.name.clone(), val);
@@ -2843,7 +2844,7 @@ impl<'a> Interpreter<'a> {
             // B-2026-08-02-5 — a tuple-element receiver writes back through
             // the same place recursion assignment uses.
             ExprKind::TupleIndex { .. } => {
-                self.assign_to_place(object, val);
+                self.assign_to_place(object, val, None);
             }
             _ => {}
         }
@@ -2943,7 +2944,7 @@ impl<'a> Interpreter<'a> {
                 mut fields,
             } => {
                 fields.insert(field.to_string(), val);
-                self.assign_to_place(object, Value::Struct { name: sn, fields });
+                self.assign_to_place(object, Value::Struct { name: sn, fields }, None);
             }
             _ => {}
         }
@@ -2985,7 +2986,17 @@ impl<'a> Interpreter<'a> {
     /// `*deref`). Returns `false` if `place` is not an assignable form, so the
     /// statement-level caller can flag the should-never-happen case while
     /// recursive callers (always valid field/index places) ignore it.
-    fn assign_to_place(&mut self, place: &Expr, new_val: Value) -> bool {
+    fn assign_to_place(
+        &mut self,
+        place: &Expr,
+        new_val: Value,
+        // B-2026-08-30-34 — the RHS's unsigned width, so a `u64` assigned into
+        // a float-typed field converts the value rather than its
+        // two's-complement carrier. `None` at every caller whose RHS is not a
+        // freshly-evaluated source expression (a write-back of an already
+        // converted value, an `Option` payload, a compound-assign result).
+        src_unsigned: Option<u32>,
+    ) -> bool {
         match &place.kind {
             ExprKind::Identifier(name) => {
                 self.env.set(name, new_val);
@@ -3020,7 +3031,9 @@ impl<'a> Interpreter<'a> {
                             .and_then(|sd| sd.fields.iter().find(|f| &f.name == field))
                             .map(|f| f.ty.clone())
                         {
-                            Some(te) => exec::coerce_int_value_to_declared_float(new_val, &te),
+                            Some(te) => {
+                                exec::coerce_int_value_to_declared_float(new_val, &te, src_unsigned)
+                            }
                             None => new_val,
                         }
                     }
@@ -3055,7 +3068,7 @@ impl<'a> Interpreter<'a> {
                     return false;
                 }
                 items[i] = new_val;
-                self.assign_to_place(object, Value::Tuple(items))
+                self.assign_to_place(object, Value::Tuple(items), src_unsigned)
             }
             ExprKind::Unary {
                 op: crate::ast::UnaryOp::Deref,

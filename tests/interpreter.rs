@@ -2500,6 +2500,78 @@ fn test_sqrt_float() {
     );
 }
 
+/// B-2026-08-30-34 — A `u64` AT OR ABOVE 2^63 CONVERTED TO EVERY FLOAT TYPE AS
+/// ITS NEGATIVE TWO'S-COMPLEMENT IMAGE, on the interpreter only.
+///
+/// `Value::Int` is a signed `i128` with no signedness tag — deliberately — so a
+/// `u64` past 2^63 rides as its negative twin and each reader that must know
+/// consults the recorded type (`span_unsigned_int_width` / `int_width_at`). The
+/// float conversions were the readers that never did, so `u64::MAX as f64`
+/// answered -1 here while all three compiled surfaces answered
+/// 18446744073709552000. The cast-path residual of B-2026-07-04-8, which built
+/// that u64 model for printing, comparison and sorting and never mentions casts.
+///
+/// It was NOT one site. An integer reaches a float slot by ten routes and each
+/// converted the carrier independently: the `as` cast, `to_f32`/`to_f64`, a
+/// float-annotated `let`, a call argument, a method argument, a function's tail
+/// expression, an explicit `return`, a struct-literal field, a field
+/// assignment, and a `Vec[f64]` element store. Measured over a 9-value x
+/// 10-shape sweep: 45 of 90 rows diverged from the compiled backends before,
+/// 0 of 90 after.
+///
+/// The last two rows are the CONTROL, and they are what makes this test able to
+/// fail in both directions: `ints` pins that the integer-target casts and the
+/// division still read the carrier as they always have (`mx as i64` is -1,
+/// `mx as u32` is 4294967295), so a "fix" that normalized the carrier
+/// everywhere — breaking B-2026-07-04-8's model — would fail here rather than
+/// pass quietly. `u128` pins the widening this fix also had to correct:
+/// `u64 as u128` kept the sign and stored -1, which printing and comparison
+/// got wrong too, not just the float read.
+///
+/// Twin: `tests/codegen.rs::e2e_u64_above_2_63_converts_to_float_as_unsigned`.
+#[test]
+fn u64_above_2_63_converts_to_every_float_type_as_unsigned() {
+    // Literal seed rather than `env.args().len()` — an in-process interpreter
+    // test sees the TEST binary's argv; the codegen twin needs an opaque seed
+    // to survive -O2 folding and 1 is what that yields under its harness.
+    assert_eq!(
+        run(
+            r#"
+fn tailf(v: u64) -> f64 { v }
+fn retf(v: u64) -> f64 { return v; }
+fn takef(x: f64) -> f64 { x }
+struct S { f: f64 }
+impl S { fn setm(mut ref self, x: f64) -> f64 { self.f = x; self.f } }
+fn main() {
+    let n = 1i64;
+    let zero: i64 = n - 1;
+    let mx: u64 = (18446744073709551615u64 + (zero as u64));
+    let hi: u64 = (9223372036854775808u64 + (zero as u64));
+    let lo: u64 = (9223372036854775807u64 + (zero as u64));
+    println(f"cast {(mx as f64)} {(hi as f64)} {(lo as f64)}");
+    println(f"f32  {(mx as f32)} {(hi as f32)}");
+    println(f"half {(mx as f16)} {(mx as bf16)}");
+    println(f"meth {mx.to_f64()} {mx.to_f32()}");
+    let slot: f64 = mx;
+    println(f"slot {slot}");
+    println(f"call {takef(mx)} {tailf(mx)} {retf(mx)}");
+    let mut s: S = S { f: mx };
+    println(f"fldi {s.f}");
+    s.f = hi;
+    println(f"flda {s.f} {s.setm(mx)}");
+    let w: u128 = (mx as u128);
+    println(f"u128 {w} {(w as f64)}");
+    let mut vf: Vec[f64] = [];
+    vf.push(mx);
+    println(f"push {vf[0]}");
+    println(f"ints {mx} {(mx as i64)} {(mx as u32)} {(mx / 3u64)}");
+}
+"#
+        ),
+        "cast 18446744073709552000 9223372036854776000 9223372036854776000\nf32  18446744073709552000 9223372036854776000\nhalf inf 18446744073709552000\nmeth 18446744073709552000 18446744073709552000\nslot 18446744073709552000\ncall 18446744073709552000 18446744073709552000 18446744073709552000\nfldi 18446744073709552000\nflda 9223372036854776000 18446744073709552000\nu128 18446744073709551615 18446744073709552000\npush 18446744073709552000\nints 18446744073709551615 -1 4294967295 6148914691236517205\n"
+    );
+}
+
 /// B-2026-08-30-26 — the interpreter half of the int <-> `bf16` conversion
 /// fixture, and a PARITY PIN rather than a regression test: the interpreter was
 /// never wrong here. It performed every one of these while both compiled

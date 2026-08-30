@@ -1604,9 +1604,20 @@ impl<'a> super::Interpreter<'a> {
 
             // Return
             ExprKind::Return(val) => {
+                // B-2026-08-30-34 — convert HERE, where the returned
+                // expression (and so its recorded unsigned width) is still in
+                // hand. The caller-side widening in `eval_call` sees only the
+                // value and cannot tell a `u64` at or above 2^63 from the
+                // negative i64 it shares a carrier with, so
+                // `fn f(v: u64) -> f64 { return v; }` handed back -1.
+                // `coerce_float_assign_rhs` is inert unless the typechecker
+                // flagged this exact span as an int landing in a float slot.
                 let v = val
                     .as_ref()
-                    .map(|e| self.eval_expr_inner(e))
+                    .map(|e| {
+                        let v = self.eval_expr_inner(e);
+                        self.coerce_float_assign_rhs(e, v)
+                    })
                     .unwrap_or(Value::Unit);
                 self.set_cf(ControlFlow::Return(v))
             }
@@ -1730,6 +1741,11 @@ impl<'a> super::Interpreter<'a> {
             // that downstream arithmetic would mis-type.
             ExprKind::Cast { expr: inner, ty } => {
                 let val = self.eval_expr_inner(inner);
+                // B-2026-08-30-34 — the SOURCE's unsigned width, read from the
+                // operand's own leaf span (the `Cast` node's span covers
+                // `x as T` and so is a different key). Without it the float
+                // arms below convert the two's-complement carrier.
+                let src_u = self.span_unsigned_int_width(&inner.span);
                 let target_name = match &ty.kind {
                     crate::ast::TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
                     _ => String::new(),
@@ -1744,7 +1760,7 @@ impl<'a> super::Interpreter<'a> {
                     let base = self
                         .refinement_base_name(&target_name)
                         .unwrap_or_else(|| target_name.clone());
-                    let casted = cast_value(val, &base);
+                    let casted = cast_value(val, &base, src_u);
                     match self.eval_refinement_predicate(&pred, casted.clone()) {
                         Some(true) => return casted,
                         _ => {
@@ -1757,7 +1773,7 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
-                cast_value(val, &target_name)
+                cast_value(val, &target_name, src_u)
             }
 
             // Range — evaluates to a `Value::Iterator` for bounded ranges
@@ -2090,6 +2106,35 @@ impl<'a> super::Interpreter<'a> {
     }
 }
 
+/// Reinterpret an integer CARRIER as the value it denotes, given the source's
+/// unsigned width (`None` = signed, or a width whose values are all
+/// non-negative in the carrier anyway).
+///
+/// `Value::Int` is a signed `i128` with no signedness tag, so a `u64` at or
+/// above 2^63 rides as its negative two's-complement image — deliberately, and
+/// every reader that must know consults the recorded type instead
+/// (`span_unsigned_int_width` / `int_width_at`). The float conversions were the
+/// readers that never did, so `u64::MAX as f64` answered -1 under the
+/// interpreter while all three compiled surfaces answered
+/// 18446744073709552000 (B-2026-08-30-34, the cast-path residual of
+/// B-2026-07-04-8's u64 model).
+///
+/// Narrower unsigned widths (u8/u16/u32) are absent from the width helpers
+/// because they zero-extend to a non-negative carrier, where signed and
+/// unsigned readings coincide — so `None` is correct for them, not a gap.
+///
+/// Going through f64 for an f32/f16/bf16 target is exact rather than a
+/// double-rounding compromise: rounding to p1 bits then p2 agrees with rounding
+/// straight to p2 when p1 >= 2*p2 + 2, and f64's 53 >= 2*24 + 2 for f32 (which
+/// the narrower two then round from, as they always have).
+pub(super) fn carrier_to_f64(i: i128, src_unsigned_width: Option<u32>) -> f64 {
+    match src_unsigned_width {
+        Some(64) => (i as u64) as f64,
+        Some(128) => (i as u128) as f64,
+        _ => i as f64,
+    }
+}
+
 /// Apply the surface-level `as`-cast at runtime. Mirrors the cast pairs the
 /// typechecker accepts in `check_cast_pair`: numeric↔numeric (int / float),
 /// bool→int, and char→wide-int (i32/i64/u32/u64). Narrow integer targets
@@ -2098,7 +2143,7 @@ impl<'a> super::Interpreter<'a> {
 /// value through — the typechecker has already rejected genuine
 /// mis-casts; this guard just prevents an interpreter panic when the
 /// AST shape carries something the runtime doesn't recognize.
-pub(super) fn cast_value(val: Value, target: &str) -> Value {
+pub(super) fn cast_value(val: Value, target: &str, src_unsigned_width: Option<u32>) -> Value {
     // Takes the i128 CARRIER and TRUNCATES to the target width
     // (B-2026-08-19-8 stage 5). `as` is defined as a bitwise/truncating
     // conversion with no runtime check (design.md § numeric cast), so a
@@ -2119,11 +2164,21 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             // 128-bit targets are the carrier's own width — no truncation.
             // `u128` keeps the bit pattern, matching how every other unsigned
             // width rides the signed carrier.
+            // B-2026-08-30-34 — widening a `u64` to 128 bits must ZERO-extend
+            // the carrier, not carry its sign: `18446744073709551615u64 as
+            // u128` was stored as -1, so the value was already wrong before any
+            // later read of it. It surfaced through the float conversion (the
+            // fix above then faithfully rendered -1 as 2^128-1), but the defect
+            // is here — printing or comparing that `u128` was wrong too.
+            "i128" | "u128" if src_unsigned_width == Some(64) => Value::Int((i as u64) as i128),
             "i128" | "u128" => Value::Int(i),
-            "f16" => Value::Float(round_f64_via_f16(i as f64)),
-            "bf16" => Value::Float(round_f64_via_bf16(i as f64)),
-            "f32" => Value::Float(i as f32 as f64),
-            "f64" | "float" => Value::Float(i as f64),
+            // B-2026-08-30-34 — convert the VALUE, not the carrier. A `u64`
+            // at or above 2^63 is held as its negative two's-complement image,
+            // so `i as f64` on the carrier answered -1 for `u64::MAX`.
+            "f16" => Value::Float(round_f64_via_f16(carrier_to_f64(i, src_unsigned_width))),
+            "bf16" => Value::Float(round_f64_via_bf16(carrier_to_f64(i, src_unsigned_width))),
+            "f32" => Value::Float(carrier_to_f64(i, src_unsigned_width) as f32 as f64),
+            "f64" | "float" => Value::Float(carrier_to_f64(i, src_unsigned_width)),
             "bool" => Value::Bool(i != 0),
             // `u8 as char` — the one infallible integer→char cast the
             // typechecker permits (every byte is a valid Latin-1 scalar). Mirror

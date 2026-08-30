@@ -208,6 +208,11 @@ impl<'a> super::Interpreter<'a> {
         args: &[CallArg],
     ) -> Option<Value> {
         let pred = self.refinement_predicate(type_name)?;
+        // B-2026-08-30-34 — the argument's own unsigned width, so a `u64`
+        // refined to a float base converts the value rather than the carrier.
+        let arg_src_unsigned = args
+            .first()
+            .and_then(|arg| self.span_unsigned_int_width(&arg.value.span));
         let arg_val = match args.first() {
             Some(arg) => self.eval_expr_inner(&arg.value),
             None => Value::Unit,
@@ -218,7 +223,7 @@ impl<'a> super::Interpreter<'a> {
         let base = self
             .refinement_base_name(type_name)
             .unwrap_or_else(|| type_name.to_string());
-        let casted = cast_value(arg_val, &base);
+        let casted = cast_value(arg_val, &base, arg_src_unsigned);
         Some(
             match self.eval_refinement_predicate(&pred, casted.clone()) {
                 Some(true) => Value::EnumVariant {
@@ -424,8 +429,21 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         continue;
                     };
+                    // B-2026-08-30-34 — NOT the same indexing as the
+                    // free-function path: here `arg_vals[0]` is the receiver and
+                    // the explicit arguments follow, while `args` holds only the
+                    // explicit ones. The offset is derived from the two lengths
+                    // rather than assumed to be 1, because `declared_tys` above
+                    // pads for the receiver only when `self_param` is present.
+                    // Taking `args[i]` directly would read the RECEIVER's
+                    // recorded type for the first parameter.
+                    let recv_off = arg_vals.len().saturating_sub(args.len());
+                    let src_u = i
+                        .checked_sub(recv_off)
+                        .and_then(|k| args.get(k))
+                        .and_then(|a| self.span_unsigned_int_width(&a.value.span));
                     let val = match declared_tys.as_ref().and_then(|tys| tys.get(i)) {
-                        Some(te) => super::exec::coerce_int_value_to_declared_float(val, te),
+                        Some(te) => super::exec::coerce_int_value_to_declared_float(val, te, src_u),
                         None => val,
                     };
                     self.bind_pattern(pat, val);
@@ -750,7 +768,7 @@ impl<'a> super::Interpreter<'a> {
                 self.env.pop_scope();
 
                 for (place, val) in arg_writebacks {
-                    self.assign_to_place(&place, val);
+                    self.assign_to_place(&place, val, None);
                 }
 
                 if let Some(self_val) = self_writeback {
@@ -4129,11 +4147,19 @@ impl<'a> super::Interpreter<'a> {
             // `to_f32` rounds through `f32` then widens for the `f64`-backed
             // `Value::Float`; `to_f64` is the direct widening.
             if let Value::Int(n) = &obj {
+                // B-2026-08-30-34 — convert the VALUE. The receiver's width is
+                // read from `args_close_span`, the leaf the typechecker stashes
+                // it at, because `object.span` has been overwritten with this
+                // call's own result type.
+                let src_u = match self.int_width_at(args_close_span) {
+                    IntW::U(w @ (64 | 128)) => Some(w),
+                    _ => None,
+                };
                 if method == "to_f32" {
-                    return Value::Float((*n as f32) as f64);
+                    return Value::Float(super::eval_expr::carrier_to_f64(*n, src_u) as f32 as f64);
                 }
                 if method == "to_f64" {
-                    return Value::Float(*n as f64);
+                    return Value::Float(super::eval_expr::carrier_to_f64(*n, src_u));
                 }
             }
         }

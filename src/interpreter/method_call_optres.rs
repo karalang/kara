@@ -315,7 +315,7 @@ impl<'a> super::Interpreter<'a> {
                             variant: "None".to_string(),
                             data: EnumData::Unit,
                         };
-                        self.assign_to_place(object, none);
+                        self.assign_to_place(object, none, None);
                         return Some(taken);
                     }
                 }
@@ -340,7 +340,7 @@ impl<'a> super::Interpreter<'a> {
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v.clone()]),
                         };
-                        self.assign_to_place(object, some);
+                        self.assign_to_place(object, some, None);
                         return Some(v);
                     }
                 }

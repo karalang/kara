@@ -1893,7 +1893,16 @@ impl<'a> super::TypeChecker<'a> {
         // `infer_method_call`/`eval_method_call`. Recorded for every integer
         // receiver (not just u64) so the reader gets a definite answer rather
         // than inferring signedness from an absent entry.
-        if method == "to_string" && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+        // `to_f32` / `to_f64` join `to_string` for exactly the same reason
+        // (B-2026-08-30-34): they read the receiver's signedness, `span` aliases
+        // the receiver and has been clobbered with the call's result type
+        // (`f32`/`f64`) by the time the interpreter runs, so without this stash
+        // `u64::MAX.to_f64()` converted the negative two's-complement carrier
+        // and answered -1 while both compiled backends answered
+        // 18446744073709552000.
+        if matches!(method, "to_string" | "to_f32" | "to_f64")
+            && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+        {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
         }
 

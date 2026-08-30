@@ -2059,8 +2059,14 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         continue;
                     };
+                    // B-2026-08-30-34 — `arg_vals` is built positionally from
+                    // `args`, so index `i` names this argument's own expression
+                    // and its recorded unsigned width.
+                    let src_u = args
+                        .get(i)
+                        .and_then(|a| self.span_unsigned_int_width(&a.value.span));
                     let val = match declared_tys.as_ref().and_then(|tys| tys.get(i)) {
-                        Some(te) => super::exec::coerce_int_value_to_declared_float(val, te),
+                        Some(te) => super::exec::coerce_int_value_to_declared_float(val, te, src_u),
                         None => val,
                     };
                     self.bind_pattern(pat, val);
@@ -2362,7 +2368,7 @@ impl<'a> super::Interpreter<'a> {
                 }
 
                 for (place, val) in writebacks {
-                    self.assign_to_place(&place, val);
+                    self.assign_to_place(&place, val, None);
                 }
 
                 if let Some(msg) = contract_fault {
@@ -2396,7 +2402,7 @@ impl<'a> super::Interpreter<'a> {
                 let ret_te = self.declared_return_ty_of_fn(&fn_name);
                 match result {
                     Ok(v) | Err(ControlFlow::Return(v)) => match ret_te.as_ref() {
-                        Some(te) => super::exec::coerce_int_value_to_declared_float(v, te),
+                        Some(te) => super::exec::coerce_int_value_to_declared_float(v, te, None),
                         None => v,
                     },
                     Err(cf) => self.set_cf(cf),
