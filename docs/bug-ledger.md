@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 319 | 4 |
-| run-vs-build | 248 | 14 |
+| run-vs-build | 249 | 14 |
 | leak | 234 | 6 |
 | missing-feature | 188 | 1 |
 | double-free | 156 | 1 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1247 | 28 |
+| codegen | 1248 | 28 |
 | typecheck | 278 | 0 |
 | interp | 259 | 10 |
 | other | 70 | 0 |
 | ownership | 67 | 0 |
-| cli | 66 | 2 |
+| cli | 67 | 2 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1821 surfaced · 30 open · 1764 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1822 surfaced · 30 open · 1765 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (30)
 
@@ -155,11 +155,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1821 surfaced
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-29-66 | 2026-08-29 | codegen | high | A struct WRAPPING a `Vec` of `Drop` elements, built in a callee and returned, runs the element's `Drop` body on FREED memory in the compiled backends -- printing a garbage id that differs between runs, with a valgrind `Invalid read of size 8`. The trigger is positional: it happens when the caller's `let` is NOT the first statement of its block, and disappears when it is. The interpreter is correct either way | — |
 | B-2026-08-29-67 | 2026-08-29 | codegen | medium | A `Vec[T]` of `Drop` elements returned from a callee runs the element's `Drop` body BEFORE the caller's first use of the vector on the compiled backends, and AFTER it on the interpreter -- `m3 dR3 v3` against `m3 v3 dR3`. Right count, wrong place, and the compiled read lands on an element whose body has already run | — |
-| B-2026-08-30-1 | 2026-08-30 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPTY, and Vec/Map mutations vanish -- while `--interp` is correct on all four; this is B-2026-07-29-20's headline case, which is marked fixed, live again on the lane a user gets by default | — |
 | B-2026-08-30-2 | 2026-08-30 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL HANDS OUT A BINDING RATHER THAN MINTING A TEMP LEAKS IT, AND CANNOT BE FIXED AT THE CONSUMER -- `{ loc }.contains("x")` strands 32 B and `loc` is STILL READABLE afterwards, so the immediate free the widened consuming gates emit would DANGLE that read rather than merely double-free; the mixed-arm spelling shows the ownership is per-path, so the answer is a per-arm owner at the merge, not a wider consumer-side predicate | — |
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
 | B-2026-08-30-5 | 2026-08-30 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/pi INTO f16 before multiplying, because the block's opening widen covers bf16 only. | — |
+| B-2026-08-30-7 | 2026-08-30 | cli+codegen | high | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
 
 ### Relocated (2)
 
@@ -191,9 +191,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1821 surfaced
 
 </details>
 
-### Fixed (1764)
+### Fixed (1765)
 
-<details><summary>1764 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1765 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1960,6 +1960,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1821 surfaced
 | B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
 | B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
 | B-2026-08-29-65 | interp+codegen | medium | A PARAM returned by a TAIL `return r` -- no trailing semicolon -- runs its `Drop` body TWICE on EVERY backend, while the same function written `retur… | fc450fe |
+| B-2026-08-30-1 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPT… | 80bb5ec6 |
 | B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
 
 </details>
