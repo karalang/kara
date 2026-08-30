@@ -93,9 +93,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 318 | 4 |
-| run-vs-build | 247 | 14 |
+| run-vs-build | 248 | 14 |
 | leak | 234 | 6 |
-| missing-feature | 187 | 0 |
+| missing-feature | 188 | 1 |
 | double-free | 156 | 1 |
 | codegen-gap | 149 | 0 |
 | diagnostics | 112 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1244 | 27 |
+| codegen | 1246 | 28 |
 | typecheck | 278 | 0 |
-| interp | 258 | 10 |
+| interp | 259 | 10 |
 | other | 70 | 0 |
 | ownership | 67 | 0 |
 | cli | 66 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1818 surfaced · 29 open · 1762 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1820 surfaced · 30 open · 1763 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (29)
+### Open (30)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -150,7 +150,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1818 surfaced
 | B-2026-08-29-56 | 2026-08-29 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(f"zz"); buf }` matched at the call site aborts with `free(): double free detected` on JIT and AOT while `--interp` is correct; the bare-tail spelling `{ Some(f"zz") }` is clean, so it is the named binding's cleanup that survives the move into the return slot. MAIN IS RED: this is what `selfhost_parser_matches_rust_parser_items` has been SIGSEGV-ing on since c793ad0 widened the spellings that reach it | none |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
 | B-2026-08-29-59 | 2026-08-29 | cli | high | `karac run` does NOT reach the JIT lane -- it runs the tree-walk interpreter, despite the JIT being the documented default since LLJIT slice 6c. Measured two ways: hiding `karac_jit_runner` entirely changes nothing (the lane would abort with 'karac_jit_runner not found'), and a 20M-iteration loop that a JIT finishes instantly did not complete in 10 MINUTES. Every ledger row whose evidence cites `karac run` as a 'JIT surface' has therefore been reading the interpreter twice | — |
-| B-2026-08-29-60 | 2026-08-29 | interp+codegen | low | `asinh` / `acosh` / `atanh` at f32 match the interpreter under NEITHER width rule -- Rust std implements the inverse hyperbolics as formulas rather than libm calls, so its f32 impl, its f64 impl and the `asinhf` codegen calls are three different algorithms and no interpreter-side choice reproduces the third. | — |
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
@@ -159,6 +158,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1818 surfaced
 | B-2026-08-30-1 | 2026-08-30 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPTY, and Vec/Map mutations vanish -- while `--interp` is correct on all four; this is B-2026-07-29-20's headline case, which is marked fixed, live again on the lane a user gets by default | — |
 | B-2026-08-30-2 | 2026-08-30 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL HANDS OUT A BINDING RATHER THAN MINTING A TEMP LEAKS IT, AND CANNOT BE FIXED AT THE CONSUMER -- `{ loc }.contains("x")` strands 32 B and `loc` is STILL READABLE afterwards, so the immediate free the widened consuming gates emit would DANGLE that read rather than merely double-free; the mixed-arm spelling shows the ownership is per-path, so the answer is a per-arm owner at the merge, not a wider consumer-side predicate | — |
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
+| B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
+| B-2026-08-30-5 | 2026-08-30 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/pi INTO f16 before multiplying, because the block's opening widen covers bf16 only. | — |
 
 ### Relocated (2)
 
@@ -190,9 +191,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1818 surfaced
 
 </details>
 
-### Fixed (1762)
+### Fixed (1763)
 
-<details><summary>1762 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1763 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1956,6 +1957,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1818 surfaced
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
 | B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
+| B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
 | B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
 | B-2026-08-29-65 | interp+codegen | medium | A PARAM returned by a TAIL `return r` -- no trailing semicolon -- runs its `Drop` body TWICE on EVERY backend, while the same function written `retur… | fc450fe |
 
