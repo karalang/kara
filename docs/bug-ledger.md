@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | perf | 87 | 1 |
-| soundness | 84 | 4 |
+| soundness | 84 | 3 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
 | use-after-free | 25 | 0 |
@@ -119,14 +119,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
-| effect | 28 | 1 |
+| effect | 28 | 0 |
 | resolver | 28 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced · 33 open · 1789 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced · 32 open · 1790 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (33)
+### Open (32)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -161,7 +161,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
 | B-2026-08-30-33 | 2026-08-30 | interp+codegen | medium | A by-value param with TWO exits -- conditionally STORED into a `mut ref` place and also RETURNED on another path -- runs NO `Drop` body on the path where it dies inside the callee. The shape B-2026-08-30-28's per-path flag deliberately DECLINES: nothing clears the flag on a non-store exit, so admitting it DOUBLES the body instead (measured, all four surfaces). Unanimous across backends, so no A/B gate reports it | — |
-| B-2026-08-30-35 | 2026-08-30 | effect | high | AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE CONTRIBUTES NO EFFECTS TO INFERENCE -- `println(f"{touch()}")` infers [writes(Stdout)] where the `let`-hoisted form infers [writes(Db), writes(Stdout)], so a DECLARED `with writes(Resource)` is dropped exactly as readily as `panics`; public-fn effect verification then passes an under-declared row | — |
 | B-2026-08-30-36 | 2026-08-30 | typecheck | medium | `f16` AND `bf16` IMPLEMENT NONE OF THE SIX ARITHMETIC OPERATOR TRAITS (`Add`/`Sub`/`Mul`/`Div`/`Rem`/`Neg`), so neither can satisfy a generic `T: Add` bound and no generic numeric helper is callable at either width — design.md § f16 / bf16 promises "Add, Sub, Mul, Div, Neg ... same surface as f32/f64". The operators work when spelled DIRECTLY (`a + b` on two `f16` compiles and runs correctly on all three backends); only the trait surface is missing, so the gap is invisible until a generic is involved. `PartialEq` / `PartialOrd` / `Copy` — the rest of that same design.md sentence — are all present | — |
 
 ### Relocated (2)
@@ -195,9 +194,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 
 </details>
 
-### Fixed (1789)
+### Fixed (1790)
 
-<details><summary>1789 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1790 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1990,6 +1989,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1851 surfaced
 | B-2026-08-30-31 | codegen | high | AUTO-PAR RUNS `process.exit(code)` BEFORE THE `println`s THAT PRECEDE IT WHENEVER ANY STATEMENT FOLLOWS THE EXIT, silently discarding ALL prior stdou… | 198b899 |
 | B-2026-08-30-32 | codegen | medium | LLVM-18 PROMOTES f16 ARITHMETIC AND MATH METHODS TO f32 ON wasm32 AND NEVER ROUNDS THE RESULT BACK, so a wasm module holds values the type cannot rep… | c1a9f3e |
 | B-2026-08-30-34 | interp | medium | A `u64` value >= 2^63 converts to EVERY float type as its negative two's-complement under the interpreter (`u64::MAX as f64` prints -1) while all thr… | 74f6989 |
+| B-2026-08-30-35 | effect | high | AN EXPRESSION INSIDE AN f-STRING INTERPOLATION HOLE CONTRIBUTES NO EFFECTS TO INFERENCE -- `println(f"{touch()}")` infers [writes(Stdout)] where the… | ae33af9 |
 
 </details>
 
