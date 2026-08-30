@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 319 | 3 |
 | run-vs-build | 250 | 14 |
-| leak | 234 | 6 |
+| leak | 237 | 8 |
 | missing-feature | 188 | 1 |
 | double-free | 157 | 0 |
 | codegen-gap | 149 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1249 | 24 |
+| codegen | 1252 | 26 |
 | typecheck | 278 | 0 |
 | interp | 260 | 11 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1825 surfaced · 27 open · 1769 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1828 surfaced · 29 open · 1770 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (27)
+### Open (29)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -151,12 +151,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1825 surfaced
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-29-66 | 2026-08-29 | codegen | high | A struct WRAPPING a `Vec` of `Drop` elements, built in a callee and returned, runs the element's `Drop` body on FREED memory in the compiled backends -- printing a garbage id that differs between runs, with a valgrind `Invalid read of size 8`. The trigger is positional: it happens when the caller's `let` is NOT the first statement of its block, and disappears when it is. The interpreter is correct either way | — |
 | B-2026-08-29-67 | 2026-08-29 | codegen | medium | A `Vec[T]` of `Drop` elements returned from a callee runs the element's `Drop` body BEFORE the caller's first use of the vector on the compiled backends, and AFTER it on the interpreter -- `m3 dR3 v3` against `m3 v3 dR3`. Right count, wrong place, and the compiled read lands on an element whose body has already run | — |
-| B-2026-08-30-2 | 2026-08-30 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL HANDS OUT A BINDING RATHER THAN MINTING A TEMP LEAKS IT, AND CANNOT BE FIXED AT THE CONSUMER -- `{ loc }.contains("x")` strands 32 B and `loc` is STILL READABLE afterwards, so the immediate free the widened consuming gates emit would DANGLE that read rather than merely double-free; the mixed-arm spelling shows the ownership is per-path, so the answer is a per-arm owner at the merge, not a wider consumer-side predicate | — |
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | medium | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
 | B-2026-08-30-9 | 2026-08-30 | interp | medium | The INTERPRETER renders an unsigned `Vector` lane above `i64::MAX` as a SIGNED reinterpretation -- `Vector[u64, 2]` holding `u64::MAX` prints `Vector(-1, 1)` while the SAME program's scalar and INDEXED-lane reads of the same value both print 18446744073709551615, and both compiled backends now print the unsigned value too; `Value::Vector` holds untyped `Value::Int` lanes, so its Display cannot recover a signedness the index path gets right | — |
 | B-2026-08-30-10 | 2026-08-30 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used again here` on a program every backend compiles and runs correctly. B-2026-08-08-25 deliberately classifies such an arm as a BORROW in codegen; `ownership.rs` still records it as a move. The `if let` spelling of the same thing does NOT warn, which is what rules out a deliberate strict-move rule. Diagnostics-only, and the help text it prints is unactionable | — |
+| B-2026-08-30-11 | 2026-08-30 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path while the `t` path is clean, because B-2026-08-29-27's gates need EVERY tail to mint and B-2026-08-30-2's owner needs a source binding to inherit a FRAME from; the innermost frame is wrong (a wrapping block's drains before the value escapes -- caught by the self-host seed-run oracle, not by any sweep), so the lead is the SIBLING binding arm's frame | — |
+| B-2026-08-30-12 | 2026-08-30 | codegen | medium | A VALUE-POSITION BLOCK WHOSE TAIL NAMES A BINDING IT DECLARED ITSELF LEAKS IT IN A READ-ONLY CONSUMER -- `{ let t = mkB(n); t }.contains("bbb")` strands 27 B while the OWNING spelling is clean; B-2026-08-30-2's owner declines it because there is no live frame to replace and admitting it double-freed 23 tests (it is the shape every codegen desugar synthesizes), but unlike that row the source cannot be read again, so this one belongs to `expr_is_fresh_owned_branch_tail` and the seven gates B-2026-08-29-27 wired | — |
+| B-2026-08-30-13 | 2026-08-30 | codegen | low | AN ASSIGNMENT WHOSE RHS IS A VALUE-POSITION BLOCK DOES NOT FREE THE VALUE IT OVERWRITES AT -O0 -- `let mut s = mkA(n); s = { t };` strands 15 B while `s = mkB(n)` and `s = t` are both clean at BOTH opt levels, so it is one RHS shape missing the old-value drop rather than a missing mechanism; clean at -O2, which is the default, so a default build hides it | — |
 
 ### Relocated (2)
 
@@ -189,9 +191,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1825 surfaced
 
 </details>
 
-### Fixed (1769)
+### Fixed (1770)
 
-<details><summary>1769 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1770 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1961,6 +1963,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1825 surfaced
 | B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
 | B-2026-08-29-65 | interp+codegen | medium | A PARAM returned by a TAIL `return r` -- no trailing semicolon -- runs its `Drop` body TWICE on EVERY backend, while the same function written `retur… | fc450fe |
 | B-2026-08-30-1 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPT… | 80bb5ec6 |
+| B-2026-08-30-2 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL HANDS OUT A BINDING RATHER THAN MINTING A TEMP LEAKS IT, AND CANNOT BE FIXED AT THE CONSUMER -- `{ loc }.… | c935db1 |
 | B-2026-08-30-5 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/… | 42e103d |
 | B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
