@@ -3961,7 +3961,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         Some(f) => f,
                         None => {
                             let fn_ty = fty.fn_type(&params, false);
-                            self.module.add_function(sym, fn_ty, None)
+                            let f = self.module.add_function(sym, fn_ty, None);
+                            // B-2026-08-30-27 — declare it as optimizable as the
+                            // intrinsic half of this table, so a loop-invariant
+                            // call is hoisted rather than repeated per iteration.
+                            self.apply_libm_math_fn_attrs(f);
+                            f
                         }
                     };
                     let call = self

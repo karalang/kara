@@ -6044,6 +6044,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// makes the answer independent of the HOST: the value is produced by the
     /// target's libm on every path, which a compile-time evaluation in the
     /// compiler process could not promise for a cross-compiled target (wasm).
+    /// Give a libm math declaration karac creates the attributes LLVM's own
+    /// float INTRINSICS already carry, so the two lowering families optimize
+    /// alike (B-2026-08-30-27).
+    ///
+    /// Which family a `float_math` method lands in is an accident of the
+    /// LLVM-18 pin — `log10` has an intrinsic, `cosh` does not — but the two
+    /// were optimized very differently. `llvm.log10.f32` is declared
+    /// `memory(none) speculatable willreturn nounwind`, so LICM lifts a
+    /// loop-invariant one out of the loop; a bare `coshf` declaration is left
+    /// to LLVM's library-attribute inference, which is errno-conservative and
+    /// grants only `memory(read)` — not enough to move the call. Measured: the
+    /// same loop hoisted `log10f` above it and left `coshf` inside, spilling
+    /// the accumulator every iteration.
+    ///
+    /// `memory(none)` says these do not read or write observable memory, which
+    /// discounts errno. That is sound HERE rather than in general: Kara has no
+    /// errno surface, nothing in the language can observe it, and the intrinsic
+    /// half of this very table has been declared errno-free all along. So this
+    /// removes an inconsistency rather than introducing an assumption — it is
+    /// the same judgement `-fno-math-errno` encodes, applied to the arm that
+    /// was accidentally excluded from it.
+    pub(super) fn apply_libm_math_fn_attrs(&self, fn_val: inkwell::values::FunctionValue<'ctx>) {
+        use inkwell::attributes::{Attribute, AttributeLoc};
+        let enum_attr = |name: &str, val: u64| {
+            self.context
+                .create_enum_attribute(Attribute::get_named_enum_kind_id(name), val)
+        };
+        // `memory` packs two bits per location (argmem, inaccessiblemem, other);
+        // all-zero is `memory(none)`, matching the intrinsics.
+        for (name, val) in [
+            ("memory", 0),
+            ("nounwind", 0),
+            ("willreturn", 0),
+            ("mustprogress", 0),
+            ("speculatable", 0),
+        ] {
+            fn_val.add_attribute(AttributeLoc::Function, enum_attr(name, val));
+        }
+    }
+
     pub(super) fn mark_call_no_constant_fold(&self, call: inkwell::values::CallSiteValue<'ctx>) {
         use inkwell::attributes::{Attribute, AttributeLoc};
         let attr = self

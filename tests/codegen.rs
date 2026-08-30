@@ -124730,3 +124730,88 @@ mod presize_reservation {
         );
     }
 }
+
+/// B-2026-08-30-27 — the two `float_math` lowering families must be declared
+/// equally optimizable.
+///
+/// Which family a method lands in is an accident of the LLVM-18 pin: `log10`
+/// has an intrinsic, `cosh` does not and is emitted as a direct libm call. That
+/// made no semantic difference and a large optimization one. `llvm.log10.f32`
+/// is declared `memory(none) speculatable willreturn nounwind`, so LICM lifts a
+/// loop-invariant call out of the loop; the bare `coshf` declaration karac
+/// created carried nothing, and LLVM's own library-attribute inference is
+/// errno-conservative enough (`memory(read)`) that the call stayed put.
+/// Measured on the same 1000-iteration loop: `log10f` was hoisted above it and
+/// `coshf` was called every iteration, spilling the accumulator each time.
+///
+/// This asserts the DECLARATION rather than the hoist, deliberately. The
+/// attributes are the fix; whether a particular loop gets hoisted is LLVM's
+/// decision and would make the test a hostage to pipeline changes.
+/// `compile_to_ir` emits pre-optimization IR, which is exactly where the
+/// declaration is visible.
+///
+/// The intrinsic half is asserted alongside as the contrast that gives the
+/// test its meaning: if a future change dropped the attributes from BOTH, an
+/// assertion on `coshf` alone would still be satisfiable by making the two
+/// consistently pessimal.
+#[cfg(feature = "llvm")]
+mod libm_math_declaration_attrs {
+    fn module_ir(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen")
+    }
+
+    /// The body of the attribute group attached to `sym`'s `declare` line.
+    /// Resolved through the `#N` reference so the assertion does not depend on
+    /// which group number LLVM happened to assign.
+    fn declaration_attrs(ir: &str, sym: &str) -> String {
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("declare") && l.contains(&format!("@{sym}(")))
+            .unwrap_or_else(|| panic!("no declaration of `{sym}` in the emitted IR:\n{ir}"));
+        assert!(
+            line.contains('#'),
+            "`{sym}` is declared with NO attribute group at all — that is the \
+             B-2026-08-30-27 state:\n{line}"
+        );
+        let group = line.rsplit('#').next().unwrap().trim().to_string();
+        let prefix = format!("attributes #{group} = ");
+        ir.lines()
+            .find(|l| l.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no `{prefix}` line in IR for `{sym}`:\n{ir}"))
+            .to_string()
+    }
+
+    #[test]
+    fn direct_libm_calls_are_declared_as_optimizable_as_the_intrinsics() {
+        let ir = module_ir(
+            "fn main() {\n\
+                 let n = env.args().len() as i64;\n\
+                 let x: f32 = (n as f32);\n\
+                 println(f\"{x.cosh()} {x.log10()}\");\n\
+             }",
+        );
+
+        // The direct-libm arm — the one this bug is about.
+        let cosh = declaration_attrs(&ir, "coshf");
+        for want in ["memory(none)", "nounwind", "willreturn"] {
+            assert!(
+                cosh.contains(want),
+                "`coshf` declaration is missing `{want}`, so LICM cannot hoist a \
+                 loop-invariant call:\n{cosh}"
+            );
+        }
+
+        // The intrinsic arm — the contrast the fix is measured against.
+        let log10 = declaration_attrs(&ir, "llvm.log10.f32");
+        assert!(
+            log10.contains("memory(none)"),
+            "the intrinsic arm lost `memory(none)`, so the comparison this test \
+             draws is no longer meaningful:\n{log10}"
+        );
+    }
+}
