@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 318 | 4 |
+| miscompile | 319 | 4 |
 | run-vs-build | 248 | 14 |
 | leak | 234 | 6 |
 | missing-feature | 188 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1246 | 28 |
+| codegen | 1247 | 28 |
 | typecheck | 278 | 0 |
 | interp | 259 | 10 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1820 surfaced · 30 open · 1763 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1821 surfaced · 30 open · 1764 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (30)
 
@@ -191,9 +191,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1820 surfaced
 
 </details>
 
-### Fixed (1763)
+### Fixed (1764)
 
-<details><summary>1763 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1764 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1569,7 +1569,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1820 surfaced
 | B-2026-08-20-12 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => . | `src/exhaustive.rs` lowered every float literal pattern to… |
 | B-2026-08-20-13 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints… | Root cause is in `src/typechecker/types.rs`: the numeric-co… |
 | B-2026-08-20-14 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) r… | f620315 |
-| B-2026-08-20-15 | autopar+codegen | high | AUTO-PAR MISCOMPILE: after a fanned-out `while k < end { ...; k = k + 1; }` reduction, the parent's counter is left at its INIT value instead of `end… | d361c11 |
+| B-2026-08-20-15 | autopar+codegen | high | AUTO-PAR MISCOMPILE: after a fanned-out `while k < end { ...; k = k + 1; }` reduction, the parent's counter is left at its INIT value instead of `end… | 095e557 |
 | B-2026-08-20-16 | cli | high | `karac check <file>` and `karac run <file>` SILENTLY TRUNCATE a package member to a single file, producing both FALSE REJECTIONS and FALSE ACCEPTANCE… | b8e8a70 |
 | B-2026-08-20-17 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing | f725b44 |
 | B-2026-08-20-18 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1 | ae0b21b |
@@ -1960,6 +1960,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1820 surfaced
 | B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
 | B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
 | B-2026-08-29-65 | interp+codegen | medium | A PARAM returned by a TAIL `return r` -- no trailing semicolon -- runs its `Drop` body TWICE on EVERY backend, while the same function written `retur… | fc450fe |
+| B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
 
 </details>
 
