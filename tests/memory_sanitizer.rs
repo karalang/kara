@@ -53748,6 +53748,80 @@ fn main() {
         );
     }
 
+    /// B-2026-08-30-8 under ASAN — a returned `Option` local that a READ-ONLY
+    /// `match` arm borrowed from must be freed exactly once, and the veto
+    /// override that achieves it must not turn a chain into a leak.
+    ///
+    /// All three failure directions are memory bugs invisible to an output test,
+    /// which is why this is pinned here as well. Leave the source armed and the
+    /// callee frees the buffer on the way out while the caller frees it again —
+    /// pre-fix every `acc`/`plain` line below was a use-after-free read followed
+    /// by `free(): double free detected in tcache 2`. Disarm too eagerly and the
+    /// `chain` case leaks its buffer once per pass, because
+    /// `<src>.map(f).unwrap_or(d)` consumes a value the read-only arm left the
+    /// SOURCE owning (B-2026-08-08-25 leg 1) — the source is never handed out,
+    /// so zeroing its slot orphans the allocation. LSan on Linux CI is the only
+    /// gate that sees that half; a local macOS asan run does not run LSan at all.
+    ///
+    /// `let _ = plain(..)` is the third direction: the caller DISCARDS the
+    /// returned option, so exactly one free must still happen. A fix that simply
+    /// dropped the callee's free without the caller taking ownership would leak
+    /// here and nowhere else.
+    ///
+    /// `acc` is `Parser.collect_leading_doc_comments` condensed — accumulate
+    /// into an `Option[String]` across a loop, then return it — which is the
+    /// shape `selfhost_parser_matches_rust_parser_items` was dying on. Every
+    /// payload is read BYTE-WISE and the loop counter keeps each f-string opaque
+    /// to the optimizer, so no buffer here is a provably dead allocation LLVM
+    /// can delete out from under the assertion.
+    #[test]
+    fn asan_returned_option_local_borrowed_by_a_readonly_arm_is_freed_once() {
+        assert_clean_asan_run(
+            r#"
+fn acc(n: i64) -> Option[String] {
+    let mut buf: Option[String] = None;
+    let mut i: i64 = 0i64;
+    while i < n {
+        let line = f"L{i}";
+        match buf {
+            Some(prev) => { let mut j = prev; j.push_str("-"); j.push_str(line); buf = Some(j); }
+            None => { buf = Some(line); }
+        }
+        i = i + 1i64;
+    }
+    buf
+}
+fn plain(k: i64) -> Option[String] {
+    let mut buf: Option[String] = Some(f"a{k}");
+    match buf { Some(prev) => { println(prev); } None => {} }
+    buf
+}
+fn chain(k: i64) -> i64 {
+    let o: Option[String] = Some(f"hi{k}");
+    match o { Some(s) => { println(s); } None => {} }
+    o.map(|x| x.len()).unwrap_or(0i64)
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 4i64 {
+        match acc(3i64) { Some(s) => { println(s); } None => { println("-"); } }
+        match plain(i) { Some(s) => { println(s); } None => { println("-"); } }
+        let _ = plain(100i64 + i);
+        println(f"{chain(i)}");
+        i = i + 1i64;
+    }
+    println("end");
+}
+"#,
+            &[
+                "L0-L1-L2", "a0", "a0", "a100", "hi0", "3", "L0-L1-L2", "a1", "a1", "a101", "hi1",
+                "3", "L0-L1-L2", "a2", "a2", "a102", "hi2", "3", "L0-L1-L2", "a3", "a3", "a103",
+                "hi3", "3", "end",
+            ],
+            "returned_option_local_readonly_arm",
+        );
+    }
+
     /// B-2026-08-08-25 LEGS 2 AND 3 under ASAN — the `Result` and user-ENUM
     /// channels, whose live-local clones must free exactly one buffer each.
     ///

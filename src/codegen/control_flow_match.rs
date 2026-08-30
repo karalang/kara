@@ -9696,6 +9696,29 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
+        self.suppress_inline_option_result_binding_move_impl(value, false);
+    }
+
+    /// B-2026-08-30-8 — the ESCAPING entry point: `value` is being RETURNED, so
+    /// the caller becomes the payload's owner and the source's scope-exit free
+    /// must go, even for a source a read-only `match` arm left owning its
+    /// payload (`inline_optres_retained_sources`).
+    ///
+    /// That retention veto is right at every CONSUMING position — the premise
+    /// there is "some callee already took the buffer", which a borrowing arm
+    /// never did, so zeroing the sole owner's slot would leak (B-2026-08-08-25
+    /// leg 1). A return has the opposite premise and does not need one: handing
+    /// the header out IS the transfer, so exactly one owner remains either way.
+    ///
+    /// Only the BARE-IDENTIFIER shape overrides the veto. A `.map(f).unwrap_or(d)`
+    /// chain in return position is still a consuming expression whose source may
+    /// legitimately have kept its buffer, so it keeps the veto and reaches the
+    /// caller through the chain's own value, not through this slot.
+    pub(super) fn suppress_inline_option_result_binding_escape(&self, value: &Expr) {
+        self.suppress_inline_option_result_binding_move_impl(value, true);
+    }
+
+    fn suppress_inline_option_result_binding_move_impl(&self, value: &Expr, escaping: bool) {
         // Resolve the OWNING binding whose scope-exit payload free must be
         // disarmed because the caller (`unwrap_or`) has taken and freed the
         // aliased Err/None payload. Two receiver shapes reach here:
@@ -9718,10 +9741,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // payload has no other owner to hand off to, so disarming it here
         // leaks. The premise of this disarm — "the map's arm already took the
         // buffer" — only holds while the arm is on the transfer path.
-        if self
-            .drop_rc
-            .inline_optres_retained_sources
-            .contains(name.as_str())
+        //
+        // B-2026-08-30-8: a RETURN of the binding itself is on that path by
+        // construction — the caller receives the header and owns the buffer —
+        // so the veto does not apply there. See
+        // `suppress_inline_option_result_binding_escape` for why the override is
+        // limited to the bare-identifier shape.
+        let escaping_bare_binding = escaping && matches!(&value.kind, ExprKind::Identifier(_));
+        if !escaping_bare_binding
+            && self
+                .drop_rc
+                .inline_optres_retained_sources
+                .contains(name.as_str())
         {
             return;
         }

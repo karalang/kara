@@ -17898,6 +17898,152 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-8 — a returned `Option`/`Result` local that a READ-ONLY
+    /// `match` arm borrowed from is freed twice.
+    ///
+    /// `bc1c37c` (B-2026-08-29-56) hooked the escape disarm at the two return
+    /// positions, but reused the CONSUMING-position helper and so inherited its
+    /// veto: a source that a read-only arm left owning its payload sits in
+    /// `inline_optres_retained_sources` and is skipped. That veto is right where
+    /// it was written — the premise of a consuming-position disarm is "a callee
+    /// already took the buffer", which a borrowing arm never did, so zeroing the
+    /// sole owner's slot would leak (B-2026-08-08-25 leg 1). A return has the
+    /// opposite premise: handing the header out IS the transfer, so the caller
+    /// owns the buffer and the callee's scope-exit free is one owner too many.
+    ///
+    /// The correlation is exact and was measured per shape: every body whose
+    /// source hit the veto aborted, every body that reached the disarm was
+    /// clean, and nothing else moved.
+    ///
+    /// Two of the ledger row's three "required ingredients" are refuted here and
+    /// are rows for that reason. A REASSIGNMENT of the local is not needed
+    /// (`readonly-arm-returned` has none and aborted pre-fix), and the arm need
+    /// not be read-only in the source-level sense (`arm-escapes-payload` moves
+    /// the payload out and still aborted). What is actually required is only
+    /// that a `Some(prev)`-shaped arm put the local on the retained list, and
+    /// that the local then escape.
+    ///
+    /// A double free aborts the process, so `run_program` returns `None` and
+    /// each pre-fix row failed against its expected string outright. Ten of the
+    /// thirteen were RED; the three `*-control` rows were green on both sides
+    /// and guard the two directions this fix could have gone wrong in — losing a
+    /// free that is still needed, and disarming a chain whose source kept its
+    /// buffer.
+    #[test]
+    fn e2e_returned_option_local_borrowed_by_a_readonly_arm_is_freed_once() {
+        const H: &str = "fn r_plain() -> Option[String] { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(prev) => { println(f\"saw {prev}\"); } None => {} } buf }\n\
+             fn r_reassign() -> Option[String] { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(prev) => { println(f\"saw {prev}\"); buf = Some(f\"z\"); } None => { buf = None; } } buf }\n\
+             fn r_after() -> Option[String] { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(prev) => { println(f\"saw {prev}\"); } None => {} } buf = Some(f\"z\"); buf }\n\
+             fn r_escapes() -> Option[String] { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(prev) => { let mut j = prev; j.push_str(\"!\"); buf = Some(j); } None => { buf = Some(f\"n\"); } } buf }\n\
+             fn r_ret_if(flag: bool) -> Option[String] { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(prev) => { println(f\"saw {prev}\"); } None => {} } if flag { return buf; } buf = Some(f\"z\"); buf }\n\
+             fn r_result() -> Result[String, i64] { let mut r: Result[String, i64] = Ok(f\"a\"); match r { Ok(prev) => { println(f\"saw {prev}\"); } Err(_) => {} } r }\n\
+             fn r_vec() -> Option[Vec[i64]] { let mut v: Vec[i64] = Vec.new(); v.push(7i64); let mut buf: Option[Vec[i64]] = Some(v); match buf { Some(prev) => { println(f\"len {prev.len()}\"); } None => {} } buf }\n\
+             fn r_loop(n: i64) -> Option[String] { let mut buf: Option[String] = None; let mut i: i64 = 0i64; while i < n { let line = f\"L{i}\"; match buf { Some(prev) => { let mut j = prev; j.push_str(\"-\"); j.push_str(line); buf = Some(j); } None => { buf = Some(line); } } i = i + 1i64; } buf }\n\
+             fn r_wild() -> Option[String] { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(_) => { buf = Some(f\"z\"); } None => {} } buf }\n\
+             fn r_local() -> i64 { let mut buf: Option[String] = Some(f\"a\"); match buf { Some(prev) => { println(f\"saw {prev}\"); buf = Some(f\"z\"); } None => {} } match buf { Some(x) => { println(f\"[{x}]\"); 1i64 } None => { 0i64 } } }\n\
+             fn r_chain(flag: bool) -> i64 { let o: Option[String] = Some(f\"hi\"); match o { Some(s) => { println(f\"saw {s}\"); } None => {} } if flag { return o.map(|x| x.len()).unwrap_or(0i64); } o.map(|x| x.len()).unwrap_or(0i64) }\n";
+        for (label, body, want) in [
+            // THE ROW, minimised: no reassignment anywhere. The ledger row
+            // listed one as a required ingredient; it is not.
+            (
+                "readonly-arm-returned",
+                "match r_plain() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "saw a\n[a]\npost\n",
+            ),
+            // The row's own repro — reassignment inside the arm.
+            (
+                "arm-then-reassign",
+                "match r_reassign() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "saw a\n[z]\npost\n",
+            ),
+            // ... and outside it. Neither spelling is load-bearing.
+            (
+                "reassign-after-match",
+                "match r_after() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "saw a\n[z]\npost\n",
+            ),
+            // The arm MOVES the payload out and puts a new one back. The
+            // classifier declines to call this read-only, yet the source is
+            // still on the retained list from the `Some(prev)` binding.
+            (
+                "arm-escapes-payload",
+                "match r_escapes() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[a!]\npost\n",
+            ),
+            // The `exprs.rs` hook: a `return` nested in an `if` is not the
+            // body's tail, so the tail walk never sees it.
+            (
+                "explicit-return-in-if",
+                "match r_ret_if(true) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "saw a\n[a]\npost\n",
+            ),
+            // ... and the same function's tail on the other path, which is the
+            // `call_dispatch.rs` hook. One function, both sites.
+            (
+                "tail-when-return-not-taken",
+                "match r_ret_if(false) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "saw a\n[z]\npost\n",
+            ),
+            // `Result`'s `Ok` payload takes the sibling `inline_result` set.
+            (
+                "result-twin",
+                "match r_result() { Ok(s) => println(f\"[{s}]\"), Err(e) => println(f\"e{e}\"), }\n",
+                "saw a\n[a]\npost\n",
+            ),
+            // A `Vec` payload is the other direct `{ptr,len,cap}` shape the
+            // read-only classifier admits.
+            (
+                "vec-payload",
+                "match r_vec() { Some(v) => println(f\"[{v[0]}]\"), None => println(\"none\"), }\n",
+                "len 1\n[7]\npost\n",
+            ),
+            // `Parser.collect_leading_doc_comments` condensed: accumulate into
+            // an `Option[String]` across a loop, then return it. This is what
+            // `selfhost_parser_matches_rust_parser_items` was dying on, via a
+            // `///` doc comment on any item.
+            (
+                "selfhost-doc-comment-shape",
+                "match r_loop(3i64) { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[L0-L1-L2]\npost\n",
+            ),
+            // CONTROL, clean on both sides and load-bearing in the LEAK
+            // direction: the caller drops the value, so exactly one free must
+            // happen. Pre-fix the callee's; post-fix the caller's.
+            (
+                "caller-discards",
+                "let _ = r_reassign();\n",
+                "saw a\npost\n",
+            ),
+            // CONTROL: `Some(_)` binds nothing, so the source never joins the
+            // retained set and the escape disarm was already reaching it.
+            (
+                "wildcard-arm-control",
+                "match r_wild() { Some(s) => println(f\"[{s}]\"), None => println(\"none\"), }\n",
+                "[z]\npost\n",
+            ),
+            // CONTROL: consumed locally instead of returned. Nothing escapes,
+            // so the source must KEEP its scope-exit free.
+            (
+                "consumed-locally-control",
+                "println(f\"{r_local()}\");\n",
+                "saw a\n[z]\n1\npost\n",
+            ),
+            // CONTROL for the narrowing, and the reason the veto override is
+            // limited to a bare identifier: `<src>.map(f).unwrap_or(d)` in
+            // return position is a CONSUMING expression whose read-only source
+            // still owns its buffer. Disarming `o` here would leak it, which is
+            // B-2026-08-08-25 leg 1 exactly. LSan is the gate that sees it.
+            (
+                "map-chain-return-control",
+                "println(f\"{r_chain(true)}\"); println(f\"{r_chain(false)}\");\n",
+                "saw hi\n2\nsaw hi\n2\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// Phase-11 `PriorityQueue[T: Ord]` — the first stdlib collection whose
     /// bodies are real Kāra over a generic, trait-bounded impl.
     ///

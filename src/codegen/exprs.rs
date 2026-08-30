@@ -1295,7 +1295,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Bare-tail `Some(f"zz")` was always clean because a temporary
                     // registers no binding cleanup; only the NAMED binding had an
                     // armed action to leave behind.
-                    self.suppress_inline_option_result_binding_move(e);
+                    self.suppress_inline_option_result_binding_escape(e);
                     // B-2026-07-22-2: `return mk().s;` — the caller now owns
                     // the extracted field's buffer; zero it in the staged
                     // fresh-temp slot so the drain below frees only the
