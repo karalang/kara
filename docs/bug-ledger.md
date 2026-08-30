@@ -96,13 +96,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 249 | 14 |
 | leak | 234 | 6 |
 | missing-feature | 188 | 1 |
-| double-free | 156 | 1 |
+| double-free | 157 | 1 |
 | codegen-gap | 149 | 0 |
 | diagnostics | 112 | 0 |
 | false-positive | 100 | 0 |
 | perf | 86 | 2 |
 | soundness | 80 | 0 |
-| other | 64 | 1 |
+| other | 64 | 0 |
 | crash | 61 | 0 |
 | use-after-free | 24 | 1 |
 
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1248 | 28 |
+| codegen | 1249 | 28 |
 | typecheck | 278 | 0 |
 | interp | 259 | 10 |
 | other | 70 | 0 |
 | ownership | 67 | 0 |
-| cli | 67 | 2 |
+| cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1822 surfaced · 30 open · 1765 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1823 surfaced · 29 open · 1766 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (30)
+### Open (29)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -147,9 +147,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1822 surfaced
 | B-2026-08-29-53 | 2026-08-29 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range. The SCALAR `x.tanh()` on the same value in the SAME binary returns the correct 1. | — |
 | B-2026-08-29-54 | 2026-08-29 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 } }` called as `H.s2(R { id: 1 }, R { id: 2 })` prints `v=7` alone under JIT and AOT against `dR2 dR1 v=7` under `--interp`; one argument is enough, moved locals work, and instance methods work, so it is the static-call arm specifically | none |
 | B-2026-08-29-55 | 2026-08-29 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { id: 2 }) + take(R { id: 3 }, R { id: 4 })` runs all four bodies after BOTH calls, so the first call's guard is still live while the second runs; design.md's position table and its no-extension rule both say otherwise, and `--interp` matches them | none |
-| B-2026-08-29-56 | 2026-08-29 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(f"zz"); buf }` matched at the call site aborts with `free(): double free detected` on JIT and AOT while `--interp` is correct; the bare-tail spelling `{ Some(f"zz") }` is clean, so it is the named binding's cleanup that survives the move into the return slot. MAIN IS RED: this is what `selfhost_parser_matches_rust_parser_items` has been SIGSEGV-ing on since c793ad0 widened the spellings that reach it | none |
 | B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
-| B-2026-08-29-59 | 2026-08-29 | cli | high | `karac run` does NOT reach the JIT lane -- it runs the tree-walk interpreter, despite the JIT being the documented default since LLJIT slice 6c. Measured two ways: hiding `karac_jit_runner` entirely changes nothing (the lane would abort with 'karac_jit_runner not found'), and a 20M-iteration loop that a JIT finishes instantly did not complete in 10 MINUTES. Every ledger row whose evidence cites `karac run` as a 'JIT surface' has therefore been reading the interpreter twice | — |
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
@@ -160,6 +158,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1822 surfaced
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
 | B-2026-08-30-5 | 2026-08-30 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/pi INTO f16 before multiplying, because the block's opening widen covers bf16 only. | — |
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | high | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
+| B-2026-08-30-8 | 2026-08-30 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit free by zeroing its cap, a later assignment silently re-arms it, and the return then hands the same buffer to the caller. All three are required; removing any one is clean, and the arm that actually executes is irrelevant. THIS, not B-2026-08-29-56, is what `selfhost_parser_matches_rust_parser_items` has been dying on -- bisected to `///` doc comments, i.e. `Parser.collect_leading_doc_comments` | — |
 
 ### Relocated (2)
 
@@ -191,9 +190,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1822 surfaced
 
 </details>
 
-### Fixed (1765)
+### Fixed (1766)
 
-<details><summary>1765 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1766 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1956,6 +1955,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1822 surfaced
 | B-2026-08-29-46 | interp+codegen | medium | TWO OWNED PARAMS' `Drop` BODIES RUN IN OPPOSITE ORDER ON THE TWO BACKENDS -- `fn take(r: R, q: R) -> i64 { 7 }` called with two fresh temps prints `d… | 33f8781 |
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
+| B-2026-08-29-56 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(… | bc1c37c |
 | B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
 | B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
 | B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
