@@ -2572,6 +2572,62 @@ fn main() {
     );
 }
 
+/// B-2026-08-30-9 — a `Vector[T, N]` renders its lanes through the TYPE-DIRECTED
+/// renderer, so an unsigned lane above `i64::MAX` reads back as unsigned.
+///
+/// The headline shape is the SELF-CONTRADICTION inside one program: `u[0]` and
+/// `u` disagreed about the very same lane. The indexed read reinterprets by the
+/// expression's static type and printed 18446744073709551615; the whole vector
+/// fell through `render_typed_mode`'s arms to the untyped `Display` in
+/// `value.rs`, which sees a bare `Value::Int(-1)` carrier and prints `-1`.
+/// Asserting both in ONE program is the point — either line alone looks right.
+///
+/// The nested cases (`Vec` / tuple / `Option` of a vector) are interpreter-ONLY
+/// on purpose, and it is not an oversight that they have no codegen twin: the
+/// compiled backends cannot render a nested vector AT ALL today — they abort
+/// with `emit_display_fn_for_type: type_name 'Vector_u64_2' not yet supported`
+/// (B-2026-08-30-39), which is why the twin in `tests/codegen.rs` twins only
+/// the depth-0 spellings. They are still worth pinning here: they come from the
+/// container arms recursing INTO the new one, so they are what proves the fix
+/// was made at the recursion point rather than special-cased at depth 0.
+///
+/// `i64` lanes are in the table as the control that keeps the fix honest — a
+/// signed `-1` must still print `-1`, which is what stops "render lanes
+/// unsigned" from being implemented as "render lanes unsigned unconditionally".
+///
+/// Twin (depth-0 rows only): `tests/codegen.rs::e2e_vector_display_agrees_with_the_interpreter`.
+#[test]
+fn vector_display_renders_wide_unsigned_lanes_as_unsigned() {
+    assert_eq!(
+        run(
+            r#"
+fn main() {
+    let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);
+    println(f"lane {u[0]}");
+    println(f"whole {u}");
+    println(f"bare");
+    println(u);
+    let w: Vector[u128, 2] = Vector[u128, 2](340282366920938463463374607431768211455u128, 1u128);
+    println(f"u128 {w[0]} {w}");
+    let b: Vector[u64, 2] = Vector[u64, 2](9223372036854775808u64, 1u64);
+    println(f"bound {b}");
+    let s: Vector[i64, 2] = Vector[i64, 2](-1, 1);
+    println(f"signed {s}");
+    let n: Vector[u8, 4] = Vector[u8, 4](200u8, 1u8, 2u8, 3u8);
+    println(f"narrow {n}");
+    let vs: Vec[Vector[u64, 2]] = [u];
+    println(f"invec {vs}");
+    let t = (u, 7i64);
+    println(f"intup {t}");
+    let o: Option[Vector[u64, 2]] = Some(u);
+    println(f"inopt {o}");
+}
+"#
+        ),
+        "lane 18446744073709551615\nwhole Vector(18446744073709551615, 1)\nbare\nVector(18446744073709551615, 1)\nu128 340282366920938463463374607431768211455 Vector(340282366920938463463374607431768211455, 1)\nbound Vector(9223372036854775808, 1)\nsigned Vector(-1, 1)\nnarrow Vector(200, 1, 2, 3)\ninvec [Vector(18446744073709551615, 1)]\nintup (Vector(18446744073709551615, 1), 7)\ninopt Some(Vector(18446744073709551615, 1))\n"
+    );
+}
+
 /// B-2026-08-30-26 — the interpreter half of the int <-> `bf16` conversion
 /// fixture, and a PARITY PIN rather than a regression test: the interpreter was
 /// never wrong here. It performed every one of these while both compiled

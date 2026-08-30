@@ -917,6 +917,48 @@ mod codegen_tests {
                  println(f\"a {v} b {g} c\");",
                 "a Vector(1, 2) b Vector(0.5, 1.5) c\n",
             ),
+            // The four rows below were the one shape this twin could NOT hold
+            // while B-2026-08-30-9 was open: an unsigned lane above `i64::MAX`
+            // rendered here as the value and on the interpreter as a signed
+            // reinterpretation (`Vector(-1, 1)`), so they lived in a separate
+            // PINNED test that asserted only the compiled side. That row is
+            // fixed -- the interpreter's `render_typed_mode` grew a
+            // `Value::Vector` arm, so lanes read back through the element type
+            // -- and absorbing them here is what its author's handoff asked
+            // for. The pinned test is gone: this twin strictly subsumes it,
+            // because it asserts the interpreter AND the compiled backend
+            // against the same text instead of the compiled backend alone.
+            (
+                "u64 lanes above i64::MAX",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 println(f\"{u}\");",
+                "Vector(18446744073709551615, 1)\n",
+            ),
+            (
+                "u64 lanes above i64::MAX, bare println",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 println(u);",
+                "Vector(18446744073709551615, 1)\n",
+            ),
+            // Exactly 2^63 -- the first value that does not fit the signed
+            // carrier. The `u64::MAX` row alone would pass against a fix that
+            // special-cased the all-ones pattern.
+            (
+                "u64 lane exactly at the signed boundary",
+                "let u: Vector[u64, 2] = Vector[u64, 2](9223372036854775808u64, 1u64);\n\
+                 println(f\"{u}\");",
+                "Vector(9223372036854775808, 1)\n",
+            ),
+            // `u128` is the second width whose top half misses the carrier, and
+            // it is here because reading one back at 64 bits keeps only the low
+            // half -- the shape B-2026-08-19-23 hit on the scalar path.
+            (
+                "u128 lanes above i64::MAX",
+                "let w: Vector[u128, 2] = \n\
+                 Vector[u128, 2](340282366920938463463374607431768211455u128, 1u128);\n\
+                 println(f\"{w}\");",
+                "Vector(340282366920938463463374607431768211455, 1)\n",
+            ),
         ];
         for (label, body, want) in cases {
             let src = format!("fn main() {{\n{body}\n}}\n");
@@ -939,37 +981,6 @@ mod codegen_tests {
                      nothing at all before B-2026-08-29-52",
                 );
             }
-        }
-    }
-
-    /// B-2026-08-29-52, the one shape where the compiled backends deliberately
-    /// do NOT match the interpreter.
-    ///
-    /// An unsigned lane holding a value above `i64::MAX` renders as the value
-    /// here and as a signed reinterpretation on the interpreter
-    /// (`Vector(-1, 1)`). The interpreter's `Value::Vector` holds untyped
-    /// `Value::Int` lanes, so its Display cannot recover a signedness its own
-    /// INDEXED read gets right — `u[0]` prints 18446744073709551615 while the
-    /// whole vector prints -1, in the same program. That is a defect in the
-    /// reference, tracked separately; reproducing it here to keep the twin
-    /// green would write a known-wrong sign convention into the compiled
-    /// formatter and make it harder to remove.
-    ///
-    /// Pinned rather than twinned for exactly that reason — when the
-    /// interpreter side is fixed, this test keeps passing and the twin above
-    /// can absorb the case.
-    #[test]
-    fn e2e_vector_display_renders_wide_unsigned_lanes_as_unsigned() {
-        let src = "fn main() {\n\
-                   let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
-                   println(f\"{u}\");\n\
-                   }\n";
-        if let Some(aot) = run_program(src) {
-            assert_eq!(
-                aot, "Vector(18446744073709551615, 1)\n",
-                "a u64 lane must render unsigned, like the scalar and indexed-lane \
-                 paths already do",
-            );
         }
     }
 

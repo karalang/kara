@@ -218,6 +218,29 @@ impl<'a> super::Interpreter<'a> {
                 }
                 format!("[{}]", parts.join(", "))
             }
+            // `Vector[T, N]` renders lane-by-lane through this same typed
+            // recursion, for one reason: a lane is a `Value::Int` whose
+            // carrier is signed, so the untyped `Display` arm in `value.rs`
+            // prints `u64::MAX` as `-1`. The element type is exactly what the
+            // `Value::Int` arm below needs to read it back as unsigned, and
+            // `display_element_type` already peels `Type::Vector` — so the
+            // whole fix is being ON this path rather than falling through to
+            // the catch-all (B-2026-08-30-9).
+            //
+            // Both compiled backends already print the unsigned value, so this
+            // is the interpreter catching up to them, not a new convention.
+            // Recursing (rather than formatting the lane inline) is what makes
+            // a `Vector` nested in a `Vec` / tuple / `Option` come out right
+            // too: those arms recurse into this one.
+            Value::Vector(lanes) => {
+                let elem = Self::display_element_type(ty).cloned();
+                let lanes = lanes.clone();
+                let mut parts: Vec<String> = Vec::new();
+                for x in &lanes {
+                    parts.push(self.render_typed_mode(x, elem.as_ref(), debug));
+                }
+                format!("Vector({})", parts.join(", "))
+            }
             Value::Slice {
                 storage,
                 start,
