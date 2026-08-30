@@ -93,12 +93,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 318 | 4 |
-| run-vs-build | 246 | 13 |
+| run-vs-build | 247 | 14 |
 | leak | 232 | 5 |
 | missing-feature | 187 | 0 |
 | double-free | 156 | 1 |
 | codegen-gap | 149 | 0 |
-| diagnostics | 112 | 1 |
+| diagnostics | 112 | 0 |
 | false-positive | 100 | 0 |
 | perf | 86 | 2 |
 | soundness | 80 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1241 | 25 |
+| codegen | 1242 | 26 |
 | typecheck | 278 | 0 |
 | interp | 258 | 10 |
 | other | 70 | 0 |
-| ownership | 67 | 1 |
-| cli | 65 | 1 |
+| ownership | 67 | 0 |
+| cli | 66 | 2 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 33 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1815 surfaced · 28 open · 1760 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-29). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1816 surfaced · 28 open · 1761 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (28)
 
@@ -155,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1815 surfaced
 | B-2026-08-29-61 | 2026-08-29 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precision while the runtime call uses the f32 symbol, so `lit.cosh()` and `dyn.cosh()` differ even though the binary prints `lit == dyn` as true. Breaks run == build. | — |
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.61x: the `/ 2` form is if-converted to branchless cmov, the `>> 1` form is not, and keeps a data-dependent branch per search step (mispredicts 178k -> 701k, +293%, on 7.5% FEWER instructions) | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
-| B-2026-08-29-64 | 2026-08-29 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E0500 as a NON-BLOCKING warning -- `karac check` prints `warning[ownership]` then `All checks passed`, and `karac build` produces a working binary and exits 0 | — |
 | B-2026-08-29-66 | 2026-08-29 | codegen | high | A struct WRAPPING a `Vec` of `Drop` elements, built in a callee and returned, runs the element's `Drop` body on FREED memory in the compiled backends -- printing a garbage id that differs between runs, with a valgrind `Invalid read of size 8`. The trigger is positional: it happens when the caller's `let` is NOT the first statement of its block, and disappears when it is. The interpreter is correct either way | — |
 | B-2026-08-29-67 | 2026-08-29 | codegen | medium | A `Vec[T]` of `Drop` elements returned from a callee runs the element's `Drop` body BEFORE the caller's first use of the vector on the compiled backends, and AFTER it on the interpreter -- `m3 dR3 v3` against `m3 v3 dR3`. Right count, wrong place, and the compiled read lands on an element whose body has already run | — |
+| B-2026-08-30-1 | 2026-08-30 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPTY, and Vec/Map mutations vanish -- while `--interp` is correct on all four; this is B-2026-07-29-20's headline case, which is marked fixed, live again on the lane a user gets by default | — |
 
 ### Relocated (2)
 
@@ -189,9 +189,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1815 surfaced
 
 </details>
 
-### Fixed (1760)
+### Fixed (1761)
 
-<details><summary>1760 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1761 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1954,6 +1954,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1815 surfaced
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
 | B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
+| B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
 | B-2026-08-29-65 | interp+codegen | medium | A PARAM returned by a TAIL `return r` -- no trailing semicolon -- runs its `Drop` body TWICE on EVERY backend, while the same function written `retur… | fc450fe |
 
 </details>
