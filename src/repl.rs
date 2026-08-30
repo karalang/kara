@@ -386,10 +386,12 @@ pub(crate) enum ProviderHistoryKind {
 pub struct EvaluatedCell {
     pub stdout: String,
     pub errors: Vec<String>,
-    /// Compiler-surface notes that aren't fatal — today this carries the
-    /// `perf[auto-clone-in-repl]` lines emitted when `--auto-clone` rewrites
-    /// a consume site. Always non-empty when an insertion fired (the spec
-    /// requires the channel be visible — never silent). Production
+    /// Compiler-surface notes that aren't fatal. Two kinds today: the
+    /// `perf[auto-clone-in-repl]` lines emitted when `--auto-clone` rewrites a
+    /// consume site, and the `warning[repl-jit-no-snapshot]` line emitted when
+    /// a cell declares a binding the JIT lane cannot carry across cells
+    /// (B-2026-08-30-7). Always non-empty when either fired — the spec
+    /// requires the channel be visible, never silent. Production
     /// `evaluate_cell` mirrors each entry to stderr so users see them.
     pub notes: Vec<String>,
     /// Per-cell effect set rendered as the `writes(A, B) reads(C)` text
@@ -2004,6 +2006,13 @@ impl Session {
         let (snapshot_replay, snapshot_capture) =
             self.compute_snapshot_sets_for_cell(program, typed);
 
+        // B-2026-08-30-7: a binding this cell declares that the classification
+        // above left on the pass-through path will be rebuilt from its
+        // initializer in every later cell. Say so once, here, rather than let
+        // the divergence from `--interp` be silent.
+        let mut notes = notes;
+        notes.extend(self.passthrough_divergence_notes(program, typed));
+
         // Slice c-repl.B.4: prior cells' fn bodies live in the
         // runner's JITDylib. Emit them as `declare`-only in this
         // cell's IR so codegen + jitlink skip the body for them;
@@ -2222,6 +2231,127 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// B-2026-08-30-7: report, at the cell that DECLARES it, a top-level
+    /// `let` the JIT lane has no cross-cell snapshot for.
+    ///
+    /// Such a binding takes the B.5.3d PASS-THROUGH: no global is emitted, so
+    /// every later cell rebuilds it by RE-RUNNING the original initializer.
+    /// phase-7-codegen.md called that "correct (re-evaluating) semantics",
+    /// which holds only for an immutable binding whose RHS is pure. Otherwise
+    /// it diverges from `--interp` twice over, silently:
+    ///
+    ///   * a mutation is REVERTED, including one made in the declaring cell —
+    ///     the loss happens when the NEXT cell re-evaluates the RHS, not when
+    ///     this one fails to write a global (which is what separates this from
+    ///     B-2026-08-30-1, where the global exists and goes stale);
+    ///   * a side-effecting initializer RE-EXECUTES, which is the exact thing
+    ///     the snapshot tier was built to prevent (B.5.1's own example:
+    ///     `let log = read_file("big.json")` should not reread the file).
+    ///
+    /// `--interp` has neither problem: its `let_snapshots` cache is keyed by
+    /// name and holds a `Value`, with no type tier at all.
+    ///
+    /// WHY THE DECLARING CELL and not the cell that loses the value: it is the
+    /// actionable moment — the user learns the binding will not persist before
+    /// building on it — and it fires exactly once with no dedup state, because
+    /// from the next cell onward the name is in `persistent_lets` and this
+    /// walk skips it.
+    ///
+    /// WHY NOT WARN ON EVERY pass-through binding: most are immutable with a
+    /// constructor-shaped initializer (`let p = Point { x: 1 };`), where
+    /// re-running the RHS is observationally identical and there is nothing to
+    /// report. Warning there would bury the real cases. The two conditions
+    /// below are what make harm possible: `let mut` is Kāra's prerequisite for
+    /// mutating at all, so an immutable binding cannot hit the first failure;
+    /// and a direct call to a session-defined free function is the shape the
+    /// second one takes. A constructor (`Vec.new()`, a struct literal) is a
+    /// `MethodCall` / `StructLiteral`, not a `Call` through an identifier, so
+    /// it does not trip the second condition.
+    #[cfg(feature = "llvm")]
+    fn passthrough_divergence_notes(
+        &self,
+        program: &crate::ast::Program,
+        typed: &crate::typechecker::TypeCheckResult,
+    ) -> Vec<String> {
+        use crate::ast::{Expr, ExprKind, Item, PatternKind, StmtKind};
+        use crate::resolver::SpanKey;
+
+        let Some(main_fn) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == "main" => Some(f),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+
+        // Names an earlier cell declared. The synthetic main is
+        // `<persistent_lets replay>\n<cell body>` and `persistent_lets` does
+        // not absorb this cell until after it runs, so a binding missing here
+        // is one the CURRENT cell introduces.
+        let prior: std::collections::HashSet<String> = self
+            .persistent_lets
+            .iter()
+            .flat_map(|l| parse_let_binding_names(l))
+            .collect();
+
+        let user_fns: std::collections::HashSet<&str> = program
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Function(f) => Some(f.name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        fn calls_session_fn(value: &Expr, user_fns: &std::collections::HashSet<&str>) -> bool {
+            match &value.kind {
+                ExprKind::Call { callee, .. } => {
+                    matches!(&callee.kind, ExprKind::Identifier(n) if user_fns.contains(n.as_str()))
+                }
+                _ => false,
+            }
+        }
+
+        let mut notes = Vec::new();
+        for stmt in &main_fn.body.stmts {
+            let StmtKind::Let {
+                is_mut,
+                pattern,
+                ty,
+                value,
+            } = &stmt.kind
+            else {
+                continue;
+            };
+            let PatternKind::Binding(name) = &pattern.kind else {
+                continue;
+            };
+            if prior.contains(name.as_str()) {
+                continue;
+            }
+            let Some(t) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {
+                continue;
+            };
+            if snapshot_kind_for_type(t).is_some() {
+                continue;
+            }
+            if !*is_mut && !calls_session_fn(value, &user_fns) {
+                continue;
+            }
+            let shown = ty
+                .as_ref()
+                .map(|t| format!(" ({})", crate::formatter::render_type_expr(t)))
+                .unwrap_or_default();
+            notes.push(format!(
+                "warning[repl-jit-no-snapshot]: `{name}`{shown} is rebuilt from its \
+                 initializer in every later cell — the JIT REPL has no cross-cell \
+                 snapshot for this type, so a mutation will not survive the cell \
+                 boundary and a side-effecting initializer runs again each time. \
+                 `karac repl --interp` carries this binding correctly (B-2026-08-30-7)."
+            ));
+        }
+        notes
     }
 
     /// Slice c-repl.B.5.1: classify every top-level `let` in this

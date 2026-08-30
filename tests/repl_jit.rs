@@ -472,6 +472,115 @@ fn repl_jit_snapshot_write_back_chains_across_cells() {
     );
 }
 
+/// B-2026-08-30-7 — a binding the JIT lane cannot snapshot must SAY so at the
+/// cell that declares it.
+///
+/// The pass-through path rebuilds such a binding by re-running its initializer
+/// in every later cell, so a mutation is reverted and a side-effecting
+/// initializer re-executes — both silently, and both divergences from
+/// `--interp`, which carries every type. Until the snapshot tier covers these
+/// types (B.5.3d), the guarantee this test pins is that the divergence is
+/// ANNOUNCED rather than silent.
+///
+/// The note fires at the DECLARING cell and only there: from the next cell on,
+/// the name lives in `persistent_lets` and the walk skips it.
+#[test]
+fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let mut v: Vec[String] = Vec.new();");
+    assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
+    let note = r
+        .notes
+        .iter()
+        .find(|n| n.contains("repl-jit-no-snapshot"))
+        .unwrap_or_else(|| panic!("expected a no-snapshot note; notes: {:?}", r.notes));
+    assert!(
+        note.contains("`v`") && note.contains("Vec[String]"),
+        "the note must name the binding and its type; got: {note}",
+    );
+    assert!(
+        note.contains("--interp"),
+        "the note must name the lane that is correct; got: {note}",
+    );
+
+    // Second cell mutates it. No repeat — the note is a property of the
+    // binding, not of every cell that touches it.
+    let r2 = s.evaluate_cell_captured("v.push(f\"a\");");
+    assert!(r2.errors.is_empty(), "mutate cell: {:?}", r2.errors);
+    assert!(
+        !r2.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+        "the note must fire once, at the declaring cell; got: {:?}",
+        r2.notes,
+    );
+}
+
+/// B-2026-08-30-7, second half: an immutable binding whose initializer CALLS a
+/// session-defined function also diverges, because the call re-runs on every
+/// later cell — B.5.1's own `let log = read_file("big.json")` example. Pinned
+/// separately from the `let mut` case because it reaches the note by the other
+/// condition, and a regression could plausibly break one and not the other.
+#[test]
+fn repl_jit_passthrough_side_effecting_initializer_warns() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("fn mk() -> Vec[String] { Vec.new() }");
+    assert!(r.errors.is_empty(), "items cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let cfg = mk();");
+    assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("repl-jit-no-snapshot") && n.contains("`cfg`")),
+        "an immutable binding initialized by a session fn call must warn; notes: {:?}",
+        r.notes,
+    );
+}
+
+/// B-2026-08-30-7 control — a binding the snapshot tier DOES cover must stay
+/// quiet. Without this the note could regress into firing on everything, which
+/// would bury the cases that matter behind noise on every ordinary cell.
+#[test]
+fn repl_jit_eligible_binding_emits_no_passthrough_warning() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    for src in [
+        "let mut n: i64 = 0;",
+        "let mut t = f\"a\";",
+        "let mut v: Vec[i64] = Vec.new();",
+        "let mut m: Map[i64, i64] = Map.new();",
+        "let mut q: Set[i64] = Set.new();",
+    ] {
+        let r = s.evaluate_cell_captured(src);
+        assert!(r.errors.is_empty(), "{src}: {:?}", r.errors);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "{src} is snapshot-eligible and must not warn; notes: {:?}",
+            r.notes,
+        );
+    }
+}
+
+/// B-2026-08-30-7 control — an IMMUTABLE binding with a constructor-shaped
+/// initializer is on the pass-through path too, but re-running the initializer
+/// is observationally identical, so there is nothing to report. This is the
+/// common shape in an interactive session; warning here would make the note
+/// worthless.
+#[test]
+fn repl_jit_immutable_constructor_binding_emits_no_passthrough_warning() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("struct P { x: i64 }");
+    assert!(r.errors.is_empty(), "items cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let p = P { x: 1 };");
+    assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
+    assert!(
+        !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+        "a pure immutable binding must not warn; notes: {:?}",
+        r.notes,
+    );
+}
+
 #[test]
 fn repl_jit_snapshot_covers_f64_bool_char() {
     // Slice c-repl.B.5.1 — verify the snapshot replay path handles
