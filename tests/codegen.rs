@@ -118200,6 +118200,79 @@ fn main() {{
         }
     }
 
+    /// B-2026-08-30-26 — AN INTEGER <-> `bf16` CONVERSION WAS REFUSED BY BOTH
+    /// COMPILED BACKENDS, IN EVERY DIRECTION, WHILE THE INTERPRETER PERFORMED IT.
+    ///
+    /// `compile_cast`'s float->float lane had gone through
+    /// `build_float_cast_bf16_safe` since B-2026-08-29-23, but its int->float
+    /// and float->int lanes had not: `sitofp`/`uitofp` INTO `bfloat` and
+    /// `llvm.fptosi.sat.iN.bf16` are native bf16 nodes LLVM 18 cannot select,
+    /// so the module-wide guard rejected the program outright. All 16 shapes
+    /// (8 integer widths x 2 directions) failed; `f16` was unaffected.
+    ///
+    /// PRE-FIX THIS FAILS LOUDLY RATHER THAN VACUOUSLY, which is worth stating
+    /// because the reverse is the usual hazard with `if let Some(out)`.
+    /// `run_program` PANICS on a codegen error by design — only a link or exec
+    /// failure soft-skips to `None` — and the pre-fix symptom IS a codegen
+    /// error. Verified by reverting the fix: `codegen failed for test program:
+    /// internal error: codegen emitted a native bfloat llvm.fptosi.sat.i8.bf16`.
+    /// An `assert!(out.is_some())` would add nothing here and would break the
+    /// documented soft-skip on a machine with no runtime archive.
+    ///
+    /// The values are chosen so a lowering that merely compiles cannot pass.
+    /// `257 -> 256` and `-12345 -> -12352` pin bf16's 8-bit significand
+    /// rounding; `1000.0 as i8 -> 127` and `-1000.0 as i8 -> -128` pin
+    /// saturation at both ends; `-2.5 as u8 -> 0` pins the unsigned clamp; and
+    /// `1.0e30`/`-1.0e30` into i32/u32/i64 pin it at the extremes.
+    ///
+    /// GOING VIA f32 IS EXACT, NOT AN APPROXIMATION, IN BOTH DIRECTIONS.
+    /// bf16->f32 widens a truncated f32, so it is lossless. int->f32->bf16
+    /// double-rounds, but rounding to p1 bits then to p2 agrees with rounding
+    /// straight to p2 when p1 >= 2*p2 + 2, and 24 >= 2*8 + 2 — which is why
+    /// these outputs match the interpreter, whose own `i as bf16` takes a
+    /// different route (through f64).
+    ///
+    /// Mirrored in `tests/interpreter.rs::int_bf16_conversions_round_and_saturate`.
+    #[test]
+    fn e2e_int_bf16_conversions_are_lowered_through_f32() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let n = env.args().len() as i64;
+    let zero: i64 = n - 1;
+    let onef: f32 = (n as f32);
+    let a1: i8 = (-127i8 + (zero as i8));
+    let a2: i8 = (3i8 + (zero as i8));
+    let a3: u8 = (255u8 + (zero as u8));
+    let a4: i16 = (257i16 + (zero as i16));
+    let a5: i16 = (-12345i16 + (zero as i16));
+    let a6: u16 = (65535u16 + (zero as u16));
+    let a7: i32 = (2147483647i32 + (zero as i32));
+    let a8: u32 = (4294967295u32 + (zero as u32));
+    let a9: i64 = (9223372036854775807i64 + zero);
+    let a10: i64 = (-9223372036854775807i64 + zero);
+    let a11: u64 = (6148914691236517205u64 + (zero as u64));
+    println(f"i2b {(a1 as bf16)} {(a2 as bf16)} {(a3 as bf16)} {(a4 as bf16)}");
+    println(f"i2b {(a5 as bf16)} {(a6 as bf16)} {(a7 as bf16)} {(a8 as bf16)}");
+    println(f"i2b {(a9 as bf16)} {(a10 as bf16)} {(a11 as bf16)}");
+    let b1: bf16 = ((2.5f32 * onef) as bf16);
+    let b2: bf16 = ((-2.5f32 * onef) as bf16);
+    let b3: bf16 = ((1000.0f32 * onef) as bf16);
+    let b4: bf16 = ((-1000.0f32 * onef) as bf16);
+    let b5: bf16 = ((1.0e30f32 * onef) as bf16);
+    let b6: bf16 = ((-1.0e30f32 * onef) as bf16);
+    let b7: bf16 = ((0.4f32 * onef) as bf16);
+    println(f"b2i {(b1 as i8)} {(b2 as i8)} {(b3 as i8)} {(b4 as i8)}");
+    println(f"b2i {(b1 as u8)} {(b2 as u8)} {(b3 as u8)} {(b7 as u8)}");
+    println(f"b2i {(b5 as i32)} {(b6 as i32)} {(b5 as u32)} {(b6 as u32)}");
+    println(f"b2i {(b5 as i64)} {(b6 as i64)} {(b3 as i16)} {(b4 as i16)}");
+}
+"#,
+        ) {
+            assert_eq!(out, "i2b -127 3 255 256\ni2b -12352 65536 2147483648 4294967296\ni2b 9223372036854776000 -9223372036854776000 6160924290242839000\nb2i 2 -2 127 -128\nb2i 2 0 255 0\nb2i 2147483647 -2147483648 4294967295 0\nb2i 9223372036854775807 -9223372036854775808 1000 -1000\n");
+        }
+    }
+
     /// B-2026-08-27-5 — the compiled twin of
     /// `eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche`.
     ///

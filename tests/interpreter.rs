@@ -2500,6 +2500,65 @@ fn test_sqrt_float() {
     );
 }
 
+/// B-2026-08-30-26 — the interpreter half of the int <-> `bf16` conversion
+/// fixture, and a PARITY PIN rather than a regression test: the interpreter was
+/// never wrong here. It performed every one of these while both compiled
+/// backends refused to build the program at all, which is what made the bug a
+/// run-vs-build divergence instead of a wrong answer.
+///
+/// It is pinned because the codegen fix routes int->bf16 through f32 while this
+/// side goes through f64, so the two agree by a double-rounding argument
+/// (p1 >= 2*p2 + 2) rather than by sharing code. If either route is ever
+/// changed, this and its codegen twin move apart and both fail.
+///
+/// Twin: `tests/codegen.rs::e2e_int_bf16_conversions_are_lowered_through_f32`.
+#[test]
+fn int_bf16_conversions_round_and_saturate() {
+    // The seed is the literal 1 rather than `env.args().len()`: the codegen
+    // twin needs an opaque seed to survive -O2 constant folding and 1 is what
+    // that yields under its harness, while `env.args()` in an IN-PROCESS
+    // interpreter test reports the TEST binary's argv (same reasoning as
+    // `test_optres_tuple_payload_is_owned_exactly_once`). The interpreter folds
+    // nothing, so it needs no opacity — only the same values.
+    assert_eq!(
+        run(
+            r#"
+fn main() {
+    let n = 1i64;
+    let zero: i64 = n - 1;
+    let onef: f32 = (n as f32);
+    let a1: i8 = (-127i8 + (zero as i8));
+    let a2: i8 = (3i8 + (zero as i8));
+    let a3: u8 = (255u8 + (zero as u8));
+    let a4: i16 = (257i16 + (zero as i16));
+    let a5: i16 = (-12345i16 + (zero as i16));
+    let a6: u16 = (65535u16 + (zero as u16));
+    let a7: i32 = (2147483647i32 + (zero as i32));
+    let a8: u32 = (4294967295u32 + (zero as u32));
+    let a9: i64 = (9223372036854775807i64 + zero);
+    let a10: i64 = (-9223372036854775807i64 + zero);
+    let a11: u64 = (6148914691236517205u64 + (zero as u64));
+    println(f"i2b {(a1 as bf16)} {(a2 as bf16)} {(a3 as bf16)} {(a4 as bf16)}");
+    println(f"i2b {(a5 as bf16)} {(a6 as bf16)} {(a7 as bf16)} {(a8 as bf16)}");
+    println(f"i2b {(a9 as bf16)} {(a10 as bf16)} {(a11 as bf16)}");
+    let b1: bf16 = ((2.5f32 * onef) as bf16);
+    let b2: bf16 = ((-2.5f32 * onef) as bf16);
+    let b3: bf16 = ((1000.0f32 * onef) as bf16);
+    let b4: bf16 = ((-1000.0f32 * onef) as bf16);
+    let b5: bf16 = ((1.0e30f32 * onef) as bf16);
+    let b6: bf16 = ((-1.0e30f32 * onef) as bf16);
+    let b7: bf16 = ((0.4f32 * onef) as bf16);
+    println(f"b2i {(b1 as i8)} {(b2 as i8)} {(b3 as i8)} {(b4 as i8)}");
+    println(f"b2i {(b1 as u8)} {(b2 as u8)} {(b3 as u8)} {(b7 as u8)}");
+    println(f"b2i {(b5 as i32)} {(b6 as i32)} {(b5 as u32)} {(b6 as u32)}");
+    println(f"b2i {(b5 as i64)} {(b6 as i64)} {(b3 as i16)} {(b4 as i16)}");
+}
+"#
+        ),
+        "i2b -127 3 255 256\ni2b -12352 65536 2147483648 4294967296\ni2b 9223372036854776000 -9223372036854776000 6160924290242839000\nb2i 2 -2 127 -128\nb2i 2 0 255 0\nb2i 2147483647 -2147483648 4294967295 0\nb2i 9223372036854775807 -9223372036854775808 1000 -1000\n"
+    );
+}
+
 #[test]
 fn test_float_math_transcendental_and_rounding() {
     // Scalar transcendental + rounding math (`crate::float_math`): unary

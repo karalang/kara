@@ -8511,8 +8511,10 @@ impl<'ctx> Codegen<'ctx> {
              into the unselectable scalar form by the target's vector \
              legalizer. bf16 must be widened to f32: route a scalar site \
              through `build_float_compare_bf16_safe`, \
-             `build_float_neg_bf16_safe` or `build_float_cast_bf16_safe`, and \
-             a vector site through `widen_bf16_vector` / `narrow_bf16_vector`."
+             `build_float_neg_bf16_safe`, `build_float_cast_bf16_safe` or \
+             `build_int_to_float_bf16_safe`, and a vector site through \
+             `widen_bf16_vector` / `narrow_bf16_vector`. A float→int site \
+             needs no call: `emit_float_to_int_sat` widens its own operand."
         )
     }
 

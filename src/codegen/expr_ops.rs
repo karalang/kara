@@ -5403,15 +5403,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Signed/unsigned int-to-float branch on the source-type hint:
                 // `255u8 as f32` should yield 255.0, not -1.0 via sitofp on the
                 // bit-pattern. Symmetric to the int-widening path above.
-                let result = if source_is_unsigned {
-                    self.builder
-                        .build_unsigned_int_to_float(iv, ft, "cast")
-                        .unwrap()
-                } else {
-                    self.builder
-                        .build_signed_int_to_float(iv, ft, "cast")
-                        .unwrap()
-                };
+                let result = self.build_int_to_float_bf16_safe(iv, ft, source_is_unsigned, "cast");
                 Ok(result.into())
             }
             (BasicValueEnum::FloatValue(fv), BasicTypeEnum::IntType(it)) => {
@@ -5422,6 +5414,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // target-independent instruction. (Pre-fix this was raw
                 // `fptosi`, which is poison on out-of-range.) Identical lowering
                 // to `f.saturating_to_iN()`.
+                // A `bfloat` operand is widened to f32 inside
+                // `emit_float_to_int_sat` — the chokepoint every float→int
+                // family shares (B-2026-08-30-26).
                 let result = self.emit_float_to_int_sat(fv, it, target_is_unsigned)?;
                 Ok(result.into())
             }
@@ -5430,6 +5425,58 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(result.into())
             }
             _ => Ok(val),
+        }
+    }
+
+    /// Integer→float conversion that never emits a `sitofp`/`uitofp` whose
+    /// RESULT is `bfloat` — the int-side sibling of
+    /// [`Self::build_float_cast_bf16_safe`] (B-2026-08-30-26).
+    ///
+    /// LLVM 18 cannot select either node into `bfloat`, so both compiled
+    /// backends refused `n as bf16` for every integer width, signed and
+    /// unsigned alike, while the interpreter performed it. A bf16 target
+    /// therefore converts to `f32` first and narrows through the bf16-safe
+    /// float cast.
+    ///
+    /// GOING VIA f32 IS NOT A DOUBLE-ROUNDING COMPROMISE, it is exact.
+    /// Rounding a real to p1 bits and then to p2 agrees with rounding it
+    /// straight to p2 whenever p1 >= 2*p2 + 2; f32 carries 24 significand bits
+    /// against bf16's 8, and 24 >= 18. So the two-step result is the
+    /// correctly-rounded bf16 for every integer input, which is what lets this
+    /// match the interpreter (whose own `i as bf16` goes through f64 then f32)
+    /// rather than merely approximate it.
+    ///
+    /// A non-bf16 target emits exactly the instruction it always did, so this
+    /// is a no-op for `f32` / `f64` / `f16`. The many int→float sites in
+    /// `stats.rs` / `column.rs` are not routed through it because they name
+    /// `f64_type()` literally and cannot reach bf16; if a future site can, the
+    /// module-wide guard in `verify_no_native_bf16_ops` names this helper.
+    pub(super) fn build_int_to_float_bf16_safe(
+        &self,
+        iv: inkwell::values::IntValue<'ctx>,
+        ft: inkwell::types::FloatType<'ctx>,
+        source_is_unsigned: bool,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        let bf16_t = self.context.bf16_type();
+        let conv_ty = if ft == bf16_t {
+            self.context.f32_type()
+        } else {
+            ft
+        };
+        let wide = if source_is_unsigned {
+            self.builder
+                .build_unsigned_int_to_float(iv, conv_ty, name)
+                .unwrap()
+        } else {
+            self.builder
+                .build_signed_int_to_float(iv, conv_ty, name)
+                .unwrap()
+        };
+        if ft == bf16_t {
+            self.build_float_cast_bf16_safe(wide, ft, &format!("{name}.bf"))
+        } else {
+            wide
         }
     }
 
@@ -6205,6 +6252,21 @@ impl<'ctx> super::Codegen<'ctx> {
         int_ty: inkwell::types::IntType<'ctx>,
         target_unsigned: bool,
     ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        // B-2026-08-30-26 — `llvm.fptosi.sat.iN.bf16` is a native bf16 node
+        // wearing a call's clothing, and LLVM 18 cannot select it any more than
+        // it can select an `fptosi` on `bfloat`: both compiled backends refused
+        // `b as i64` outright while the interpreter performed it. Widening to
+        // f32 first is EXACT rather than an approximation — a bf16 is a
+        // truncated f32, so every bf16 value has an identical f32 image and the
+        // saturating conversion sees the same number. This is the chokepoint
+        // all five float→int callers share (`f as iN`, `saturating_to_iN`, and
+        // the range checks behind the checked/trunc/wrapping families), so
+        // fixing it here covers each of them and cannot drift apart.
+        let fv = if fv.get_type() == self.context.bf16_type() {
+            self.build_float_cast_bf16_safe(fv, self.context.f32_type(), "f2i.x32")
+        } else {
+            fv
+        };
         let base = if target_unsigned {
             "llvm.fptoui.sat"
         } else {
