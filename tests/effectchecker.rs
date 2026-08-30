@@ -12299,3 +12299,198 @@ fn test_fstring_hole_contributes_its_effects_to_inference() {
         );
     }
 }
+
+// ── Interpolation holes are not leaves: the rest of the surface ──
+//
+// `collect_calls_in_expr` had `InterpolatedStringLit` in its "Leaf
+// expressions — no calls to collect" list; `ae33af9` (B-2026-08-30-35) taught
+// it to recurse. TWO MORE WALKERS in this phase carried the identical
+// omission and are covered here, plus the parts of the first walker's blast
+// radius that row's own test does not reach — every verb, every hole
+// position, and the platform target gate.
+//
+// The oracle for every case below is the SAME program with the hole's
+// contents hoisted out, or written without an f-string: the two forms must
+// agree. That equality is the assertion — not a hardcoded expected set —
+// because it is exactly the property the bug broke.
+
+/// Every verb's inferred set for the hole form must equal the let-hoisted
+/// twin's. All eight are covered: the bug dropped resource verbs and
+/// execution verbs alike, so pinning only `panics` (the shape that first
+/// exposed it) would leave the `blocks`/`suspends` scheduler-placement half
+/// and every declared `writes(R)` unguarded.
+#[test]
+fn test_interpolation_hole_effects_match_let_hoisted_twin_for_every_verb() {
+    for clause in [
+        "writes(Db)",
+        "reads(Db)",
+        "sends(Db)",
+        "receives(Db)",
+        "allocates(Db)",
+        "blocks",
+        "suspends",
+        "panics",
+    ] {
+        let prog = |body: &str| {
+            format!(
+                "effect resource Db;\n\
+                 fn touch() -> i64 with {clause} {{ return 1 }}\n\
+                 fn f() {{ {body} }}\n\
+                 fn main() {{ f() }}"
+            )
+        };
+        let hole = effectcheck_ok(&prog("println(f\"{touch()}\")"));
+        let lifted = effectcheck_ok(&prog("let n = touch(); println(f\"{n}\")"));
+        let mut got: Vec<String> = hole.inferred_effects["f"]
+            .effects
+            .iter()
+            .map(|e| format!("{:?}({})", e.effect.verb, e.effect.resource))
+            .collect();
+        let mut want: Vec<String> = lifted.inferred_effects["f"]
+            .effects
+            .iter()
+            .map(|e| format!("{:?}({})", e.effect.verb, e.effect.resource))
+            .collect();
+        got.sort();
+        got.dedup();
+        want.sort();
+        want.dedup();
+        assert_eq!(
+            got, want,
+            "`with {clause}`: hole form must infer what the let-hoisted twin infers"
+        );
+    }
+}
+
+/// The consequence that makes this a hole in the headline guarantee rather
+/// than a cosmetic under-report: a PUBLIC function's declared effect row is
+/// verified against the inferred set, so a call hidden in a hole let an
+/// under-declared `pub fn` verify clean. The let-hoisted twin was rejected.
+#[test]
+fn test_interpolation_hole_does_not_bypass_public_fn_effect_verification() {
+    let src = "effect resource Db;\n\
+               fn touch() -> i64 with writes(Db) { return 1 }\n\
+               pub fn f() with writes(Stdout) { println(f\"{touch()}\") }\n\
+               fn main() { f() }";
+    let errs = effectcheck_errors(src);
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("writes(Db)") && e.to_string().contains("'f'")),
+        "an undeclared writes(Db) reached only through an interpolation hole must \
+         still fail public-fn verification: {errs:?}",
+    );
+}
+
+/// The same collector feeds `build_call_graph`, which the platform target
+/// gate walks — so the hole also hid a call from cross-target availability
+/// checking. The gate must fire whether the call sits in a hole or in a
+/// `let`, and it must name the same call chain either way. (`Display` is
+/// the resource the neighbouring gate tests use: `native` does not provide
+/// it, which is what makes the gate fire under the default target.)
+#[test]
+fn test_interpolation_hole_call_is_visible_to_the_target_gate() {
+    for body in [
+        "println(f\"{touch()}\")",
+        "let n = touch(); println(f\"{n}\")",
+    ] {
+        let errs = effectcheck_errors(&format!(
+            "effect resource Display;\n\
+             fn touch() -> i64 with writes(Display) {{ return 1 }}\n\
+             fn main() {{ {body} }}"
+        ));
+        assert!(
+            errs.iter().any(|e| {
+                let m = e.to_string();
+                m.contains("target `native` does not provide resource 'Display'")
+                    && m.contains("main → touch")
+            }),
+            "target gate must see the call in `{body}`: {errs:?}",
+        );
+    }
+}
+
+/// Position sweep — the hole is the boundary, not any particular syntactic
+/// slot. A bare `{expr}`, one carrying a format spec, several in one
+/// literal, a call nested inside a larger hole expression, a method call,
+/// and an f-string in return position all have to carry their callee's
+/// effects. `pos_return_string` is the starkest: before the fix a function
+/// whose entire effect content was one hole inferred NOTHING at all.
+#[test]
+fn test_interpolation_hole_effects_survive_every_hole_position() {
+    let prelude = "effect resource Db;\n\
+                   struct S { v: i64 }\n\
+                   impl S { fn get(ref self) -> i64 with writes(Db) { return self.v } }\n\
+                   fn touch() -> i64 with writes(Db) { return 1 }\n";
+    for body in [
+        "println(f\"{touch()}\")",
+        "let s = f\"{touch()}\"; println(s)",
+        "println(f\"{touch():04}\")",
+        "println(f\"{touch()} and {touch()}\")",
+        "println(f\"{touch() + 1}\")",
+        "let s = S { v: 1 }; println(f\"{s.get()}\")",
+        "return f\"{touch()}\"",
+    ] {
+        let ret = if body.starts_with("return") {
+            " -> String"
+        } else {
+            ""
+        };
+        let result = effectcheck_ok(&format!(
+            "{prelude}fn f(){ret} {{ {body} }}\nfn main() {{ f(); }}"
+        ));
+        assert!(
+            inferred_has(&result.inferred_effects["f"], EffectVerbKind::Writes, "Db"),
+            "writes(Db) must survive in `{body}`",
+        );
+    }
+}
+
+/// Sibling walker #2 — `modbind_synth`'s `walk_expr`, which records
+/// module-binding reads. Same leaf-list omission as `collect_calls_in_expr`,
+/// separately measured: both bodies are a tail-position read of the same
+/// `let mut` binding, and only the f-string differs.
+#[test]
+fn test_interpolation_hole_records_a_module_binding_read() {
+    for (label, sig, body) in [
+        ("plain", "-> i64", "COUNTER"),
+        ("hole", "-> String", "f\"{COUNTER}\""),
+    ] {
+        let result = effectcheck_ok(&format!(
+            "let mut COUNTER: i64 = 0;\n\
+             fn f() {sig} {{ {body} }}\n\
+             fn main() {{ println(f()) }}"
+        ));
+        assert!(
+            inferred_has(
+                &result.inferred_effects["f"],
+                EffectVerbKind::Reads,
+                "COUNTER_resource"
+            ),
+            "{label}: a module-binding read must be attributed inside a hole too",
+        );
+    }
+}
+
+/// Sibling walker #3 — `collect_par_blocks_in_block`, which gathers `par { }`
+/// blocks for the module-binding-write-in-par conflict check. A BARE `par`
+/// cannot be a hole's expression (it is `()`, and a hole needs `Display`, so
+/// the typechecker rejects it first), but a block expression CONTAINING one
+/// types fine and reaches here — and used to escape the check entirely.
+#[test]
+fn test_par_block_inside_an_interpolation_hole_is_still_conflict_checked() {
+    for (label, body) in [
+        ("plain", "let n = { par { COUNTER = 1; } 5 }; println(n)"),
+        ("hole", "println(f\"{ { par { COUNTER = 1; } 5 } }\")"),
+    ] {
+        let errors = effectcheck_errors(&format!(
+            "let mut COUNTER: i64 = 0;\n\
+             fn run() {{ {body} }}\n\
+             fn main() {{ run() }}"
+        ));
+        assert!(
+            has_par_conflict_for(&errors, "COUNTER"),
+            "{label}: par-block write conflict must be caught inside a hole too; got {:?}",
+            errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+        );
+    }
+}

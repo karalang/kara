@@ -1320,6 +1320,21 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
                 collect_par_in_expr(e, out);
             }
         }
+        // A `par { }` cannot be a hole's whole expression — it evaluates to
+        // `()` and a hole requires `Display`, so the typechecker rejects
+        // `f"{par { .. }}"` before this phase runs. It CAN sit inside one:
+        // `f"{ { par { COUNTER = 1; } 5 } }"` types fine, and while that
+        // block form was diagnosed normally the hole-wrapped twin escaped
+        // the par-conflict check entirely (B-2026-08-30-35). Third instance
+        // of the same leaf-list omission, alongside `collect_calls_in_expr`
+        // and `walk_expr`.
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts {
+                if let ParsedInterpolationPart::Expr(inner, _) = part {
+                    collect_par_in_expr(inner, out);
+                }
+            }
+        }
         // Leaves with no nested expressions.
         ExprKind::Identifier(_)
         | ExprKind::Path { .. }
@@ -1332,7 +1347,6 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
         | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
-        | ExprKind::InterpolatedStringLit(_)
         | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::Continue { .. }
@@ -1882,6 +1896,21 @@ impl<'a> ModBindingSynthWalker<'a> {
                 }
                 self.walk_block(body);
             }
+            // An f-string hole holds a real sub-expression, so a module
+            // binding named inside one is a genuine read of it. Measured:
+            // `fn f() -> i64 { COUNTER }` attributed `reads(COUNTER_resource)`
+            // while `fn f() -> String { f"{COUNTER}" }` — the same
+            // tail-position read of the same binding — attributed nothing
+            // (B-2026-08-30-35). Sibling of the identical omission in
+            // `collect_calls_in_expr`; both walkers had the literal in their
+            // leaf list.
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let ParsedInterpolationPart::Expr(inner, _) = part {
+                        self.walk_expr(inner);
+                    }
+                }
+            }
             // Leaves with no nested expressions.
             ExprKind::SelfValue
             | ExprKind::SelfType
@@ -1892,7 +1921,6 @@ impl<'a> ModBindingSynthWalker<'a> {
             | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
-            | ExprKind::InterpolatedStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }
