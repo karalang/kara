@@ -1980,6 +1980,19 @@ impl<'a> super::Interpreter<'a> {
                 ("ast", "expr") => return self.eval_ast_expr_builder(args, span),
                 ("ast", "item") => return self.eval_ast_item_builder(args, span),
                 ("compiler", "error") => return self.eval_compiler_error(args, span),
+                // B-2026-08-30-30 — `process.exit(code)` reaches the
+                // interpreter as a METHOD CALL on a pseudo-variable receiver,
+                // never as the `Path` its dispatch in `eval_call.rs` was keyed
+                // on, so it used to die on the unbound-`process` identifier
+                // with an "internal ... this is a compiler bug" diagnostic.
+                // Guarded on `process` not being a real binding, exactly as
+                // `codegen/method_call.rs` guards its own copy, so a user
+                // binding named `process` is never hijacked — without the
+                // guard the two backends would disagree on that program
+                // instead of on this one.
+                ("process", "exit") if self.env.get("process").is_none() => {
+                    return self.eval_process_exit(args)
+                }
                 ("gpu", "dispatch") => return self.eval_gpu_dispatch(args, span),
                 // B-2026-08-19-10 slice 1: whole-buffer reductions. The
                 // interpreter uses the SAME TREE ORDER as the shader, so this

@@ -34812,3 +34812,104 @@ fn test_check_project_still_passes_a_correct_package() {
     assert!(check.status.success(), "declared effects must pass: {all}");
     assert!(all.contains("All checks passed"), "{all}");
 }
+
+/// B-2026-08-30-31 (auto-par) and B-2026-08-30-30 (interpreter) — the two
+/// halves of making `process.exit(code)` behave the same everywhere.
+///
+/// `process.exit` is design.md § Stdio & Exit Control's escape hatch for
+/// terminating from deep in a call stack, and the canonical use is
+/// `println("fatal: …"); process.exit(1)`. Two separate defects made that
+/// unreliable:
+///
+///   * AUTO-PAR (-31). `process.exit` reaches the analyzer as a METHOD CALL on
+///     the `process` pseudo-receiver, not as a jump expression, so
+///     `concurrency::predicates::expr_exits` reported `false` and auto-par
+///     hoisted the statements around it into workers. With ANY statement after
+///     the exit, the process terminated before the console writes landed and
+///     the build printed NOTHING — while `KARAC_AUTO_PAR=0` printed correctly.
+///     Silent output loss, not a crash, and invisible to a test that only
+///     checks the exit code: that is why this asserts stdout AND status.
+///
+///   * INTERPRETER (-30). The interpreter's `process.exit` arm was keyed on
+///     `ExprKind::Path`, which this callee never is, so `--interp` died with an
+///     internal "this is a compiler bug" diagnostic on a program both compiled
+///     backends ran.
+///
+/// The `exit-last` row is the shape that always worked and must keep working —
+/// it is what makes the trigger "a statement FOLLOWS the exit" rather than
+/// "process.exit" in general, and without it a regression that simply stopped
+/// parallelizing anything would still pass.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
+    for (label, body, expected) in [
+        ("exit-last", "println(\"a\"); process.exit(3)", "a\n"),
+        (
+            "stmt-after-exit",
+            "println(\"a\"); process.exit(3); println(\"z\")",
+            "a\n",
+        ),
+        (
+            "two-writes-then-exit-then-stmt",
+            "println(\"a\"); println(\"b\"); process.exit(3); println(\"z\")",
+            "a\nb\n",
+        ),
+    ] {
+        let tmp = scratch_project("process-exit-autopar");
+        write(&tmp.join("kara.toml"), "[package]\nname = \"pexit\"\n");
+        write(
+            &tmp.join("src/main.kara"),
+            &format!("fn main() {{ {body} }}\n"),
+        );
+        let exe = tmp.join("pexit");
+
+        for auto_par in [true, false] {
+            let _ = std::fs::remove_file(&exe);
+            let cmd = karac_bin().current_dir(&tmp).arg("build");
+            let cmd = if auto_par {
+                cmd
+            } else {
+                cmd.env("KARAC_AUTO_PAR", "0")
+            };
+            let built = cmd.output().map(|o| o.status.success()).unwrap_or(false);
+            if !built || !exe.exists() {
+                eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+                continue;
+            }
+            let out = Command::new(&exe).output().unwrap();
+            let par = if auto_par { "1" } else { "0" };
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                expected,
+                "{label}: stdout under KARAC_AUTO_PAR={par}"
+            );
+            assert_eq!(
+                out.status.code(),
+                Some(3),
+                "{label}: exit status under KARAC_AUTO_PAR={par}"
+            );
+        }
+
+        // The interpreter half: same stdout, same status, no internal
+        // "this is a compiler bug" diagnostic.
+        let interp = karac_bin()
+            .current_dir(&tmp)
+            .arg("run")
+            .arg("--interp")
+            .arg("src/main.kara")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&interp.stdout),
+            expected,
+            "{label}: --interp stdout"
+        );
+        assert_eq!(interp.status.code(), Some(3), "{label}: --interp status");
+        let err = String::from_utf8_lossy(&interp.stderr);
+        assert!(
+            !err.contains("this is a compiler bug"),
+            "{label}: --interp reported an internal compiler bug: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

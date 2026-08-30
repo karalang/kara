@@ -51359,7 +51359,7 @@ fn main() {
 struct Res { tag: i64, buf: Vec[i64] }
 impl Drop for Res {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }
@@ -51419,7 +51419,7 @@ fn main() {
 struct Res { tag: i64, buf: Vec[i64] }
 impl Drop for Res {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }
@@ -51488,7 +51488,7 @@ fn main() {
 struct Full { name: String, buf: Vec[i64] }
 impl Drop for Full {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }
@@ -51564,7 +51564,7 @@ fn main() {
 struct Full { name: String, buf: Vec[i64] }
 impl Drop for Full {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }
@@ -51633,7 +51633,7 @@ fn main() {
 struct Full { name: String, buf: Vec[i64] }
 impl Drop for Full {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }
@@ -52616,7 +52616,7 @@ fn main() {
 struct Full { name: String, buf: Vec[i64] }
 impl Drop for Full {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }
@@ -53059,7 +53059,7 @@ fn main() {
 struct Res { tag: i64, buf: Vec[i64] }
 impl Drop for Res {
     fn drop(mut ref self) {
-        if self.buf[0] < 0i64 { println(self.buf[0]); }
+        if let Some(v) = self.buf.first() { if v < 0i64 { println(v); } }
         self.buf.clear();
     }
 }

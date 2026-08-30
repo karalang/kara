@@ -716,6 +716,12 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ),
     ),
     ("E0416", eff("NoEffectViolated", None)),
+    // B-2026-08-30-29 — `class: None` restates `class_for_effect_error_kind`,
+    // which leaves this kind deliberately unclassified: no published
+    // DiagnosticClass describes "a destructor that can panic", and the
+    // `code_table_class_matches_the_effect_and_ownership_classifiers` test
+    // holds the two in lockstep.
+    ("E0417", eff("DropBodyMayPanic", None)),
     (
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
@@ -2206,6 +2212,7 @@ mod tests {
             ("E0411", E::TargetGateViolation),
             ("E0413", E::ExternCUnwindRequiresPanics),
             ("E0416", E::NoEffectViolated),
+            ("E0417", E::DropBodyMayPanic),
             ("L0001", E::FfiLintHint),
             ("L0002", E::MutualRecursionNote),
             ("L0003", E::PureLoopInPar),

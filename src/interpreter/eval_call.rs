@@ -30,6 +30,37 @@ use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// `process.exit(code)` — design.md § Stdio & Exit Control. Raises
+    /// `ControlFlow::ExitUnwind`, which propagates through every pending
+    /// `defer` / `errdefer` on the way out, matching the spec's "controlled
+    /// stack unwind that runs all pending `defer`/`errdefer` blocks before
+    /// terminating".
+    ///
+    /// B-2026-08-30-30 — extracted so the TWO spellings the front end can hand
+    /// us share one implementation. The parser emits `process.exit(3)` as a
+    /// METHOD CALL with `process` as a pseudo-variable receiver, not as a
+    /// `Path`, so the path-keyed dispatch this was lifted out of never fired
+    /// and the program died on the `Identifier("process")` arm of
+    /// `eval_expr` with an "internal ... this is a compiler bug" diagnostic —
+    /// on an accepted program that both compiled backends ran correctly.
+    /// `codegen/method_call.rs` had already had to special-case the method
+    /// shape and its comment says so; this is the interpreter catching up
+    /// rather than a second, drifting copy.
+    pub(crate) fn eval_process_exit(&mut self, args: &[CallArg]) -> Value {
+        self.track_effect("panics");
+        let code = if let Some(arg) = args.first() {
+            match self.eval_expr_inner(&arg.value) {
+                Value::Int(v) => v as i32,
+                _ => 1,
+            }
+        } else {
+            0
+        };
+        // Run all pending defers via ExitUnwind propagation.
+        self.pending_cf = Some(ControlFlow::ExitUnwind { code });
+        Value::Unit
+    }
+
     pub(crate) fn eval_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Value {
         // Comptime `Type` reflection in the path-call form: `MyType.fields()`,
         // `MyType.name()`, … parse as `Call(Path([Type, method]))`. The
@@ -473,20 +504,7 @@ impl<'a> super::Interpreter<'a> {
         if let ExprKind::Path { segments, .. } = &callee.kind {
             let path_str = segments.join(".");
             match path_str.as_str() {
-                "process.exit" => {
-                    self.track_effect("panics");
-                    let code = if let Some(arg) = args.first() {
-                        match self.eval_expr_inner(&arg.value) {
-                            Value::Int(v) => v as i32,
-                            _ => 1,
-                        }
-                    } else {
-                        0
-                    };
-                    // Run all pending defers via ExitUnwind propagation
-                    self.pending_cf = Some(ControlFlow::ExitUnwind { code });
-                    return Value::Unit;
-                }
+                "process.exit" => return self.eval_process_exit(args),
                 "Atomic.new" => {
                     let val = if let Some(arg) = args.first() {
                         self.eval_expr_inner(&arg.value)

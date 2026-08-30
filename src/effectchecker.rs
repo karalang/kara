@@ -363,6 +363,12 @@ pub enum EffectErrorKind {
     /// either (that set is the `note[effect]` renderings).
     PureLoopInPar,
     /// An impl method's inferred effects exceed the trait method's declared ceiling.
+    /// An `impl Drop for T`'s `fn drop` body has `panics` in its INFERRED
+    /// effect set. design.md § Drop and Destructors ("Drop bodies must not
+    /// panic") makes this a definition-site rejection and says so explicitly:
+    /// "This is a static rule, not a runtime one -- there is no 'abort on
+    /// panic in drop' fallback to discover at runtime." B-2026-08-30-29.
+    DropBodyMayPanic,
     ImplExceedsTraitCeiling,
     /// A trait default method body's inferred effects exceed the method's declared ceiling.
     TraitDefaultExceedsCeiling,
@@ -534,6 +540,7 @@ pub(crate) fn class_for_effect_error_kind(
         | EffectErrorKind::EffectSubtypeViolation
         | EffectErrorKind::ProfileViolation
         | EffectErrorKind::ImplExceedsTraitCeiling
+        | EffectErrorKind::DropBodyMayPanic
         | EffectErrorKind::TraitDefaultExceedsCeiling
         | EffectErrorKind::EffectVariableConflict
         | EffectErrorKind::ProfileIncompatibleEffect
@@ -1902,6 +1909,7 @@ impl<'a> EffectChecker<'a> {
         self.verify_extern_export_no_suspends();
         self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();
+        self.verify_drop_bodies_are_panics_free();
         self.verify_trait_default_bodies();
         self.check_call_site_subtyping();
         self.check_with_e_unification();

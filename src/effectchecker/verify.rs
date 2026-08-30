@@ -665,6 +665,92 @@ impl<'a> super::EffectChecker<'a> {
         self.errors.extend(new_errors);
     }
 
+    /// B-2026-08-30-29 — enforce design.md § Drop and Destructors, "Drop bodies
+    /// must not panic": an `impl Drop for T`'s `fn drop` must be inferred
+    /// `panics`-free, and the impl is rejected at the DEFINITION SITE if it is
+    /// not.
+    ///
+    /// The spec is unusually explicit that this belongs here and nowhere else:
+    /// "This is a static rule, not a runtime one — there is no 'abort on panic
+    /// in drop' fallback to discover at runtime." The rationale it gives is
+    /// that destructors run during panic unwind, so a panic-during-unwind
+    /// becomes a double-panic process abort (§ Catching Panics) that destroys
+    /// the ORIGINAL failure's information — the checker exists to remove that
+    /// class of heisenbug rather than to report it after the fact.
+    ///
+    /// Deliberately keyed on the INFERRED set, not the declared one. `fn drop`
+    /// carries no `with` clause to declare effects on, so inference is the only
+    /// thing that knows the body indexes a `Vec`, overflows a `#[checked]` add,
+    /// or calls a `panics` function — which is exactly the enumeration the
+    /// spec sentence gives.
+    ///
+    /// Structural sibling of [`Self::verify_impl_trait_ceilings`], and placed
+    /// beside it on purpose: both walk `impl Trait for Type` blocks and compare
+    /// an impl method's inferred effects against a ceiling. Here the ceiling is
+    /// fixed by the language rather than by the trait's declaration.
+    pub(crate) fn verify_drop_bodies_are_panics_free(&mut self) {
+        let items: &[Item] = &self.program.items;
+        let mut new_errors: Vec<EffectError> = Vec::new();
+
+        for item in items {
+            let imp = match item {
+                Item::ImplBlock(imp) => imp,
+                _ => continue,
+            };
+            // `impl Drop for T` only — an inherent `fn drop` is an ordinary
+            // method the compiler never calls as a destructor, so the rule
+            // does not reach it.
+            let is_drop_impl = imp
+                .trait_name
+                .as_ref()
+                .and_then(|p| p.segments.last())
+                .is_some_and(|n| n == "Drop");
+            if !is_drop_impl {
+                continue;
+            }
+            let type_name = match &imp.target_type.kind {
+                TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                _ => continue,
+            };
+
+            for impl_item in &imp.items {
+                let method = match impl_item {
+                    ImplItem::Method(m) => m,
+                    ImplItem::AssocType(_) => continue,
+                };
+                if method.name != "drop" {
+                    continue;
+                }
+                let key = self.interner.dotted_str(&type_name, &method.name);
+                let inferred = match self.inferred_effects.get(&key) {
+                    Some(s) => s.clone(),
+                    None => continue,
+                };
+                if !inferred
+                    .effects
+                    .iter()
+                    .any(|te| matches!(te.effect.verb, EffectVerbKind::Panics))
+                {
+                    continue;
+                }
+                new_errors.push(EffectError {
+                    message: format!(
+                        "drop body for '{type_name}' can panic, but a `Drop` impl must be \
+                         `panics`-free — a destructor runs during panic unwind, where a \
+                         second panic aborts the process and destroys the original \
+                         failure's report; handle the failure in place instead \
+                         (`match fallible() {{ Ok(_) => {{}}, Err(e) => log(e) }}`)"
+                    ),
+                    span: method.span,
+                    kind: EffectErrorKind::DropBodyMayPanic,
+                    subtype_trace: None,
+                    replacement: None,
+                });
+            }
+        }
+        self.errors.extend(new_errors);
+    }
+
     /// For every trait method that has a default body, verify that the body's
     /// inferred effect set is a subset of the method's declared ceiling.
     ///

@@ -228,8 +228,37 @@ fn expr_exits(expr: &Expr, loop_jumps: bool) -> bool {
         ExprKind::Call { callee, args } => {
             expr_exits(callee, loop_jumps) || args.iter().any(|a| expr_exits(&a.value, loop_jumps))
         }
-        ExprKind::MethodCall { object, args, .. } => {
-            expr_exits(object, loop_jumps) || args.iter().any(|a| expr_exits(&a.value, loop_jumps))
+        // B-2026-08-30-31 — `process.exit(code)` IS AN EARLY EXIT, in exactly
+        // the sense this predicate means and for the same reason `?` is
+        // (B-2026-08-26-27, the arm above): control leaves the enclosing
+        // function and never comes back. It reaches us as a METHOD CALL on the
+        // `process` pseudo-receiver rather than as a jump expression, so the
+        // generic arm below — which only walks the receiver and the args —
+        // reported `false` and let auto-par hoist the statements around it
+        // into workers.
+        //
+        // The consequence was not a crash but SILENT OUTPUT LOSS: with any
+        // statement following the exit, `println("a"); process.exit(3); ..`
+        // terminated the process before the console writes landed, so an
+        // auto-par build printed NOTHING where `KARAC_AUTO_PAR=0` printed
+        // "a". Console writes are deliberately non-conflicting for auto-par,
+        // so nothing else in the analysis was going to order them against a
+        // process-terminating call.
+        //
+        // Guarded on `process` not being a real binding, matching the guards
+        // in `codegen/method_call.rs` and `interpreter/method_call.rs` — all
+        // three must agree on when the name means the pseudo-module, or a
+        // user binding called `process` would be analyzed as an exit here
+        // while the backends treat it as an ordinary method call.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            (method == "exit" && matches!(&object.kind, ExprKind::Identifier(n) if n == "process"))
+                || expr_exits(object, loop_jumps)
+                || args.iter().any(|a| expr_exits(&a.value, loop_jumps))
         }
         ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
             expr_exits(object, loop_jumps)

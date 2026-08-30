@@ -12081,3 +12081,111 @@ fn gamma(n: i64) -> i64 { let h = Holder { f: ping }; n }
         "`gamma` is joined by a value reference and must NOT be named as recursing"
     );
 }
+
+/// B-2026-08-30-29 — design.md § Drop and Destructors, "Drop bodies must not
+/// panic": an `impl Drop for T` whose `fn drop` is inferred to carry `panics`
+/// is rejected at the DEFINITION SITE (E0417).
+///
+/// The spec enumerates the shapes itself — "an index out of bounds, an integer
+/// overflow in `#[checked]` arithmetic, an explicit `panic!`, a call to a
+/// function whose effect set includes `panics`" — and all three testable ones
+/// are rows here. Before this landed, `karac check` printed "All checks
+/// passed." for every one of them.
+///
+/// `clean-body` and `inherent-drop` are the boundaries that must keep
+/// compiling: a destructor that only prints is exactly what the rule is meant
+/// to leave alone, and an INHERENT `fn drop` is an ordinary method the
+/// compiler never calls as a destructor, so the rule does not reach it.
+///
+/// NOT COVERED, deliberately and measurably: the same panicky expression
+/// written inside an f-string interpolation hole (`println(f"{v[3]}")`) is
+/// still accepted, because effects of expressions inside a hole are not
+/// attributed to the enclosing function at all — a general inference gap that
+/// drops a call's declared `writes(Resource)` just as readily as its `panics`.
+/// That is filed separately; the `index-in-interpolation-hole-NOT-caught` row
+/// pins the CURRENT behaviour so closing that gap flips this row loudly rather
+/// than silently widening this rule's reach.
+#[test]
+fn drop_body_that_can_panic_is_rejected_at_the_definition_site() {
+    for (label, source) in [
+        (
+            "explicit-panic",
+            "struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { panic(\"boom\") } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+        (
+            "calls-a-panicking-fn",
+            "fn boom() { panic(\"inner\") }\n\
+             struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { boom() } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+        (
+            "index-out-of-bounds",
+            "struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { let v: Vec[i64] = Vec.new(); let x = v[3]; println(f\"{x}\") } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+    ] {
+        let errors = effectcheck_errors(source);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, EffectErrorKind::DropBodyMayPanic)),
+            "{label}: expected a DropBodyMayPanic rejection, got {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The boundaries for [`drop_body_that_can_panic_is_rejected_at_the_definition_site`].
+/// Each of these compiled before the rule landed and must keep compiling.
+#[test]
+fn a_panic_free_drop_body_and_an_inherent_drop_are_left_alone() {
+    for (label, source) in [
+        (
+            "clean-body",
+            "struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\") } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+        (
+            // An INHERENT `fn drop` is never invoked as a destructor, so the
+            // rule must not reach it even though the name matches.
+            "inherent-drop",
+            "struct S { id: i64 }\n\
+             impl S { fn drop(mut ref self) { panic(\"boom\") } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+        (
+            // Pins the interpolation-hole gap as it stands today — see the
+            // doc comment above. When that gap closes this row FAILS, which
+            // is the intent: it is a reminder to move the shape into the
+            // rejected table, not a claim that accepting it is correct.
+            "index-in-interpolation-hole-NOT-caught",
+            "struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { let v: Vec[i64] = Vec.new(); println(f\"{v[3]}\") } }\n\
+             fn main() { let s = S { id: 1 }; println(\"x\") }\n",
+        ),
+    ] {
+        // `effectcheck_ok` asserts the program produces NO non-note effect
+        // errors at all, which is the boundary claim in its strongest form:
+        // not merely "no E0417" but "this still compiles clean". It panics
+        // with the offending diagnostics if that stops being true, so the
+        // `label` is carried in a wrapper assertion for legibility.
+        let parsed = parse(source);
+        assert!(parsed.errors.is_empty(), "{label}: unexpected parse errors");
+        let result = effectcheck(&parsed.program);
+        let offending: Vec<_> = result
+            .errors
+            .iter()
+            .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
+            .map(|e| format!("{:?}: {}", e.kind, e.message))
+            .collect();
+        assert!(
+            offending.is_empty(),
+            "{label}: must still compile clean, got {offending:?}"
+        );
+    }
+}
