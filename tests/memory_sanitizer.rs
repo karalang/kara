@@ -63196,6 +63196,67 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-19 — the ASAN half of the read-only-arm borrow fix, and the
+    /// half that catches the ACTUAL defect. The E2E twin asserts output, which
+    /// a use-after-free only fails when the freed block happens to have been
+    /// reused; ASAN fails on the read itself, deterministically.
+    ///
+    /// Pre-fix this is a genuine invalid read: valgrind reported "Invalid read
+    /// of size 2 ... 0 bytes inside a block of size 5 free'd" — the `String`
+    /// buffer of the struct payload, freed by the first arm and read by the
+    /// second. The program still printed and exited 0, which is why it needed a
+    /// sanitizer to be seen at all.
+    ///
+    /// Also covers the other direction: the fix makes these arms BORROWS, so
+    /// the source keeps its payload and something else must free it. A borrow
+    /// that dropped the owner would leak instead, and LeakSanitizer on the
+    /// Linux CI leg fails on that.
+    ///
+    /// E2E twin: `tests/codegen.rs::e2e_optres_struct_payload_read_only_arm_does_not_take_the_payload`.
+    #[test]
+    fn asan_optres_struct_payload_read_only_arm_is_a_borrow() {
+        assert_clean_asan_run(
+            r#"
+struct Sstr { s: String }
+struct Svec { v: Vec[i64] }
+struct Sint { n: i64 }
+struct Inner { s: String }
+struct Outer { i: Inner }
+shared struct Shr { w: String }
+fn main() {
+    let a: Option[Sstr] = Some(Sstr { s: f"alpha" });
+    match a { Some(p) => { println(p.s); } None => {} }
+    match a { Some(q) => println(q.s), None => println("no-a") }
+
+    let b: Option[Svec] = Some(Svec { v: [11, 22, 33] });
+    match b { Some(p) => { println(p.v[0]); } None => {} }
+    match b { Some(q) => println(q.v[2]), None => println("no-b") }
+
+    let c: Option[Outer] = Some(Outer { i: Inner { s: f"nested" } });
+    match c { Some(p) => { println(p.i.s); } None => {} }
+    match c { Some(q) => println(q.i.s), None => println("no-c") }
+
+    let d: Result[Sstr, i64] = Ok(Sstr { s: f"okstr" });
+    match d { Ok(p) => { println(p.s); } Err(_) => {} }
+    match d { Ok(q) => println(q.s), Err(_) => println("no-d") }
+
+    let e: Option[Sint] = Some(Sint { n: 42 });
+    match e { Some(p) => { println(p.n); } None => {} }
+    match e { Some(q) => println(q.n), None => println("no-e") }
+
+    let g: Option[Shr] = Some(Shr { w: f"shared" });
+    match g { Some(p) => { println(p.w); } None => {} }
+    match g { Some(q) => println(q.w), None => println("no-g") }
+}
+"#,
+            &[
+                "alpha", "alpha", "11", "33", "nested", "nested", "okstr", "okstr", "42", "42",
+                "shared", "shared",
+            ],
+            "optres struct payload read-only arm is a borrow",
+        );
+    }
+
     /// B-2026-08-29-66 under ASAN/LSan — the memory half of the auto-par
     /// branch-publish handshake, which the ordering assertions in
     /// `tests/par_codegen.rs` can only see indirectly (a garbage id printed

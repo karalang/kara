@@ -2231,8 +2231,99 @@ impl<'ctx> super::Codegen<'ctx> {
                         .pattern_state
                         .pattern_binding_types
                         .get(&(p.span.offset, p.span.length))
-                        .is_some_and(|t| t == "String" || t == "Vec")
+                        .is_some_and(|t| {
+                            t == "String" || t == "Vec" || self.named_struct_owns_heap(t, 8)
+                        })
             })
+    }
+
+    /// Does the user struct `name` own heap, transitively through its fields?
+    ///
+    /// B-2026-08-30-19 — the classification above admitted only a DIRECT
+    /// `{ptr,len,cap}` payload, so `Option[S]` where `S` merely CONTAINS a
+    /// `String` was not a borrow: the read-only arm took the payload, the source
+    /// was left dangling, and a second read was a use-after-free that printed
+    /// garbage on the JIT and both AOT legs while `--interp` was correct. The
+    /// same struct inside a USER enum variant was already right, so this is the
+    /// built-in `Option`/`Result` channel specifically.
+    ///
+    /// TRANSITIVE, not one hop: `Outer { i: Inner { s: String } }` fails exactly
+    /// the same way and a one-hop check would still miss it.
+    ///
+    /// A struct with no heap below it stays out, which keeps
+    /// `Option[S { n: i64 }]` on the path it already takes correctly — the
+    /// change is confined to the shapes that are broken today.
+    ///
+    /// `fuel` bounds a cycle: `struct A { b: Option[B] }` /
+    /// `struct B { a: Option[A] }` is representable, and running out answers
+    /// "owns heap", the conservative direction (a borrow, so the source keeps
+    /// its payload — the failure mode of being wrong here is a missed
+    /// optimization, not a dangling read).
+    fn named_struct_owns_heap(&self, name: &str, fuel: u32) -> bool {
+        if fuel == 0 {
+            return true;
+        }
+        // A `shared struct` is NOT admitted. Its payload is an RC box, a
+        // different ownership regime from the value payloads B-2026-08-08-25's
+        // borrow model is about: a field read off one is DEEP-CLONED
+        // (B-2026-08-13-6) precisely because the box may have other handles, so
+        // classifying the arm as a borrow drops an owner the RC path still
+        // expects. Measured: admitting them turned
+        // `asan_shared_struct_heap_field_read_cloned_not_aliased` — whose
+        // program matches an `Option[Inner]` over a `shared struct Inner` — into
+        // an ASAN memory error, while every value-struct shape stayed correct.
+        if self.type_decls.shared_type_decl_names.contains(name)
+            || self.type_decls.shared_type_names.contains(name)
+        {
+            return false;
+        }
+        let Some(ftes) = self.type_decls.struct_field_type_exprs.get(name) else {
+            return false;
+        };
+        ftes.iter()
+            .any(|fte| self.field_te_owns_heap(fte, fuel - 1))
+    }
+
+    /// The field-type half of [`Self::named_struct_owns_heap`]. A scalar owns
+    /// nothing; a known struct recurses; everything else (`String`, `Vec`,
+    /// `Map`, an enum, an unresolved name) counts as owning, matching
+    /// `te_owns_heap_below_buffer`'s conservative default.
+    fn field_te_owns_heap(&self, te: &crate::ast::TypeExpr, fuel: u32) -> bool {
+        match &te.kind {
+            crate::ast::TypeKind::Tuple(elems) => {
+                elems.iter().any(|e| self.field_te_owns_heap(e, fuel))
+            }
+            crate::ast::TypeKind::Path(p) => {
+                let head = p.segments.last().map(String::as_str).unwrap_or("");
+                if matches!(
+                    head,
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "i128"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "u128"
+                        | "usize"
+                        | "isize"
+                        | "f16"
+                        | "bf16"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                ) {
+                    return false;
+                }
+                if self.type_decls.struct_field_type_exprs.contains_key(head) {
+                    return self.named_struct_owns_heap(head, fuel);
+                }
+                true
+            }
+            _ => true,
+        }
     }
 
     /// The resolved `Option[P]` / `Result[O, E]` instantiation of a bare-local

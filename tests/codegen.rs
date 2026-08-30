@@ -118200,55 +118200,96 @@ fn main() {{
         }
     }
 
-    /// B-2026-08-30-34 — the compiled twin of the u64->float conversion
-    /// fixture, and a PARITY PIN rather than a regression test: codegen was
-    /// never wrong here. `uitofp` carries the source's signedness in the
-    /// instruction, so every one of these was already correct while the
-    /// interpreter answered -1 for ten different routes into a float slot.
+    /// B-2026-08-30-19 — A READ-ONLY `match` ARM OVER AN `Option`/`Result`
+    /// WHOSE STRUCT PAYLOAD CARRIES HEAP TOOK THE PAYLOAD, so a later read of
+    /// the source was a USE-AFTER-FREE.
     ///
-    /// It is pinned because the interpreter fix reaches the same answers by a
-    /// different mechanism — reading the recorded type at each site to
-    /// reinterpret a signed `i128` carrier — so the two agree by construction
-    /// only as long as both keep doing so. If either drifts, this and its
-    /// interpreter twin move apart and both fail.
+    /// B-2026-08-08-25 made such an arm a BORROW so the source keeps its
+    /// payload, but its classification admitted only a DIRECT `{ptr,len,cap}`
+    /// payload — `pattern_binds_direct_inline_heap_payload` required the bound
+    /// type to be `String` or `Vec`. A struct that merely CONTAINS one was not
+    /// admitted, so the arm still took it and the second read ran off a freed
+    /// block: `hello` then garbage on the JIT and both AOT legs, while
+    /// `--interp` was correct — the run-vs-build signature. Silent, not a
+    /// crash: the program printed and exited 0.
     ///
-    /// Twin: `tests/interpreter.rs::u64_above_2_63_converts_to_every_float_type_as_unsigned`.
+    /// The five shapes here are the measured boundary. The first four were
+    /// BROKEN and each failed differently, which is why all four are pinned
+    /// rather than one standing in for the rest:
+    ///
+    ///   `Option[S { s: String }]`   valgrind "invalid read of size 2", garbage
+    ///   `Option[S { v: Vec[i64] }]` invalid read — but ONLY through `v[i]`;
+    ///                               `v.len()` reads a length field that
+    ///                               survives the free and looks correct
+    ///   `Option[Outer{Inner{..}}]`  the same failure one hop further down, so
+    ///                               a one-hop fix would still miss it
+    ///   `Result[S { s: String }]`   valgrind-CLEAN and prints empty — the
+    ///                               payload is moved out and zeroed rather
+    ///                               than freed-then-read, so a fix verified
+    ///                               only against the `Option` leg would look
+    ///                               done while this stayed broken
+    ///
+    /// The last two are CONTROLS, and both were already correct:
+    ///
+    ///   `Option[S { n: i64 }]`      the fix admits a struct only when it
+    ///                               transitively owns heap, so a change that
+    ///                               admitted every struct would still pass the
+    ///                               four above while moving this one off the
+    ///                               path it takes correctly today
+    ///   `Option[shared struct]`     a `shared struct` payload is an RC box, a
+    ///                               different ownership regime — its field read
+    ///                               is deep-cloned (B-2026-08-13-6) because the
+    ///                               box may have other handles. Admitting it as
+    ///                               a borrow drops an owner the RC path still
+    ///                               expects, which is not hypothetical: the
+    ///                               first version of this fix did exactly that
+    ///                               and turned
+    ///                               `asan_shared_struct_heap_field_read_cloned_not_aliased`
+    ///                               into an ASAN memory error while every
+    ///                               value-struct shape stayed correct.
+    ///
+    /// ASAN twin: `tests/memory_sanitizer.rs::asan_optres_struct_payload_read_only_arm_is_a_borrow`.
     #[test]
-    fn e2e_u64_above_2_63_converts_to_float_as_unsigned() {
+    fn e2e_optres_struct_payload_read_only_arm_does_not_take_the_payload() {
         if let Some(out) = run_program(
             r#"
-fn tailf(v: u64) -> f64 { v }
-fn retf(v: u64) -> f64 { return v; }
-fn takef(x: f64) -> f64 { x }
-struct S { f: f64 }
-impl S { fn setm(mut ref self, x: f64) -> f64 { self.f = x; self.f } }
+struct Sstr { s: String }
+struct Svec { v: Vec[i64] }
+struct Sint { n: i64 }
+struct Inner { s: String }
+struct Outer { i: Inner }
+shared struct Shr { w: String }
 fn main() {
-    let n = env.args().len() as i64;
-    let zero: i64 = n - 1;
-    let mx: u64 = (18446744073709551615u64 + (zero as u64));
-    let hi: u64 = (9223372036854775808u64 + (zero as u64));
-    let lo: u64 = (9223372036854775807u64 + (zero as u64));
-    println(f"cast {(mx as f64)} {(hi as f64)} {(lo as f64)}");
-    println(f"f32  {(mx as f32)} {(hi as f32)}");
-    println(f"half {(mx as f16)} {(mx as bf16)}");
-    println(f"meth {mx.to_f64()} {mx.to_f32()}");
-    let slot: f64 = mx;
-    println(f"slot {slot}");
-    println(f"call {takef(mx)} {tailf(mx)} {retf(mx)}");
-    let mut s: S = S { f: mx };
-    println(f"fldi {s.f}");
-    s.f = hi;
-    println(f"flda {s.f} {s.setm(mx)}");
-    let w: u128 = (mx as u128);
-    println(f"u128 {w} {(w as f64)}");
-    let mut vf: Vec[f64] = [];
-    vf.push(mx);
-    println(f"push {vf[0]}");
-    println(f"ints {mx} {(mx as i64)} {(mx as u32)} {(mx / 3u64)}");
+    let a: Option[Sstr] = Some(Sstr { s: f"alpha" });
+    match a { Some(p) => { println(p.s); } None => {} }
+    match a { Some(q) => println(q.s), None => println("no-a") }
+
+    let b: Option[Svec] = Some(Svec { v: [11, 22, 33] });
+    match b { Some(p) => { println(p.v[0]); } None => {} }
+    match b { Some(q) => println(q.v[2]), None => println("no-b") }
+
+    let c: Option[Outer] = Some(Outer { i: Inner { s: f"nested" } });
+    match c { Some(p) => { println(p.i.s); } None => {} }
+    match c { Some(q) => println(q.i.s), None => println("no-c") }
+
+    let d: Result[Sstr, i64] = Ok(Sstr { s: f"okstr" });
+    match d { Ok(p) => { println(p.s); } Err(_) => {} }
+    match d { Ok(q) => println(q.s), Err(_) => println("no-d") }
+
+    let e: Option[Sint] = Some(Sint { n: 42 });
+    match e { Some(p) => { println(p.n); } None => {} }
+    match e { Some(q) => println(q.n), None => println("no-e") }
+
+    let g: Option[Shr] = Some(Shr { w: f"shared" });
+    match g { Some(p) => { println(p.w); } None => {} }
+    match g { Some(q) => println(q.w), None => println("no-g") }
 }
 "#,
         ) {
-            assert_eq!(out, "cast 18446744073709552000 9223372036854776000 9223372036854776000\nf32  18446744073709552000 9223372036854776000\nhalf inf 18446744073709552000\nmeth 18446744073709552000 18446744073709552000\nslot 18446744073709552000\ncall 18446744073709552000 18446744073709552000 18446744073709552000\nfldi 18446744073709552000\nflda 9223372036854776000 18446744073709552000\nu128 18446744073709551615 18446744073709552000\npush 18446744073709552000\nints 18446744073709551615 -1 4294967295 6148914691236517205\n");
+            assert_eq!(
+                out,
+                "alpha\nalpha\n11\n33\nnested\nnested\nokstr\nokstr\n42\n42\nshared\nshared\n"
+            );
         }
     }
 
