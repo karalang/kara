@@ -3822,6 +3822,42 @@ impl<'ctx> super::Codegen<'ctx> {
         if agg_ty == self.vec_struct_type() || self.current_fn.is_none() {
             return;
         }
+        // B-2026-08-30-38 — an argument spelled as a value-position WRAPPER
+        // (`one(if c { mk(1) } else { mk(2) })`, its `match` spelling, a bare
+        // block `one({ let t = mk(5); t })`) names the CONSTRUCT, and every arm
+        // below matches a PRODUCER shape (`Call`, `StructLiteral`, `Path`). So
+        // none of them claimed it, no temp was registered, and the value's user
+        // `Drop` body never ran on any backend. The memory was still freed, so
+        // this leaked no bytes and no A/B gate could see it — only the body was
+        // lost, which at the language level is a lock never released.
+        //
+        // Redirect to a representative tail rather than adding wrapper arms:
+        // the merged value came from exactly one tail, and
+        // `expr_is_fresh_owned_branch_tail` (B-2026-08-29-27) admits the
+        // construct only when EVERY tail mints a fresh owned temp, so the tails
+        // agree on both the type and on who owns the value. `val` stays the
+        // merged value — it is what actually has to be dropped.
+        //
+        // A MIXED construct (`one(if c { g } else { mk(2) })`, one tail handing
+        // out a binding) is declined by that predicate, and the decline is
+        // load-bearing rather than merely conservative: the binding keeps its
+        // own drop, so claiming the merged value here would run one body TWICE.
+        // The measured cost of declining is that the fresh tail's body is still
+        // lost when the other tail is the one that names a binding — filed
+        // separately rather than papered over, since closing it needs a
+        // per-branch drop flag, not a wider predicate.
+        if let Some(tail) = self.fresh_owned_branch_tail_repr(arg) {
+            let tail = tail.clone();
+            self.track_inline_owned_aggregate_arg_inst(
+                val,
+                &tail,
+                arg_escapes_frame,
+                mono_inst,
+                callee_entry_copies_mono,
+                escaping_paths,
+            );
+            return;
+        }
         let cur_fn = self.current_fn.unwrap();
         // Fresh enum-variant temp shapes: `E.V(args)` / bare-ctor `V(args)`
         // (Call), unit variant `E.V` (Path), and struct variant `E.V { .. }`

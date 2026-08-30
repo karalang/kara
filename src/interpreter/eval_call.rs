@@ -3114,48 +3114,15 @@ impl<'a> super::Interpreter<'a> {
                 }
                 continue;
             }
-            let type_name: Option<String> = match &arg.value.kind {
-                ExprKind::StructLiteral { path, .. } => {
-                    let n = path.last().cloned();
-                    // A SHARED struct literal builds a refcounted value —
-                    // its drop belongs to the rc machinery.
-                    n.filter(|n| {
-                        self.find_struct_def(n)
-                            .is_some_and(|d| !d.is_shared && !d.is_par)
-                    })
-                }
-                ExprKind::Call { callee, .. } => match &callee.kind {
-                    ExprKind::Identifier(v) => self.find_enum_for_variant(v).or_else(|| {
-                        // Fn-call-RETURNED Drop temp (B-2026-07-01-7):
-                        // `consume(make())` — resolve the producing fn's
-                        // declared return-type head. Shared types are
-                        // filtered by the drop_method_keys + struct gate in
-                        // the caller below plus the SharedStruct value shape
-                        // (run_user_drop_body_on_value binds whatever value
-                        // arrived; the drop_method_keys gate is the
-                        // authoritative filter).
-                        self.user_fn_return_type_name(v)
-                    }),
-                    ExprKind::Path { segments, .. } if segments.len() == 2 => self
-                        .qualified_enum_variant_is_unit(&segments[0], &segments[1])
-                        .map(|_| segments[0].clone()),
-                    _ => None,
-                },
-                // Unit variant in path form (`consume(Sig.B)`).
-                ExprKind::Path { segments, .. } if segments.len() == 2 => self
-                    .qualified_enum_variant_is_unit(&segments[0], &segments[1])
-                    .map(|_| segments[0].clone()),
-                // Bare unit variant (`consume(B)` where B is a variant).
-                //
-                // B-2026-08-28-43 — via `fresh_bare_unit_variant_enum`, not a
-                // bare `env.get(v).is_none()`. That test excluded this shape
-                // entirely: the item pass seeds every unit variant into the
-                // outermost scope as a constant, so `env.get("B")` answers
-                // `Some` for the VARIANT exactly as it does for a local, and
-                // `consume(B)` ran no body while `consume(E.B)` ran one.
-                ExprKind::Identifier(v) => self.fresh_bare_unit_variant_enum(v),
-                _ => None,
-            };
+            // B-2026-08-30-38 — a WRAPPER argument (`one(if c { mk(1) } else
+            // { mk(2) })`, the `match` spelling, a bare block) resolves through
+            // its TAILS. `fresh_temp_arg_type_name` names PRODUCER shapes only,
+            // and a wrapper is none of them, so this walk claimed nothing and
+            // the value's user `Drop` body never ran. Codegen twin: the redirect
+            // at the head of `track_inline_owned_aggregate_arg_inst`.
+            let type_name: Option<String> = self
+                .fresh_temp_arg_type_name(&arg.value)
+                .or_else(|| self.wrapper_tail_arg_type_name(&arg.value));
             let Some(tn) = type_name else { continue };
             let Some(v) = arg_vals.get(i) else { continue };
             // B-2026-08-01-13 (c1/c5) — a fresh USER-enum arg's payload
@@ -3218,6 +3185,162 @@ impl<'a> super::Interpreter<'a> {
                 self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
         }
+    }
+
+    /// The user-type name of a fresh-temp CALL ARGUMENT, or `None` when the
+    /// argument is not a producer this walk owns the drop for.
+    ///
+    /// Extracted verbatim from `run_fresh_temp_arg_drops`'s inline match
+    /// (B-2026-08-30-38) so [`Self::wrapper_tail_arg_type_name`] can ask the
+    /// same question of a wrapper's tails. Behaviour is unchanged; the shapes
+    /// and their reasons are the ones each row below recorded.
+    fn fresh_temp_arg_type_name(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::StructLiteral { path, .. } => {
+                let n = path.last().cloned();
+                // A SHARED struct literal builds a refcounted value —
+                // its drop belongs to the rc machinery.
+                n.filter(|n| {
+                    self.find_struct_def(n)
+                        .is_some_and(|d| !d.is_shared && !d.is_par)
+                })
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(v) => self.find_enum_for_variant(v).or_else(|| {
+                    // Fn-call-RETURNED Drop temp (B-2026-07-01-7):
+                    // `consume(make())` — resolve the producing fn's
+                    // declared return-type head. Shared types are
+                    // filtered by the drop_method_keys + struct gate in
+                    // the caller plus the SharedStruct value shape
+                    // (run_user_drop_body_on_value binds whatever value
+                    // arrived; the drop_method_keys gate is the
+                    // authoritative filter).
+                    self.user_fn_return_type_name(v)
+                }),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                    .qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                    .map(|_| segments[0].clone()),
+                _ => None,
+            },
+            // Unit variant in path form (`consume(Sig.B)`).
+            ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                .qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                .map(|_| segments[0].clone()),
+            // Bare unit variant (`consume(B)` where B is a variant).
+            //
+            // B-2026-08-28-43 — via `fresh_bare_unit_variant_enum`, not a
+            // bare `env.get(v).is_none()`. That test excluded this shape
+            // entirely: the item pass seeds every unit variant into the
+            // outermost scope as a constant, so `env.get("B")` answers
+            // `Some` for the VARIANT exactly as it does for a local, and
+            // `consume(B)` ran no body while `consume(E.B)` ran one.
+            ExprKind::Identifier(v) => self.fresh_bare_unit_variant_enum(v),
+            _ => None,
+        }
+    }
+
+    /// B-2026-08-30-38 — [`Self::fresh_temp_arg_type_name`] reached through a
+    /// value-position WRAPPER: `if` / `match` / a bare block (and the `Seq`,
+    /// `Unsafe`, `LabeledBlock` spellings of the last). The construct's value
+    /// comes from exactly one tail, so its type — and who owns it — is the
+    /// tails' answer, not the construct's.
+    ///
+    /// FAIL-CLOSED on every tail, and the closure is what keeps this sound
+    /// rather than merely conservative. A tail naming an OUTER binding
+    /// (`one(if c { g } else { mk(2) })`) leaves that binding's own name-keyed
+    /// drop armed, so claiming the merged value here would run one body TWICE.
+    /// Requiring every tail to resolve — and to the SAME type — declines that
+    /// shape, at the measured cost of still losing the fresh tail's body when
+    /// the taken branch is the fresh one. Closing that needs a per-branch drop
+    /// flag rather than a wider predicate, so it is filed on its own.
+    ///
+    /// Codegen twin: `expr_is_fresh_owned_branch_tail_local` +
+    /// `fresh_owned_branch_tail_repr`, which share the all-tails rule and the
+    /// block-local exception below.
+    fn wrapper_tail_arg_type_name(&self, e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => {
+                let tail = b.final_expr.as_deref()?;
+                self.tail_arg_type_name(tail).or_else(|| {
+                    // A binding the block declares ITSELF (`one({ let t =
+                    // mk(5); t })`) has no reader after the tail: the block ends
+                    // there and the move disarms the local's own drop, so the
+                    // value reaches the call owned by nobody. That is the
+                    // opposite of an OUTER binding tail, which is why this
+                    // exception is safe where the general decline is required.
+                    self.block_local_binding_tail_rhs(b, tail)
+                        .and_then(|rhs| self.tail_arg_type_name(rhs))
+                })
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let then_ty = self.tail_arg_type_name(then_block.final_expr.as_deref()?)?;
+                let else_ty = self.tail_arg_type_name(else_branch.as_deref()?)?;
+                (then_ty == else_ty).then_some(then_ty)
+            }
+            ExprKind::Match { arms, .. } => {
+                let mut it = arms.iter();
+                let first = self.tail_arg_type_name(&it.next()?.body)?;
+                for a in it {
+                    if self.tail_arg_type_name(&a.body)? != first {
+                        return None;
+                    }
+                }
+                Some(first)
+            }
+            _ => None,
+        }
+    }
+
+    /// One tail's worth of [`Self::wrapper_tail_arg_type_name`], recursing
+    /// through nested wrappers so an arm-wrapped block and an `else if` chain
+    /// resolve like the shapes that spell them flat.
+    fn tail_arg_type_name(&self, e: &Expr) -> Option<String> {
+        self.fresh_temp_arg_type_name(e)
+            .or_else(|| self.wrapper_tail_arg_type_name(e))
+    }
+
+    /// The `let` RHS that produced a block's identifier TAIL, when the block
+    /// itself declares that identifier (B-2026-08-30-38). `None` when the tail
+    /// is not an identifier, when the block does not bind it (an outer binding,
+    /// which keeps its own drop), or when it arrives through a shape with no
+    /// single producer to name — a destructuring pattern or a `LetUninit`.
+    ///
+    /// The LAST binding `let` wins: an earlier one is shadowed, so taking the
+    /// first would classify `{ let t = mk(1); let t = outer; t }` on an RHS
+    /// that no longer produces the tail's value. Codegen twin of the same name.
+    fn block_local_binding_tail_rhs<'e>(
+        &self,
+        b: &'e crate::ast::Block,
+        tail: &Expr,
+    ) -> Option<&'e Expr> {
+        let ExprKind::Identifier(name) = &tail.kind else {
+            return None;
+        };
+        let mut rhs: Option<&Expr> = None;
+        for st in &b.stmts {
+            match &st.kind {
+                crate::ast::StmtKind::Let { pattern, value, .. } => match &pattern.kind {
+                    crate::ast::PatternKind::Binding(bn) if bn == name => rhs = Some(value),
+                    _ if pattern.binding_names().iter().any(|n| n == name) => return None,
+                    _ => {}
+                },
+                crate::ast::StmtKind::LetElse { pattern, .. }
+                    if pattern.binding_names().iter().any(|n| n == name) =>
+                {
+                    return None
+                }
+                crate::ast::StmtKind::LetUninit { name: n, .. } if n == name => return None,
+                _ => {}
+            }
+        }
+        rhs
     }
 
     /// B-2026-07-11-26 (interp parity with the codegen

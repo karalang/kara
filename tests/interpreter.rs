@@ -35021,6 +35021,115 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
             "in-s\ndR2\ndR1\nin-s\ndR4\ndR3\nv=14\n",
         ),
         (
+            "wrapper-arg-struct-literal-tail",
+            format!(
+                "{HDR}fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let v = one(if true {{ R {{ id: 1 }} }} else {{ R {{ id: 2 }} }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            "in-one\ndR1\nv=1\n",
+        ),
+        (
+            "wrapper-arg-method-receiver",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 struct H {{ n: i64 }}\n\
+                 impl H {{ fn take(mut ref self, r: R) -> i64 {{ println(\"in-take\"); r.id }} }}\n\
+                 fn main() {{\n\
+                 \x20   let mut h = H {{ n: 0 }};\n\
+                 \x20   let v = h.take(if true {{ mk(10) }} else {{ mk(11) }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            "in-take\ndR10\nv=10\n",
+        ),
+        (
+            "wrapper-arg-two-args-reverse-order",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn two(a: R, b: R) -> i64 {{ println(\"in-two\"); a.id + b.id }}\n\
+                 fn main() {{\n\
+                 \x20   let v = two(if true {{ mk(1) }} else {{ mk(2) }}, if true {{ mk(3) }} else {{ mk(4) }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            // Both temps expire when the call returns, so program order of
+            // introduction decides: they pop right to left (B-2026-08-29-46).
+            "in-two\ndR3\ndR1\nv=4\n",
+        ),
+        (
+            "wrapper-arg-enum-payload-tail",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 enum E {{ V(R), U }}\n\
+                 fn takee(e: E) -> i64 {{ println(\"in-takee\"); match e {{ E.V(r) => r.id, E.U => 0 }} }}\n\
+                 fn main() {{\n\
+                 \x20   let v = takee(if true {{ E.V(mk(30)) }} else {{ E.U }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            "in-takee\ndR30\nv=30\n",
+        ),
+        (
+            "wrapper-arg-drop-bearing-field",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 struct W {{ r: R, n: i64 }}\n\
+                 fn takew(w: W) -> i64 {{ println(\"in-takew\"); w.n }}\n\
+                 fn main() {{\n\
+                 \x20   let v = takew(if true {{ W {{ r: mk(50), n: 5 }} }} else {{ W {{ r: mk(51), n: 6 }} }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            "in-takew\ndR50\nv=5\n",
+        ),
+        (
+            "wrapper-arg-shared-tail-stays-with-rc",
+            format!(
+                "{HDR}shared struct S {{ id: i64 }}\n\
+                 fn takes(s: S) -> i64 {{ println(\"in-takes\"); s.id }}\n\
+                 fn main() {{\n\
+                 \x20   let v = takes(if true {{ S {{ id: 40 }} }} else {{ S {{ id: 41 }} }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            // A `shared` tail is refcounted; the rc machinery owns its release,
+            // so the argument walk must NOT claim it.
+            "in-takes\nv=40\n",
+        ),
+        (
+            "wrapper-arg-block-local-shadowed-binding",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let v = one({{ let t = mk(90); let t = mk(91); t }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            // The LAST binding produces the tail; taking the first would
+            // classify on an RHS that no longer yields the handed-out value.
+            // (`mk(90)`'s own body is a separate shadowing gap, not this row.)
+            "in-one\ndR91\nv=91\n",
+        ),
+        (
+            "wrapper-arg-passthrough-callee-still-defers",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn pass(r: R) -> R {{ r }}\n\
+                 fn main() {{\n\
+                 \x20   let v = pass(if true {{ mk(60) }} else {{ mk(61) }});\n\
+                 \x20   println(f\"v={{v.id}}\");\n\
+                 }}\n"
+            ),
+            // The wrapper redirect must not defeat the passthrough guard: the
+            // value travels out of the call, so the RESULT's owner runs the
+            // body, once, at its own last use.
+            "v=60\ndR60\n",
+        ),
+        (
             "deep-nest-inner-call-drains-first",
             format!(
                 "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
@@ -35035,15 +35144,16 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
     ] {
         assert_eq!(run(&src), want, "case {label}");
     }
-    // PINNED AT THE DEFECT — the interpreter half of a neighbouring bug this
-    // fix does NOT close, so the pair records it on both sides rather than one
-    // backend's half. An argument that is a CONTROL-FLOW or BLOCK expression
-    // rather than a direct call/literal loses its `Drop` body ENTIRELY, on this
-    // backend as much as on the compiled ones — which is what makes it a
+    // B-2026-08-30-38, FIXED — the interpreter half, byte-identical to the
+    // codegen twin (`e2e_owned_param_temps_drop_in_reverse_argument_order`).
+    // An argument that is a CONTROL-FLOW or BLOCK expression rather than a
+    // direct call/literal used to lose its `Drop` body ENTIRELY, on this
+    // backend as much as on the compiled ones — which is what made it a
     // BOTH-BACKENDS fix rather than a parity repair, and why no A/B gate and no
-    // kata can see it. `one(mk(6))` and the let-bound `one(e0)` are CONTROLS:
-    // their failure would mean the per-call window regressed something, while
-    // the first three record the standing defect. B-2026-08-30-38.
+    // kata could see it. `wrapper_tail_arg_type_name` now resolves the argument
+    // through its tails. `one(mk(6))` and the let-bound `one(e0)` stay as
+    // CONTROLS: both worked before the fix, which is precisely why a spot-check
+    // of this bug came back clean.
     let pin_src = format!(
         "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
          fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
@@ -35065,10 +35175,10 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
     );
     assert_eq!(
         run(&pin_src),
-        // a/b/c: the body is LOST (the defect). d/e: it runs (the controls).
-        "in-one\na=1\nin-one\nb=3\nin-one\nc=5\n\
+        // Every line runs its body exactly once, at the call's return.
+        "in-one\ndR1\na=1\nin-one\ndR3\nb=3\nin-one\ndR5\nc=5\n\
          in-one\ndR6\nd=6\nin-one\ndR7\ne=7\n",
-        "case control-flow-argument-loses-its-drop-body",
+        "case control-flow-argument-runs-its-drop-body",
     );
 }
 

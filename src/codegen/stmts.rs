@@ -14850,6 +14850,22 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && self.branch_tail_mints_fresh_owned_temp(expr)
     }
 
+    /// [`Self::expr_is_fresh_owned_branch_tail`] over the block-local-tail
+    /// widening (B-2026-08-30-38). Same wrapper kinds, same fail-closed rule on
+    /// the tails; the one difference is that a block handing out a binding IT
+    /// declares counts as minting.
+    pub(super) fn expr_is_fresh_owned_branch_tail_local(&self, expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::Block(_)
+                | ExprKind::Seq(_)
+                | ExprKind::Unsafe(_)
+                | ExprKind::LabeledBlock { .. }
+                | ExprKind::If { .. }
+                | ExprKind::Match { .. }
+        ) && self.branch_tail_mints_fresh_owned_temp_local(expr)
+    }
+
     /// One tail's worth of [`Self::expr_is_fresh_owned_branch_tail`]'s
     /// fail-closed test. Recurses through nested wrappers so a block inside an
     /// arm (`if c { { mk(n) } } else { … }`) and an `else if` chain — whose
@@ -14860,14 +14876,50 @@ impl<'ctx> super::Codegen<'ctx> {
     /// yields unit: there is no merged value to own, so it declines. A `match`
     /// with no arms declines for the same reason.
     pub(super) fn branch_tail_mints_fresh_owned_temp(&self, e: &Expr) -> bool {
+        self.branch_tail_mints_fresh_owned_temp_inner(e, false)
+    }
+
+    /// [`Self::branch_tail_mints_fresh_owned_temp`] with the BLOCK-LOCAL
+    /// binding tail admitted (B-2026-08-30-38).
+    ///
+    /// `{ let t = mk(5); t }` ends in an identifier, so the plain predicate
+    /// declines it — correctly, for its own seven callers. Their fail-closed
+    /// rule exists because a binding tail "leaves that binding READABLE
+    /// afterwards", and freeing at the use site would dangle the later read.
+    /// That reasoning is about a binding declared OUTSIDE the wrapper. One the
+    /// wrapper declares ITSELF has no later reader by construction: the block
+    /// ends at the tail, the move disarms the local's own cleanup, and the
+    /// value reaches the consumer owned by nobody.
+    ///
+    /// Kept behind a flag rather than folded into the shared predicate so
+    /// B-2026-08-29-27's callers are byte-identical. Widening them looks right
+    /// — `{ let t = mk(5); t }.contains("x")` still strands its buffer — but
+    /// that is a leak at seven sites with their own frees, measured separately.
+    pub(super) fn branch_tail_mints_fresh_owned_temp_local(&self, e: &Expr) -> bool {
+        self.branch_tail_mints_fresh_owned_temp_inner(e, true)
+    }
+
+    fn branch_tail_mints_fresh_owned_temp_inner(
+        &self,
+        e: &Expr,
+        block_local_tail_ok: bool,
+    ) -> bool {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Seq(b)
             | ExprKind::Unsafe(b)
-            | ExprKind::LabeledBlock { body: b, .. } => b
-                .final_expr
-                .as_deref()
-                .is_some_and(|t| self.branch_tail_mints_fresh_owned_temp(t)),
+            | ExprKind::LabeledBlock { body: b, .. } => {
+                let Some(tail) = b.final_expr.as_deref() else {
+                    return false;
+                };
+                self.branch_tail_mints_fresh_owned_temp_inner(tail, block_local_tail_ok)
+                    || (block_local_tail_ok
+                        && self
+                            .block_local_binding_tail_rhs(b, tail)
+                            .is_some_and(|rhs| {
+                                self.branch_tail_mints_fresh_owned_temp_inner(rhs, true)
+                            }))
+            }
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -14878,16 +14930,151 @@ impl<'ctx> super::Codegen<'ctx> {
                 else {
                     return false;
                 };
-                self.branch_tail_mints_fresh_owned_temp(then_tail)
-                    && self.branch_tail_mints_fresh_owned_temp(else_branch)
+                self.branch_tail_mints_fresh_owned_temp_inner(then_tail, block_local_tail_ok)
+                    && self
+                        .branch_tail_mints_fresh_owned_temp_inner(else_branch, block_local_tail_ok)
             }
             ExprKind::Match { arms, .. } => {
                 !arms.is_empty()
-                    && arms
-                        .iter()
-                        .all(|a| self.branch_tail_mints_fresh_owned_temp(&a.body))
+                    && arms.iter().all(|a| {
+                        self.branch_tail_mints_fresh_owned_temp_inner(&a.body, block_local_tail_ok)
+                    })
             }
-            _ => self.expr_yields_fresh_owned_temp(e),
+            _ => {
+                self.expr_yields_fresh_owned_temp(e)
+                    || (block_local_tail_ok && self.arg_producer_mints_fresh_owned_temp(e))
+            }
+        }
+    }
+
+    /// The PRODUCER shapes `track_inline_owned_aggregate_arg_inst` classifies
+    /// beyond the `Call`/`MethodCall` pair
+    /// [`Self::expr_yields_fresh_owned_temp`] already admits: a struct or
+    /// enum-struct-variant LITERAL, a qualified unit variant (`E.U`), and its
+    /// bare spelling (B-2026-08-30-38).
+    ///
+    /// Only the `_local` recursion consults this, so B-2026-08-29-27's callers
+    /// are unaffected — their question is about a heap BUFFER they are about to
+    /// free at the use site, and a literal is not universally theirs to free.
+    /// Here the registrar is the only consumer and declines any shape it cannot
+    /// name, so admitting one costs nothing.
+    ///
+    /// `Path` and the bare identifier are admitted only when they resolve to a
+    /// unit VARIANT. Both spellings can equally name a place — a module
+    /// constant, a local — and a place tail keeps its own drop, so admitting one
+    /// unconditionally would reopen the double-fire the fail-closed rule exists
+    /// to prevent. A literal needs no such test: it always mints.
+    fn arg_producer_mints_fresh_owned_temp(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::StructLiteral { .. } => true,
+            ExprKind::Path { .. } => self.enum_name_of_expr(e).is_some(),
+            ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n).is_some(),
+            _ => false,
+        }
+    }
+
+    /// The `let` RHS that produced a block's identifier TAIL, when that
+    /// identifier names a binding the block itself declares (B-2026-08-30-38).
+    /// `None` when the tail is not an identifier, when the block does not bind
+    /// it (it is an outer binding, which keeps its own drop), or when it
+    /// arrives through a shape whose producer this cannot name — a
+    /// destructuring pattern or a `LetUninit`.
+    ///
+    /// The LAST binding `let` wins, because a later one shadows the earlier:
+    /// taking the first would classify `{ let t = mk(1); let t = outer; t }` on
+    /// an RHS that no longer produces the tail's value.
+    ///
+    /// Reassignment (`let t = mk(5); t = mk(9); t`) is deliberately NOT
+    /// disqualifying: the tail still hands out an owned value with no other
+    /// owner, which is exactly what the caller asks about.
+    fn block_local_binding_tail_rhs<'e>(
+        &self,
+        b: &'e crate::ast::Block,
+        tail: &Expr,
+    ) -> Option<&'e Expr> {
+        let ExprKind::Identifier(name) = &tail.kind else {
+            return None;
+        };
+        let mut rhs: Option<&Expr> = None;
+        for st in &b.stmts {
+            match &st.kind {
+                crate::ast::StmtKind::Let { pattern, value, .. } => {
+                    match &pattern.kind {
+                        crate::ast::PatternKind::Binding(bn) if bn == name => rhs = Some(value),
+                        // A destructuring `let` that binds the tail name gives
+                        // no single producer expression to classify.
+                        _ if pattern.binding_names().iter().any(|n| n == name) => return None,
+                        _ => {}
+                    }
+                }
+                crate::ast::StmtKind::LetElse { pattern, .. }
+                    if pattern.binding_names().iter().any(|n| n == name) =>
+                {
+                    return None
+                }
+                crate::ast::StmtKind::LetUninit { name: n, .. } if n == name => return None,
+                _ => {}
+            }
+        }
+        rhs
+    }
+
+    /// B-2026-08-30-38 — the tail [`Self::expr_is_fresh_owned_branch_tail`]
+    /// admitted a wrapper ON, for a consumer that needs the PRODUCER expression
+    /// rather than a yes/no.
+    ///
+    /// `track_inline_owned_aggregate_arg_inst` classifies an argument by
+    /// matching its expression shape (`Call` → the callee's declared return
+    /// type, `StructLiteral` → its path, `Path` → a unit variant). A wrapper
+    /// names the construct, not a producer, so every arm missed and the temp's
+    /// user `Drop` body never ran — `one(if c { mk(1) } else { mk(2) })` and
+    /// both its sibling spellings dropped nothing at all.
+    ///
+    /// Returning the FIRST tail is sound precisely because the predicate is
+    /// fail-closed on every tail: the construct is admitted only when they all
+    /// mint a fresh owned temp, and they merge into one value, so any of them
+    /// answers "what type is this and who owns it" the same way. `None` for a
+    /// non-wrapper (the general predicate's job) and for a mixed construct.
+    ///
+    /// The fail-closed half carries more weight here than it did for
+    /// B-2026-08-29-27's leak. A tail that hands out a BINDING keeps that
+    /// binding's own drop, so admitting a mixed construct would run one body
+    /// TWICE — a double free rather than the leak that predicate was closing.
+    pub(super) fn fresh_owned_branch_tail_repr<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        if !self.expr_is_fresh_owned_branch_tail_local(expr) {
+            return None;
+        }
+        self.first_branch_tail(expr)
+    }
+
+    /// The first tail [`Self::branch_tail_mints_fresh_owned_temp`] would have
+    /// tested, recursing through nested wrappers on the same terms so an
+    /// `else if` chain and an arm-wrapped block resolve like their flat
+    /// spellings. Only meaningful after that predicate has accepted `e`.
+    fn first_branch_tail<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => {
+                let tail = b.final_expr.as_deref()?;
+                // Mirror of the admission rule: when the block was admitted
+                // through its own local binding, the PRODUCER is that binding's
+                // RHS, not the identifier standing in for it. Returning the
+                // identifier would send the caller's classification to a shape
+                // that names no type.
+                match self.block_local_binding_tail_rhs(b, tail) {
+                    Some(rhs) if !self.branch_tail_mints_fresh_owned_temp_inner(tail, true) => {
+                        self.first_branch_tail(rhs)
+                    }
+                    _ => self.first_branch_tail(tail),
+                }
+            }
+            ExprKind::If { then_block, .. } => {
+                self.first_branch_tail(then_block.final_expr.as_deref()?)
+            }
+            ExprKind::Match { arms, .. } => self.first_branch_tail(&arms.first()?.body),
+            _ => Some(e),
         }
     }
 
