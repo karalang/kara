@@ -5844,6 +5844,58 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_float_cast_bf16_safe(fv, self.context.bf16_type(), name)
     }
 
+    /// Widen ANY reduced-precision scalar -- `f16` as well as `bf16` -- to
+    /// `f32` for the whole of a multi-step lowering, returning the type to
+    /// round back to (`None` when nothing was widened).
+    ///
+    /// The [`Self::widen_bf16_scalar`] pair above exists for a SELECTABILITY
+    /// problem: LLVM 18 cannot select native `bfloat` arithmetic off x86, so
+    /// bf16 has to be widened whether or not accuracy wants it. This pair
+    /// exists for an ACCURACY one, and f16 needs it even though f16 arithmetic
+    /// selects everywhere: a lowering that materializes an irrational constant
+    /// with `fty.const_float` rounds that constant INTO the receiver's format
+    /// before any arithmetic runs, and at f16 that is a ~2.5e-4 relative error
+    /// on a value the interpreter carries to ~1e-8 (B-2026-08-30-5). No choice
+    /// of intermediate width recovers it -- the multiplicand was already wrong
+    /// -- so the constant has to be built at f32 in the first place, which is
+    /// what widening the receiver here accomplishes.
+    ///
+    /// Widening also makes the result match the interpreter BY CONSTRUCTION
+    /// rather than by measurement: `eval_at_span_width` maps F32/F16/BF16 to
+    /// the same f32 path, so a block that widens to f32 and rounds once at the
+    /// end is running the interpreter's arithmetic, not an equivalent of it.
+    pub(super) fn widen_reduced_float_scalar(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> (
+        inkwell::values::FloatValue<'ctx>,
+        Option<inkwell::types::FloatType<'ctx>>,
+    ) {
+        let ty = fv.get_type();
+        if ty != self.context.f16_type() && ty != self.context.bf16_type() {
+            return (fv, None);
+        }
+        (
+            self.build_float_cast_bf16_safe(fv, self.context.f32_type(), name),
+            Some(ty),
+        )
+    }
+
+    /// Round back to the type [`Self::widen_reduced_float_scalar`] widened
+    /// from; the identity when it widened nothing.
+    pub(super) fn narrow_reduced_float_scalar(
+        &self,
+        fv: inkwell::values::FloatValue<'ctx>,
+        back_to: Option<inkwell::types::FloatType<'ctx>>,
+        name: &str,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        match back_to {
+            None => fv,
+            Some(ty) => self.build_float_cast_bf16_safe(fv, ty, name),
+        }
+    }
+
     /// Call an overloaded LLVM float intrinsic WITHOUT ever instantiating it
     /// at `bfloat`.
     ///

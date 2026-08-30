@@ -40294,6 +40294,160 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_reduced_precision_receiver_multiplies_its_constant_at_f32() {
+        // B-2026-08-30-5 — `to_degrees` / `to_radians` on an `f16` receiver
+        // disagreed with the interpreter on ~25% of inputs. Codegen handles
+        // `recip` / `to_degrees` / `to_radians` / `fract` in one block that
+        // opened by widening bf16 ONLY (bf16 arithmetic is unselectable off
+        // x86, B-2026-08-29-34); f16 selects natively and so was left alone,
+        // which meant `fty.const_float(57.29577951308232)` rounded 180/pi
+        // INTO f16 before the multiply. f16's ULP near 57.3 is 0.03125, so
+        // the constant arrived carrying 2.5e-4 of relative error against the
+        // ~1e-8 the interpreter multiplies by, and no intermediate width
+        // recovers a multiplicand that was already wrong.
+        //
+        // The ten f16 receivers below are not a sample of convenience: each
+        // was chosen because "constant rounded into f16, multiply at f16" and
+        // "constant at f32, multiply at f32, round once" give DIFFERENT f16
+        // results for BOTH methods, so every one of those twenty values fails
+        // if the widen ever stops covering f16. The remaining rows are
+        // regression guards — `recip` and `fract` were always correct at f16
+        // (1.0 is exact at every width, and `x - trunc(x)` is exact), and
+        // bf16 / f32 / f64 were correct throughout, so they must stay so.
+        //
+        // Bit-exact string pins are portable HERE, unlike the libm
+        // transcendentals `approx_line` exists for: an fmul by a constant, an
+        // fdiv by 1.0 and `x - trunc(x)` are IEEE-exact operations, identical
+        // on every platform.
+        let src = r#"
+fn main() {
+    let a: f16 = 0.0304718017578125f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = -0.0304718017578125f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = 0.060943603515625f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = -0.060943603515625f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = -3.900390625f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = 7.80078125f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = -7.80078125f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = -249.625f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = 499.25f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let a: f16 = -499.25f16;
+    println(f"f16  {a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+    let b: f16 = 1.25f16;
+    println(f"f16  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f16 = -3.5f16;
+    println(f"f16  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f16 = 0.375f16;
+    println(f"f16  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f16 = -17.75f16;
+    println(f"f16  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: bf16 = 1.25bf16;
+    println(f"bf16 {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: bf16 = -3.5bf16;
+    println(f"bf16 {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: bf16 = 0.375bf16;
+    println(f"bf16 {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: bf16 = -17.75bf16;
+    println(f"bf16 {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f32 = 1.25f32;
+    println(f"f32  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f32 = -3.5f32;
+    println(f"f32  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f32 = 0.375f32;
+    println(f"f32  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f32 = -17.75f32;
+    println(f"f32  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f64 = 1.25f64;
+    println(f"f64  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f64 = -3.5f64;
+    println(f"f64  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f64 = 0.375f64;
+    println(f"f64  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+    let b: f64 = -17.75f64;
+    println(f"f64  {b.to_degrees()} {b.to_radians()} {b.recip()} {b.fract()}");
+}
+"#;
+        let want = concat!(
+            "f16  1.74609375 0.0005316734313964844 32.8125 0.0304718017578125\n",
+            "f16  -1.74609375 -0.0005316734313964844 -32.8125 -0.0304718017578125\n",
+            "f16  3.4921875 0.0010633468627929688 16.40625 0.060943603515625\n",
+            "f16  -3.4921875 -0.0010633468627929688 -16.40625 -0.060943603515625\n",
+            "f16  -223.5 -0.06805419921875 -0.25634765625 -0.900390625\n",
+            "f16  447 0.1361083984375 0.128173828125 0.80078125\n",
+            "f16  -447 -0.1361083984375 -0.128173828125 -0.80078125\n",
+            "f16  -14304 -4.35546875 -0.00400543212890625 -0.625\n",
+            "f16  28608 8.7109375 0.002002716064453125 0.25\n",
+            "f16  -28608 -8.7109375 -0.002002716064453125 -0.25\n",
+            "f16  71.625 0.021820068359375 0.7998046875 0.25\n",
+            "f16  -200.5 -0.06109619140625 -0.28564453125 -0.5\n",
+            "f16  21.484375 0.0065460205078125 2.666015625 0.375\n",
+            "f16  -1017 -0.309814453125 -0.05633544921875 -0.75\n",
+            "bf16 71.5 0.0218505859375 0.80078125 0.25\n",
+            "bf16 -201 -0.06103515625 -0.28515625 -0.5\n",
+            "bf16 21.5 0.00653076171875 2.671875 0.375\n",
+            "bf16 -1016 -0.310546875 -0.056396484375 -0.75\n",
+            "f32  71.6197280883789 0.021816615015268326 0.800000011920929 0.25\n",
+            "f32  -200.5352325439453 -0.06108652427792549 -0.2857142984867096 -0.5\n",
+            "f32  21.485918045043945 0.006544984877109528 2.6666667461395264 0.375\n",
+            "f32  -1017.0001220703125 -0.30979594588279724 -0.056338027119636536 -0.75\n",
+            "f64  71.6197243913529 0.02181661564992912 0.8 0.25\n",
+            "f64  -200.53522829578813 -0.061086523819801536 -0.2857142857142857 -0.5\n",
+            "f64  21.48591731740587 0.006544984694978736 2.6666666666666665 0.375\n",
+            "f64  -1017.0000863572112 -0.3097959422289935 -0.056338028169014086 -0.75\n",
+        );
+        assert_eq!(run_program(src), Some(want.to_string()));
+    }
+
+    #[test]
+    fn test_ir_f16_scalar_float_helper_block_emits_no_half_arithmetic() {
+        // The mechanism pin for the E2E above: after widening, the whole
+        // `recip` / `to_degrees` / `to_radians` / `fract` block computes at
+        // `float`, so an f16 receiver must produce NO `half` arithmetic at
+        // all — only the `fptrunc` back at the end. A regression that stops
+        // widening f16 shows up here as `fmul half`, naming the cause
+        // directly instead of as twenty wrong digits.
+        let src = r#"
+fn main() {
+    let a: f16 = 7.80078125f16;
+    println(f"{a.to_degrees()} {a.to_radians()} {a.recip()} {a.fract()}");
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, None, None).expect("codegen failed");
+        for line in ir.lines() {
+            for op in ["fmul half", "fdiv half", "fsub half", "fadd half"] {
+                assert!(
+                    !line.contains(op),
+                    "`{op}` emitted: the float-helper block computed at the \
+                     receiver's width, so an irrational constant was rounded \
+                     into f16 before the arithmetic (B-2026-08-30-5): {line}"
+                );
+            }
+        }
+        assert!(
+            ir.contains("fmul float"),
+            "expected the widened f32 multiply; IR:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_script_mode_top_level_statements() {
         // Script mode (design.md § Script mode, phase-8 Q7): a main-less
         // file of top-level statements compiles via the parser-synthesized

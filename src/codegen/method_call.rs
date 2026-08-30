@@ -3494,17 +3494,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // float-only): `recip` → `fdiv 1.0, x`; `to_degrees` / `to_radians` →
         // `fmul x, C` with the SAME constants Rust `f64::to_degrees`/
         // `to_radians` use; `fract` → `fsub x, trunc(x)` (Rust `f64::fract` =
-        // `self - self.trunc()`). All bit-exact with the interpreter's `f64::*`;
-        // `const_float` rounds the f64 constant to the receiver width.
+        // `self - self.trunc()`). `const_float` rounds the f64 constant to
+        // whatever type the arithmetic runs at, which is why the widen below
+        // has to cover every reduced-precision receiver and not just the one
+        // that cannot be selected natively.
         if matches!(method, "recip" | "to_degrees" | "to_radians" | "fract") && args.is_empty() {
             let v = self.compile_expr(object)?;
             if let BasicValueEnum::FloatValue(fv) = v {
-                // bf16 is widened for the WHOLE block and rounded back once at
-                // the end (B-2026-08-29-34): every arm below computes with
-                // native float ops on `fty`, which on bf16 are unselectable
-                // off x86. Widening here rather than per-arm also keeps the
-                // multi-step `fract` from rounding its intermediate.
-                let (fv, narrow_bf16) = self.widen_bf16_scalar(fv, "fh.in");
+                // EVERY reduced-precision receiver -- f16 as well as bf16 --
+                // is widened for the WHOLE block and rounded back once at the
+                // end. bf16 needs it because native `bfloat` arithmetic is
+                // unselectable off x86 (B-2026-08-29-34). f16 needs it for a
+                // different reason, which is why it was missed: f16 arithmetic
+                // selects fine, but `fty.const_float` below rounds the
+                // irrational `to_degrees` / `to_radians` constants INTO f16
+                // before the multiply, costing ~2.5e-4 relative on a constant
+                // the interpreter carries to ~1e-8 -- a run-vs-build
+                // divergence on ~25% of f16 inputs (B-2026-08-30-5).
+                //
+                // Widening here rather than per-arm also keeps the multi-step
+                // `fract` from rounding its intermediate.
+                let (fv, narrowed) = self.widen_reduced_float_scalar(fv, "fh.in");
                 let fty = fv.get_type();
                 let r = match method {
                     "recip" => {
@@ -3515,12 +3525,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Rust's `PIS_IN_180` (180/π) — the f64 nearest to the
                         // `57.2957795130823208767981548141051703` literal that
                         // `f64::to_degrees` multiplies by. `const_float` rounds
-                        // it to the receiver width.
+                        // it to `fty`, which the widen above guarantees is f64
+                        // or f32 and never a reduced-precision format.
+                        //
+                        // The two backends spell this constant differently and
+                        // still agree bit for bit once both are at f32:
+                        // `f32(57.29577951308232)` and the f32 of Rust's longer
+                        // literal are the same float. That is what makes the
+                        // widen an EXACT match with the interpreter rather than
+                        // a close one, and why no constant needed retuning.
                         let c = fty.const_float(57.29577951308232);
                         self.builder.build_float_mul(fv, c, "to_deg").unwrap()
                     }
                     "to_radians" => {
-                        // Rust's `RADS_PER_DEG` = π / 180.
+                        // Rust's `RADS_PER_DEG` = π / 180. Rust evaluates that
+                        // quotient in f32 for the f32 overload where this
+                        // divides in f64 before rounding, so the two are a
+                        // double rounding apart in principle — and land on the
+                        // same f32 in fact (both `0.01745329238474369`), which
+                        // the f32 column's 0-divergence measurement has always
+                        // been the evidence for.
                         let c = fty.const_float(std::f64::consts::PI / 180.0);
                         self.builder.build_float_mul(fv, c, "to_rad").unwrap()
                     }
@@ -3545,7 +3569,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap()
                     }
                 };
-                let r = self.narrow_bf16_scalar(r, narrow_bf16, "fh.out");
+                let r = self.narrow_reduced_float_scalar(r, narrowed, "fh.out");
                 return Ok(r.into());
             }
         }
