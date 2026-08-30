@@ -99,22 +99,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 157 | 0 |
 | codegen-gap | 149 | 0 |
 | diagnostics | 112 | 0 |
-| false-positive | 101 | 1 |
+| false-positive | 101 | 0 |
 | perf | 86 | 1 |
 | soundness | 80 | 0 |
 | other | 65 | 1 |
 | crash | 61 | 0 |
-| use-after-free | 24 | 0 |
+| use-after-free | 25 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1256 | 27 |
+| codegen | 1257 | 28 |
 | typecheck | 278 | 0 |
 | interp | 262 | 12 |
 | other | 70 | 0 |
-| ownership | 68 | 1 |
+| ownership | 68 | 0 |
 | cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1833 surfaced · 31 open · 1773 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1834 surfaced · 31 open · 1774 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (31)
 
@@ -152,7 +152,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1833 surfaced
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | medium | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
 | B-2026-08-30-9 | 2026-08-30 | interp | medium | The INTERPRETER renders an unsigned `Vector` lane above `i64::MAX` as a SIGNED reinterpretation -- `Vector[u64, 2]` holding `u64::MAX` prints `Vector(-1, 1)` while the SAME program's scalar and INDEXED-lane reads of the same value both print 18446744073709551615, and both compiled backends now print the unsigned value too; `Value::Vector` holds untyped `Value::Int` lanes, so its Display cannot recover a signedness the index path gets right | — |
-| B-2026-08-30-10 | 2026-08-30 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used again here` on a program every backend compiles and runs correctly. B-2026-08-08-25 deliberately classifies such an arm as a BORROW in codegen; `ownership.rs` still records it as a move. The `if let` spelling of the same thing does NOT warn, which is what rules out a deliberate strict-move rule. Diagnostics-only, and the help text it prints is unactionable | — |
 | B-2026-08-30-11 | 2026-08-30 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path while the `t` path is clean, because B-2026-08-29-27's gates need EVERY tail to mint and B-2026-08-30-2's owner needs a source binding to inherit a FRAME from; the innermost frame is wrong (a wrapping block's drains before the value escapes -- caught by the self-host seed-run oracle, not by any sweep), so the lead is the SIBLING binding arm's frame | — |
 | B-2026-08-30-12 | 2026-08-30 | codegen | medium | A VALUE-POSITION BLOCK WHOSE TAIL NAMES A BINDING IT DECLARED ITSELF LEAKS IT IN A READ-ONLY CONSUMER -- `{ let t = mkB(n); t }.contains("bbb")` strands 27 B while the OWNING spelling is clean; B-2026-08-30-2's owner declines it because there is no live frame to replace and admitting it double-freed 23 tests (it is the shape every codegen desugar synthesizes), but unlike that row the source cannot be read again, so this one belongs to `expr_is_fresh_owned_branch_tail` and the seven gates B-2026-08-29-27 wired | — |
 | B-2026-08-30-13 | 2026-08-30 | codegen | low | AN ASSIGNMENT WHOSE RHS IS A VALUE-POSITION BLOCK DOES NOT FREE THE VALUE IT OVERWRITES AT -O0 -- `let mut s = mkA(n); s = { t };` strands 15 B while `s = mkB(n)` and `s = t` are both clean at BOTH opt levels, so it is one RHS shape missing the old-value drop rather than a missing mechanism; clean at -O2, which is the default, so a default build hides it | — |
@@ -161,6 +160,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1833 surfaced
 | B-2026-08-30-16 | 2026-08-30 | codegen | low | A FRESH-TEMP `shared enum` SCRUTINEE'S OWN `Drop` BODY STILL RUNS AT THE ENCLOSING SCOPE'S EXIT -- `match mkSe() { .. }` is interp `v1 dSe s1 s2` vs compiled `v1 s1 s2 dSe`; the value-enum half of this was fixed by B-2026-08-29-28, the shared half rides a different channel | — |
 | B-2026-08-30-17 | 2026-08-30 | interp+codegen | low | AN `if let` MISS DROPS THE SCRUTINEE TEMPORARY *AFTER* THE `else` ARM ON BOTH BACKENDS, WHERE design.md SAYS BEFORE IT -- `els dE` vs the specified `dE els`; the two backends AGREE, so no A/B gate can see it | — |
 | B-2026-08-30-18 | 2026-08-30 | codegen | medium | A struct literal built DIRECTLY at a `return` site, whose field is a `Vec` of `Drop` elements, runs the element's `Drop` body ONCE TOO MANY on every compiled backend -- `mid dR14 v14 dR14 post` against the interpreter's `mid v14 dR14 post`. The two working spellings both route the value through a named binding first (`let bx = ...; return bx`) or omit `return` entirely (the bare tail), so the return-position literal is the whole trigger; a non-container `Drop` field is correct in all three spellings | — |
+| B-2026-08-30-19 | 2026-08-30 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still takes the payload, so a later read of the source is a use-after-free that prints garbage on the JIT and both AOT legs while `--interp` is correct. The borrow classification admits only a DIRECT `{ptr,len,cap}` payload (`String` / `Vec`), and a struct that merely CONTAINS one is not admitted. The same struct inside a USER enum variant is correct, so it is the built-in `Option`/`Result` channel specifically; the `Result` leg fails differently (valgrind-clean, second read empty) | — |
 
 ### Relocated (2)
 
@@ -193,9 +193,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1833 surfaced
 
 </details>
 
-### Fixed (1773)
+### Fixed (1774)
 
-<details><summary>1773 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1774 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1972,6 +1972,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1833 surfaced
 | B-2026-08-30-5 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/… | 42e103d |
 | B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
+| B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
 
 </details>
 
