@@ -40232,6 +40232,135 @@ fn main() {
     /// (`asan_wrapped_param_view_payload_frees_once`) — and every one agreed
     /// across all three backends while wrong, so nothing but an absolute
     /// expectation could have caught them.
+    /// B-2026-08-30-56 — an integer reaching a FLOAT enum payload is CONVERTED,
+    /// not bit-reinterpreted.
+    ///
+    /// `coerce_to_payload_words` bitcasts whatever it is handed into i64 slots,
+    /// so a payload arriving in the wrong class was a silent wrong value rather
+    /// than a verifier error: `let o: Option[f64] = Some(m)` with `m: i64` read
+    /// back as a subnormal near 4.45e-309 — the integer's own bits as a double.
+    ///
+    /// 9007199254740993 is 2^53+1, the conversion probe: it survives as itself
+    /// if no conversion happens and lands on ...992 once it round-trips through
+    /// a double. Every case here therefore asserts ...992 — the CONVERTED value
+    /// — and would read ...993 if the store silently skipped `sitofp`, or a
+    /// denormal if it bitcast.
+    ///
+    /// Three paths were missing the coercion for three different reasons, which
+    /// is why the case list separates them: a GENERIC payload (`Option`/`Result`
+    /// declare theirs as `T`, so the existing skip for type parameters covered
+    /// every `Some`/`Ok` in the language), an enum STRUCT-variant (never called
+    /// the coercion at all), and the QUALIFIED spelling of a generic user enum
+    /// (the span that carries the instantiation reached only the bare form).
+    /// `T.W(f64)`, a plain struct field and a `Vec[f64]` literal were already
+    /// correct and are kept as CONTROLS — they are what localized each gap.
+    #[test]
+    fn e2e_int_into_float_enum_payload_converts() {
+        let hdr = "enum T { W(f64) }\n\
+                   enum S { V { f: f64 } }\n\
+                   enum G[X] { A(X), B }\n\
+                   struct Plain { f: f64 }\n";
+        for (label, src, want) in [
+            (
+                "option-generic-payload",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let o: Option[f64] = Some(m);\n\
+                     \x20   match o {{ Some(x) => println(f\"{{x}}\"), None => println(\"none\") }}\n\
+                     }}"
+                ),
+                "9007199254740992\n",
+            ),
+            (
+                "result-generic-payload",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let r: Result[f64, i64] = Ok(m);\n\
+                     \x20   match r {{ Ok(x) => println(f\"{{x}}\"), Err(_) => println(\"err\") }}\n\
+                     }}"
+                ),
+                "9007199254740992\n",
+            ),
+            (
+                "enum-struct-variant-field",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let s = S.V {{ f: m }};\n\
+                     \x20   match s {{ S.V {{ f }} => println(f\"{{f}}\") }}\n\
+                     }}"
+                ),
+                "9007199254740992\n",
+            ),
+            (
+                "user-generic-enum-qualified",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let g: G[f64] = G.A(m);\n\
+                     \x20   match g {{ G.A(x) => println(f\"{{x}}\"), G.B => println(\"b\") }}\n\
+                     }}"
+                ),
+                // The QUALIFIED spelling. Its bare sibling below was fixed by
+                // the same threading one call site earlier, and the two
+                // disagreeing is what showed this was a plumbing gap rather
+                // than a missing conversion.
+                "9007199254740992\n",
+            ),
+            (
+                "user-generic-enum-bare",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let g: G[f64] = A(m);\n\
+                     \x20   match g {{ G.A(x) => println(f\"{{x}}\"), G.B => println(\"b\") }}\n\
+                     }}"
+                ),
+                "9007199254740992\n",
+            ),
+            (
+                "concrete-tuple-variant-control",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let t = T.W(m);\n\
+                     \x20   match t {{ T.W(x) => println(f\"{{x}}\") }}\n\
+                     }}"
+                ),
+                // CONTROL: correct since B-2026-08-13-18, and the row's own
+                // localizer — structurally the same construction as `Some(m)`,
+                // differing only in that its payload type is declared
+                // concretely.
+                "9007199254740992\n",
+            ),
+            (
+                "plain-struct-field-control",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let p = Plain {{ f: m }};\n\
+                     \x20   println(f\"{{p.f}}\");\n\
+                     }}"
+                ),
+                "9007199254740992\n",
+            ),
+            (
+                "vec-literal-element-control",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let m: i64 = 9007199254740993;\n\
+                     \x20   let v: Vec[f64] = [m];\n\
+                     \x20   println(f\"{{v[0]}}\");\n\
+                     }}"
+                ),
+                "9007199254740992\n",
+            ),
+        ] {
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+    }
     #[test]
     fn e2e_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         let hdr = "struct R { id: i64 }\n\

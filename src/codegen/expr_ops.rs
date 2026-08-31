@@ -8324,6 +8324,22 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         src: &Expr,
     ) -> BasicValueEnum<'ctx> {
+        self.coerce_enum_payload_scalar_inst(enum_name, variant, idx, val, src, None)
+    }
+
+    /// [`Self::coerce_enum_payload_scalar`] carrying the enum INSTANTIATION at
+    /// the construction site, so a payload declared as a generic parameter can
+    /// still be coerced (B-2026-08-30-56). `None` reproduces the previous
+    /// behaviour exactly.
+    pub(super) fn coerce_enum_payload_scalar_inst(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        idx: usize,
+        val: BasicValueEnum<'ctx>,
+        src: &Expr,
+        inst: Option<&TypeExpr>,
+    ) -> BasicValueEnum<'ctx> {
         if !(val.is_int_value() || val.is_float_value()) {
             return val;
         }
@@ -8349,6 +8365,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // reinterprets rather than converts (B-2026-08-13-18). A generic
         // parameter is exactly the case where there is nothing to convert to,
         // so it is skipped and the value keeps its own width.
+        let mut te = te.clone();
         if let TypeKind::Path(p) = &te.kind {
             if p.segments.len() == 1
                 && self
@@ -8356,14 +8373,65 @@ impl<'ctx> super::Codegen<'ctx> {
                     .iter()
                     .any(|g| g == &p.segments[0])
             {
-                return val;
+                // B-2026-08-30-56 — resolve the parameter through THIS SITE's
+                // instantiation before giving up. `Option[T] { Some(T) }`
+                // declares its payload generically, so the skip above covered
+                // every `Some(..)` and `Ok(..)` in the language: an integer
+                // reaching `Option[f64]` was packed as its own BITS and read
+                // back as a subnormal near 4.45e-309. The concrete
+                // tuple-variant spelling `T.W(f64)` converted correctly, which
+                // is exactly what localized the defect to this skip.
+                //
+                // The skip's own reason still holds where it applies: without
+                // an instantiation there is nothing to convert TO, and coercing
+                // to the generic base's all-i64 placeholder NARROWS a wider
+                // payload — an `i128` in `Some(..)` truncated to i64 and
+                // `Option[i128]` printed `0` (B-2026-08-19-19). So this only
+                // fires when the site binds the parameter to a CONCRETE type,
+                // and falls back to the skip otherwise.
+                let resolved = inst
+                    .and_then(|i| self.enum_param_binding_in_inst(enum_name, &p.segments[0], i));
+                match resolved {
+                    Some(concrete) => te = concrete,
+                    None => return val,
+                }
             }
         }
-        let target = self.llvm_type_for_type_expr(te);
+        let target = self.llvm_type_for_type_expr(&te);
         if !(target.is_int_type() || target.is_float_type()) {
             return val;
         }
         self.coerce_scalar_to_type_from(val, target, src)
+    }
+
+    /// B-2026-08-30-56 — what `param` is bound to by the enum instantiation
+    /// `inst` (`Option[f64]` binds `T` to `f64`), positionally against the
+    /// enum's declared generic parameter list.
+    ///
+    /// `None` when `inst` names a different enum, carries no generic args, or
+    /// binds the parameter to something that is not a plain type — each of
+    /// which leaves the caller at its previous skip rather than guessing.
+    fn enum_param_binding_in_inst(
+        &self,
+        enum_name: &str,
+        param: &str,
+        inst: &TypeExpr,
+    ) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &inst.kind else {
+            return None;
+        };
+        if p.segments.last().map(String::as_str) != Some(enum_name) {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let idx = self
+            .enum_generic_param_names(enum_name)
+            .iter()
+            .position(|g| g == param)?;
+        match args.get(idx)? {
+            crate::ast::GenericArg::Type(te) => Some(te.clone()),
+            _ => None,
+        }
     }
 
     pub(super) fn enum_variant_field_type_exprs(

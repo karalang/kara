@@ -396,6 +396,22 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         _args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.compile_assoc_call_at(type_name, method, _args, None)
+    }
+
+    /// [`Self::compile_assoc_call`] carrying the call site's span
+    /// (B-2026-08-30-56), so the QUALIFIED enum-variant constructor
+    /// `G.A(m)` can resolve a generic payload the way the bare `A(m)`
+    /// spelling already does. Without it the two spellings of one
+    /// construction disagreed: `let g: G[f64] = A(m)` converted and
+    /// `G.A(m)` packed the integer's bits.
+    pub(super) fn compile_assoc_call_at(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        _args: &[CallArg],
+        call_span: Option<&crate::token::Span>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let args = _args;
         // B-2026-07-08-25 — inside a monomorph body, a leading GENERIC type
         // param (`T.default()`, `T.new()`, `T.from(x)`) must dispatch at the
@@ -3058,7 +3074,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // String / Vec / user-struct payloads.
         if let Some(layout) = self.type_decls.enum_layouts.get(type_name) {
             if layout.tags.contains_key(method) {
-                if let Some(v) = self.try_compile_enum_variant(method, Some(type_name), _args)? {
+                if let Some(v) =
+                    self.try_compile_enum_variant_at(method, Some(type_name), _args, call_span)?
+                {
                     return Ok(v);
                 }
             }

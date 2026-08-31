@@ -528,7 +528,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         segments[0]
                     ));
                 }
-                return self.compile_assoc_call(&segments[0], &segments[1], args);
+                return self.compile_assoc_call_at(
+                    &segments[0],
+                    &segments[1],
+                    args,
+                    Some(call_span),
+                );
             }
         }
 
@@ -833,7 +838,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Check if this is an enum variant constructor (tuple variant)
-        if let Some(enum_val) = self.try_compile_enum_variant(&name, None, args)? {
+        if let Some(enum_val) =
+            self.try_compile_enum_variant_at(&name, None, args, Some(call_span))?
+        {
             return Ok(enum_val);
         }
 
@@ -5482,6 +5489,31 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name_override: Option<&str>,
         args: &[CallArg],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        self.try_compile_enum_variant_at(name, enum_name_override, args, None)
+    }
+
+    /// [`Self::try_compile_enum_variant`] carrying the CONSTRUCTION SITE's span
+    /// (B-2026-08-30-56).
+    ///
+    /// The span is how a generically-declared payload finds its concrete type:
+    /// `enum_inst_type_exprs` records `Option[f64]` against the construction
+    /// expression, and without it `Some(m)` packed an integer's bits into a
+    /// float payload. `None` keeps the previous, unresolved behaviour, which is
+    /// what the synthesized call sites (refinement lowering) pass — they build
+    /// their own `Ok`/`Err` around values already of the right class.
+    pub(super) fn try_compile_enum_variant_at(
+        &mut self,
+        name: &str,
+        enum_name_override: Option<&str>,
+        args: &[CallArg],
+        call_span: Option<&crate::token::Span>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let site_inst: Option<TypeExpr> = call_span.and_then(|sp| {
+            self.type_decls
+                .enum_inst_type_exprs
+                .get(&(sp.offset, sp.length))
+                .cloned()
+        });
         // Find which enum this variant belongs to. When the caller already
         // knows the enum (the qualified `Enum.Variant(args)` form in
         // `compile_assoc_call`), `enum_name_override` carries it — use it
@@ -5589,7 +5621,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.share_bare_shared_ctor_payload(&arg.value, val);
                 // Shared-enum twin of the coercion in the non-shared arm below
                 // (B-2026-08-13-18) — same packer, same silent failure mode.
-                let val = self.coerce_enum_payload_scalar(&enum_name, name, i, val, &arg.value);
+                let val = self.coerce_enum_payload_scalar_inst(
+                    &enum_name,
+                    name,
+                    i,
+                    val,
+                    &arg.value,
+                    site_inst.as_ref(),
+                );
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
                 for (j, w) in words.into_iter().enumerate() {
@@ -5693,7 +5732,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // (B-2026-08-13-18). See `coerce_enum_payload_scalar`: the packer
             // reinterprets rather than converts, so an int reaching an `f64`
             // payload is a silent wrong value, not a verifier error.
-            let val = self.coerce_enum_payload_scalar(&enum_name, name, i, val, &arg.value);
+            let val = self.coerce_enum_payload_scalar_inst(
+                &enum_name,
+                name,
+                i,
+                val,
+                &arg.value,
+                site_inst.as_ref(),
+            );
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1)); // legacy fallback if layout missing
             let words = self.coerce_to_payload_words(val, num_words)?;
             for (j, w) in words.into_iter().enumerate() {
@@ -5896,6 +5942,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val = self.compile_expr(&init.value)?;
                 self.suppress_fstr_acc_if_moved_out(&init.value);
                 let val = self.maybe_defensive_copy_param_arg(&init.value, val);
+                // B-2026-08-30-56 — coerce to the CLASS the field declares
+                // before packing, exactly as the tuple-variant path has since
+                // B-2026-08-13-18. `coerce_to_payload_words` bitcasts whatever
+                // it is handed into i64 slots, so an int reaching a declared
+                // `f64` field was a silent reinterpretation, not a verifier
+                // error: `S.V { f: m }` with `f: f64` and `m: i64` read back as
+                // a subnormal near 4.45e-309.
+                let val = self.coerce_enum_payload_scalar(enum_name, variant, i, val, &init.value);
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
                 for (j, w) in words.into_iter().enumerate() {
@@ -5941,6 +5995,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // (the caller retains the buffer free under the by-value ABI) — mirrors
             // the struct-literal / tuple-variant constructor paths.
             let val = self.maybe_defensive_copy_param_arg(&init.value, val);
+            // B-2026-08-30-56 — the non-shared twin of the coercion above.
+            let val = self.coerce_enum_payload_scalar(enum_name, variant, i, val, &init.value);
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
             let words = self.coerce_to_payload_words(val, num_words)?;
             for (j, w) in words.into_iter().enumerate() {
