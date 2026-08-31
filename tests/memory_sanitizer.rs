@@ -788,6 +788,58 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-18 — the memory half of giving a `Vector[T, N]` enum
+    /// payload its true word count.
+    ///
+    /// Counting a 4-lane `i64` vector as ONE word meant it never exceeded a
+    /// variant's payload area, so the oversize-boxing path was unreachable for
+    /// vectors. With the true count an `Option[Vector[i64, 8]]` (8 words
+    /// against Option's 3-word area) heap-boxes on every construction — a
+    /// `malloc` that did not exist before this change, on a payload the drop
+    /// path had never been asked to free. A missing box-free leaks 64 bytes per
+    /// iteration; a double free or a read through the freed box is the other
+    /// direction. Neither shows in an output comparison, which is why the E2E
+    /// twin cannot stand in for this.
+    ///
+    /// The loop also exercises the ALIGNMENT fix: the box store is emitted at
+    /// alignment 8 rather than the vector's natural 32, because `malloc`
+    /// guarantees only 16. Without it this program dies on `vmovaps` — and
+    /// heap-state-dependently, which is what makes an ASAN run over many
+    /// iterations a better witness than a single-shot fixture.
+    #[test]
+    fn asan_vector_enum_payload_box_frees_once() {
+        let Some((out, status)) = run_under_asan(
+            r#"fn mk(n: i64) -> Option[Vector[i64, 8]] {
+    return Some(Vector[i64, 8](n, n+1, n+2, n+3, n+4, n+5, n+6, n+7))
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut i = 0;
+    while i < 20 {
+        let o = mk(i + n);
+        match o { Some(w) => { println(f"w {w}"); } None => {} }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            "asan_vector_enum_payload_box_frees_once",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(
+            out.matches("w Vector(").count(),
+            20,
+            "every iteration must render its payload:\n{out}"
+        );
+        assert!(
+            out.contains("w Vector(1, 2, 3, 4, 5, 6, 7, 8)") && out.contains("end"),
+            "payload values are wrong:\n{out}"
+        );
+    }
+
     /// B-2026-08-31-10 — the memory half of widening the Option/Result Display
     /// gate to multi-word payloads.
     ///

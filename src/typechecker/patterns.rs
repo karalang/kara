@@ -526,6 +526,23 @@ impl<'a> super::TypeChecker<'a> {
         } else if let Type::Shared(type_name) = expected {
             self.pattern_binding_types
                 .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+        } else if matches!(expected, Type::Array { .. } | Type::Vector { .. }) {
+            // B-2026-08-31-18. Neither is a `Type::Named`, so nothing recorded
+            // a surface name for an array- or vector-typed payload binding and
+            // codegen's `pattern_payload_word_count` fell to its 1-word
+            // default: `match e { E.V(w) => .. }` over a `Vector[i64, 4]`
+            // payload bound the FIRST WORD as an i64 (printing `1` where the
+            // interpreter printed the whole vector), and for a boxed payload it
+            // bound the box pointer. The name pairs with the full `TypeExpr`
+            // recorded by `record_pattern_inner_type`, which is what supplies
+            // the width and the LLVM type.
+            let name = if matches!(expected, Type::Array { .. }) {
+                "Array"
+            } else {
+                "Vector"
+            };
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), name.to_string());
         } else if matches!(expected, Type::Bool) {
             // Match-arm parallel to the `bind_pattern_types` bool
             // case — see that site for the trunc-narrowing
@@ -1811,6 +1828,25 @@ impl<'a> super::TypeChecker<'a> {
                 .insert(SpanKey::from_span(&pattern.span), tup_te);
             self.pattern_binding_types
                 .insert(SpanKey::from_span(&pattern.span), "Tuple".to_string());
+            return;
+        }
+        // `Array[T, N]` / `Vector[T, N]`: record the FULL type — like the
+        // Tuple arm above, and for the same reason. Both span N element words
+        // in an enum payload, and neither is a `Type::Named`, so without the
+        // recorded `TypeExpr` codegen has no width and no LLVM type for the
+        // binding and sized it as one word (B-2026-08-31-18).
+        if matches!(ty, Type::Array { .. } | Type::Vector { .. }) {
+            let key = SpanKey::from_span(&pattern.span);
+            self.pattern_binding_inner_types
+                .insert(key, Self::type_to_type_expr(ty));
+            self.pattern_binding_inner_unresolved
+                .insert(key, ty.clone());
+            let name = if matches!(ty, Type::Array { .. }) {
+                "Array"
+            } else {
+                "Vector"
+            };
+            self.pattern_binding_types.insert(key, name.to_string());
             return;
         }
         // B-2026-08-11-21: a SCALAR binding records its type name too. Codegen

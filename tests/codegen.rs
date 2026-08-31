@@ -11977,6 +11977,145 @@ plain Plain { n: 1, s: s, w: 340282366920938463463374607431768211455 }
         );
     }
 
+    /// B-2026-08-31-18 — a `Vector[T, N]` or `Array[T, N]` ENUM PAYLOAD survives
+    /// the round trip through the variant's payload words.
+    ///
+    /// Both were sized as ONE word. For an array that was a pure under-count (the
+    /// pack side correctly produced N words, so `out.len() > num_words` heap-boxed
+    /// it while the unpack, recomputing the same conservative 1, read word 0 as the
+    /// value); for a vector it was worse, because `coerce_to_i64` has no vector arm
+    /// and returns a literal ZERO — the payload was not truncated, it was erased.
+    ///
+    /// The `m*` rows are the ones that matter. A `match` binding is a VALUE, so
+    /// `E.V4(w) => w` bound `0` (or the first element, or a box pointer) with
+    /// nothing in the program to say so; the Display rows only make the same
+    /// corruption visible. `b[0]` on an array binding was a hard codegen error
+    /// ("Index operator applied to non-array type") because the binding rebuilt as
+    /// an `i64`.
+    ///
+    /// EVERY ROW IS A DIFFERENT PART OF THE WORD ACCOUNTING:
+    ///  - `d4`/`m4` — 4 lanes into a variant area wide enough to hold them inline.
+    ///  - `d8`/`m8`/`o8` — 8 lanes. Inline in `E` (whose area is the max over
+    ///    variants) and BOXED in `Option`, whose area is 3, so this is the pair
+    ///    that exercises the debox path and the `malloc`-alignment fix with it.
+    ///  - `d32`/`m32` — lanes NARROWER than a word, which the one-word-per-lane
+    ///    convention zero-extends and the rebuild truncates back.
+    ///  - `df`/`mf` — f64 lanes, which round-trip as bit patterns, and `dh`/`mh` +
+    ///    `du`/`mu` — f16 and u8 lanes, SUB-WORD components unpacked at their exact
+    ///    width. Narrow floats have been the omitted case in several hand-written
+    ///    width lists this month, so they are pinned here.
+    ///  - `ma`/`oa` — the array half, read through an INDEX so the binding's LLVM
+    ///    type is asserted and not just its rendering.
+    ///  - `hw` — a vector AND an array as FIELDS of a struct payload, the shape
+    ///    that reached `reconstruct_payload_value`'s "unexpected multi-word
+    ///    non-struct field" fallback and `insertvalue`d an `i64` into a
+    ///    `<4 x i64>` slot: invalid IR that failed module verification.
+    ///
+    /// The array payloads sit on a NON-derived enum deliberately: `Array[T, N]` has
+    /// no arm in `emit_display_fn_for_type_expr`, so a derived-Display enum
+    /// carrying one panics the compiler (B-2026-08-31-19) before any of this runs.
+    /// `Vec[Vector[T, N]]` is absent for a different reason — its element buffer is
+    /// `malloc`ed and accessed at the vector's natural 32-byte alignment, which
+    /// faults depending on heap state (B-2026-08-31-21).
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_vector_array_enum_payload_round_trip`, pinned to the same string.
+    #[test]
+    fn e2e_vector_array_enum_payload_round_trip() {
+        let Some(out) = run_program(
+            r#"#[derive(Display)]
+enum E {
+    V4(Vector[i64, 4]),
+    V8(Vector[i64, 8]),
+    V32(Vector[i32, 4]),
+    Vf(Vector[f64, 2]),
+    Vh(Vector[f16, 2]),
+    Vu(Vector[u8, 4]),
+    N,
+}
+
+struct Holder { v: Vector[i64, 4], a: Array[i64, 3], n: i64 }
+enum H { W(Holder), N }
+
+// Array payloads live on a NON-derived enum: `Array[T, N]` has no Display
+// arm in codegen at any depth (B-2026-08-31-19), so a derived-Display enum
+// carrying one panics the compiler before this row's reconstruction runs.
+enum A { A3(Array[i64, 3]), N }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let v4: Vector[i64, 4] = Vector[i64, 4](n, n + 1, n + 2, n + 3);
+    let v8: Vector[i64, 8] = Vector[i64, 8](n, n+1, n+2, n+3, n+4, n+5, n+6, n+7);
+    let v32: Vector[i32, 4] = Vector[i32, 4](n as i32, (n+1) as i32, (n+2) as i32, (n+3) as i32);
+    let vf: Vector[f64, 2] = Vector[f64, 2](n as f64 + 0.5, n as f64 + 1.5);
+    let vh: Vector[f16, 2] = Vector[f16, 2]((n as f32 + 1.5f32) as f16, (n as f32 + 2.5f32) as f16);
+    let vu: Vector[u8, 4] = Vector[u8, 4](n as u8, (n + 1) as u8, (n + 2) as u8, (n + 3) as u8);
+    let a3: Array[i64, 3] = [n, n + 1, n + 2];
+
+    let d4 = E.V4(v4);
+    println(f"d4  {d4}");
+    let d8 = E.V8(v8);
+    println(f"d8  {d8}");
+    let d32 = E.V32(v32);
+    println(f"d32 {d32}");
+    let df = E.Vf(vf);
+    println(f"df  {df}");
+
+    let dh = E.Vh(vh);
+    println(f"dh  {dh}");
+    let du = E.Vu(vu);
+    println(f"du  {du}");
+
+    match d4 { E.V4(w) => { println(f"m4  {w}"); } E.V8(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match d8 { E.V8(w) => { println(f"m8  {w}"); } E.V4(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match d32 { E.V32(w) => { println(f"m32 {w}"); } E.V4(w) => {} E.V8(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match df { E.Vf(w) => { println(f"mf  {w}"); } E.V4(w) => {} E.V8(w) => {} E.V32(w) => {} E.Vh(w) => {} E.Vu(w) => {} E.N => {} }
+    match dh { E.Vh(w) => { println(f"mh  {w}"); } E.V4(w) => {} E.V8(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vu(w) => {} E.N => {} }
+    match du { E.Vu(w) => { println(f"mu  {w}"); } E.V4(w) => {} E.V8(w) => {} E.V32(w) => {} E.Vf(w) => {} E.Vh(w) => {} E.N => {} }
+
+    let da = A.A3(a3);
+    match da { A.A3(b) => { println(f"ma  {b[0]} {b[1]} {b[2]}"); } A.N => {} }
+
+    let o4: Option[Vector[i64, 4]] = Some(v4);
+    match o4 { Some(w) => { println(f"o4  {w}"); } None => {} }
+    let o8: Option[Vector[i64, 8]] = Some(v8);
+    match o8 { Some(w) => { println(f"o8  {w}"); } None => {} }
+    let oa: Option[Array[i64, 3]] = Some(a3);
+    match oa { Some(b) => { println(f"oa  {b[0]} {b[2]}"); } None => {} }
+    let r4: Result[Vector[i64, 4], i64] = Ok(v4);
+    match r4 { Ok(w) => { println(f"r4  {w}"); } Err(x) => { println(f"re  {x}"); } }
+
+    let h = H.W(Holder { v: v4, a: a3, n: n });
+    match h { H.W(x) => { println(f"hw  {x.v} {x.a[0]} {x.a[2]} {x.n}"); } H.N => {} }
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"d4  V4(Vector(1, 2, 3, 4))
+d8  V8(Vector(1, 2, 3, 4, 5, 6, 7, 8))
+d32 V32(Vector(1, 2, 3, 4))
+df  Vf(Vector(1.5, 2.5))
+dh  Vh(Vector(2.5, 3.5))
+du  Vu(Vector(1, 2, 3, 4))
+m4  Vector(1, 2, 3, 4)
+m8  Vector(1, 2, 3, 4, 5, 6, 7, 8)
+m32 Vector(1, 2, 3, 4)
+mf  Vector(1.5, 2.5)
+mh  Vector(2.5, 3.5)
+mu  Vector(1, 2, 3, 4)
+ma  1 2 3
+o4  Vector(1, 2, 3, 4)
+o8  Vector(1, 2, 3, 4, 5, 6, 7, 8)
+oa  1 3
+r4  Vector(1, 2, 3, 4)
+hw  Vector(1, 2, 3, 4) 1 3 1
+"#
+        );
+    }
+
     /// B-2026-08-31-10 — an `Option`/`Result` whose payload is a MULTI-WORD
     /// value renders under codegen, identically to the interpreter.
     ///

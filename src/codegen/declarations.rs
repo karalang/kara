@@ -3739,7 +3739,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     "Map" | "Set" | "SortedSet" | "SortedMap" => 1,
                     // Single-word primitives.
                     "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
-                    | "isize" | "f32" | "f64" | "bool" | "char" | "Unit" => 1,
+                    | "isize" | "f16" | "bf16" | "f32" | "f64" | "bool" | "char" | "Unit" => 1,
+                    // `Vector[T, N]` — one word per LANE, matching
+                    // `llvm_type_word_count`'s vector arm and the array
+                    // convention it borrows. Without this the `_` arm below
+                    // found no registered type of that name and returned the
+                    // conservative 1, under-sizing the variant's payload area
+                    // (B-2026-08-31-18).
+                    "Vector" => {
+                        let args = path.generic_args.as_ref();
+                        let elem = args.and_then(|a| a.first()).and_then(|a| match a {
+                            GenericArg::Type(t) => Some(t.clone()),
+                            _ => None,
+                        });
+                        let lanes = args.and_then(|a| a.get(1)).and_then(|a| match a {
+                            GenericArg::Const(e) => match &e.kind {
+                                ExprKind::Integer(n, _) if *n > 0 => Some(*n as usize),
+                                _ => None,
+                            },
+                            _ => None,
+                        });
+                        match (elem, lanes) {
+                            (Some(el), Some(n)) => {
+                                self.payload_word_count_for_type_expr(
+                                    &el,
+                                    outer_enum,
+                                    outer_variant,
+                                ) * n
+                            }
+                            _ => 1,
+                        }
+                    }
                     // TWO words. `Option`'s payload area is 3 and `Result`'s 5,
                     // so a 128-bit scalar fits INLINE — it must not be routed
                     // to the oversize-boxing path, whose unpack mirror
@@ -3815,6 +3845,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .map(|t| self.payload_word_count_for_type_expr(t, outer_enum, outer_variant))
                 .sum(),
+            // `Array[T, N]` — N element words, matching `llvm_type_word_count`'s
+            // array arm. The `_ => 1` catch-all sized it as a single word, so a
+            // 3-element array payload claimed one slot while the pack side
+            // (`coerce_to_payload_words`' ArrayValue arm) correctly produced
+            // three — `out.len() > num_words` then heap-BOXED it, and the
+            // match-arm unpack, computing its own conservative 1, read word 0
+            // as the value and bound the box pointer's low half
+            // (B-2026-08-31-18).
+            TypeKind::Array { element, size } => {
+                let n = match &size.kind {
+                    ExprKind::Integer(v, _) if *v > 0 => *v as usize,
+                    _ => return 1,
+                };
+                self.payload_word_count_for_type_expr(element, outer_enum, outer_variant) * n
+            }
             TypeKind::Ref(_) | TypeKind::MutRef(_) => 1, // pointer
             TypeKind::MutSlice(_) => 2,                  // { ptr, len }
             _ => 1,
@@ -3840,6 +3885,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 .sum(),
             BasicTypeEnum::ArrayType(at) => {
                 Self::llvm_type_word_count(at.get_element_type()) * (at.len() as usize)
+            }
+            // `Vector[T, N]` lowers to `<N x T>` and costs ONE WORD PER LANE,
+            // the same convention `ArrayType` above uses (the pack side gives
+            // every element its own i64 word rather than bit-packing them).
+            // Falling to the `_ => 1` catch-all counted a 4-lane i64 vector as
+            // a single word, so an enum payload of that type claimed one slot,
+            // was never boxed, and `coerce_to_i64` — which has no vector arm —
+            // wrote a literal ZERO into it. `match` on the payload then bound
+            // 0 and Display printed `Vector(0, 0, 0, 0)` (B-2026-08-31-18).
+            BasicTypeEnum::VectorType(vt) => {
+                Self::llvm_type_word_count(vt.get_element_type()) * (vt.get_size() as usize)
             }
             _ => 1,
         }

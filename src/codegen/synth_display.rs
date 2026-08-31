@@ -23,7 +23,9 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue,
+};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -2895,9 +2897,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 zero
             }
         };
+        // ALL of the field's words, not the first three. The three-word form
+        // was the only entry point here, so a payload wider than three words
+        // reconstructed its first three components and left the rest undef —
+        // a `Vector[i64, 4]` rendered `Vector(1, 2, 3, 51)`, three correct
+        // lanes and one garbage (B-2026-08-31-18). `num` is the variant's
+        // reserved span for this field, which the layout pass and the pack
+        // side both compute from the same word count.
+        let field_words: Vec<inkwell::values::IntValue<'ctx>> =
+            (0..num.max(1)).map(|j| word(self, j)).collect();
         let w0 = word(self, 0);
-        let w1 = word(self, 1);
-        let w2 = word(self, 2);
         let field_ty = self.llvm_type_for_type_expr(field_te);
         // OVERSIZED payload: the pack side heap-boxed it and stored the box
         // pointer in word 0, because the variant's inline area is narrower than
@@ -2920,11 +2929,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_to_ptr(w0, ptr_ty, "enum.fbox.p")
                 .unwrap();
-            self.builder
+            let ld = self
+                .builder
                 .build_load(field_ty, box_ptr, "enum.fbox.ld")
-                .unwrap()
+                .unwrap();
+            // Relaxed to malloc's guarantee, like every other box consumer
+            // (B-2026-08-31-18).
+            if let Some(inst) = ld.as_instruction_value() {
+                let _ = inst.set_alignment(8);
+            }
+            ld
         } else {
-            self.rebuild_value_from_payload_words(field_ty, w0, w1, w2)
+            self.rebuild_value_from_payload_word_slice(field_ty, &field_words)
                 .unwrap_or_else(|_| w0.into())
         };
         let slot = self.create_entry_alloca(display_fn, "enum.field", field_val.get_type());

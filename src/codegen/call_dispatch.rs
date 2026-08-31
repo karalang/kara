@@ -9699,6 +9699,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         BasicValueEnum::ArrayValue(av) => {
                             Self::llvm_type_word_count(av.get_type().into())
                         }
+                        // A `Vector[T, N]` FIELD of a struct payload spans its
+                        // lanes exactly as an array field does; `_ => 1` sent it
+                        // through `coerce_to_i64`'s zero default
+                        // (B-2026-08-31-18).
+                        BasicValueEnum::VectorValue(vv) => {
+                            Self::llvm_type_word_count(vv.get_type().into())
+                        }
                         _ => 1,
                     };
                     let sub_words = if sub_count <= 1 {
@@ -9722,6 +9729,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             )
                         })?;
                     out.push(self.coerce_to_i64(f)?);
+                }
+            }
+            // `Vector[T, N]` — one word per LANE, the array arm's convention
+            // (`llvm_type_word_count`'s vector arm agrees, so `out.len()`
+            // matches the area the layout pass reserved). `extractelement`
+            // rather than `extractvalue`: a vector is not an aggregate.
+            //
+            // Without this arm a vector fell to the `_` default below, whose
+            // `coerce_to_i64` has no vector case and returns a literal ZERO —
+            // the payload was not truncated, it was ERASED, and a boxing site
+            // that later `inttoptr`d that zero segfaulted (B-2026-08-31-18).
+            BasicValueEnum::VectorValue(vv) => {
+                let i32_t = self.context.i32_type();
+                let lanes = vv.get_type().get_size();
+                for i in 0..lanes {
+                    let lane = self
+                        .builder
+                        .build_extract_element(vv, i32_t.const_int(i as u64, false), "pl.v")
+                        .map_err(|e| {
+                            format!(
+                                "coerce_to_payload_words: extract_element failed at lane {}: {:?}",
+                                i, e
+                            )
+                        })?;
+                    out.push(self.coerce_to_i64(lane)?);
                 }
             }
             // A scalar WIDER than a word splits across words, little-endian
@@ -9789,7 +9821,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_pointer_value();
-            self.builder.build_store(box_ptr, val).unwrap();
+            // `malloc` guarantees 16-byte alignment; an over-aligned value
+            // (a `<4 x i64>` wants 32) would otherwise get LLVM's natural
+            // alignment on this store and lower to `vmovaps`, which FAULTS on
+            // a 16-byte-aligned address. Measured as a SIGSEGV on
+            // `malloc(32); vmovaps %ymm0,(%rax)` — and heap-state dependent,
+            // so it appeared and vanished as unrelated statements were added
+            // or removed (B-2026-08-31-18). Every consumer of this box reads
+            // it back through the same relaxed alignment.
+            let box_store = self.builder.build_store(box_ptr, val).unwrap();
+            let _ = box_store.set_alignment(8);
             let box_word = self
                 .builder
                 .build_ptr_to_int(box_ptr, i64_t, "enumbox.w")

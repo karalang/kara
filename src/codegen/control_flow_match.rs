@@ -23,7 +23,7 @@ use crate::codegen::helpers::vec_inner_type_expr;
 use super::state::UserDropKind;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -7051,6 +7051,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some("Vec") | Some("VecDeque") | Some("String") | Some("StringSlice")
                     | Some("CString") => 3,
                     Some("Slice") => 2,
+                    // `Array[T, N]` / `Vector[T, N]` — N element words, from
+                    // the concrete `TypeExpr` the typechecker records alongside
+                    // the name. Neither resolves through `struct_types` or
+                    // `enum_layouts`, so the `Some(name)` arm below returned the
+                    // 1-word default: the reconstruction bound word 0 (the
+                    // first element, or the box pointer for a payload wider
+                    // than the variant's area) instead of the whole value
+                    // (B-2026-08-31-18).
+                    Some("Array") | Some("Vector") => self
+                        .pattern_state
+                        .pattern_binding_inner_types
+                        .get(&key)
+                        .map(|te| Self::llvm_type_word_count(self.llvm_type_for_type_expr(te)))
+                        .unwrap_or(1)
+                        .max(1),
                     // Shared type (struct OR enum): RC heap pointer = exactly one
                     // word. Must precede the struct/enum arms (see the twin note
                     // in `pattern_payload_llvm_type`) — a direct recursive shared
@@ -7183,6 +7198,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // `Array[T, N]` / `Vector[T, N]` — the twin of the word-count
+                // arm: the debox load must read `[N x T]` / `<N x T>`, not the
+                // i64 default (B-2026-08-31-18).
+                if matches!(
+                    self.pattern_state
+                        .pattern_binding_types
+                        .get(&key)
+                        .map(|s| s.as_str()),
+                    Some("Array") | Some("Vector")
+                ) {
+                    if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
+                        return self.llvm_type_for_type_expr(te);
+                    }
+                }
                 // Generic user-struct payload binding — the mono aggregate type
                 // (sibling of the word-count arm in `pattern_payload_word_count`).
                 if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
@@ -7303,6 +7332,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(whole_ty, box_ptr, "enumbox.ld")
                     .unwrap();
+                // malloc's guarantee, not the type's natural alignment — an
+                // over-aligned payload (`<4 x i64>` wants 32) would lower to a
+                // faulting `vmovaps` (B-2026-08-31-18).
+                if let Some(inst) = loaded.as_instruction_value() {
+                    let _ = inst.set_alignment(8);
+                }
                 deboxed_words = self.coerce_to_payload_words(loaded, want)?;
                 deboxed_words.as_slice()
             } else {
@@ -7560,6 +7595,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // `Array[T, N]` / `Vector[T, N]`: neither is a struct, so the
+        // field-by-field machinery below (which falls back to
+        // `vec_struct_type` for any non-struct target) cannot build it.
+        // Delegate to `rebuild_value_from_payload_word_slice`, which owns the
+        // array/vector reconstruction the Display path uses — one
+        // implementation, so the two backends' unpacks cannot drift
+        // (B-2026-08-31-18).
+        if matches!(
+            self.pattern_state
+                .pattern_binding_types
+                .get(&key)
+                .map(|s| s.as_str()),
+            Some("Array") | Some("Vector")
+        ) {
+            if let Some(te) = self.pattern_state.pattern_binding_inner_types.get(&key) {
+                let target = self.llvm_type_for_type_expr(te);
+                if matches!(
+                    target,
+                    BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
+                ) {
+                    return self.rebuild_value_from_payload_word_slice(target, field_words);
+                }
+            }
+        }
         // Multi-word: resolve the binding's surface type to choose the
         // target LLVM aggregate type. A Struct-PATTERN sub-pattern (slice
         // 3t: `Some(Holder { name, id })`) has no `pattern_binding_types`
@@ -7711,6 +7770,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             .into(),
                         _ => word.into(),
                     }
+                } else if matches!(
+                    field_ty,
+                    BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
+                ) {
+                    // An `Array[T, N]` / `Vector[T, N]` FIELD spans N element
+                    // words. Before B-2026-08-31-18 taught `llvm_type_word_count`
+                    // about vectors, such a field reported one word and fell to
+                    // the scalar branch above; with the true width it reached the
+                    // "unexpected multi-word non-struct" fallback below, which
+                    // keeps word 0 and `insertvalue`s a bare `i64` into a
+                    // `<4 x i64>` slot — invalid IR that fails module
+                    // verification. Delegate to the shared rebuilder, which owns
+                    // both shapes.
+                    self.rebuild_value_from_payload_word_slice(field_ty, slice)?
                 } else if let BasicTypeEnum::StructType(inner_st) = field_ty {
                     // Nested struct field — rebuild via the recursive,
                     // word-correct helper. #44 (phase-12 parser slice 2a): the
@@ -7777,6 +7850,15 @@ impl<'ctx> super::Codegen<'ctx> {
             let field_val: BasicValueEnum<'ctx> = if let BasicTypeEnum::StructType(inner) = field_ty
             {
                 self.reconstruct_struct_from_words(inner, slice)?.into()
+            } else if matches!(
+                field_ty,
+                BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
+            ) {
+                // Twin of the array/vector branch in `reconstruct_payload_value`
+                // (B-2026-08-31-18) — this helper is the one a NESTED struct
+                // field recurses through, so both need it or a vector one level
+                // down still collapses to word 0.
+                self.rebuild_value_from_payload_word_slice(field_ty, slice)?
             } else {
                 let word = slice
                     .first()

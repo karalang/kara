@@ -13,7 +13,7 @@
 use crate::ast::*;
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -4126,6 +4126,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_load(inner_ll, box_ptr, "enumbox.uw.ld")
                 .unwrap();
+            // malloc's 16-byte guarantee, not the type's natural alignment
+            // (B-2026-08-31-18) — the pack-side store is relaxed the same way.
+            if let Some(inst) = loaded.as_instruction_value() {
+                let _ = inst.set_alignment(8);
+            }
             // B-2026-08-05-7 (vec_get leg): the BOX itself leaked. A payload
             // wider than the enum's area is heap-boxed by
             // `coerce_to_payload_words`, and every consumer is supposed to
@@ -4360,10 +4365,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_to_ptr(words[0], ptr_ty, "plbox.p")
                 .map_err(|e| format!("rebuild_payload: inttoptr failed: {e:?}"))?;
-            return self
+            // Relaxed to malloc's guarantee — the pack-side store is too
+            // (B-2026-08-31-18).
+            let loaded = self
                 .builder
                 .build_load(target_ty, box_ptr, "plbox.ld")
-                .map_err(|e| format!("rebuild_payload: load failed: {e:?}"));
+                .map_err(|e| format!("rebuild_payload: load failed: {e:?}"))?;
+            if let Some(inst) = loaded.as_instruction_value() {
+                let _ = inst.set_alignment(8);
+            }
+            return Ok(loaded);
         }
         self.rebuild_value_from_payload_word_slice(target_ty, words)
     }
@@ -4515,12 +4526,62 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(agg.into())
             }
-            BasicTypeEnum::ArrayType(_) => {
-                // Fixed-size arrays as Option payloads aren't expected in
-                // v1.x kata workloads; conservatively return w0 in i64
-                // form so downstream code at least compiles. Surfaces a
-                // bug-shaped artifact rather than a hard error if reached.
-                Ok(i64_t.const_zero().into())
+            // `Array[T, N]` — N elements, each consuming its own word span,
+            // the mirror of `coerce_to_payload_words`' ArrayValue arm.
+            //
+            // This used to return an i64 ZERO with a comment calling the shape
+            // unexpected in v1.x kata workloads. It is not unexpected: an
+            // `Option[Array[i64, 3]]` / a user enum with an array payload both
+            // land here, and the zero was returned as an INT where the caller
+            // wanted an array — so the value was not merely wrong, its LLVM
+            // type was too, and the renderer printed a scalar (B-2026-08-31-18).
+            BasicTypeEnum::ArrayType(at) => {
+                let elem_ty = at.get_element_type();
+                let need = self.payload_words_for_type(elem_ty).max(1);
+                let mut agg = at.get_undef();
+                for i in 0..at.len() as usize {
+                    let cursor = i * need;
+                    if cursor >= words.len() {
+                        break;
+                    }
+                    let elem =
+                        self.rebuild_value_from_payload_word_slice(elem_ty, &words[cursor..])?;
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, elem, i as u32, "or.pl.arr.iv")
+                        .map_err(|e| format!("or.pl.arr: insert_value failed: {e:?}"))?
+                        .into_array_value();
+                }
+                Ok(agg.into())
+            }
+            // `Vector[T, N]` — one word per lane, rebuilt with `insertelement`
+            // (a vector is not an aggregate, so `insertvalue` does not apply).
+            // Absent entirely before B-2026-08-31-18: the `_` arm below handed
+            // back the raw i64 word 0, which the pack side had already written
+            // as a literal zero.
+            BasicTypeEnum::VectorType(vt) => {
+                let elem_ty = vt.get_element_type();
+                let need = self.payload_words_for_type(elem_ty).max(1);
+                let i32_t = self.context.i32_type();
+                let mut agg = vt.get_undef();
+                for i in 0..vt.get_size() as usize {
+                    let cursor = i * need;
+                    if cursor >= words.len() {
+                        break;
+                    }
+                    let lane =
+                        self.rebuild_value_from_payload_word_slice(elem_ty, &words[cursor..])?;
+                    agg = self
+                        .builder
+                        .build_insert_element(
+                            agg,
+                            lane,
+                            i32_t.const_int(i as u64, false),
+                            "or.pl.vec.ie",
+                        )
+                        .map_err(|e| format!("or.pl.vec: insert_element failed: {e:?}"))?;
+                }
+                Ok(agg.into())
             }
             _ => Ok(w0.into()),
         }
@@ -4546,6 +4607,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         .sum::<usize>()
                         .max(1)
                 }
+            }
+            // One word per element / lane, matching `coerce_to_payload_words`
+            // and `llvm_type_word_count` (B-2026-08-31-18). The `_ => 1`
+            // default made a nested array or vector FIELD claim a single word,
+            // so every field after it read from the wrong offset.
+            BasicTypeEnum::ArrayType(at) => {
+                self.payload_words_for_type(at.get_element_type()).max(1) * (at.len() as usize)
+            }
+            BasicTypeEnum::VectorType(vt) => {
+                self.payload_words_for_type(vt.get_element_type()).max(1) * (vt.get_size() as usize)
             }
             _ => 1,
         }
