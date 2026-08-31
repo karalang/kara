@@ -48,6 +48,53 @@ fn run_no_errors(source: &str) -> String {
     out.join("")
 }
 
+/// B-2026-08-31-29 (oracle half) — `let g = ref arr[i]` over an `Array[T, N]`
+/// base reads the element.
+///
+/// The interpreter was RIGHT throughout, on every line of this fixture, which
+/// is precisely what made the bug a run-vs-build divergence rather than a
+/// design question: codegen's named-local `ref` arm dispatched no container
+/// class at all and lowered an Array as though its slot were a `{ptr, i64,
+/// i64}` Vec header, so `Array[i64, 3]` built cleanly and segfaulted while
+/// `--interp` printed the right answer. This half is the oracle the compiled
+/// side is asserted against.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_ref_binding_over_an_array_base_reads_the_element`, pinned to the same
+/// string.
+#[test]
+fn test_ref_binding_over_an_array_base() {
+    assert_eq!(
+        run(r#"struct P { a: i64, b: i64 }
+
+fn main() {
+    let sa: Array[i64, 3] = Array[10, 20, 30];
+    let g = ref sa[2];
+    println(f"scalar {g}");
+
+    let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let va: Array[Vector[i64, 4], 3] = Array[v, v, v];
+    let gv = ref va[2];
+    println(f"vector {gv.reduce_sum()}");
+
+    let pa: Array[P, 2] = Array[P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let gp = ref pa[1];
+    println(f"struct {gp.a} {gp.b}");
+
+    let mut ma: Array[i64, 3] = Array[1, 2, 3];
+    let gm = ref ma[0];
+    ma[0] = 99;
+    println(f"alias {gm}");
+
+    let vv: Vec[i64] = [7, 8, 9];
+    let gc = ref vv[1];
+    println(f"vec {gc}");
+}
+"#),
+        "scalar 30\nvector 10\nstruct 3 4\nalias 99\nvec 8\n"
+    );
+}
+
 /// B-2026-08-26-36 — `let r = ref v[i]` is a LIVE BORROW, not a snapshot.
 ///
 /// The aliasing is the contract, not an optimisation. Codegen compiles the

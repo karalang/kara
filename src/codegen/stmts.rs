@@ -14152,8 +14152,83 @@ impl<'ctx> super::Codegen<'ctx> {
         // shape `std.autograd`'s tape reads take.
         let (elem_ptr, elem_ty, elem_te) = match &object.kind {
             ExprKind::Identifier(container) => {
-                let (ptr, ty) = self.lower_indexed_elem_ptr_vec(container, index)?;
-                let te = self.var_types.var_elem_type_exprs.get(container).cloned();
+                // B-2026-08-31-29 — DISPATCH ON THE CONTAINER CLASS. This arm
+                // called `lower_indexed_elem_ptr_vec` unconditionally, so any
+                // non-Vec named local was lowered as though its slot held a
+                // `{ptr, i64, i64}` Vec header. For an `Array[T, N]`, whose
+                // slot is the array storage itself, that reads element 0 as
+                // the data POINTER and element 1 as the LENGTH:
+                //
+                //     %arr = alloca [3 x i64]              ; [10, 20, 30]
+                //     %len  = gep {ptr,i64,i64}, %arr, 0, 1 ; 20
+                //     %data = gep {ptr,i64,i64}, %arr, 0, 0 ; 10
+                //     %bounds = icmp uge i64 2, %len        ; 2 < 20, PASSES
+                //     %e = gep i64, %data, i64 2            ; address 10 + 16
+                //
+                // The bounds check is not merely useless there, it is
+                // DEFEATED — it compares against a payload word — so the load
+                // faults on whatever address the elements happen to spell.
+                // `Array[i64, 3]` segfaults at runtime with a clean build; the
+                // `Array[Vector[T, N], M]` spelling the row was filed for is
+                // the LUCKY case, where the wrong element type (the vector's
+                // lane) reaches `compile_vector_method` and panics the
+                // compiler before it can emit the bad load.
+                //
+                // The classification mirrors `compile_indexed_receiver_method`
+                // (`calls.rs`) exactly, in the same order, so the two indexed
+                // lowerings agree on what a container is. Declining is the
+                // right answer for every other class, which is also what the
+                // sibling `FieldAccess` arm below does (`_ => Ok(None)`): a
+                // Map base is deliberately NOT wired up here, because
+                // `let g = ref m[k]` binds the whole map rather than the value
+                // under the interpreter too — a separate defect that wiring
+                // codegen alone would convert into a run-vs-build divergence.
+                let is_vec = self
+                    .var_types
+                    .vec_elem_types
+                    .contains_key(container.as_str());
+                let is_slice = self
+                    .var_types
+                    .slice_elem_types
+                    .contains_key(container.as_str());
+                let arr_slot = self
+                    .variables
+                    .get(container.as_str())
+                    .copied()
+                    .filter(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                let (ptr, ty, te) = if is_vec {
+                    let (p, t) = self.lower_indexed_elem_ptr_vec(container, index)?;
+                    (
+                        p,
+                        t,
+                        self.var_types.var_elem_type_exprs.get(container).cloned(),
+                    )
+                } else if is_slice {
+                    let (p, t) = self.lower_indexed_elem_ptr_slice(container, index)?;
+                    (
+                        p,
+                        t,
+                        self.var_types.var_elem_type_exprs.get(container).cloned(),
+                    )
+                } else if let Some(slot) = arr_slot {
+                    let (p, t) = self.lower_indexed_elem_ptr_array(slot, index)?;
+                    // An Array's element TypeExpr lives in its OWN table. The
+                    // `var_elem_type_exprs` the other two arms read is the
+                    // Vec/Slice/Map one, whose ~170 readers treat a present
+                    // entry as "this binding is one of those" — which is why
+                    // `array_elem_type_exprs` exists separately, and why this
+                    // reads it rather than widening that table. Without it the
+                    // borrowed element has no recorded type and a field read
+                    // through the borrow (`let r = ref pa[1]; r.a`) fails with
+                    // "cannot resolve field 'a' on this receiver".
+                    (
+                        p,
+                        t,
+                        self.var_types.array_elem_type_exprs.get(container).cloned(),
+                    )
+                } else {
+                    return Ok(false);
+                };
                 (ptr, ty, te)
             }
             ExprKind::FieldAccess { .. } => {

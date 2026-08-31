@@ -12,6 +12,21 @@ use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
+/// The KIND of an LLVM value, for a diagnostic that must not print an
+/// inkwell `Debug` dump. `{:?}` on a `BasicValueEnum` renders the whole
+/// `Value` struct — address, `is_const`, the raw IR line — which is noise to
+/// everyone who is not holding this file open.
+fn basic_value_kind_name(v: BasicValueEnum<'_>) -> &'static str {
+    match v {
+        BasicValueEnum::ArrayValue(_) => "an array",
+        BasicValueEnum::IntValue(_) => "an integer",
+        BasicValueEnum::FloatValue(_) => "a float",
+        BasicValueEnum::PointerValue(_) => "a pointer",
+        BasicValueEnum::StructValue(_) => "a struct",
+        BasicValueEnum::VectorValue(_) | BasicValueEnum::ScalableVectorValue(_) => "a vector",
+    }
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// `Vector[T, N].splat(x)` — broadcast scalar `x` to all `N` lanes
     /// (design.md § Portable SIMD). Compile the scalar once and
@@ -1193,7 +1208,25 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let recv = self.compile_expr(object)?.into_vector_value();
+        // B-2026-08-31-29 — a DIAGNOSTIC, not an unwrap. `into_vector_value`
+        // panics the whole compiler when an upstream lowering hands this a
+        // non-vector receiver, and the panic text is a Rust `Debug` dump of an
+        // inkwell value with no span and no source construct in it. Every
+        // phase in this compiler is required to emit a structured error
+        // instead; that this one did not is what turned a container-dispatch
+        // gap (fixed in `stmts.rs`, same row) into `thread panicked at
+        // method_call_vector.rs`. The gap is closed, so nothing reaches this
+        // arm today — it stays as the guard for the NEXT such gap, which is
+        // the only reason a defensive branch earns its place.
+        let recv_val = self.compile_expr(object)?;
+        let BasicValueEnum::VectorValue(recv) = recv_val else {
+            return Err(format!(
+                "codegen: receiver of vector method '{}' lowered to {} rather than a vector — \
+                 the container it was read from resolved to the wrong element type",
+                method,
+                basic_value_kind_name(recv_val),
+            ));
+        };
         let n = recv.get_type().get_size();
         let i32_t = self.context.i32_type();
         let lane = |cg: &Self, v: inkwell::values::VectorValue<'ctx>, i: u32| {

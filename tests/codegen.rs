@@ -21291,6 +21291,81 @@ fn main() {
         );
     }
 
+    /// The fixture B-2026-08-31-29's two halves share: the codegen E2E below
+    /// and `tests/interpreter.rs`'s `test_ref_binding_over_an_array_base`.
+    /// One string, so a shape added to either widens both.
+    const ARRAY_REF_BINDING_SRC: &str = r#"struct P { a: i64, b: i64 }
+
+fn main() {
+    let sa: Array[i64, 3] = Array[10, 20, 30];
+    let g = ref sa[2];
+    println(f"scalar {g}");
+
+    let v: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let va: Array[Vector[i64, 4], 3] = Array[v, v, v];
+    let gv = ref va[2];
+    println(f"vector {gv.reduce_sum()}");
+
+    let pa: Array[P, 2] = Array[P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let gp = ref pa[1];
+    println(f"struct {gp.a} {gp.b}");
+
+    let mut ma: Array[i64, 3] = Array[1, 2, 3];
+    let gm = ref ma[0];
+    ma[0] = 99;
+    println(f"alias {gm}");
+
+    let vv: Vec[i64] = [7, 8, 9];
+    let gc = ref vv[1];
+    println(f"vec {gc}");
+}
+"#;
+
+    /// B-2026-08-31-29 — `let g = ref arr[i]` over an `Array[T, N]` base reads
+    /// the ELEMENT, not whatever the array's first two words happen to spell.
+    ///
+    /// `try_compile_ref_binding`'s named-local arm called
+    /// `lower_indexed_elem_ptr_vec` unconditionally, so an `Array` — whose slot
+    /// IS the storage, not a `{ptr, i64, i64}` header — was punned as a Vec:
+    /// element 0 became the data pointer and element 1 the length. The bounds
+    /// check was not merely useless, it was DEFEATED, comparing the index
+    /// against a payload word:
+    ///
+    ///     %arr = alloca [3 x i64]                ; [10, 20, 30]
+    ///     %len  = gep {ptr,i64,i64}, %arr, 0, 1   ; 20
+    ///     %data = gep {ptr,i64,i64}, %arr, 0, 0   ; 10
+    ///     %bounds = icmp uge i64 2, %len          ; 2 < 20, PASSES
+    ///     %e = gep i64, %data, i64 2              ; address 10 + 16
+    ///
+    /// The `scalar` line is therefore the load-bearing one: `Array[i64, 3]`
+    /// built CLEANLY and segfaulted. The row was filed against the
+    /// `Array[Vector[T, N], M]` spelling, which is the LUCKY case — there the
+    /// wrong element type (the vector's LANE) reaches `compile_vector_method`
+    /// and panics the compiler before the bad load is ever emitted, so it fails
+    /// loudly at build time instead of silently at runtime.
+    ///
+    /// `struct` covers the second half of the fix: an Array's element
+    /// `TypeExpr` lives in `array_elem_type_exprs`, not the `var_elem_type_exprs`
+    /// the Vec/Slice arms read, and without it a field read through the borrow
+    /// failed with "cannot resolve field 'a' on this receiver". `alias` pins
+    /// the borrow's actual contract — a write through the container is visible
+    /// through the live borrow — and `vec` is the control: the one class that
+    /// always worked, which must keep working.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_ref_binding_over_an_array_base`,
+    /// pinned to the same string. The interpreter was correct throughout, which
+    /// is what made this a run-vs-build divergence rather than a design gap.
+    #[test]
+    fn e2e_ref_binding_over_an_array_base_reads_the_element() {
+        let Some(out) = run_program(ARRAY_REF_BINDING_SRC) else {
+            return;
+        };
+        assert_eq!(
+            out, "scalar 30\nvector 10\nstruct 3 4\nalias 99\nvec 8\n",
+            "a `ref` binding over an Array base must read the element; got: {out:?}"
+        );
+    }
+
     /// B-2026-08-27-23 — `.clone()` on a TUPLE and on `Option[shared T]`, the
     /// two element shapes B-2026-08-26-21's rejection had no remedy for.
     ///
