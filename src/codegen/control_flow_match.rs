@@ -310,8 +310,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // the `let` site); a scrutinee temporary never passes through that site,
         // which is why it needed its own classification here.
         let passthrough_retains = self.call_passthrough_armed_any_source(scrutinee).is_some();
-        let readonly_inline_optres =
-            self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms) || passthrough_retains;
+        let readonly_inline_optres = {
+            // B-2026-08-30-52 — the operator relaxation is scoped to this
+            // classifier; see the flag's doc for the fresh-temp leak a
+            // global relaxation causes.
+            let saved = self.pattern_state.escape_walk_relaxes_primitive_operators;
+            self.pattern_state.escape_walk_relaxes_primitive_operators = true;
+            let r = self.scrutinee_is_readonly_inline_optres_local(scrutinee, arms);
+            self.pattern_state.escape_walk_relaxes_primitive_operators = saved;
+            r
+        } || passthrough_retains;
         // B-2026-08-08-25 leg 1 — the clone leg keeps the source's payload too,
         // so the suppressors must skip it for the same reason. It is held
         // SEPARATE from `readonly_inline_optres` because only the read-only
@@ -481,7 +489,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut next_bb = arm0_bb;
         let mut arm_body_bbs: Vec<BasicBlock<'ctx>> = Vec::with_capacity(arms.len());
 
+        // B-2026-08-31-14 — `borrowed_agg_payload_struct_vars` is keyed by
+        // BINDING NAME and cleared only per FUNCTION, so a name registered by a
+        // borrow-mode arm stayed registered for every LATER match in the same
+        // function that happened to reuse it. Snapshot it around the arm loop
+        // and restore per arm, so the registration lives exactly as long as the
+        // arm that made it.
+        let saved_borrowed_agg_payload_vars =
+            self.borrow_vars.borrowed_agg_payload_struct_vars.clone();
         for (i, arm) in arms.iter().enumerate() {
+            self.borrow_vars.borrowed_agg_payload_struct_vars =
+                saved_borrowed_agg_payload_vars.clone();
             let arm_bb = next_bb;
             // Always create a fresh fail_bb — never reuse merge_bb directly.
             // If the last pattern condition is false (non-exhaustive match or
@@ -1225,6 +1243,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // resolve outer names, not this arm's shadows.
             self.restore_var_env(arm_snap);
         }
+        self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
 
         // Wire the entry block. With a qualifying string-dispatch plan, branch
         // `entry_bb` through the switch tree straight into the arm bodies;
@@ -5610,12 +5629,41 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => true,
                     }
                 };
+                // B-2026-08-30-52 — an ARITHMETIC OR COMPARISON OPERATOR IS A
+                // CALL BY THE TIME THIS WALK RUNS. `lowering.rs` rewrites
+                // `n + 1` to `Call { callee: Path(["i64", "add"]), .. }`, so
+                // the `Binary` arm above — which treats a bare operand as a
+                // BORROW — never sees it, and the operand fell to the generic
+                // "passed to a call means moved" rule below.
+                //
+                // The consequence was a read-only arm classified as escaping
+                // because of a SCALAR: `match a { Some(S { v, n }) =>
+                // println(v[0] + n) }` took the payload and the source read
+                // back garbage, while `println(v[0] + 1)` on the identical
+                // pattern was correct. Nothing is moved either way — the
+                // difference was only whether an operand happened to be a
+                // binding.
+                //
+                // This is the SAME defect B-2026-08-05-3 (guard leg) fixed in
+                // the sibling classifier `consume_class`, with the same
+                // symptom there: a guard `Some(x) if x.1 == 5i64` scored
+                // "consumed" purely because of the desugar, disarming the
+                // source and leaking a tuple payload. That fix introduced
+                // `is_lowered_primitive_operator`; this walker simply never
+                // learned about it. Reusing the one predicate is what keeps
+                // the two classifiers from drifting again — an earlier
+                // attempt here open-coded a looser test (any method name on a
+                // numeric type, and no `String`) and leaked 3200 bytes in
+                // `asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once`.
+                let callee_is_primitive_operator =
+                    self.pattern_state.escape_walk_relaxes_primitive_operators
+                        && super::consume_class::is_lowered_primitive_operator(callee);
                 let callee_is_closure_literal = matches!(&callee.kind, ExprKind::Closure { .. });
                 // The callee walk still runs for a literal: it is how a closure
                 // that CAPTURES `name` (rather than receiving it) is caught.
                 self.borrow_binding_escapes(callee, name)
                     || args.iter().enumerate().any(|(i, a)| {
-                        if is_print {
+                        if is_print || callee_is_primitive_operator {
                             borrow_pos(self, &a.value)
                         } else if callee_is_closure_literal && bare(&a.value) {
                             closure_arg_escapes(self, i)

@@ -291,7 +291,7 @@ fn stmt_has_sink(name: &str, s: &Stmt) -> bool {
 /// fresh-slice shapes. A place expression is the only shape
 /// `value_derived_from` recognizes, and it is never one of those, so a derived
 /// operand still transfers nothing.
-fn is_lowered_primitive_operator(callee: &Expr) -> bool {
+pub(crate) fn is_lowered_primitive_operator(callee: &Expr) -> bool {
     let ExprKind::Path { segments, .. } = &callee.kind else {
         return false;
     };

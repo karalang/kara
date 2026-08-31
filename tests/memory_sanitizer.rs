@@ -63380,6 +63380,66 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-14 under ASAN/LSan — A BORROW-MODE PAYLOAD BINDING NAME
+    /// STAYED REGISTERED FOR EVERY LATER MATCH IN THE SAME FUNCTION.
+    ///
+    /// `borrowed_agg_payload_struct_vars` is keyed by BINDING NAME and was
+    /// cleared only per FUNCTION. A read-only arm registers its payload
+    /// bindings there (so a heap field copied out of one deep-copies); a LATER
+    /// match that happened to reuse the name then inherited that registration
+    /// and stopped taking ownership of its own payload, which nothing else
+    /// owned — a leak.
+    ///
+    /// The two matches below are individually clean and leak only together, in
+    /// this order, which is why it survived: the first is a read-only borrow
+    /// over a NAMED local, the second a FRESH TEMP whose arm genuinely moves
+    /// `e.msg` out. Both bind `e`. Measured on `main` before the fix: 800 bytes
+    /// in 50 objects, one per loop iteration. Swap the order and it is clean,
+    /// which is what made an earlier bisect of this read as "no interaction".
+    ///
+    /// Found while working B-2026-08-30-52: relaxing the escape walker made a
+    /// third match qualify as a borrow and lit the same collision from another
+    /// direction, but the defect is entirely independent of that row and
+    /// reproduces on an unmodified compiler.
+    #[test]
+    fn asan_borrow_mode_binding_name_does_not_leak_into_a_later_match() {
+        assert_clean_asan_run(
+            r#"
+struct One { msg: String }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn g(i: i64) -> Result[i64, One] { return Result.Err(One { msg: s_of(i) }); }
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+fn main() {
+    let base: i64 = env.args().len();
+    let mut n = 0i64;
+    let mut i = base;
+    while i < base + 50i64 {
+        // 1. READ-ONLY over a named local — a borrow, and it registers `e`.
+        let r: Result[i64, One] = g(i);
+        match r {
+            Result.Ok(_) => { n = n + 1i64; }
+            Result.Err(e) => { if e.msg.contains(digits(i)) { n = n + e.msg.len(); } }
+        }
+        // 2. FRESH TEMP whose arm MOVES the payload out. It must own it; the
+        //    stale registration above made it think otherwise.
+        match g(i) {
+            Result.Ok(v) => { n = n + v; }
+            Result.Err(e) => { let m: String = e.msg; if m.contains(digits(i)) { n = n + m.len(); } }
+        }
+        i = i + 1i64;
+    }
+    println("done");
+}
+"#,
+            &["done"],
+            "borrow-mode binding name does not leak into a later match",
+        );
+    }
+
     /// B-2026-08-29-66 under ASAN/LSan — the memory half of the auto-par
     /// branch-publish handshake, which the ordering assertions in
     /// `tests/par_codegen.rs` can only see indirectly (a garbage id printed

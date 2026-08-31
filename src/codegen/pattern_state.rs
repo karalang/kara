@@ -54,6 +54,22 @@ pub(crate) struct PatternState<'ctx> {
     /// aliases the container's storage and the container's own cleanup
     /// already covers the buffer.
     pub(crate) pattern_binding_is_borrow: bool,
+    /// B-2026-08-30-52 — scope the escape walker's LOWERED-OPERATOR relaxation
+    /// to the read-only-arm classifiers, and nowhere else.
+    ///
+    /// `n + 1` is a `Call` by the time the walk runs, so an operand looked
+    /// moved; `is_lowered_primitive_operator` identifies those calls. Applying
+    /// the relaxation to EVERY `no_arm_payload_escapes` caller is not safe, and
+    /// the cost is measured: several of them read "the arm does not let its
+    /// binding escape" as "the SOURCE still owns it", which only holds when
+    /// there IS a source. For a FRESH-TEMP scrutinee (`match g1(i) { .. }`)
+    /// there is none, so a relaxed answer there leaves nobody owning the
+    /// payload — `asan_freshtemp_result_arm_binding_a_struct_payload_owns_it_once`
+    /// leaked 3200 bytes in 200 objects, one per loop iteration.
+    ///
+    /// The two read-only classifiers are the callers that require a named local
+    /// source, so the flag is raised around them and restored after.
+    pub(crate) escape_walk_relaxes_primitive_operators: bool,
     /// B-2026-08-08-25 — set alongside `pattern_binding_is_borrow` when the
     /// scrutinee is a LIVE LOCAL owning an inline `Option`/`Result`
     /// `{ptr,len,cap}` payload and no arm moves that payload out

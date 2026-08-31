@@ -188,8 +188,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_state
             .pattern_binding_source_retains_inline_payload;
         self.pattern_state
-            .pattern_binding_source_retains_inline_payload =
-            self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, then_block);
+            .pattern_binding_source_retains_inline_payload = {
+            // B-2026-08-30-52 — same scoping as the `match` site.
+            let saved = self.pattern_state.escape_walk_relaxes_primitive_operators;
+            self.pattern_state.escape_walk_relaxes_primitive_operators = true;
+            let r =
+                self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, then_block);
+            self.pattern_state.escape_walk_relaxes_primitive_operators = saved;
+            r
+        };
         self.pattern_state.pattern_binding_is_borrow = self.pattern_state.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)
@@ -744,8 +751,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .pattern_state
             .pattern_binding_source_retains_inline_payload;
         self.pattern_state
-            .pattern_binding_source_retains_inline_payload =
-            self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, body);
+            .pattern_binding_source_retains_inline_payload = {
+            // B-2026-08-30-52 — same scoping as the `match` site.
+            let saved = self.pattern_state.escape_walk_relaxes_primitive_operators;
+            self.pattern_state.escape_walk_relaxes_primitive_operators = true;
+            let r = self.scrutinee_is_readonly_inline_optres_local_block(value, pattern, body);
+            self.pattern_state.escape_walk_relaxes_primitive_operators = saved;
+            r
+        };
         self.pattern_state.pattern_binding_is_borrow = self.pattern_state.pattern_binding_is_borrow
             || self.scrutinee_is_borrowed_binding(value)
             || self.scrutinee_is_borrow_call(value)

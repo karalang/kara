@@ -68103,12 +68103,23 @@ fn main() {
         // boxed `Option[Holder]` binding — the consumed fields' caps are
         // zeroed INSIDE the box (`boxfld.suppress`) so the let-site
         // BoxedEnumDrop inner walk frees only unbound fields.
+        //
+        // B-2026-08-30-52 RETARGETED THIS ARM TO A CONSUMING ONE. It used to
+        // read `println(name.len() + id)` — a READ-ONLY destructuring arm,
+        // which is now classified a BORROW: the source keeps the payload and
+        // frees it at scope exit, so there is no transfer and `boxfld.suppress`
+        // is correctly absent. Both strategies free exactly once, so the
+        // behaviour this test protects is unchanged; what moved is WHICH
+        // mechanism a read-only arm uses, which is the row's whole subject.
+        // `let owned = name;` restores a genuine consume, so the suppression is
+        // required again and this test still guards the thing it was written
+        // for. The read-only spelling is asserted just below.
         let src = r#"
 struct Holder { name: String, id: i64 }
 fn main() {
     let o: Option[Holder] = Some(Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 });
     match o {
-        Some(Holder { name, id }) => { println(name.len() + id); },
+        Some(Holder { name, id }) => { let owned: String = name; println(owned.len() + id); },
         None => { println("missing"); },
     }
 }
@@ -121120,6 +121131,34 @@ fn main() {
                      match a { Some(S { v }) => println(v[1]), None => println(\"none\") }\n\
                  }\n",
                 "11\n22\n",
+            ),
+            // B-2026-08-30-52 sub-mechanism (a): TWO BOUND LEAVES IN ONE
+            // EXPRESSION. `n + 1` is a `Call` by the time the escape walker
+            // runs (`Path(["i64", "add"])`), so a bare operand looked MOVED and
+            // the arm was not read-only — `println(v[0] + n)` read back garbage
+            // while `println(v[0] + 1)` on the identical pattern was correct.
+            // The walker now reuses `consume_class`'s
+            // `is_lowered_primitive_operator`, the predicate B-2026-08-05-3
+            // added to the sibling classifier for this exact desugar.
+            (
+                "two bound leaves in one expression",
+                "struct S { v: Vec[i64], n: i64 }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { v: [11, 22], n: 5 });\n\
+                     match a { Some(S { v, n }) => { println(v[0] + n); } None => {} }\n\
+                     match a { Some(S { v, n }) => println(v[1] + n), None => println(\"none\") }\n\
+                 }\n",
+                "16\n27\n",
+            ),
+            (
+                "control: one bound leaf and a literal — correct before and after",
+                "struct S { v: Vec[i64], n: i64 }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { v: [11, 22], n: 5 });\n\
+                     match a { Some(S { v, n }) => { println(v[0] + 1); } None => {} }\n\
+                     match a { Some(S { v, n }) => println(v[1] + 1), None => println(\"none\") }\n\
+                 }\n",
+                "12\n23\n",
             ),
             // CONTROL: a payload that owns nothing stays OFF the borrow path —
             // `field_te_owns_heap` says so — because it already takes its path

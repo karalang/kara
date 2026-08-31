@@ -6198,6 +6198,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_state: PatternState {
                 discarded_branch_spans: FxHashSet::default(),
                 pattern_binding_is_borrow: false,
+                escape_walk_relaxes_primitive_operators: false,
                 pattern_binding_source_retains_inline_payload: false,
                 pattern_binding_scrutinee_is_elidable_param: false,
                 pattern_binding_scrutinee_is_option_result: false,
