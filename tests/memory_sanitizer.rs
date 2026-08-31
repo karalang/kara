@@ -55074,6 +55074,165 @@ fn main() {
         );
     }
 
+    /// B-2026-08-29-32 — a discarded BRANCH whose arms are literals of a
+    /// struct that carries heap but declares no `Drop` ANYWHERE in it.
+    ///
+    /// This is a pure MEMORY row and only this file can see it: `P` has no
+    /// body to run, so every body-count fixture in the tree reads identically
+    /// before and after. The discard battery answered the bodies question
+    /// correctly — there is none — and then RETURNED, and the return sat above
+    /// the one memory registration that path makes, so the `String` was
+    /// stranded. The directly-discarded literal was always clean, because it
+    /// routes through `track_inline_owned_aggregate_arg`, which carries memory
+    /// AND bodies rather than gating the first on the second; that asymmetry
+    /// between two spellings of one discard is the whole bug.
+    ///
+    /// The loop makes the leak a multiple rather than a single block so a
+    /// partial fix cannot hide inside allocator noise. Measured on the pinned
+    /// program below: 810 B in 20 blocks definitely lost before the fix and
+    /// clean after, at `KARAC_OPT_LEVEL=0` AND at the default `-O2` this
+    /// harness actually builds at. Both levels are stated because the sibling
+    /// fixture for B-2026-08-29-30 gates at `-O0` only — there the discarded
+    /// value was a pure temporary LLVM deletes under optimization, and reading
+    /// that caveat across to this row would understate what this one proves.
+    #[test]
+    fn asan_discarded_branch_of_body_less_heap_literals_frees_once() {
+        assert_clean_asan_run(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload(i: i64) -> String { f"payload-{seed()}-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn go() -> i64 {
+    let mut i = 0i64;
+    while i < 20i64 {
+        if seed() > 0 { P { a: payload(i), b: 1 } } else { P { a: payload(i), b: 2 } };
+        let _ = match seed() { 1 => { P { a: payload(i), b: 3 } } _ => { P { a: payload(i), b: 4 } } };
+        i = i + 1i64;
+    }
+    return 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_body_less_heap_literal_loop",
+        );
+        // Every spelling of the same discard, one evaluation each: bare `if`,
+        // `let _ = if`, bare `match`, `let _ = match`, an `else if` chain, a
+        // `match` NESTED in an `if` arm, and arms that are CALLS rather than
+        // literals. All seven stranded 38 B apiece before the fix.
+        assert_clean_asan_run(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn go() -> i64 {
+    if seed() > 0 { P { a: payload(), b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { P { a: payload(), b: 1 } } else { P { a: payload(), b: 2 } };
+    match seed() { 1 => { P { a: payload(), b: 1 } } _ => { P { a: payload(), b: 2 } } };
+    let _ = match seed() { 1 => { P { a: payload(), b: 1 } } _ => { P { a: payload(), b: 2 } } };
+    let _ = if seed() > 9 { P { a: payload(), b: 1 } } else if seed() > 0 { P { a: payload(), b: 2 } } else { P { a: payload(), b: 3 } };
+    let _ = if seed() > 0 { match seed() { 1 => { P { a: payload(), b: 1 } } _ => { P { a: payload(), b: 2 } } } } else { P { a: payload(), b: 3 } };
+    let _ = if seed() > 0 { mkp(1) } else { mkp(2) };
+    return 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_body_less_heap_literal_spellings",
+        );
+        // THE GUARD, and the reason this fix is not simply "register memory
+        // here". A field initializer that is a PROJECTION OFF A FRESH TEMP
+        // (`mkv(1).v`) ALIASES that temp's buffer, and the temp keeps its own
+        // cleanup — so registering the literal too frees one pointer twice.
+        // Registering unconditionally turned this program from clean into
+        // `free(): double free detected in tcache 2`, which is a strictly
+        // worse trade than the 38 B leak it was fixing.
+        //
+        // The aliasing itself is PRE-EXISTING and is filed separately: the
+        // `let`-BOUND spelling of the identical literal double-frees on a tree
+        // without this fix, with no discard anywhere in it. This fixture pins
+        // only that the DISCARD path declines to walk into it.
+        assert_clean_asan_run(
+            r#"
+struct V { v: Vec[i64], b: i64 }
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkv(n: i64) -> V { let mut q: Vec[i64] = Vec.new(); q.push(n); return V { v: q, b: n }; }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn go() -> i64 {
+    if seed() > 0 { V { v: mkv(1).v, b: 1 } } else { V { v: mkv(2).v, b: 2 } };
+    let _ = if seed() > 0 { P { a: mkp(1).a, b: 1 } } else { P { a: mkp(2).a, b: 2 } };
+    return 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_literal_aliasing_a_temp_declines",
+        );
+        // The initializer kinds the guard keeps ADMITTING — values MINTED at
+        // the literal: a `.clone()`, a string literal, an interpolated
+        // string, and a nested call. Each is registered and freed once.
+        //
+        // The statements are deliberately STACKED rather than measured one
+        // program at a time, and that is the methodological point of this
+        // fixture. An earlier cut of the guard admitted `P { a: t.a, .. }`
+        // over a local on the strength of single-statement runs that were
+        // clean — but a local dies at its NLL last use when nothing follows
+        // it, so the alias and the local's own cleanup never coexisted. Add
+        // one more discard after it and they do: that program double-freed
+        // under a guard tuned on one-statement measurements, where without
+        // any registration it merely leaked 38 B. A one-statement fixture
+        // cannot see the difference, so this one does not use one.
+        assert_clean_asan_run(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn go() -> i64 {
+    let u = mkp(8);
+    let _ = if seed() > 0 { P { a: u.a.clone(), b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { P { a: "lit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { P { a: f"x{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b: 1 } } else { P { a: payload(), b: 2 } };
+    let _ = if seed() > 0 { mkp(1) } else { mkp(2) };
+    return 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_literal_safe_initializer_kinds_still_owned",
+        );
+        // THE DECLINED KINDS, pinned for what they are: a field initialized
+        // from a LOCAL — projected (`t.a`) or moved in whole (`s`) — is NOT
+        // registered, so it still strands 38 B apiece exactly as it did
+        // before this row. That is the guard's admitted cost and it is a
+        // deliberate trade, not an oversight: registering them is what
+        // produced the double free described above, and a leak is the better
+        // half of that pair. ASAN is not the gate for those cells — a leak
+        // would fail this fixture — so they are exercised through a program
+        // whose values ARE freed, to pin that the decline is a decline and
+        // not a corruption. The leak itself is filed separately.
+        assert_clean_asan_run(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn slen(s: String) -> i64 { if s.contains("payload") { s.len() } else { 0 } }
+fn go() -> i64 {
+    let t = mkp(9);
+    let s = payload();
+    return slen(t.a) - slen(s) + 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_literal_declined_kinds_are_not_corrupted",
+        );
+    }
+
     /// B-2026-08-29-25 — the MEMORY half of the discarded-`if` and
     /// block-wrapper fix, with HEAP-CARRYING payloads.
     ///

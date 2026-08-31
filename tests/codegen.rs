@@ -22765,6 +22765,126 @@ fn main() {
     /// owner beside the statement frame's and the body ran TWICE — first for
     /// `{ match … }`, and then, after a too-narrow first guard, for
     /// `{ mk(7) }`. Both are pinned here at ONE.
+    /// B-2026-08-29-32 — the BODY-COUNT side of teaching the discard battery
+    /// to register memory for a body-less aggregate.
+    ///
+    /// The row itself is invisible here: `P` has no `Drop`, so its leak
+    /// changes no transcript and `memory_sanitizer` is the fixture that sees
+    /// it. What THIS file is for is the double-own risk the fix runs. The
+    /// registration added below `try_track_discarded_user_drop_temp`'s early
+    /// return is reached by falling THROUGH a decision that used to return, so
+    /// the way it goes wrong is a type that already had an owner acquiring a
+    /// second one — which shows up as a doubled `Drop` body long before it
+    /// shows up as a double free. Each row here must print its body exactly
+    /// once.
+    #[test]
+    fn e2e_discarded_branch_of_body_less_heap_literals_keeps_one_owner() {
+        let hdr = "struct P { a: String, b: i64 }\n\
+                   struct D { a: String, b: i64 }\n\
+                   impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+                   struct W { r: D, b: i64 }\n\
+                   fn pay() -> String { return \"heap\"; }\n\
+                   fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n\
+                   fn mkw(n: i64) -> W { return W { r: mkd(n), b: n }; }\n";
+        for (label, body, want) in [
+            // The row's own shapes: no body anywhere in `P`, so nothing prints
+            // and the only thing that changed is memory.
+            (
+                "body-less literal through a bare if",
+                "if n == 0 { P { a: pay(), b: 1 } } else { P { a: pay(), b: 2 } };",
+                "end\n",
+            ),
+            (
+                "body-less literal through a wildcard let match",
+                "let _ = match n { 0 => { P { a: pay(), b: 1 } } _ => { P { a: pay(), b: 2 } } };",
+                "end\n",
+            ),
+            // A type that declares its OWN `Drop` never reaches the new
+            // fall-through (its wrapper carries body and memory together).
+            // One body, not two.
+            (
+                "own-Drop literal through a branch stays single",
+                "let _ = if n == 0 { D { a: pay(), b: 1 } } else { D { a: pay(), b: 2 } };",
+                "dD1\nend\n",
+            ),
+            (
+                "own-Drop call through a branch stays single",
+                "let _ = if n == 0 { mkd(1) } else { mkd(2) };",
+                "dD1\nend\n",
+            ),
+            // No own `Drop` but a Drop-BEARING field: this one takes the arm
+            // BELOW the new one, which registers the field-bodies walk. It is
+            // the nearest neighbour to the changed branch and the one most
+            // likely to double if the fall-through were placed wrong.
+            (
+                "Drop-bearing field through a branch stays single",
+                "let _ = if n == 0 { W { r: mkd(1), b: 1 } } else { W { r: mkd(2), b: 2 } };",
+                "dD1\nend\n",
+            ),
+            // The direct-discard spellings, which already carried memory AND
+            // bodies through `track_inline_owned_aggregate_arg` and must be
+            // untouched by this row.
+            (
+                "control: direct own-Drop literal discard",
+                "let _ = D { a: pay(), b: 1 };",
+                "dD1\nend\n",
+            ),
+            (
+                "control: bare-statement own-Drop literal discard",
+                "D { a: pay(), b: 1 };",
+                "dD1\nend\n",
+            ),
+            // The GUARD's admitted kinds, carrying a body so a wrong decline
+            // or a double is visible as a count rather than only as bytes.
+            // The GUARD's two sides, carrying a body so a wrong answer shows
+            // up as a count rather than only as bytes. The declined shape
+            // (a field initializer projected off a FRESH TEMP) must still be
+            // correct — the guard withholds the memory registration, not the
+            // body — and the admitted shape must stay single.
+            (
+                "guard declines the aliasing shape and it is still single",
+                "let _ = if n == 0 { W { r: mkw(7).r, b: 1 } } else { W { r: mkd(2), b: 2 } };",
+                "dD7\nend\n",
+            ),
+            (
+                "guard admits arms that mint their own field",
+                "let _ = if n == 0 { W { r: mkd(7), b: 1 } } else { W { r: mkd(2), b: 2 } };",
+                "dD7\nend\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+        // PINNED AT A KNOWN DEFECT, not asserted as correct. A discarded
+        // branch whose arm literal CONSUMES A LOCAL — whole (`W { r: t, .. }`)
+        // or projected (`W { r: t.r, .. }`) — runs that local's body TWICE:
+        // once at the discard and once at the local's own scope end. All
+        // three backends agree on it, so it is an agreed gap rather than a
+        // divergence, and it is PRE-EXISTING: measured byte-identical at
+        // `c4af3243`, the commit before B-2026-08-29-31 taught this path to
+        // own an arm's value at all. The BOUND spelling of the same move
+        // (`let w = W { r: t, .. };`) is correct at one body, which is what
+        // localizes it to the discard. Filed separately; this row's guard
+        // neither causes it nor can reach it.
+        for (label, body) in [
+            (
+                "pinned DEFECT: discarded arm literal consuming a whole local",
+                "let t = mkd(7);\nlet _ = if n == 0 { W { r: t, b: 1 } } else { W { r: mkd(2), b: 2 } };",
+            ),
+            (
+                "pinned DEFECT: discarded arm literal consuming a local's field",
+                "let t = mkw(7);\nlet _ = if n == 0 { W { r: t.r, b: 1 } } else { W { r: mkd(2), b: 2 } };",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("dD7\ndD7\nend\n"),
+                "[{label}]"
+            );
+        }
+    }
+
     #[test]
     fn e2e_wildcard_let_discard_owns_what_its_arm_hands_out() {
         let hdr = "struct R { id: i64, name: String }\n\

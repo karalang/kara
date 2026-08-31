@@ -50018,6 +50018,96 @@ fn test_no_else_if_arm_owns_the_value_it_mints() {
 /// conservative answer is wrong in BOTH directions, so this backend records
 /// which arm actually ran — the runtime bit compiled gets for free from
 /// per-path basic blocks.
+/// B-2026-08-29-32 — the interpreter twin of
+/// `codegen::e2e_discarded_branch_of_body_less_heap_literals_keeps_one_owner`,
+/// carrying the SAME eight shapes in the same order.
+///
+/// The row itself is codegen-only: the leak it fixes is a compiled-backend
+/// memory registration, and this backend was already clean. The twin exists
+/// for the other half of the contract — the shapes the fix touches must keep
+/// AGREEING across backends, and a body count is the only cross-backend
+/// observable a body-less struct's memory bug has. If the compiled fix ever
+/// starts double-owning, this file is where the divergence shows up as a
+/// doubled `dD`.
+#[test]
+fn test_discarded_branch_of_body_less_heap_literals_keeps_one_owner() {
+    let hdr = "struct P { a: String, b: i64 }\n\
+               struct D { a: String, b: i64 }\n\
+               impl Drop for D { fn drop(mut ref self) { println(f\"dD{self.b}\") } }\n\
+               struct W { r: D, b: i64 }\n\
+               fn pay() -> String { return \"heap\"; }\n\
+               fn mkd(n: i64) -> D { return D { a: pay(), b: n }; }\n\
+               fn mkw(n: i64) -> W { return W { r: mkd(n), b: n }; }\n";
+    for (label, body, want) in [
+        (
+            "body-less literal through a bare if",
+            "if n == 0 { P { a: pay(), b: 1 } } else { P { a: pay(), b: 2 } };",
+            "end\n",
+        ),
+        (
+            "body-less literal through a wildcard let match",
+            "let _ = match n { 0 => { P { a: pay(), b: 1 } } _ => { P { a: pay(), b: 2 } } };",
+            "end\n",
+        ),
+        (
+            "own-Drop literal through a branch stays single",
+            "let _ = if n == 0 { D { a: pay(), b: 1 } } else { D { a: pay(), b: 2 } };",
+            "dD1\nend\n",
+        ),
+        (
+            "own-Drop call through a branch stays single",
+            "let _ = if n == 0 { mkd(1) } else { mkd(2) };",
+            "dD1\nend\n",
+        ),
+        (
+            "Drop-bearing field through a branch stays single",
+            "let _ = if n == 0 { W { r: mkd(1), b: 1 } } else { W { r: mkd(2), b: 2 } };",
+            "dD1\nend\n",
+        ),
+        (
+            "control: direct own-Drop literal discard",
+            "let _ = D { a: pay(), b: 1 };",
+            "dD1\nend\n",
+        ),
+        (
+            "control: bare-statement own-Drop literal discard",
+            "D { a: pay(), b: 1 };",
+            "dD1\nend\n",
+        ),
+        (
+            "guard declines the aliasing shape and it is still single",
+            "let _ = if n == 0 { W { r: mkw(7).r, b: 1 } } else { W { r: mkd(2), b: 2 } };",
+            "dD7\nend\n",
+        ),
+        (
+            "guard admits arms that mint their own field",
+            "let _ = if n == 0 { W { r: mkd(7), b: 1 } } else { W { r: mkd(2), b: 2 } };",
+            "dD7\nend\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+    // PINNED AT A KNOWN DEFECT on THIS backend too, which is what makes it an
+    // agreed gap rather than a divergence: a discarded branch whose arm
+    // literal consumes a LOCAL runs that local's body twice. Pre-existing —
+    // measured byte-identical at `c4af3243` — and pinned on both sides so a
+    // one-sided "fix" of either backend shows up as a failure here.
+    for (label, body) in [
+        (
+            "pinned DEFECT: discarded arm literal consuming a whole local",
+            "let t = mkd(7);\nlet _ = if n == 0 { W { r: t, b: 1 } } else { W { r: mkd(2), b: 2 } };",
+        ),
+        (
+            "pinned DEFECT: discarded arm literal consuming a local's field",
+            "let t = mkw(7);\nlet _ = if n == 0 { W { r: t.r, b: 1 } } else { W { r: mkd(2), b: 2 } };",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src), "dD7\ndD7\nend\n", "[{label}]");
+    }
+}
+
 #[test]
 fn test_wildcard_let_discard_owns_what_its_arm_hands_out() {
     let hdr = "struct R { id: i64, name: String }\n\

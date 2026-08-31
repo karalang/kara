@@ -3269,6 +3269,92 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-29-32 — does a discarded branch tail mint a struct literal
+    /// one of whose fields is initialized from something this site does not
+    /// KNOW to be fresh — a place expression (`V { v: mkv(1).v }`,
+    /// `P { a: t.a }`) or a bare binding moved in (`P { a: s }`)?
+    ///
+    /// Such a field ALIASES a buffer that already has an owner, so handing
+    /// the literal a second owner frees one pointer twice. The aliasing is
+    /// PRE-EXISTING and is not this row's to repair — the `let`-BOUND
+    /// spelling of the same literal (`let w = V { v: mkv(1).v, b: 1 };`)
+    /// already double-frees with no discard anywhere in it. What IS this
+    /// row's business is declining to walk into it: before the registration
+    /// below existed the branch spelling registered nothing and ran clean,
+    /// and trading a 38 B leak for a double free is not a trade worth making.
+    ///
+    /// FRESHNESS IS THE TEST, and it is deliberately conservative about what
+    /// counts. An earlier cut of this guard declined only a projection rooted
+    /// at a CALL temp, on the strength of single-statement measurements
+    /// showing `P { a: t.a }` over a local was clean. That was a FALSE
+    /// NEGATIVE: `t` dies at its NLL last use when nothing follows it, so the
+    /// alias and the local's own cleanup never coexist. Add one more
+    /// statement after it and they do — `let t = mkp(9); … t.a …;` followed
+    /// by any second discard double-freed, while the same pair leaked 38 B
+    /// and reported zero errors without the registration. A guard tuned on
+    /// one-statement programs cannot see that, so this one asks the question
+    /// the other way round: admit only initializers whose value is MINTED
+    /// here (a call, a literal, a nested aggregate, an operator result), and
+    /// decline every identifier and every place.
+    ///
+    /// This costs the row nothing — its whole population is
+    /// `P { a: payload(), .. }` and arms that are calls — and it is why
+    /// `t.a.clone()` stays admitted: a `.clone()` is a MethodCall, and mints.
+    fn discard_branch_tail_aliases_a_temp(&self, body: &Expr) -> bool {
+        let t = Self::block_tail_expr(body);
+        match &t.kind {
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|f| Self::field_init_aliases_a_temp(&f.value)),
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| self.discard_branch_tail_aliases_a_temp(&arm.body)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|e| self.discard_branch_tail_aliases_a_temp(e))
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|e| self.discard_branch_tail_aliases_a_temp(e))
+            }
+            _ => false,
+        }
+    }
+
+    /// One struct-literal field initializer: does it hand over a value that
+    /// already has an owner elsewhere? True for a bare binding and for any
+    /// place expression; false only for values MINTED at this site. See
+    /// [`Self::discard_branch_tail_aliases_a_temp`] for why the test is
+    /// freshness rather than root-of-place.
+    fn field_init_aliases_a_temp(e: &Expr) -> bool {
+        !matches!(
+            &e.kind,
+            ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::StructLiteral { .. }
+                | ExprKind::Integer(..)
+                | ExprKind::Float(..)
+                | ExprKind::CharLit(_)
+                | ExprKind::ByteLit(_)
+                | ExprKind::Bool(_)
+                | ExprKind::StringLit(_)
+                | ExprKind::MultiStringLit(_)
+                | ExprKind::InterpolatedStringLit(_)
+                | ExprKind::ByteStringLit(_)
+                | ExprKind::Binary { .. }
+                | ExprKind::Unary { .. }
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::MapLiteral(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Cast { .. }
+        )
+    }
+
     pub(super) fn try_track_discarded_user_drop_temp(
         &mut self,
         tail: &Expr,
@@ -3419,6 +3505,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(cur_fn) = self.current_fn else {
             return;
         };
+        // B-2026-08-29-32 — set when the type has NO body to run anywhere in
+        // it, but the memory registration below is still due. The two arms
+        // that discover this used to `return`, and both `return`s sat ABOVE
+        // `track_struct_var`, so the heap a body-less aggregate carries was
+        // simply never registered.
+        let mut memory_only = false;
         let bodies_fn = if !field_bodies_only {
             None
         } else if is_enum {
@@ -3437,10 +3529,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(f) => Some((f, UserDropKind::ContainerElemBodies)),
                 None => return,
             }
-        } else {
-            if !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
+        } else if !self.type_runs_user_drop(&ret_ty_name, &mut Vec::new()) {
+            // B-2026-08-29-32 — `struct P { a: String, b: i64 }` with no
+            // `Drop` on it OR any field, reached through a discarded BRANCH
+            // tail. The bodies question is answered CORRECTLY here (there is
+            // no body to run), and returning on that answer is what stranded
+            // the `String`: `track_struct_var` below is the only memory
+            // registration this path makes, and it sat on the far side of
+            // the `return`. Measured 38 B leaked in all four spellings —
+            // bare `if`, `let _ = if`, bare `match`, `let _ = match` — while
+            // the DIRECTLY-discarded literal was clean, because that one
+            // routes through `track_inline_owned_aggregate_arg`, which
+            // carries memory AND bodies rather than gating memory on bodies.
+            //
+            // Answer "no bodies" and fall through. This cannot double-own:
+            // a type that declares its own `Drop` never reaches here
+            // (`field_bodies_only` is false, and its wrapper carries both
+            // halves), and a type with a Drop-BEARING field takes the arm
+            // below instead. What is left is exactly the body-less case,
+            // whose only owner is the memory registration.
+            // The one shape the memory registration must NOT claim; see
+            // `discard_branch_tail_aliases_a_temp`.
+            if self.discard_branch_tail_aliases_a_temp(tail) {
                 return;
             }
+            memory_only = true;
+            None
+        } else {
             match self.field_bodies_fn_for_owned_temp(&ret_ty_name) {
                 Some(f) => Some((f, UserDropKind::StructFieldBodies)),
                 None => return,
@@ -3480,6 +3595,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_none_or(|ps| ps.is_empty())
         {
             self.track_struct_var(&ret_ty_name, slot);
+        }
+        // B-2026-08-29-32 — memory is registered above and there is no body.
+        // Falling into the match below would reach `track_user_drop_var`,
+        // which hangs the `karac_drop_<T>` wrapper off the slot — and a type
+        // with no `Drop` anywhere in it has no such wrapper. Stop here.
+        if memory_only {
+            return;
         }
         // The kind travels WITH the function from the branch that built it:
         // this site registers an enum-payload container walk on one leg and a
