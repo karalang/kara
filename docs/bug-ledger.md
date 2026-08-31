@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 240 | 9 |
 | missing-feature | 191 | 1 |
 | double-free | 159 | 1 |
-| codegen-gap | 155 | 1 |
+| codegen-gap | 156 | 2 |
 | diagnostics | 113 | 1 |
 | false-positive | 101 | 0 |
 | soundness | 92 | 4 |
 | perf | 87 | 1 |
-| crash | 65 | 3 |
+| crash | 65 | 2 |
 | other | 65 | 1 |
 | use-after-free | 26 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1299 | 37 |
+| codegen | 1300 | 37 |
 | interp | 288 | 19 |
 | typecheck | 283 | 1 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1896 surfaced · 43 open · 1824 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1897 surfaced · 43 open · 1825 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (43)
 
@@ -166,13 +166,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1896 surfaced
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
 | B-2026-08-31-15 | 2026-08-31 | typecheck | medium | A COMPARISON METHOD ON A PRIMITIVE RECEIVER IS SILENTLY POISONED, NOT CHECKED — `let s: String = n.cmp(m)` type-checks and PRINTS `Less` into the String slot, while the identical `a.cmp(b)` on a String receiver is correctly rejected; the name-keyed exemption that shields the seven comparison methods from a mis-count returns `Type::Error`, which is universally assignable | — |
 | B-2026-08-31-16 | 2026-08-31 | codegen | low | THE DERIVED-Display REFUSAL FOR AN UNSUPPORTED FIELD TYPE DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr — spans and byte offsets included — INTO USER-FACING OUTPUT, running to hundreds of characters for a one-line source construct and never naming the type in source syntax; the refusal itself is correct, and what it needs is a TypeExpr-to-source formatter this file lacks | — |
-| B-2026-08-31-19 | 2026-08-31 | codegen | medium | `Array[T, N]` NESTED INSIDE ANOTHER TYPE'S Display PANICS THE COMPILER -- `f"{v}"` on a `Vec[Array[i64, 3]]` aborts with `emit_display_fn_for_type: type_name 'Array_i64_3' not yet supported`, the exact shape B-2026-08-31-9 fixed for `Vector` | — |
 | B-2026-08-31-17 | 2026-08-31 | codegen | medium | AN `Option`/`Result` CALL RESULT INTERPOLATED IN AN F-STRING LEAKS ITS PAYLOAD ONCE PER EVALUATION -- `f"{mk(n)}"` where `mk` returns `Option[String]` leaks 20 buffers over 20 iterations, while the `let`-bound spelling of the same value is clean | — |
 | B-2026-08-31-20 | 2026-08-31 | interp | medium | THE INTERPRETER DOES NOT NARROW A FLOAT LITERAL TO THE ANNOTATED PAYLOAD WIDTH INSIDE `Option.Some(...)` -- `let q: Option[f16] = Option.Some(0.1)` prints `Some(0.1)` under `--interp` and `Some(0.0999755859375)` under `karac build`, while every other position narrows on both backends | — |
 | B-2026-08-31-21 | 2026-08-31 | interp+codegen | medium | A DISCARDED `shared` STRUCT LITERAL RUNS NO `Drop` BODY AND LEAKS ITS RC BOX ON ALL THREE BACKENDS -- `let _ = S { .. };`, `S { .. };` and the branch spellings are all silent and strand 41 B, while the same value BOUND (`let s = S { .. };`) is correct at one body and clean everywhere. | — |
 | B-2026-08-31-22 | 2026-08-31 | interp+codegen | medium | A DISCARDED `if`/`else` WHOSE ARMS ARE OWN-`Drop` ENUM CTORS RUNS ONE BODY ON THE INTERPRETER AND NONE ON EITHER COMPILED BACKEND -- `let _ = if c { E.A(mk(8)) } else { E.B };` prints `dE` under `--interp` and nothing under `karac run` / `karac build`, while stranding 6 B; the DIRECT spelling `let _ = E.A(mk(8));` is correct at `dE dR8` on all three. | — |
 | B-2026-08-31-23 | 2026-08-31 | codegen | high | A NESTED `match` ARM THAT MOVES A HEAP LEAF OUT OF A WHOLE-BOUND *BOXED* `Option` PAYLOAD DOUBLE FREES -- the TRANSFER-path twin of B-2026-08-30-52 (b), which fixed the READ-ONLY path beside it. The JIT aborts on the bare shape while AOT prints the right answer; AOT joins in as soon as the arm's `if` CONDITION allocates. The `Result[E, i64]` twin (INLINE payload area) is clean, so this is the boxed channel specifically | — |
 | B-2026-08-31-24 | 2026-08-31 | codegen | high | EVERY ACCESS TO A `Vec[Vector[T, N]]` ELEMENT BUFFER IS EMITTED AT THE VECTOR'S NATURAL ALIGNMENT AGAINST `malloc` MEMORY, SO IT FAULTS ON `vmovaps` DEPENDING ON HEAP STATE -- a two-statement program SIGSEGVs or not according to what else allocated before it | — |
+| B-2026-08-31-25 | 2026-08-31 | codegen | medium | `Slice[T]` HAS NO Display UNDER CODEGEN AT ANY DEPTH -- `f"{s}"` on a slice is a hard build error where the interpreter prints `[1, 2]`, and it is the last shape the Option/Result Display gate still has to decline | — |
 
 ### Relocated (2)
 
@@ -205,9 +205,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1896 surfaced
 
 </details>
 
-### Fixed (1824)
+### Fixed (1825)
 
-<details><summary>1824 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1825 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2035,6 +2035,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1896 surfaced
 | B-2026-08-31-13 | typecheck | low | THE VALUE-RECEIVER SPELLING `x.partial_cmp(y)` IS REJECTED ON A CONCRETE RECEIVER WITH "expects 2 argument(s), found 1" WHILE THE IDENTICALLY-REGISTE… | 7bd0b04 |
 | B-2026-08-31-14 | codegen | high | A BORROW-MODE PAYLOAD BINDING NAME STAYED REGISTERED FOR EVERY LATER MATCH IN THE SAME FUNCTION -- `borrowed_agg_payload_struct_vars` is keyed by BIN… | c64cbfd |
 | B-2026-08-31-18 | codegen | high | A `Vector[T, N]` OR `Array[T, N]` ENUM PAYLOAD RECONSTRUCTS AS GARBAGE UNDER CODEGEN -- silently, in `match` as well as in Display, so a bound payloa… | 527bdf8 |
+| B-2026-08-31-19 | codegen | medium | `Array[T, N]` HAS NO Display UNDER CODEGEN AT ANY DEPTH, AND THE QUIET HALF IS THE PLAIN ONE -- nested (a `Vec` element, a struct field, a tuple fiel… | c48c0fb |
 
 </details>
 
