@@ -49469,15 +49469,17 @@ fn test_discarded_let_wildcard_match_runs_its_drop_body_once() {
             "let o: Option[R] = Some(R { id: 1 });\n\
              let _ = match o { Some(r) => { r } None => { R { id: 0 } } };\n\
              println(\"dropped\");",
-            "dropped",
-            "UNFIXED (B-2026-08-29-31): braced arm hands out the bound payload",
+            "dR1\ndropped",
+            "FIXED (B-2026-08-29-31): braced arm hands out the bound payload",
         ),
         (
             "let o: Option[R] = Some(R { id: 1 });\n\
              let _ = match o { Some(r) => r, None => R { id: 0 } };\n\
              println(\"dropped\");",
-            "dropped",
-            "UNFIXED, DIVERGENT (B-2026-08-29-31): bare arm hands out the bound payload",
+            "dR1\ndropped",
+            "FIXED (B-2026-08-29-31): bare arm hands out the bound payload — this \
+             backend was the silent half of a live divergence, compiled having \
+             fired here all along",
         ),
         (
             "let n = 1;\n\
@@ -49505,8 +49507,8 @@ fn test_discarded_let_wildcard_match_runs_its_drop_body_once() {
              let n = 0;\n\
              let _ = match n { 0 => r, _ => R { id: 9 } };\n\
              println(\"end\");",
-            "end",
-            "UNFIXED (B-2026-08-29-31): arm hands out an enclosing local",
+            "dR41\nend",
+            "FIXED (B-2026-08-29-31): arm hands out an enclosing local",
         ),
     ];
     for (body, expected, label) in rows {
@@ -49625,12 +49627,13 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
         );
         assert_eq!(run(&src).trim(), expected, "[{label}]");
     }
-    // The bare form is the GUARD RAIL for the liveness gate on the new `If`
-    // arm: `r` is still in scope, so its own scope-exit body already fires and
-    // is correct at ONE. Without the gate the discard walker fires on top and
-    // this prints `dR41` twice. The `let _ =` form is pinned at the defect —
-    // B-2026-08-29-31's population reached through the `if` spelling, and its
-    // `match` twin is pinned identically in the test above.
+    // The bare form is the GUARD RAIL for the liveness gate on the `If` arm:
+    // `r` is still in scope, so its own scope-exit body already fires and is
+    // correct at ONE. Without the gate the discard walker fires on top and this
+    // prints `dR41` twice — which is exactly why B-2026-08-29-31 kept that gate
+    // while widening the OTHER half of the same predicate to admit a tail whose
+    // name has already left scope (`discard_arm_tail_is_ownable`). Both forms
+    // now sit at one body; the `match` twin above is pinned identically.
     for (stmt, expected, label) in [
         (
             "if n == 0 { r } else { R { id: 9 } };",
@@ -49639,8 +49642,8 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
         ),
         (
             "let _ = if n == 0 { r } else { R { id: 9 } };",
-            "end",
-            "pinned UNFIXED (B-2026-08-29-31): branch hands out an enclosing local",
+            "dR41\nend",
+            "FIXED (B-2026-08-29-31): branch hands out an enclosing local",
         ),
     ] {
         let src = format!(
@@ -49665,11 +49668,13 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
         );
         assert_eq!(run(&src).trim(), "dR7\nend", "[FIXED: `if` with no `else`]");
     }
-    // STILL PINNED AT THE DEFECT, and a deliberate decline rather than an
-    // oversight: `let _ = { r }` moves a local through a wrapper, and no
-    // rebind hook retracts the local's own slot through one — firing here
-    // would double it, and compiled is silent too, so declining keeps the
-    // pair agreed instead of trading a shared defect for a divergence.
+    // FIXED (B-2026-08-29-31): `let _ = { r }` moves a local through a
+    // wrapper. This pinned the shared silence, on the ground that no rebind
+    // hook retracts the local's own slot through a wrapper so firing here
+    // would double it. Both halves of that changed together: a wildcard `let`
+    // no longer marks its RHS as an escaping position, so the local is never
+    // recorded moved-out and keeps its own body — one fire, from the binding
+    // itself rather than from a discard walk.
     {
         let src = format!(
             "{hdr}fn main() {{\n\
@@ -49679,8 +49684,8 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
         );
         assert_eq!(
             run(&src).trim(),
-            "end",
-            "[pinned UNFIXED: moved local through a wrapper]"
+            "dR41\nend",
+            "[FIXED: moved local through a wrapper]"
         );
     }
 }
@@ -49834,9 +49839,14 @@ fn test_no_else_if_arm_owns_the_value_it_mints() {
             "dR1\nend",
         ),
         (
+            // FIXED by B-2026-08-29-31, which stopped a wildcard `let` marking
+            // its RHS as an escaping position. This pinned `end` when it was
+            // written: the local was recorded moved-out and nothing ran its
+            // body. It now keeps its own scope-exit body, at ONE — still a
+            // control, for the opposite direction.
             "control: place-tail-wildcard-let",
             "let r = mk(1);\nlet _ = if n == 1 { r };",
-            "end",
+            "dR1\nend",
         ),
         (
             "control: else-struct-literal",
@@ -49872,6 +49882,119 @@ fn test_no_else_if_arm_owns_the_value_it_mints() {
         let src = format!("{hdr}fn main() {{\nlet n = 1;\n{body}\nprintln(\"end\");\n}}\n");
         assert_eq!(run(&src).trim(), want, "[{label}]");
     }
+}
+
+/// B-2026-08-29-31 — the INTERPRETER twin of
+/// `e2e_wildcard_let_discard_owns_what_its_arm_hands_out`, landed in the same
+/// commit with the SAME shapes in the same order, so the two backends cannot
+/// be fixed to different answers.
+///
+/// The `let _ =` spelling of a discarded branch ran no `Drop` body on any
+/// backend and leaked one allocation per evaluation, while the BARE-STATEMENT
+/// spelling of the identical program was correct — which is what identified
+/// the statement kind rather than the branch as the unit.
+///
+/// This backend needed two changes. A wildcard `let` no longer marks its RHS
+/// as an ESCAPING position, so an arm tail naming an enclosing local is no
+/// longer recorded moved-out and keeps its own scope-exit body. And the
+/// discard gate stopped excluding a bare `Identifier` arm tail outright: it
+/// now asks whether the name still RESOLVES, which separates a live enclosing
+/// local (already owned — do not fire) from an arm's own pattern binding
+/// (already out of scope — nothing else can).
+///
+/// The `mixed-branch` row is why `taken_branch_tail` exists. One arm hands out
+/// a live local and the other mints; judging every arm and taking the
+/// conservative answer is wrong in BOTH directions, so this backend records
+/// which arm actually ran — the runtime bit compiled gets for free from
+/// per-path basic blocks.
+#[test]
+fn test_wildcard_let_discard_owns_what_its_arm_hands_out() {
+    let hdr = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n";
+    for (label, body, want) in [
+        // ── the tail names an ENCLOSING LOCAL ─────────────────────────────
+        (
+            "if-hands-out-a-local",
+            "let r = mk(41);\nlet _ = if n == 0 { r } else { mk(9) };",
+            "dR41\nend",
+        ),
+        (
+            "match-hands-out-a-local",
+            "let r = mk(41);\nlet _ = match n { 0 => r, _ => mk(9) };",
+            "dR41\nend",
+        ),
+        (
+            "block-hands-out-a-local",
+            "let r = mk(41);\nlet _ = { r };",
+            "dR41\nend",
+        ),
+        // ── the tail names the arm's own PATTERN BINDING ──────────────────
+        (
+            "payload-braced-arm",
+            "let o: Option[R] = Some(mk(1));\n\
+             let _ = match o { Some(r) => { r } None => { mk(9) } };",
+            "dR1\nend",
+        ),
+        // ── double-own guards: ONE body, not two ──────────────────────────
+        (
+            "guard: block-wrapped match is owned by the statement site",
+            "let _ = { match n { 0 => { mk(7) } _ => { mk(3) } } };",
+            "dR7\nend",
+        ),
+        (
+            "guard: block-wrapped call is owned by the statement site",
+            "let _ = { mk(7) };",
+            "dR7\nend",
+        ),
+        // ── controls ──────────────────────────────────────────────────────
+        (
+            "control: bare-statement form (B-2026-08-29-5)",
+            "let r = mk(41);\nif n == 0 { r } else { mk(9) };",
+            "dR41\nend",
+        ),
+        (
+            "control: all-mint if stays statement-owned",
+            "let _ = if n == 0 { mk(2) } else { mk(3) };",
+            "dR2\nend",
+        ),
+        (
+            "control: all-mint match stays statement-owned",
+            "let _ = match n { 0 => mk(2), _ => mk(3) };",
+            "dR2\nend",
+        ),
+        (
+            "control: else-if chain",
+            "let _ = if n == 1 { mk(20) } else if n == 0 { mk(21) } else { mk(22) };",
+            "dR21\nend",
+        ),
+        (
+            "control: mixed branch — minted arm and live local both fire once",
+            "let r = mk(18);\nlet _ = if n == 9 { r } else { mk(4) };\nprintln(\"still\");",
+            "dR4\ndR18\nstill\nend",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src).trim(), want, "[{label}]");
+    }
+    // PINNED AT A KNOWN DIVERGENCE, not asserted as correct, and pinned on the
+    // side that FIRES. A bare arm handing out a HEAP-carrying `Option` payload
+    // runs the body here and on neither compiled backend — the
+    // boxed-`Option`-payload channel. PRE-EXISTING: the bare-STATEMENT
+    // spelling of the same program diverged the same way before this row, and
+    // the same bare arm over a USER enum, or over an `Option` whose payload
+    // carries no heap, is correct on all three. Filed separately.
+    let boxed = format!(
+        "{hdr}fn main() {{\n\
+         let o: Option[R] = Some(mk(1));\n\
+         let _ = match o {{ Some(r) => r, None => mk(9) }};\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(
+        run(&boxed).trim(),
+        "dR1\nend",
+        "[pinned DIVERGENT: bare arm handing out a heap-carrying Option payload]"
+    );
 }
 
 /// The two controls that localize the fix above: a discarded CALL result and a

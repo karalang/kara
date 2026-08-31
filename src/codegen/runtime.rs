@@ -8967,9 +8967,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// interpreter's `note_escaping_stmt_sites` is the same rule.
     pub(super) fn note_escaping_stmt_sites(&mut self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+            // B-2026-08-29-31 — a WILDCARD `let` is excluded, on exactly the
+            // ground the `StmtKind::Expr` arm below already states for a
+            // discarded `if`: "its arm tails go nowhere, and marking them
+            // takes a program that runs one body today to zero". `let _ = ..`
+            // has no destination either, so an arm tail naming an enclosing
+            // local was marked as ESCAPING, its conditional-move flag was
+            // cleared on the taken path, and the local's own scope-exit body
+            // never ran — the value was handed to a consumer that does not
+            // exist. The bare-statement spelling of the same branch was
+            // correct throughout, which is what identifies the statement kind
+            // rather than the branch as the unit.
+            StmtKind::Let { pattern, value, .. }
+                if !matches!(&pattern.kind, PatternKind::Wildcard) =>
+            {
                 self.note_escaping_site(value)
             }
+            StmtKind::LetElse { value, .. } => self.note_escaping_site(value),
             // B-2026-08-30-50 — an ASSIGNMENT's RHS is an escaping position for
             // the same reason a `let`'s initializer is: the value goes to the
             // target rather than dying here.

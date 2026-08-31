@@ -615,6 +615,24 @@ pub struct Interpreter<'a> {
     /// express, and the interpreter supplies it for free: only the taken arm
     /// is ever evaluated, so marking at the arm tail IS the runtime bit.
     pub(crate) cond_move_escaping_sites: HashSet<(usize, usize)>,
+    /// B-2026-08-29-31 — the span of the tail expression of the branch arm
+    /// that ACTUALLY RAN, most recently.
+    ///
+    /// The discard gates for `if` / `match` are syntactic and so had to judge
+    /// EVERY arm and take the conservative answer, which is wrong in both
+    /// directions for a MIXED branch: `let _ = if c { r } else { mk(4) };`
+    /// has one arm handing out a live local (whose own body must not be
+    /// doubled) and one arm minting a value nothing else owns. Requiring all
+    /// arms to be ownable loses the minted body; admitting on any arm doubles
+    /// the local's.
+    ///
+    /// Compiled has this for free — an arm's owner is emitted into that arm's
+    /// own basic block, so the decision is path-local by construction. This is
+    /// the interpreter's equivalent runtime bit, and it is free for the same
+    /// reason `record_conditional_move_tail`'s is: the interpreter evaluates
+    /// only the taken arm, so writing this down as it goes IS the proof of
+    /// which path ran.
+    pub(crate) taken_branch_tail: Option<(usize, usize)>,
     /// B-2026-07-30-11 (match-arm leg) — payload bindings of the TAKEN match
     /// arm whose moved-out value carries a user `impl Drop`, stashed by
     /// `eval_match` just before the arm body evaluates and drained by
@@ -992,6 +1010,7 @@ impl<'a> Interpreter<'a> {
             owned_param_frame_is_method: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             cond_move_escaping_sites: HashSet::new(),
+            taken_branch_tail: None,
             pending_arm_drop_bindings: Vec::new(),
             pending_param_drop_bindings: Vec::new(),
             cond_store_param_names: std::collections::HashSet::new(),

@@ -13279,6 +13279,139 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-31 — the memory leg of
+    /// `e2e_wildcard_let_discard_owns_what_its_arm_hands_out`.
+    ///
+    /// The `let _ =` spelling of a discarded branch stranded whatever its arm
+    /// handed out: 9 B per evaluation for an enclosing local, 3 B for an arm's
+    /// own pattern binding, measured with valgrind at `KARAC_OPT_LEVEL=0`
+    /// against the pre-fix compiler, and 0 after. The BARE-STATEMENT spelling
+    /// of the identical program was already clean, which is what identified
+    /// the statement kind rather than the branch as the unit.
+    ///
+    /// NO OPT-LEVEL SPLIT, unlike the B-2026-08-29-30 fixture below, and the
+    /// difference is worth stating because it makes this the stronger of the
+    /// two. There the discarded value was a pure temporary with no other use,
+    /// so at `-O2` LLVM deleted the whole allocation chain and the pre-fix
+    /// program did not leak at all. HERE the value starts life as a real
+    /// binding (`let r = mk(41)`) that is live until the discard, so the
+    /// allocation survives optimization: the 20-iteration row measures 760 B
+    /// definitely lost in 20 blocks at BOTH `KARAC_OPT_LEVEL=0` AND the
+    /// default `-O2`, and 0 at both after. So this fixture is a genuine leak
+    /// gate at the level CI actually runs.
+    ///
+    /// It gates the opposite direction too, and that is the live hazard: this
+    /// row hands ownership between three sites — the arm, the statement frame,
+    /// and the binding's own scope exit — and two successive attempts at the
+    /// block leg produced a DOUBLE body before the guard was narrowed
+    /// correctly. The `guard:` rows are those cases.
+    ///
+    /// In `go()` rather than `main` because LSan scans the live stack
+    /// conservatively.
+    #[test]
+    fn asan_wildcard_let_discard_owns_what_its_arm_hands_out() {
+        const H: &str = "struct R { id: i64, s: String }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str, &[&str])] = &[
+            (
+                "if-hands-out-a-local",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(41);\n\
+                 \x20  let _ = if n == 9 { r } else { mk(9) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "match-hands-out-a-local",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(41);\n\
+                 \x20  let _ = match n { 9 => r, _ => mk(9) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "block-hands-out-a-local",
+                "fn go() -> i64 { let r = mk(41);\n\
+                 \x20  let _ = { r };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "payload-braced-arm",
+                "fn go() -> i64 { let o: Option[R] = Some(mk(1));\n\
+                 \x20  let _ = match o { Some(r) => { r } None => { mk(9) } };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            // The leak signal: 20 discarded allocations, so a per-evaluation
+            // leak compounds instead of hiding as one. 760 B / 20 blocks
+            // before this row, at both opt levels; 0 after.
+            (
+                "twenty-iteration-loop-compounds-the-leak",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let mut i = 0;\n\
+                 \x20  while i < 20 {\n\
+                 \x20    let r = mk(i);\n\
+                 \x20    let _ = if n == 9 { r } else { mk(9) };\n\
+                 \x20    i = i + 1;\n\
+                 \x20  }\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            // ── double-own guards: a second owner here is a DOUBLE FREE ──
+            (
+                "guard: block-wrapped match is owned by the statement site",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = { match n { 1 => { mk(7) } _ => { mk(3) } } };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "guard: block-wrapped call is owned by the statement site",
+                "fn go() -> i64 { let _ = { mk(7) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "guard: mixed branch owns the minted arm without doubling the local",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(18);\n\
+                 \x20  let _ = if n == 9 { r } else { mk(4) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            // ── controls, clean before and after ─────────────────────────
+            (
+                "control: bare-statement form",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(41);\n\
+                 \x20  if n == 9 { r } else { mk(9) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "control: all-mint if stays statement-owned",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { mk(2) } else { mk(3) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "control: all-mint match stays statement-owned",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = match n { 1 => mk(2), _ => mk(3) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+        ];
+        for (label, body, want) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), want, label);
+        }
+    }
+
     /// B-2026-08-29-30 (remaining half) — the LEAK leg of
     /// `e2e_no_else_if_arm_owns_the_value_it_mints`.
     ///
@@ -54896,12 +55029,16 @@ fn main() {
     /// the discard site's to own — which is why this pins both directions on a
     /// String-carrying payload rather than trusting the body count alone.
     ///
-    /// Case 2 is the boundary that keeps the widening honest: an arm handing
-    /// out an ENCLOSING LOCAL is NOT admitted (its tail is a bare identifier),
-    /// so the local's own owner is still the only one, and LSan proves the
-    /// value is not stranded by the gate declining. That cell still runs no
-    /// body — B-2026-08-29-5 — but a missing body and a leak are different
-    /// failures, and only this file can tell them apart.
+    /// Case 2 is the boundary that keeps the widening honest: the arm hands
+    /// out an ENCLOSING LOCAL, so exactly one owner may free it — the discard
+    /// site, since the value moved there. This cell pinned `end` alone while
+    /// the discarded-`let` gate declined an identifier tail (a missing body,
+    /// not a leak: LSan was already clean). B-2026-08-29-31 closed that, so
+    /// the body now runs here, and the four spellings of the same discard —
+    /// bare `if`, `let _ = if`, bare `match`, `let _ = match` — all print
+    /// `dR41 forty-one` on all four surfaces (measured). ASAN is what proves
+    /// the newly-running body is a single free rather than a second one: the
+    /// `discarded_if_enclosing_local` case below is its bare-statement twin.
     ///
     /// `name` is read byte-wise in the body for this file's usual reason.
     #[test]
@@ -54932,7 +55069,7 @@ fn main() {
     println("end");
 }
 "#,
-            &["end"],
+            &["dR41 forty-one", "end"],
             "discarded_let_wildcard_match_enclosing_local",
         );
     }

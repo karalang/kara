@@ -990,13 +990,21 @@ impl<'a> super::Interpreter<'a> {
             } => {
                 let cond = self.eval_expr_inner(condition);
                 if self.is_truthy(&cond) {
+                    // B-2026-08-29-31 — record which arm ran, for the discard
+                    // gates; see `taken_branch_tail`. Written BEFORE the body
+                    // so a nested branch inside it overwrites with the
+                    // innermost producer, which is the one that actually
+                    // minted the value.
+                    self.note_taken_branch_tail(then_block.final_expr.as_deref());
                     match self.eval_block_inner(then_block) {
                         Ok(v) => v,
                         Err(cf) => self.set_cf(cf),
                     }
                 } else if let Some(ref else_expr) = else_branch {
+                    self.note_taken_branch_tail(Some(else_expr));
                     self.eval_expr_inner(else_expr)
                 } else {
+                    self.taken_branch_tail = None;
                     Value::Unit
                 }
             }

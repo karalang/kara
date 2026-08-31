@@ -753,7 +753,44 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-29-5 — read (and clear) `compile_if`'s one-shot signal
         // BEFORE anything is compiled, so only this block sees it and a nested
         // value-position block inside the arm gets the ordinary treatment.
-        let arm_value_discarded = std::mem::take(&mut self.branch_arm_value_discarded);
+        // B-2026-08-29-31 — a STANDALONE value-position block whose value is
+        // discarded (`let _ = { r };`). It reaches neither branch compiler, so
+        // no arm ever sets the one-shot flag for it, and the tail suppression
+        // below ran unconditionally: the source's `cap` was zeroed to hand the
+        // buffer to a consumer that does not exist, so the binding's own body
+        // still fired but freed nothing — 9 B stranded per evaluation, behind
+        // a correct-looking transcript. The pre-pass records such a block by
+        // its own span, the same channel `branch_value_is_owned` reads for a
+        // branch head.
+        //
+        // NOT when the STATEMENT site will take the tail, and that exclusion
+        // is measured rather than defensive: `let _ = { match n { .. } };` and
+        // `let _ = { mk(7) };` both reach the wildcard-let discard battery
+        // through its wrapper peel, so the statement frame already owns the
+        // value. Setting the flag there too made this block register a SECOND
+        // owner through the B-2026-08-29-30 arm-level path and the body ran
+        // twice (`dR7 dR7 end`) — the double-own this row's own pre-pass note
+        // argues cannot happen for a BRANCH, and which does happen here
+        // precisely because a bare value-block has no `discard_stmt_owns_value`
+        // of its own to stand down against.
+        //
+        // The guard is the statement site's FULL admission set, not one leg of
+        // it: the first attempt asked only `discarded_match_value_tail` and
+        // moved the doubling from the block-wrapped `match` to the
+        // block-wrapped CALL one row down.
+        let stmt_owns_block_tail = block.final_expr.as_deref().is_some_and(|t| {
+            Self::discarded_owned_temp_tail(t).is_some()
+                || self.discarded_unit_variant_tail(t).is_some()
+                || self.discarded_match_value_tail(t).is_some()
+                || self.discarded_owned_literal_tail(t).is_some()
+        });
+        let discarded_value_block = !stmt_owns_block_tail
+            && self
+                .pattern_state
+                .discarded_branch_spans
+                .contains(&crate::resolver::SpanKey::from_span(&block.span));
+        let arm_value_discarded =
+            std::mem::take(&mut self.branch_arm_value_discarded) || discarded_value_block;
         // B-2026-08-30-2 — hygiene, the same one-shot discipline as the signal
         // above: only the disarm this block's OWN tail performs may be read
         // back below, never one left over from a sibling construct.

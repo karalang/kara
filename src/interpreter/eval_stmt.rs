@@ -2881,9 +2881,24 @@ impl<'a> super::Interpreter<'a> {
     /// arm tails are already known by the time one of them is reached.
     pub(crate) fn note_escaping_stmt_sites(&mut self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+            // B-2026-08-29-31 — a WILDCARD `let` is excluded, on exactly the
+            // ground the `StmtKind::Expr` arm below already states for a
+            // discarded `if`: "its arm tails go nowhere, and marking them
+            // takes a program that runs one body today to zero". `let _ = ..`
+            // has no destination either, so an arm tail naming an enclosing
+            // local was marked ESCAPING, `record_conditional_move_tail`
+            // silenced the local's own body, and nothing ran it — the value
+            // was handed to a consumer that does not exist. The
+            // BARE-STATEMENT spelling of the same branch was correct
+            // throughout, which is what identifies the statement kind rather
+            // than the branch as the unit. Codegen twin: the same exclusion in
+            // its own `note_escaping_stmt_sites`.
+            StmtKind::Let { pattern, value, .. }
+                if !matches!(&pattern.kind, crate::ast::PatternKind::Wildcard) =>
+            {
                 self.note_escaping_site(value)
             }
+            StmtKind::LetElse { value, .. } => self.note_escaping_site(value),
             // B-2026-08-30-50 — an ASSIGNMENT's RHS is an escaping position for
             // the same reason a `let`'s initializer is: the value goes to the
             // target rather than dying here.
@@ -3245,6 +3260,59 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-29-31 — which of these arm bodies is the one that RAN?
+    ///
+    /// Matches `taken_branch_tail` against each candidate's peeled tail span.
+    /// `None` means the record does not belong to THIS construct — a nested
+    /// branch overwrote it, or none ran — and the caller falls back to judging
+    /// every arm, which is what this backend did before the record existed.
+    fn taken_arm_tail_of<'e>(&self, bodies: impl Iterator<Item = &'e Expr>) -> Option<&'e Expr> {
+        let taken = self.taken_branch_tail?;
+        bodies
+            .map(Self::arm_tail_expr)
+            .find(|t| (t.span.offset, t.span.length) == taken)
+    }
+
+    /// B-2026-08-29-31 — record the tail of the branch arm now running; see
+    /// [`crate::Interpreter::taken_branch_tail`]. `None` clears it, so a
+    /// construct that yields no value cannot leave a stale span behind for the
+    /// next discard site to read.
+    pub(crate) fn note_taken_branch_tail(&mut self, tail: Option<&Expr>) {
+        self.taken_branch_tail = tail.map(|t| {
+            let t = Self::arm_tail_expr(t);
+            (t.span.offset, t.span.length)
+        });
+    }
+
+    /// B-2026-08-29-31 — may this discard site OWN what an arm tail hands out?
+    ///
+    /// The question is only interesting for a bare `Identifier` tail, and the
+    /// answer turns on whether that name still resolves. Both arms of
+    /// `discard_rhs_produces_owned_value` used to exclude an `Identifier` tail
+    /// outright, which is right for one of the two populations and wrong for
+    /// the other:
+    ///
+    ///   * an ENCLOSING LOCAL (`let r = ..; let _ = match n { 0 => r, .. };`)
+    ///     is still live here, and since B-2026-08-29-31 stopped marking a
+    ///     wildcard `let` as an escaping position it keeps its own scope-exit
+    ///     body. Firing here as well would run that body TWICE.
+    ///
+    ///   * an arm's own PATTERN BINDING (`match o { Some(r) => r, .. }`) has
+    ///     already left scope by the time this runs, and the arm's static
+    ///     retraction (`suppress_tail_expr_user_drop`) took its slot when the
+    ///     tail handed it out. Nothing owns it, so this site must.
+    ///
+    /// `env.get` separates them exactly, and it is the same liveness gate the
+    /// BARE-STATEMENT `If` arm has always used — which is why the two
+    /// statement forms now answer alike instead of one excluding a population
+    /// the other admits.
+    fn discard_arm_tail_is_ownable(&self, tail: &Expr) -> bool {
+        match &tail.kind {
+            ExprKind::Identifier(n) => self.env.get(n).is_none(),
+            _ => true,
+        }
+    }
+
     /// B-2026-08-29-30 — the expression that actually PRODUCED a discarded
     /// value, for the shape questions asked after a wildcard `let` has
     /// evaluated its RHS.
@@ -3388,12 +3456,26 @@ impl<'a> super::Interpreter<'a> {
             // Empty `arms` yields `false` through `all`, matching codegen's
             // explicit `arms.is_empty()` early return.
             ExprKind::Match { arms, .. } => {
-                !arms.is_empty()
-                    && arms.iter().all(|a| {
-                        let tail = Self::arm_tail_expr(&a.body);
-                        !matches!(tail.kind, ExprKind::Identifier(_))
-                            && self.discard_rhs_produces_owned_value(tail, val)
-                    })
+                if arms.is_empty() {
+                    return false;
+                }
+                // B-2026-08-29-31 — judge the arm that RAN when it is known.
+                // Judging every arm and taking the conservative answer is
+                // wrong in both directions for a MIXED branch: requiring all
+                // arms ownable loses a minting arm's body, admitting on any
+                // arm doubles a live local's. Compiled decides this per PATH,
+                // in the arm's own basic block; `taken_branch_tail` is the
+                // same bit for this backend.
+                if let Some(tail) = self.taken_arm_tail_of(arms.iter().map(|a| &a.body)) {
+                    let tail = tail.clone();
+                    return self.discard_arm_tail_is_ownable(&tail)
+                        && self.discard_rhs_produces_owned_value(&tail, val);
+                }
+                arms.iter().all(|a| {
+                    let tail = Self::arm_tail_expr(&a.body);
+                    self.discard_arm_tail_is_ownable(tail)
+                        && self.discard_rhs_produces_owned_value(tail, val)
+                })
             }
             // B-2026-08-29-25 — the `if` SPELLING of the arm above. An `if`
             // chooses between branch values exactly as a `match` does, and the
@@ -3432,17 +3514,24 @@ impl<'a> super::Interpreter<'a> {
                 else_branch,
                 ..
             } => match (then_block.final_expr.as_deref(), else_branch.as_deref()) {
-                (Some(then_tail), Some(else_tail)) => [then_tail, else_tail]
-                    .into_iter()
-                    .map(Self::arm_tail_expr)
-                    .all(|tail| {
-                        !matches!(tail.kind, ExprKind::Identifier(_))
-                            && self.discard_rhs_produces_owned_value(tail, val)
-                    }),
-                (Some(then_tail), None) => {
-                    let tail = Self::arm_tail_expr(then_tail);
-                    !matches!(tail.kind, ExprKind::Identifier(_))
-                        && self.discard_rhs_produces_owned_value(tail, val)
+                (Some(then_tail), else_tail) => {
+                    // B-2026-08-29-31 — the taken arm when known; see the
+                    // `Match` arm above for why all-arms conservatism is wrong
+                    // for a mixed branch.
+                    let candidates = [Some(then_tail), else_tail].into_iter().flatten();
+                    if let Some(tail) = self.taken_arm_tail_of(candidates) {
+                        let tail = tail.clone();
+                        return self.discard_arm_tail_is_ownable(&tail)
+                            && self.discard_rhs_produces_owned_value(&tail, val);
+                    }
+                    [Some(then_tail), else_tail]
+                        .into_iter()
+                        .flatten()
+                        .map(Self::arm_tail_expr)
+                        .all(|tail| {
+                            self.discard_arm_tail_is_ownable(tail)
+                                && self.discard_rhs_produces_owned_value(tail, val)
+                        })
                 }
                 _ => false,
             },

@@ -44,6 +44,11 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 self.env.push_scope();
+                // B-2026-08-29-31 — record which arm ran, for the discard
+                // gates; see `taken_branch_tail`. Written before the body so a
+                // nested branch inside it overwrites with the innermost
+                // producer.
+                self.note_taken_branch_tail(Some(&arm.body));
                 self.bind_pattern(&arm.pattern, scrutinee.clone());
                 // B-2026-08-04-4 — an arm binding holds a FRESH value, so a
                 // stale move-out record left by an earlier, unrelated binding

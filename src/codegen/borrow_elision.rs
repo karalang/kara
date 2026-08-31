@@ -784,29 +784,21 @@ fn record_discarded_branch(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
     }
 }
 
-/// B-2026-08-29-30 — [`record_discarded_branch`] restricted to an `if` with
-/// NO `else`, for the wildcard-`let` position.
+/// B-2026-08-29-30 / B-2026-08-29-31 — the wildcard-`let` position's recorder.
 ///
-/// Block wrappers are peeled (`let _ = { if c { mk(1) } };` discards the inner
-/// `if` just as directly), and an `else if` chain is deliberately NOT walked:
-/// a chain HAS an `else`, so its value reaches the statement site and that
-/// site owns it.
-fn record_discarded_else_less_if(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
-    match &expr.kind {
-        ExprKind::If {
-            condition,
-            else_branch: None,
-            ..
-        } => {
-            out.insert(SpanKey::from_span(&condition.span));
-        }
-        ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
-            if let Some(inner) = b.final_expr.as_deref() {
-                record_discarded_else_less_if(inner, out);
-            }
-        }
-        _ => {}
+/// `let _ = <expr>;` discards its RHS exactly as a bare expression-statement
+/// does, so every discarding position [`record_discarded_branch`] knows about
+/// applies here too — plus one that can only arise under a `let`: a
+/// VALUE-POSITION BLOCK (`let _ = { r };`), recorded by its own block span so
+/// `compile_block_with_frame` can ask whether its tail has a consumer. Without
+/// that leg the block's tail suppression still ran, zeroing the source's `cap`
+/// to hand the buffer to a consumer that does not exist: the body fired (the
+/// binding kept its action) and freed nothing, stranding 9 B per evaluation.
+fn record_discarded_let_rhs(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
+    if let ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) = &expr.kind {
+        out.insert(SpanKey::from_span(&b.span));
     }
+    record_discarded_branch(expr, out);
 }
 
 /// Walk every block reachable from `block`, recording the discarding positions.
@@ -828,28 +820,31 @@ fn walk_stmt_for_discards(stmt: &Stmt, out: &mut FxHashSet<SpanKey>) {
     match &stmt.kind {
         StmtKind::Expr(e) => walk_expr_for_discards(e, out),
         StmtKind::Let { pattern, value, .. } => {
-            // B-2026-08-29-30 — `let _ = <if with no else>;` discards the
-            // branch's value exactly as the bare-statement spelling does, and
-            // is the ONE discarding position this pre-pass did not record. The
+            // B-2026-08-29-30 / B-2026-08-29-31 — `let _ = <expr>;` discards
+            // its RHS exactly as the bare-statement spelling does, and it was
+            // the ONE discarding position this pre-pass did not record. The
             // consequence was that the two spellings of one program disagreed:
-            // `if n == 1 { R { .. } };` reached the arm-level owner and ran the
-            // struct's `Drop` body, while `let _ = if n == 1 { R { .. } };`
-            // left `own_value` true, took the tail-SUPPRESSION path instead,
-            // and handed the value to a consumer that does not exist — the
-            // merge yields a const-0 placeholder when there is no `else`.
+            // `if n == 1 { R { .. } };` reached the arm-level owner and ran
+            // the struct's `Drop` body, while `let _ = if n == 1 { R { .. }
+            // };` left `own_value` TRUE, took the tail-SUPPRESSION path
+            // instead, and handed the value to a consumer that does not exist.
             //
-            // Recorded through a NARROW recorder rather than
-            // `record_discarded_branch`, and the narrowness is the whole
-            // safety argument. Every OTHER discarded branch shape under a
-            // wildcard `let` — a `match`, an `if`/`else` — is already owned by
-            // the STATEMENT site (`discarded_match_value_tail` admits both and
-            // frees the merged phi). Recording those here would flip them from
-            // statement-owned to arm-owned, giving one value two owners, which
-            // is a double free rather than the missing body this fixes. An
-            // `if` with no `else` is precisely the shape that site declines,
-            // so it is precisely the shape with no owner at all.
+            // B-2026-08-29-30 landed this restricted to an `if` with NO
+            // `else`, on the stated ground that recording a `match` or an
+            // `if`/`else` here would flip them from statement-owned to
+            // arm-owned and give one value two owners. THAT CLAIM WAS WRONG,
+            // and B-2026-08-29-31 measured it: `compile_if` computes
+            // `discard_stmt_owns_value` as `discarded_if_parts_qualify(..) &&
+            // !own_value`, so clearing `own_value` is precisely what ARMS the
+            // statement site rather than displacing it. The two are
+            // COMPLEMENTARY by construction — the statement site keeps every
+            // shape whose arms all mint, the arms keep the shapes it declines
+            // — which is why widening cannot double-own. Measured across the
+            // whole matrix: every all-mint row stayed at one body and
+            // valgrind-clean, and the rows whose arm hands out a binding went
+            // from silent-and-leaking to one body and clean.
             if matches!(&pattern.kind, PatternKind::Wildcard) {
-                record_discarded_else_less_if(value, out);
+                record_discarded_let_rhs(value, out);
             }
             walk_expr_for_discards(value, out)
         }
