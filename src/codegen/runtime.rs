@@ -13468,6 +13468,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // the variable case had, and the same reason: a Vec aggregate is
         // byte-identical to a String's (B-2026-07-28-12). A materialized
         // temporary registers itself for scope cleanup inside the helper.
+        // B-2026-08-31-19 — the array sibling, ahead of the Vec arm because an
+        // array is a value-kind the fallback arms misread rather than refuse:
+        // `f"{a}"` on an `Array[i64, 3]` printed `1` and an `Array[String, 2]`
+        // printed its first element's data pointer. Nothing is registered for
+        // cleanup — an array owns no buffer of its own — so the accumulator is
+        // tracked here exactly as the Vec arm does and no further.
+        if let Some((acc, sval)) = self.try_compile_array_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.a.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.a.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         if let Some((acc, sval)) = self.try_compile_vec_display(e)? {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));

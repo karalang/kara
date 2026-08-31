@@ -1847,6 +1847,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // aggregate is byte-identical to a String's, so those arms rendered it
         // as a String and printed garbage (B-2026-07-28-12). A materialized
         // temporary registers itself for scope cleanup inside the helper.
+        // B-2026-08-31-19 — the array sibling. `println(a)` on an
+        // `Array[i64, 3]` printed NOTHING before this: the value-kind arms
+        // below have no array case at all, so the call fell through to the
+        // unknown-callee return with no write emitted.
+        if let Some((_acc, sval)) = self.try_compile_array_display(&args[0].value)? {
+            self.emit_write_and_free_string(sval, nl, to_stderr);
+            return Ok(zero.into());
+        }
         if let Some((_acc, sval)) = self.try_compile_vec_display(&args[0].value)? {
             self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());

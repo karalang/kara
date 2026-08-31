@@ -486,6 +486,19 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // B-2026-08-31-19 — the array sibling. Codegen had no depth-0 array
+    // Display at all: `f"{a}"` printed the first element and `println(a)`
+    // printed nothing, while the nested spellings panicked the compiler. The
+    // WHOLE type is forwarded, not just the element, because an array's
+    // identity includes its extent and the renderer needs the count.
+    program.display_array_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Array { .. } => Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty))),
+            _ => None,
+        })
+        .collect();
     // B-2026-08-14-31 — the Map/Set siblings of the table above, for exactly
     // the same reason and with the same failure when absent. A non-identifier
     // Map/Set fell through to codegen's value-kind arms, where its single

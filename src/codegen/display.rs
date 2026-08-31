@@ -60,6 +60,14 @@ pub(crate) struct Display<'ctx> {
     /// the identifier path uses, instead of falling through to the value-kind
     /// arms where a Vec is indistinguishable from a String (B-2026-07-28-12).
     pub(crate) display_vec_types: HashMap<(usize, usize), TypeExpr>,
+    /// The array sibling of `display_vec_types`, carrying the WHOLE
+    /// `Array[T, N]` type (its extent is part of its identity). Populated from
+    /// `Program.display_array_types`; lets `f"{a}"` / `println(a)` render an
+    /// array through the same by-pointer renderer a nested one uses, instead
+    /// of falling through to the value-kind arms and printing the first
+    /// element — or, for an `Array[String, N]`, that element's data pointer
+    /// (B-2026-08-31-19).
+    pub(crate) display_array_types: HashMap<(usize, usize), TypeExpr>,
     /// B-2026-08-14-31 — key/value types of every `Map`/`SortedMap` expression
     /// and element types of every `Set`/`SortedSet` one, keyed by span
     /// (`Program.display_map_types` / `display_set_types`). The Map/Set

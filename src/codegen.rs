@@ -6042,6 +6042,7 @@ impl<'ctx> Codegen<'ctx> {
                 display_tuple_types: HashMap::new(),
                 display_generic_enum_types: HashMap::new(),
                 display_vec_types: HashMap::new(),
+                display_array_types: HashMap::new(),
                 display_map_types: HashMap::new(),
                 display_set_types: HashMap::new(),
                 display_sorted_collection_spans: std::collections::HashSet::new(),
@@ -7655,6 +7656,7 @@ impl<'ctx> Codegen<'ctx> {
         self.display.display_tuple_types = program.display_tuple_types.clone();
         self.display.display_generic_enum_types = program.display_generic_enum_types.clone();
         self.display.display_vec_types = program.display_vec_types.clone();
+        self.display.display_array_types = program.display_array_types.clone();
         self.display.display_map_types = program.display_map_types.clone();
         self.display.display_set_types = program.display_set_types.clone();
         self.display.display_sorted_collection_spans =
@@ -9192,6 +9194,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_display_tuple_types = tp.display_tuple_types.clone();
         let mut t_display_generic_enum_types = tp.display_generic_enum_types.clone();
         let mut t_display_vec_types = tp.display_vec_types.clone();
+        let mut t_display_array_types = tp.display_array_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
@@ -9315,6 +9318,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.display.display_vec_types,
                     &mut t_display_vec_types,
+                );
+                std::mem::swap(
+                    &mut self.display.display_array_types,
+                    &mut t_display_array_types,
                 );
                 std::mem::swap(
                     &mut self.pattern_state.pattern_binding_types,

@@ -620,6 +620,172 @@ impl<'ctx> super::Codegen<'ctx> {
         self.disp_append_lit(acc, "]");
     }
 
+    /// B-2026-08-31-19 — the `Array[T, N]` twin of [`Self::emit_vec_display_fn_te`].
+    ///
+    /// Codegen had no array Display AT ANY DEPTH, and the two halves failed
+    /// differently: nested (a `Vec` element, a struct field, a tuple field) it
+    /// fell through `emit_display_fn_for_type_expr` to the by-name catch-all
+    /// and PANICKED the compiler; at depth 0 it was silent, printing the first
+    /// element for `f"{a}"` and nothing at all for `println(a)` — and for an
+    /// `Array[String, 2]` it printed the element's raw data POINTER. The
+    /// interpreter renders all of these `[1, 2, 3]`.
+    ///
+    /// Shares `emit_vec_display_body`'s text and loop shape, because an array
+    /// prints exactly like a `Vec` and the two must not drift. The layout
+    /// differs in one way only: an array's elements are INLINE at `val_ptr`
+    /// rather than behind the `{ptr, len, cap}` triple's data pointer, and its
+    /// length is a compile-time constant instead of a loaded field. Emitted as
+    /// a loop rather than unrolled so a large extent does not inflate the
+    /// module.
+    ///
+    /// Cached under `display_mangle_te`'s name for the whole `Array[T, N]`,
+    /// which includes the extent — `Array[i64, 2]` and `Array[i64, 3]` are
+    /// different layouts and must not collapse onto one body (B-2026-08-27-25,
+    /// the same reason the `Vector` arm keys on its lane count).
+    pub(super) fn emit_array_display_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+        len: u64,
+        array_te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(array_te);
+        if let Some(f) = self.disp_cache_get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.disp_cache_put(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.disp_cache_put(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        self.emit_array_display_body(display_fn, val_ptr, acc, elem_te, len);
+
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
+    /// Body of [`Self::emit_array_display_fn`] — `[e0, e1, …]` over `len`
+    /// elements laid out inline from `val_ptr`. Split out so the ELEMENT
+    /// dispatch is one call to `emit_display_fn_for_type_expr`, which is what
+    /// makes `Array[Vec[i64], 2]`, `Array[String, 2]` and nested arrays
+    /// compose without any per-shape work here.
+    fn emit_array_display_body(
+        &mut self,
+        display_fn: FunctionValue<'ctx>,
+        val_ptr: PointerValue<'ctx>,
+        acc: PointerValue<'ctx>,
+        elem_te: &TypeExpr,
+        len: u64,
+    ) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+
+        // Materialize the element Display fn BEFORE emitting this body: the
+        // recursive emit moves the builder's insert block, and the dispatcher
+        // restores only the caller's position. Same ordering constraint the
+        // Vec body documents.
+        let elem_disp = self.emit_display_fn_for_type_expr(elem_te);
+
+        self.disp_append_lit(acc, "[");
+
+        let raw_size = elem_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let elem_size = if raw_size.get_type().get_bit_width() == 64 {
+            raw_size
+        } else {
+            self.builder
+                .build_int_z_extend(raw_size, i64_t, "aesz64")
+                .unwrap()
+        };
+        let n = i64_t.const_int(len, false);
+
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        let hdr_bb = self.context.append_basic_block(display_fn, "arr.hdr");
+        let bdy_bb = self.context.append_basic_block(display_fn, "arr.bdy");
+        let sep_bb = self.context.append_basic_block(display_fn, "arr.sep");
+        let elem_bb = self.context.append_basic_block(display_fn, "arr.elem");
+        let exit_bb = self.context.append_basic_block(display_fn, "arr.exit");
+
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let i_phi = self.builder.build_phi(i64_t, "arr.i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, n, "arr.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        let is_first = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, i_val, i64_t.const_zero(), "arr.is.first")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_first, elem_bb, sep_bb)
+            .unwrap();
+
+        self.builder.position_at_end(sep_bb);
+        self.disp_append_lit(acc, ", ");
+        self.builder.build_unconditional_branch(elem_bb).unwrap();
+
+        self.builder.position_at_end(elem_bb);
+        let offset = self
+            .builder
+            .build_int_mul(i_val, elem_size, "arr.off")
+            .unwrap();
+        // The elements are INLINE — index from `val_ptr` itself, where the Vec
+        // body indexes from the loaded data pointer.
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, val_ptr, &[offset], "arr.elem.p")
+                .unwrap()
+        };
+        self.builder
+            .build_call(elem_disp, &[elem_ptr.into(), acc.into()], "aed")
+            .unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "arr.i1")
+            .unwrap();
+        let elem_end_bb = self.builder.get_insert_block().unwrap();
+        i_phi.add_incoming(&[(&i_next, elem_end_bb)]);
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.disp_append_lit(acc, "]");
+    }
+
     /// Emit (or reuse) a Display function for `Map[K, V]`. Typed entry point —
     /// distinct from `emit_display_fn_for_type` because Map's two type
     /// parameters can't be recovered from a single mangled name string.
@@ -1369,6 +1535,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         .iter()
                         .all(|e| self.reconstructable_display_payload_inner(e, seen))
             }
+            TypeKind::Array { element, size } => {
+                matches!(&size.kind, ExprKind::Integer(v, _) if *v >= 0)
+                    && self.reconstructable_display_payload_inner(element, seen)
+            }
             TypeKind::Path(p) => {
                 let Some(seg) = p.segments.last().map(String::as_str) else {
                     return false;
@@ -1408,19 +1578,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         })
                     });
                 }
-                // MEASURED EXCLUSIONS (B-2026-08-31-10). `Vector[T, N]` lowers
-                // to an LLVM vector type, which `llvm_type_word_count` counts
-                // as ONE word (its `_ => 1` catch-all) — so a 4-lane payload
-                // claims a single slot, is never deboxed, and reconstructs as
-                // garbage. Admitting it here printed
-                // `Some(Vector(0, 94011124162560, 1, 0))` against the
-                // interpreter's `Some(Vector(1, 2, 3, 4))`. `Array[T, N]` has
-                // no arm in `emit_display_fn_for_type_expr` at all and PANICS
-                // the compiler. Both are pre-existing gaps in the enum-payload
-                // machinery — a user enum with a `Vector` payload already
-                // prints the same garbage — so they stay on the deferred-error
-                // path rather than becoming a new way to reach them.
-                if matches!(seg, "Vector" | "Array" | "Slice") {
+                // `Vector[T, N]` and `Array[T, N]` were EXCLUDED here when
+                // B-2026-08-31-10 widened this predicate, and the exclusion is
+                // worth remembering rather than just deleting: admitting them
+                // then printed `Some(Vector(0, 94011124162560, 1, 0))` and
+                // `Some(1)` against the interpreter, because the enum-payload
+                // word accounting sized both at ONE word (B-2026-08-31-18) and
+                // the Display dispatcher had no array arm at all
+                // (B-2026-08-31-19). With both fixed they reconstruct and
+                // render, and the two ROWS ARE THE ONLY REASON THIS WAS EVER
+                // narrower — so anything that reopens either has to put the
+                // exclusion back, not paper over it here.
+                if matches!(seg, "Vector" | "Array") {
+                    return true;
+                }
+                // `Slice[T]` stays out: it has no Display under codegen at ANY
+                // depth — a bare `f"{s}"` on a slice is a hard error too, so
+                // there is nothing to reconstruct INTO yet.
+                if matches!(seg, "Slice") {
                     return false;
                 }
                 // A user struct: rebuilt field by field, so recurse. The old
@@ -1469,12 +1644,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// The declined-payload arm deliberately prescribes NO source-level
     /// rewrite. The obvious one — destructure with `match`/`if let` and format
-    /// the binding — is itself wrong for the two shapes that reach it: an
-    /// `Array[i64, 3]` payload bound by a match arm prints `Some(1)` under
-    /// codegen against the interpreter's `Some([1, 2, 3])`, and a
-    /// `Vector[i64, 4]` prints `Some(0)` against `Some(Vector(1, 2, 3, 4))`.
-    /// Advising it would trade a clean compile error for silently wrong
-    /// output. The one honest escape is the backend that does render it.
+    /// the binding — does not help for the shape that still reaches it: a
+    /// `Slice[T]` payload bound by a match arm hits the same refusal, because
+    /// codegen has no slice Display at any depth. When `Vector`/`Array` were
+    /// the declined shapes (before B-2026-08-31-18 and -19) the advice was
+    /// worse than useless — destructuring them bound `Some(0)` / `Some(1)`
+    /// against the interpreter's real values — so it would have traded a clean
+    /// compile error for silently wrong output. The one honest escape is the
+    /// backend that does render it.
     pub(super) fn deferred_display_error(&self, e: &Expr, arg: bool) -> String {
         let key = (e.span.offset, e.span.length);
         if let Some(te) = self.display.display_option_result_types.get(&key) {
@@ -1603,6 +1780,21 @@ impl<'ctx> super::Codegen<'ctx> {
 
         match &te.kind {
             TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_display_fn(elems),
+            // B-2026-08-31-19 — `Array[T, N]`, the shape this dispatcher never
+            // grew an arm for. Every NESTED spelling of an array (a `Vec`
+            // element, a struct field, a tuple field, an enum payload, a `dbg`
+            // argument) fell through to the by-name catch-all below and
+            // PANICKED the compiler with `type_name 'Array_i64_3' not yet
+            // supported`. Sits with the other extent-bearing shapes because the
+            // size is part of the type's identity, not decoration.
+            TypeKind::Array { element, size } => {
+                let n = match &size.kind {
+                    ExprKind::Integer(v, _) if *v >= 0 => *v as u64,
+                    _ => 0,
+                };
+                let elem = (**element).clone();
+                self.emit_array_display_fn(&elem, n, te)
+            }
             TypeKind::Path(p) => {
                 let head = p.segments.first().map(String::as_str);
                 if head == Some("Vec") {
@@ -1655,6 +1847,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {
                         return self.emit_set_display_fn(&elem_te);
+                    }
+                }
+                // `Array[T, N]` has TWO surface spellings and both reach here:
+                // source-written `Array[i64, 3]` parses as this PATH form,
+                // while a `TypeExpr` synthesized from a `Type::Array` (the
+                // typechecker's `type_to_type_expr`) uses `TypeKind::Array`,
+                // handled by the arm at the top of this match. A fix that
+                // covered only one left the other panicking — the path form is
+                // what a `Vec[Array[i64, 3]]` element carries
+                // (B-2026-08-31-19).
+                if head == Some("Array") {
+                    let args = p.generic_args.as_ref();
+                    let elem_te = args.and_then(|a| a.first()).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    let n = args.and_then(|a| a.get(1)).and_then(|a| match a {
+                        GenericArg::Const(e) => match &e.kind {
+                            ExprKind::Integer(v, _) if *v >= 0 => Some(*v as u64),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                    if let (Some(elem), Some(n)) = (elem_te, n) {
+                        return self.emit_array_display_fn(&elem, n, te);
                     }
                 }
                 // B-2026-08-14-35 — the sorted siblings. Absent these arms a
@@ -2192,8 +2409,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(type_name)
             .is_some_and(|tes| {
                 tes.iter().any(|te| {
-                    matches!(&te.kind, crate::ast::TypeKind::Path(p)
-                        if p.segments.last().map(|s| s.as_str()) == Some("Vector"))
+                    // `Array[T, N]` joins `Vector` here for the same reason and
+                    // in BOTH its surface spellings — the path form and the
+                    // `[T; N]` form (B-2026-08-31-19). Without it, the
+                    // field-parts path refused the struct outright with a Rust
+                    // `{:?}` of the field's `TypeExpr`, while the same struct
+                    // nested one level down rendered fine.
+                    matches!(&te.kind, crate::ast::TypeKind::Array { .. })
+                        || matches!(&te.kind, crate::ast::TypeKind::Path(p)
+                        if matches!(
+                            p.segments.last().map(|s| s.as_str()),
+                            Some("Vector") | Some("Array")
+                        ))
                 })
             })
     }
@@ -3912,6 +4139,78 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (LSan: 16 bytes in 4 allocations for two two-element temporaries).
     /// Deferring to scope exit is also what keeps the buffer alive long enough
     /// for an f-string's memcpy, matching the sibling collection paths.
+    /// B-2026-08-31-19 — the DEPTH-0 array renderer, sibling of
+    /// [`Self::try_compile_vec_display`] and of `try_compile_vector_display`.
+    ///
+    /// An array reaching the f-string / `println` paths had no arm at all, and
+    /// the outcome depended on its element type rather than failing cleanly:
+    /// `f"{a}"` on an `Array[i64, 3]` printed `1` — the value-kind fallback
+    /// reading the aggregate as a scalar — `println(a)` printed nothing, and an
+    /// `Array[String, 2]` printed the first element's raw data POINTER
+    /// (`93921800231728`). The interpreter renders all three `[…]`.
+    ///
+    /// Keys off the span-addressed `display_array_types`, so a bound array, an
+    /// array literal and a call result all take the same route. An array is a
+    /// VALUE with no heap of its own — its elements are inline — so unlike the
+    /// Vec sibling there is nothing to register for cleanup here; if an element
+    /// owns heap (`Array[String, N]`), that heap belongs to whatever owns the
+    /// array, and Display only ever appends a copy of the bytes.
+    pub(super) fn try_compile_array_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        let Some(arr_te) = self.display.display_array_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let (elem_te, n) = match &arr_te.kind {
+            TypeKind::Array { element, size } => match &size.kind {
+                ExprKind::Integer(v, _) if *v >= 0 => ((**element).clone(), *v as u64),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let disp = self.emit_array_display_fn(&elem_te, n, &arr_te);
+        // A bound array already has a slot; render through it rather than
+        // copying the aggregate (which for an `Array[String, N]` would put a
+        // second reference to the same buffers on the stack).
+        if let ExprKind::Identifier(name) = &e.kind {
+            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            }
+        }
+        let val = self.compile_expr(e)?;
+        if !val.is_array_value() {
+            return Ok(None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let slot = self.create_entry_alloca(fn_val, "arr.disp.tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        let rendered = self.render_via_display_fn(disp, slot);
+        // A FRESH owned array temporary (`f"{mk(n)}"`, an array literal) has no
+        // other owner, and its ELEMENTS can own heap — an `Array[String, 2]`
+        // holds two `{ptr, len, cap}` triples inline. Nothing else frees them,
+        // so the interpolation leaked both per evaluation (LSan: 40 allocations
+        // over a 20-iteration loop). Reuses the array-temp drop the `==`
+        // operand path already emits (`emit_drop_fn_for_array`), gated on the
+        // same `expr_is_fresh_owned_array_temp` predicate so a BOUND array or a
+        // place expression — owned elsewhere — is untouched.
+        //
+        // Emitted AFTER the render, so every read of the array dominates the
+        // drop, and IMMEDIATELY rather than at scope exit: a scope-exit
+        // registration hoists one entry alloca and would free only the LAST
+        // value when the interpolation sits in a loop, which is exactly the
+        // shape that surfaced the leak.
+        if self.expr_is_fresh_owned_array_temp(e) {
+            if let Some(drop_fn) = self.emit_drop_fn_for_array(&elem_te, n as u32) {
+                self.builder
+                    .build_call(drop_fn, &[slot.into()], "")
+                    .unwrap();
+            }
+        }
+        Ok(Some(rendered))
+    }
+
     pub(super) fn try_compile_vec_display(
         &mut self,
         e: &Expr,

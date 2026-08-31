@@ -483,6 +483,18 @@ pub type DisplayGenericEnumTypesTable = std::collections::HashMap<(usize, usize)
 /// its span-addressed sibling, exactly as `display_option_result_types` is for
 /// `var_option_payload_te` (B-2026-07-28-12).
 pub type DisplayVecTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Span → the WHOLE `Array[T, N]` `TypeExpr` of every array-typed expression.
+/// The array sibling of [`DisplayVecTypesTable`], carrying the full type rather
+/// than the element alone because an array's identity includes its extent and
+/// the renderer needs both.
+///
+/// Codegen had no depth-0 array Display at all, and the failure was silent:
+/// `f"{a}"` on an `Array[i64, 3]` printed `1` (the first element) and
+/// `println(a)` printed nothing, while an `Array[String, 2]` printed its first
+/// element's raw data POINTER. The nested spellings panicked the compiler
+/// instead, which is the loud half of the same gap (B-2026-08-31-19).
+pub type DisplayArrayTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 /// B-2026-08-14-31 — the `(key, value)` `TypeExpr`s of every `Map`-family
 /// expression, keyed by span, so a non-identifier Map renders like a bound one
 /// instead of falling through to the value-kind arms and printing its control
@@ -989,6 +1001,10 @@ pub struct Program {
     /// non-identifier Vec renders like a bound one. See
     /// [`DisplayVecTypesTable`].
     pub display_vec_types: DisplayVecTypesTable,
+    /// Full `Array[T, N]` `TypeExpr` of every array-typed expression, keyed by
+    /// span, so a direct `println(a)` / `f"{a}"` renders like a nested one. See
+    /// [`DisplayArrayTypesTable`].
+    pub display_array_types: DisplayArrayTypesTable,
     /// Key/value types of every `Map`/`SortedMap`-typed expression, keyed by
     /// span, so a non-identifier Map renders like a bound one. See
     /// [`DisplayMapTypesTable`] (B-2026-08-14-31).

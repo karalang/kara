@@ -788,6 +788,69 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-19 — the memory half of teaching codegen to render an
+    /// `Array[T, N]`.
+    ///
+    /// An array owns no buffer of its own, but its ELEMENTS can: an
+    /// `Array[String, 2]` holds two `{ptr, len, cap}` triples inline. Display
+    /// appends a COPY of those bytes into a fresh accumulator and must not
+    /// touch the element buffers — so the two ways to get the new renderer
+    /// wrong are freeing what it rendered (a double free at the owner's scope
+    /// exit, or a use-after-free on the read below) and registering the
+    /// rendered temporary for a cleanup it does not own.
+    ///
+    /// `a` is rendered TWICE and then READ again, so a renderer that freed it
+    /// surfaces here rather than staying latent. The loop mints a fresh array
+    /// per iteration through a CALL RESULT, the non-place spelling that spills
+    /// to a temporary slot, so a spurious registration leaks or double-frees 20
+    /// times over instead of once. `nested` puts the same elements one level
+    /// down, where a different renderer walks them.
+    #[test]
+    fn asan_array_display_does_not_take_its_elements() {
+        let Some((out, status)) = run_under_asan(
+            r#"fn mk(n: i64) -> Array[String, 2] {
+    return [f"abcdefghijklmnopqrstuvwxyz{n}", f"0123456789012345678901234{n}"]
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut i = 0;
+    while i < 20 {
+        println(f"call {mk(i + n)}");
+        i = i + 1;
+    }
+
+    let a: Array[String, 2] = [f"first-element-aaaaaaaaaaaaaaa", f"second-element-bbbbbbbbbbbbbb"];
+    println(f"var  {a}");
+    println(f"var  {a}");
+    println(f"len  {a[0].len()}");
+
+    let mut v: Vec[Array[String, 2]] = Vec.new();
+    v.push(a);
+    println(f"nest {v}");
+    println("end");
+}
+"#,
+            "asan_array_display_does_not_take_its_elements",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(
+            out.matches("call [abcdefghijklmnopqrstuvwxyz").count(),
+            20,
+            "every iteration must render its array:\n{out}"
+        );
+        for want in [
+            "var  [first-element-aaaaaaaaaaaaaaa, second-element-bbbbbbbbbbbbbb]",
+            "len  29",
+            "nest [[first-element-aaaaaaaaaaaaaaa, second-element-bbbbbbbbbbbbbb]]",
+            "end",
+        ] {
+            assert!(out.contains(want), "missing {want:?}:\n{out}");
+        }
+    }
+
     /// B-2026-08-31-18 — the memory half of giving a `Vector[T, N]` enum
     /// payload its true word count.
     ///

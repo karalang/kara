@@ -32925,6 +32925,114 @@ bool true
     );
 }
 
+/// B-2026-08-31-19 — `Array[T, N]` renders under codegen, at every depth, the
+/// way the interpreter renders it.
+///
+/// Codegen had NO array Display at all, and the two halves failed differently.
+/// Nested — a `Vec` element, a struct field, a tuple field, an enum payload — it
+/// fell through `emit_display_fn_for_type_expr` to the by-name catch-all and
+/// PANICKED the compiler with `type_name 'Array_i64_3' not yet supported`. At
+/// depth 0 it was SILENT, and what it printed depended on the element type:
+/// `f"{a}"` on an `Array[i64, 3]` printed `1` (the value-kind fallback reading the
+/// aggregate as a scalar), `println(a)` printed NOTHING AT ALL, and an
+/// `Array[String, 2]` printed its first element's raw data POINTER. So the
+/// compiler-abort half is the one that failed loudly and the plain interpolation
+/// was the quiet miscompile, which is the wrong way round for how they read — the
+/// row's original title said "nested", and the depth-0 measurement is what widened
+/// it.
+///
+/// `fstr` / `arg` / `str` are those three depth-0 shapes, one per failure mode.
+/// `nested`, `struct`, `vecarr`, `field`, `tuple`, `enum` and `mapval` are the
+/// positions that panicked; each reaches the renderer through a different
+/// dispatcher. `marm` is the match-arm binding — a VALUE, so it asserts the
+/// reconstruction and not merely the rendering. `opt` and `res` are the shapes
+/// B-2026-08-31-10 had to EXCLUDE from the Option/Result Display gate precisely
+/// because of this row and B-2026-08-31-18; they are in here because lifting that
+/// exclusion is what closes the loop, and a regression in either row re-declines
+/// them.
+///
+/// `one` is the degenerate extent, which the loop must render without a separator.
+/// `flt` and `str` pin element types whose per-element renderer is not the integer
+/// one, since the array body's whole job is to delegate.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_array_display_renders_at_every_depth`,
+/// pinned to the same string. The interpreter rendered every row correctly
+/// throughout — it is the oracle the compiled side is asserted against.
+///
+/// The seed is the literal 1 rather than `env.args().len()`: an IN-PROCESS
+/// interpreter test sees the TEST binary's argv, which is 1 only when the suite
+/// runs unfiltered.
+#[test]
+fn test_array_display_renders_at_every_depth() {
+    assert_eq!(
+        run(r#"#[derive(Display)]
+struct P { x: i64, s: String }
+#[derive(Display)]
+struct WithArr { a: Array[i64, 3], n: i64 }
+#[derive(Display)]
+enum E { A(Array[i64, 3]), S(Array[String, 2]), N }
+
+fn main() {
+    let n: i64 = 1;
+    let a: Array[i64, 3] = [n, n + 1, n + 2];
+    let s: Array[String, 2] = [f"x{n}", f"y{n}"];
+    let f: Array[f64, 2] = [n as f64 + 0.5, n as f64 + 1.5];
+    let one: Array[i64, 1] = [n];
+
+    println(f"fstr   {a}");
+    println(a);
+    println(f"str    {s}");
+    println(f"flt    {f}");
+    println(f"one    {one}");
+
+    let nested: Array[Array[i64, 2], 2] = [[n, n + 1], [n + 2, n + 3]];
+    println(f"nested {nested}");
+    let structs: Array[P, 2] = [P { x: n, s: f"p1" }, P { x: n + 1, s: f"p2" }];
+    println(f"struct {structs}");
+
+    let mut v: Vec[Array[i64, 3]] = Vec.new();
+    v.push(a);
+    println(f"vecarr {v}");
+
+    let w = WithArr { a: a, n: n };
+    println(f"field  {w}");
+
+    let t: (Array[i64, 3], i64) = (a, n);
+    println(f"tuple  {t}");
+
+    let e = E.A(a);
+    println(f"enum   {e}");
+    match e { E.A(b) => { println(f"marm   {b}"); } E.S(b) => {} E.N => {} }
+
+    let oa: Option[Array[i64, 3]] = Some(a);
+    println(f"opt    {oa}");
+    let ra: Result[Array[i64, 3], i64] = Ok(a);
+    println(f"res    {ra}");
+
+    let mut m: Map[String, Array[i64, 3]] = Map.new();
+    m.insert(f"k", a);
+    println(f"mapval {m}");
+}
+"#),
+        r#"fstr   [1, 2, 3]
+[1, 2, 3]
+str    [x1, y1]
+flt    [1.5, 2.5]
+one    [1]
+nested [[1, 2], [3, 4]]
+struct [P { x: 1, s: p1 }, P { x: 2, s: p2 }]
+vecarr [[1, 2, 3]]
+field  WithArr { a: [1, 2, 3], n: 1 }
+tuple  ([1, 2, 3], 1)
+enum   A([1, 2, 3])
+marm   [1, 2, 3]
+opt    Some([1, 2, 3])
+res    Ok([1, 2, 3])
+mapval {k: [1, 2, 3]}
+"#
+    );
+}
+
 /// B-2026-08-31-18 — a `Vector[T, N]` or `Array[T, N]` ENUM PAYLOAD survives
 /// the round trip through the variant's payload words.
 ///
