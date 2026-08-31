@@ -24763,6 +24763,223 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_transitive_generic_keeps_the_callee_at_the_declared_signedness() {
+        // B-2026-08-31-11. `fn wrap[T](x: T) { show(x) }` calling
+        // `fn show[T](x: T)` resolves show's `T` to the CALLER's `T`, and
+        // `infer_call` drops that as self-referential (the guard exists so the
+        // interpreter's substitution stack never sees a `T -> T` entry
+        // shadowing the outer frame that does know `T`). `call_type_subs` is
+        // then empty for the inner call, `subst_names` stays unfilled, and the
+        // mangle falls back to `llvm_type_to_mangle_str` — which carries the
+        // WIDTH but not the SIGNEDNESS.
+        //
+        // So `wrap$u32` called `show$i32`, and the body compiled at that
+        // signedness printed `u32::MAX` as -1. The symbol is the assertion
+        // because it is the mechanism: `wrap` keeps its own declared name and
+        // only the CALLEE loses it, which is what separates this from
+        // B-2026-08-30-45 (one symbol serving two widths, needing two
+        // instantiations to show; this needs one).
+        let ir = ir_for(
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn wrap[T](x: T) -> String { show(x) }\n\
+             fn main() {\n\
+                 let v: u32 = 4294967295u32;\n\
+                 println(wrap(v));\n\
+             }",
+        );
+        for sym in ["wrap$u32", "show$u32"] {
+            assert!(
+                ir.contains(&format!("@\"{sym}\"(")),
+                "expected `{sym}`; the transitive callee must keep the declared \
+                 signedness, not fall back to the LLVM token. IR:\n{ir}"
+            );
+        }
+        assert!(
+            !ir.contains("@\"show$i32\"("),
+            "`show` was instantiated at the SIGNED sibling of the same width; \
+             IR:\n{ir}"
+        );
+    }
+
+    /// B-2026-08-31-11 — the behavioural half, and the interpreter's oracle.
+    ///
+    /// Every expectation below is what `--interp` prints, and the interpreter
+    /// is right here for a structural reason: it carries the declared type at
+    /// runtime and recovers signedness from it (B-2026-08-30-44), so it never
+    /// had a symbol to collide. The compiled backends monomorphize, and the
+    /// transitive instantiation lost the name.
+    ///
+    /// Measured on the pre-fix compiler: 15 of these 22 cases diverged, at
+    /// EVERY unsigned width (u8/u16/u32/u64/u128/usize), at any nesting depth,
+    /// through a `ref` param, and in ARITHMETIC as well as display —
+    /// `u64::MAX / 2` gave 0 and `u64::MAX < 2` gave true. The row that filed
+    /// this listed only u64 and u128 display and left the arithmetic half as an
+    /// open question; both are wider than it recorded.
+    ///
+    /// `control-renamed-param` is the localizer: the identical program with the
+    /// callee's parameter spelled `U` instead of `T` was ALWAYS correct, which
+    /// is what pins this to the name collision rather than to nesting.
+    /// `control-tuple-arg` is the guard on the fix's own fallback — a callee
+    /// whose type argument is a TUPLE has no spellable name, must keep its
+    /// structural `$struct$…` token, and must not be dragged onto the
+    /// enclosing scalar's `$u64`.
+    #[test]
+    fn e2e_transitive_generic_keeps_the_declared_unsignedness() {
+        let hdr = "fn show[T](x: T) -> String { f\"{x}\" }\n\
+                   fn showU[U](x: U) -> String { f\"{x}\" }\n\
+                   fn wrap[T](x: T) -> String { show(x) }\n\
+                   fn wrapU[T](x: T) -> String { showU(x) }\n\
+                   fn wrap2[T](x: T) -> String { wrap(x) }\n\
+                   fn wrapRef[T](x: ref T) -> String { show(x) }\n\
+                   fn dv[T: Div](a: T, b: T) -> T { a / b }\n\
+                   fn wdv[T: Div](a: T, b: T) -> T { dv(a, b) }\n\
+                   fn lt[T: PartialOrd](a: T, b: T) -> bool { a < b }\n\
+                   fn wlt[T: PartialOrd](a: T, b: T) -> bool { lt(a, b) }\n\
+                   fn add1[T: Add](x: T, o: T) -> T { x + o }\n\
+                   fn wInline[T: Add](x: T, o: T) -> String { show(add1(x, o)) }\n\
+                   fn wArithInline[T: Add](x: T, o: T) -> String { show(x + o) }\n\
+                   fn wLet[T: Add](x: T, o: T) -> String { let y = add1(x, o); show(y) }\n\
+                   fn mkPair[T](x: T) -> (T, T) { (x, x) }\n\
+                   fn showP[T](p: T) -> String { f\"pair\" }\n\
+                   fn wPair[T](x: T) -> String { showP(mkPair(x)) }\n";
+        let big = "let v: u64 = 18446744073709551614u64; let o: u64 = 1u64;";
+        for (label, body, want) in [
+            // Display, every unsigned width.
+            (
+                "u8",
+                "let v: u8 = 255u8; println(wrap(v));".to_string(),
+                "255\n",
+            ),
+            (
+                "u16",
+                "let v: u16 = 65535u16; println(wrap(v));".to_string(),
+                "65535\n",
+            ),
+            (
+                "u32",
+                "let v: u32 = 4294967295u32; println(wrap(v));".to_string(),
+                "4294967295\n",
+            ),
+            (
+                "u64",
+                "let v: u64 = 18446744073709551615u64; println(wrap(v));".to_string(),
+                "18446744073709551615\n",
+            ),
+            (
+                "u128",
+                "let v: u128 = 340282366920938463463374607431768211455u128;\n\
+                 println(wrap(v));"
+                    .to_string(),
+                "340282366920938463463374607431768211455\n",
+            ),
+            (
+                "usize",
+                "let v: usize = 18446744073709551615u64 as usize; println(wrap(v));".to_string(),
+                "18446744073709551615\n",
+            ),
+            // Depth and parameter mode.
+            (
+                "depth-3",
+                "let v: u64 = 18446744073709551615u64; println(wrap2(v));".to_string(),
+                "18446744073709551615\n",
+            ),
+            (
+                "ref-param",
+                "let v: u32 = 4294967295u32; println(wrapRef(v));".to_string(),
+                "4294967295\n",
+            ),
+            // ARITHMETIC — the half the row left as an open question. A signed
+            // reading of u64::MAX is -1, so the division gave 0 and the
+            // comparison gave true.
+            (
+                "arith-div",
+                "let b: u64 = 18446744073709551615u64; let t: u64 = 2u64;\n\
+                 println(wdv(b, t));"
+                    .to_string(),
+                "9223372036854775807\n",
+            ),
+            (
+                "arith-cmp",
+                "let b: u64 = 18446744073709551615u64; let t: u64 = 2u64;\n\
+                 println(wlt(b, t));"
+                    .to_string(),
+                "false\n",
+            ),
+            // Argument shapes. A binding-rooted argument resolves from the
+            // enclosing mono's own registration; an INLINE expression names no
+            // binding and resolves from the enclosing type-param binding.
+            (
+                "inline-call-arg",
+                format!("{big} println(wInline(v, o));"),
+                "18446744073709551615\n",
+            ),
+            (
+                "inline-arith-arg",
+                format!("{big} println(wArithInline(v, o));"),
+                "18446744073709551615\n",
+            ),
+            (
+                "let-bound-arg",
+                format!("{big} println(wLet(v, o));"),
+                "18446744073709551615\n",
+            ),
+            // Both signednesses in ONE program: two distinct instantiation
+            // chains that previously collapsed onto the signed one.
+            (
+                "both-signs-one-program",
+                "let u: u32 = 4294967295u32; let s: i32 = -1i32;\n\
+                 println(wrap(u)); println(wrap(s));"
+                    .to_string(),
+                "4294967295\n-1\n",
+            ),
+            // Controls.
+            (
+                "control-renamed-param",
+                "let v: u32 = 4294967295u32; println(wrapU(v));".to_string(),
+                "4294967295\n",
+            ),
+            (
+                "control-direct",
+                "let v: u64 = 18446744073709551615u64; println(show(v));".to_string(),
+                "18446744073709551615\n",
+            ),
+            (
+                "control-i64",
+                "let s: i64 = -7; println(wrap(s));".to_string(),
+                "-7\n",
+            ),
+            (
+                "control-i32",
+                "let s: i32 = -7i32; println(wrap(s));".to_string(),
+                "-7\n",
+            ),
+            (
+                "control-f64",
+                "let f: f64 = 1.5; println(wrap(f));".to_string(),
+                "1.5\n",
+            ),
+            (
+                "control-string",
+                "let s: String = \"hi\"; println(wrap(s));".to_string(),
+                "hi\n",
+            ),
+            (
+                "control-bool",
+                "let b: bool = true; println(wrap(b));".to_string(),
+                "true\n",
+            ),
+            (
+                "control-tuple-arg",
+                format!("{big} println(wPair(v)); println(wrap(v));"),
+                "pair\n18446744073709551614\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n    {body}\n}}");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+    }
+
+    #[test]
     fn test_e2e_generic_arithmetic_at_reduced_precision() {
         // The compiled twin of `tests/interpreter.rs`'s
         // `test_generic_arithmetic_computes_at_the_instantiated_float_width`

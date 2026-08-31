@@ -49788,3 +49788,136 @@ fn interp_int_reaching_a_float_slot_through_an_aggregate_converts() {
         assert_eq!(run(src), *want, "{label}");
     }
 }
+
+#[test]
+fn interp_transitive_generic_is_the_codegen_unsignedness_oracle() {
+    // B-2026-08-31-11's oracle half. The DEFECT is on the compiled side: a
+    // generic calling another generic whose type param has the SAME NAME
+    // instantiated the callee at the signed sibling of the declared width, so
+    // `u32::MAX` printed as -1 from both `karac run` and `karac build` while
+    // `--interp` was correct.
+    //
+    // The interpreter is right for a structural reason rather than by luck: it
+    // carries the declared type at runtime and recovers signedness from it
+    // (B-2026-08-30-44), so it has no monomorph symbol to collide in the first
+    // place. That makes it the reference, and every value below is what it
+    // prints — the same table `e2e_transitive_generic_keeps_the_declared_-
+    // unsignedness` in `tests/codegen.rs` asserts on the compiled side.
+    //
+    // Pinning it here is the point: without the pair, an interpreter regression
+    // would silently move the reference the codegen test is measured against
+    // and the two would agree on a wrong answer.
+    //
+    // The cases are the ones that diverged (15 of 22 pre-fix) plus the
+    // localizer: `control-renamed-param` spells the callee's parameter `U`
+    // instead of `T` and was always correct on every backend, which is what
+    // separates a NAME COLLISION from nesting.
+    let hdr = "fn show[T](x: T) -> String { f\"{x}\" }\n\
+               fn showU[U](x: U) -> String { f\"{x}\" }\n\
+               fn wrap[T](x: T) -> String { show(x) }\n\
+               fn wrapU[T](x: T) -> String { showU(x) }\n\
+               fn wrap2[T](x: T) -> String { wrap(x) }\n\
+               fn wrapRef[T](x: ref T) -> String { show(x) }\n\
+               fn dv[T: Div](a: T, b: T) -> T { a / b }\n\
+               fn wdv[T: Div](a: T, b: T) -> T { dv(a, b) }\n\
+               fn lt[T: PartialOrd](a: T, b: T) -> bool { a < b }\n\
+               fn wlt[T: PartialOrd](a: T, b: T) -> bool { lt(a, b) }\n\
+               fn add1[T: Add](x: T, o: T) -> T { x + o }\n\
+               fn wInline[T: Add](x: T, o: T) -> String { show(add1(x, o)) }\n";
+    let big = "let v: u64 = 18446744073709551614u64; let o: u64 = 1u64;";
+    let cases: Vec<(&str, String, &str)> = vec![
+        ("u8", "let v: u8 = 255u8; println(wrap(v));".into(), "255\n"),
+        (
+            "u16",
+            "let v: u16 = 65535u16; println(wrap(v));".into(),
+            "65535\n",
+        ),
+        (
+            "u32",
+            "let v: u32 = 4294967295u32; println(wrap(v));".into(),
+            "4294967295\n",
+        ),
+        (
+            "u64",
+            "let v: u64 = 18446744073709551615u64; println(wrap(v));".into(),
+            "18446744073709551615\n",
+        ),
+        (
+            "u128",
+            "let v: u128 = 340282366920938463463374607431768211455u128;\n\
+             println(wrap(v));"
+                .into(),
+            "340282366920938463463374607431768211455\n",
+        ),
+        (
+            "usize",
+            "let v: usize = 18446744073709551615u64 as usize; println(wrap(v));".into(),
+            "18446744073709551615\n",
+        ),
+        (
+            "depth-3",
+            "let v: u64 = 18446744073709551615u64; println(wrap2(v));".into(),
+            "18446744073709551615\n",
+        ),
+        (
+            "ref-param",
+            "let v: u32 = 4294967295u32; println(wrapRef(v));".into(),
+            "4294967295\n",
+        ),
+        (
+            "arith-div",
+            "let b: u64 = 18446744073709551615u64; let t: u64 = 2u64;\n\
+             println(wdv(b, t));"
+                .into(),
+            "9223372036854775807\n",
+        ),
+        (
+            "arith-cmp",
+            "let b: u64 = 18446744073709551615u64; let t: u64 = 2u64;\n\
+             println(wlt(b, t));"
+                .into(),
+            "false\n",
+        ),
+        (
+            "inline-call-arg",
+            format!("{big} println(wInline(v, o));"),
+            "18446744073709551615\n",
+        ),
+        (
+            "both-signs-one-program",
+            "let u: u32 = 4294967295u32; let s: i32 = -1i32;\n\
+             println(wrap(u)); println(wrap(s));"
+                .into(),
+            "4294967295\n-1\n",
+        ),
+        (
+            "control-renamed-param",
+            "let v: u32 = 4294967295u32; println(wrapU(v));".into(),
+            "4294967295\n",
+        ),
+        (
+            "control-direct",
+            "let v: u64 = 18446744073709551615u64; println(show(v));".into(),
+            "18446744073709551615\n",
+        ),
+        (
+            "control-i64",
+            "let s: i64 = -7; println(wrap(s));".into(),
+            "-7\n",
+        ),
+        (
+            "control-f64",
+            "let f: f64 = 1.5; println(wrap(f));".into(),
+            "1.5\n",
+        ),
+        (
+            "control-string",
+            "let s: String = \"hi\"; println(wrap(s));".into(),
+            "hi\n",
+        ),
+    ];
+    for (label, body, want) in cases {
+        let src = format!("{hdr}fn main() {{\n    {body}\n}}");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}

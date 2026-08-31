@@ -238,6 +238,115 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (ref-peeled) declared element is a bare type param of `func` — so a
     /// concrete `Vec[i64]` param binds nothing. No-op unless the arg is a
     /// plain identifier with a registered element type.
+    /// The SCALAR twin of [`Self::augment_subst_from_arg_elem_types`] below:
+    /// bind a bare generic type param to the concrete type NAME the enclosing
+    /// monomorph already knows for the argument (B-2026-08-31-11).
+    ///
+    /// A nested generic call whose callee's type param has the SAME NAME as the
+    /// caller's — `fn wrap[T](x: T) { show(x) }` calling `fn show[T](x: T)` —
+    /// resolves `show`'s `T` to the caller's `T`, and the typechecker drops
+    /// that as a self-referential binding (`infer_call`'s
+    /// `if !matches!(&resolved, Type::TypeParam(n) if n == name)`, kept so the
+    /// interpreter's substitution stack never sees a `T -> T` entry shadowing
+    /// the outer frame that does know `T`). So `call_type_subs` has no entry
+    /// here and `subst_names` stays empty, leaving the mangle to fall back on
+    /// `llvm_type_to_mangle_str` — which carries a WIDTH but no SIGNEDNESS.
+    ///
+    /// Measured: `show`'s `u32` instantiation reused `show$i32`, and
+    /// `u32::MAX` printed as `-1` on BOTH compiled backends at every unsigned
+    /// width (u8/u16/u32/u64/u128), transitively at any depth, while `--interp`
+    /// and the DIRECT `show(x)` at the same width were correct. Renaming the
+    /// callee's param to `U` made the identical program correct — which is what
+    /// localizes this to the NAME COLLISION rather than to nesting — and the
+    /// arithmetic half went the same way (`u64::MAX / 2` gave 0, `u64::MAX < 2`
+    /// gave true).
+    ///
+    /// The enclosing mono knows each argument's concrete name already:
+    /// `compile_mono_function`'s param prologue records it in `var_type_names`,
+    /// resolved through `type_subst_names`. Read it back here.
+    ///
+    /// Only fills a GAP — a param the typechecker DID record keeps its binding,
+    /// so nothing that works today changes. Restricted to the scalar-primitive
+    /// names because those are exactly what the LLVM token erases; a
+    /// struct/enum type argument is disambiguated by the `token == "struct"`
+    /// branch of the mangle and is not part of the measured defect.
+    fn augment_subst_names_from_arg_type_names(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        subst_names: &mut HashMap<String, String>,
+        subst: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        let Some(gp) = &func.generic_params else {
+            return;
+        };
+        let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            // A BARE type param only: `Vec[T]` and friends are the container
+            // twin's business, and a concrete `x: i64` needs no binding.
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let pname = &path.segments[0];
+            if !is_param(pname) || subst_names.contains_key(pname) {
+                continue;
+            }
+            // First choice: the ARGUMENT's own registered concrete name. This is
+            // direct evidence and cannot be wrong. Covers every binding-rooted
+            // argument, since a mono registers its params AND its locals here —
+            // measured: a plain identifier, a `let`-bound call result and a
+            // `let`-bound arithmetic result all resolve through this arm.
+            let from_arg = match &arg.value.kind {
+                ExprKind::Identifier(arg_name) => self
+                    .var_types
+                    .var_type_names
+                    .get(arg_name.as_str())
+                    .cloned(),
+                _ => None,
+            };
+            // Fallback for an INLINE expression argument (`show(add1(x, o))`,
+            // `show(x + o)`), which names no binding and so has no entry above.
+            // The binding was dropped for exactly one reason — the callee's
+            // param resolved to the CALLER's param OF THE SAME NAME — so the
+            // enclosing mono's own binding for that name IS the answer.
+            //
+            // Guarded by the scalar shape of `subst`, which `infer_type_args`
+            // already filled from the argument's LLVM type. The other way a
+            // binding can be absent is a solution `type_to_concrete_or_param_-
+            // name` cannot spell (a tuple, a function type); those lower to an
+            // aggregate, so requiring an int/float here excludes them. Without
+            // the guard, `show(mkPair(x))` would bind the callee's `T` to the
+            // enclosing `u64` and mangle a tuple instantiation as `$u64`,
+            // colliding with a real `u64` one in the same program.
+            let from_enclosing = || {
+                let scalar_slot = match subst.get(pname) {
+                    None => true,
+                    Some(t) => t.is_int_type() || t.is_float_type(),
+                };
+                if !scalar_slot {
+                    return None;
+                }
+                self.mono_state.type_subst_names.get(pname).cloned()
+            };
+            let Some(concrete) = from_arg.or_else(from_enclosing) else {
+                continue;
+            };
+            if !Self::is_scalar_primitive_mangle_name(&concrete) {
+                continue;
+            }
+            let llvm = self.llvm_type_for_name(&concrete);
+            subst_names.insert(pname.clone(), concrete);
+            subst.entry(pname.clone()).or_insert(llvm);
+        }
+    }
+
     fn augment_subst_from_arg_elem_types(
         &self,
         func: &Function,
@@ -1799,6 +1908,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // registered element. Also covers the top-level case (a let-bound
         // `a: Vec[i64]` is registered the same way), making the two
         // element instantiations distinct monos regardless of nesting.
+        // B-2026-08-31-11 — the SCALAR gap the container fallback below does not
+        // cover: a same-named type param in a nested generic call, whose
+        // binding the typechecker drops as self-referential. Runs BEFORE the
+        // container pass and fills only params still unbound, so a recorded
+        // binding always wins. See the helper for the measurement.
+        self.augment_subst_names_from_arg_type_names(
+            &generic_fn,
+            args,
+            &mut subst_names,
+            &mut subst,
+        );
         self.augment_subst_from_arg_elem_types(&generic_fn, args, &mut subst);
 
         // Const generics slice 1b: process explicit generic args. For
