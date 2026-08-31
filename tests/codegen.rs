@@ -40616,6 +40616,47 @@ fn main() {
                 "h=30\ndR30\ndR20\nh=31\ndR31\ndR21\n",
             ),
             (
+                "shadow-block-tail-moves-the-shadowed-name",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let x = {{ let y = mk(16); let y = mk(17); y }};\n\
+                     \x20   println(f\"x={{x.id}}\");\n\
+                     }}"
+                ),
+                // B-2026-08-30-57. The tail hands `y` out, and the retraction
+                // that models the move used to match by NAME, so BOTH
+                // generations lost their action and `mk(16)`'s body never ran.
+                // Only the generation being handed out moves.
+                "dR16\nx=17\ndR17\n",
+            ),
+            (
+                "shadow-fn-tail-returns-the-shadowed-name",
+                format!(
+                    "{hdr}fn f() -> R {{ let s = mk(18); let s = mk(19); s }}\n\
+                     fn main() {{\n\
+                     \x20   let q = f();\n\
+                     \x20   println(f\"q={{q.id}}\");\n\
+                     }}"
+                ),
+                // The same retraction reached through `suppress_user_drop_for_var`
+                // rather than the block-tail site, which is what shows the
+                // subject is the by-name matching and not the block.
+                "dR18\nq=19\ndR19\n",
+            ),
+            (
+                "shadow-block-tail-field-read-is-not-a-move",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let z = {{ let w = mk(22); let w = mk(23); w.id }};\n\
+                     \x20   println(f\"z={{z}}\");\n\
+                     }}"
+                ),
+                // CONTROL: a field read hands out no binding, so no retraction
+                // runs and both generations always died correctly. Its passing
+                // is what localized the defect to the move path.
+                "dR23\ndR22\nz=23\n",
+            ),
+            (
                 "shadow-a-param",
                 format!(
                     "{hdr}fn f(r: R) -> i64 {{ let r = mk(99); r.id }}\n\
@@ -41035,15 +41076,12 @@ fn main() {
                 // The LAST binding produces the tail; taking the first would
                 // classify on an RHS that no longer yields the handed-out value.
                 //
-                // PINNED AT A DEFECT for `mk(90)`, and DELIBERATELY DIFFERENT
-                // from the interpreter twin, which expects `dR90` first. The
-                // shadowed binding's body is LOST on all three compiled
-                // surfaces; B-2026-08-30-51 fixed the interpreter's shadowing
-                // and this side still needs its own. Filed separately rather
-                // than papered over by relaxing either expectation — an
-                // agreeing pair here would be a false statement about the
-                // compiler.
-                "in-one\ndR91\nv=91\n",
+                // `mk(90)`'s body was LOST here on all three compiled surfaces
+                // until B-2026-08-30-57: the block-tail move retracted the
+                // handed-out binding BY NAME, which matched every generation of
+                // a shadowed one. The two backends agree again, so this pin and
+                // its interpreter twin are byte-identical once more.
+                "dR90\nin-one\ndR91\nv=91\n",
             ),
             (
                 "wrapper-arg-passthrough-callee-still-defers",

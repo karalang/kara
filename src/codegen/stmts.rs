@@ -1103,15 +1103,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // interpreter prints) to `k=1 / dR1` — `b`'s body lost on the
                 // path where it dies in place. Retaining only in the top frame
                 // keeps `m` and leaves `a` / `b` to the runtime flag.
-                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
-                    frame.retain(|action| {
-                        !matches!(
-                            action,
-                            crate::codegen::state::CleanupAction::UserDrop { binding_name, .. }
-                                if binding_name == &n
-                        )
-                    });
-                }
+                // B-2026-08-30-57 — the NEWEST generation only. This used to
+                // match by name alone, so a SHADOWED tail
+                // (`{ let t = mk(90); let t = mk(91); t }`) retracted every
+                // generation and the shadowed value's body was lost outright on
+                // all three compiled surfaces. Only the binding actually being
+                // handed out moves.
+                self.retract_newest_user_drop_in_top_frame(&n);
             }
             // B-2026-08-06-8 — a FIELD tail (`let x = { let b = mk(); b.v };`).
             // The function-body sibling `suppress_cleanup_for_tail_return` hands

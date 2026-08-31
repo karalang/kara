@@ -9281,6 +9281,48 @@ impl<'ctx> super::Codegen<'ctx> {
         true
     }
 
+    /// B-2026-08-30-57 — retract the NEWEST generation of `name`'s `UserDrop`
+    /// actions from the TOP frame only.
+    ///
+    /// The top-frame scoping is [`crate::codegen::CodeGen::suppress_block_tail_cleanup`]'s
+    /// own correctness argument, unchanged: a tail identifier owned by an
+    /// ENCLOSING frame is CONDITIONALLY moved and belongs to
+    /// `arm_conditional_move_tail_flag`'s runtime bit, while one owned by the
+    /// innermost frame moves on every path that reaches the tail.
+    ///
+    /// What is new is the generation filter. Matching by NAME alone retracted
+    /// every generation of a shadowed binding, so
+    /// `{ let t = mk(90); let t = mk(91); t }` lost the shadowed value's body
+    /// entirely. The last matching action's `binding_ptr` identifies the
+    /// generation being handed out, and every action sharing that pointer goes
+    /// with it -- which keeps a dual registration (an enum's own wrapper plus
+    /// its payload walk, both against one slot) intact as a unit.
+    pub(super) fn retract_newest_user_drop_in_top_frame(&mut self, name: &str) {
+        let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() else {
+            return;
+        };
+        let Some(idx) = frame.iter().rposition(
+            |a| matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == name),
+        ) else {
+            return;
+        };
+        let CleanupAction::UserDrop {
+            binding_ptr: newest,
+            ..
+        } = frame[idx]
+        else {
+            return;
+        };
+        frame.retain(|action| match action {
+            CleanupAction::UserDrop {
+                binding_name,
+                binding_ptr,
+                ..
+            } => !(binding_name == name && *binding_ptr == newest),
+            _ => true,
+        });
+    }
+
     pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
         // B-2026-08-30-28 — DECLINE for a parameter whose body is owned by a
         // per-path flag. This removal is all-paths; the flag exists precisely
@@ -9292,11 +9334,53 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.drop_rc.cond_store_flag_params.contains(name) {
             return;
         }
+        // B-2026-08-30-57 — retract only the NEWEST generation of `name`, in the
+        // innermost frame that holds one.
+        //
+        // The sweep used to be by NAME across every frame, which is wrong twice
+        // over once a name is SHADOWED. `{ let t = mk(90); let t = mk(91); t }`
+        // hands the tail out, this retracts, and both generations' actions
+        // matched -- so the shadowed value's body was lost outright, on all
+        // three compiled surfaces. The same happened at a function tail
+        // (`fn f() -> R { let s = mk(30); let s = mk(31); s }`), which is what
+        // shows the subject is the retraction and not the block.
+        //
+        // NEWEST is identified by the LAST matching action's `binding_ptr`, and
+        // every action sharing that pointer goes with it. That is what keeps a
+        // dual registration intact as a unit: an enum binding registers an
+        // own-wrapper AND a payload walk against one slot, and retracting only
+        // one of the pair would leave a stale half behind. A different slot is a
+        // different generation, and keeps its body.
+        //
+        // INNERMOST FRAME ONLY, where it used to sweep all of them. The sweep
+        // matters when the binding lives in an ENCLOSING block -- a `return x;`
+        // nested inside a branch -- and that still works, because the loop falls
+        // through to the outer frame when the inner has no match. The behaviour
+        // differs only when an inner AND an outer frame both hold one, which is
+        // shadowing across scopes: two distinct bindings, of which only the
+        // inner one is being handed out.
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            let Some(idx) = frame.iter().rposition(
+                |a| matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == name),
+            ) else {
+                continue;
+            };
+            let CleanupAction::UserDrop {
+                binding_ptr: newest,
+                ..
+            } = frame[idx]
+            else {
+                continue;
+            };
             frame.retain(|action| match action {
-                CleanupAction::UserDrop { binding_name, .. } => binding_name != name,
+                CleanupAction::UserDrop {
+                    binding_name,
+                    binding_ptr,
+                    ..
+                } => !(binding_name == name && *binding_ptr == newest),
                 _ => true,
             });
+            return;
         }
     }
 

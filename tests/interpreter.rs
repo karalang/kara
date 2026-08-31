@@ -35238,6 +35238,37 @@ fn test_shadowed_binding_drops_its_own_value() {
             "h=30\ndR30\ndR20\nh=31\ndR31\ndR21\n",
         ),
         (
+            "shadow-block-tail-moves-the-shadowed-name",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let x = {{ let y = mk(16); let y = mk(17); y }};\n\
+                 \x20   println(f\"x={{x.id}}\");\n\
+                 }}\n"
+            ),
+            "dR16\nx=17\ndR17\n",
+        ),
+        (
+            "shadow-fn-tail-returns-the-shadowed-name",
+            format!(
+                "{HDR}fn f() -> R {{ let s = mk(18); let s = mk(19); s }}\n\
+                 fn main() {{\n\
+                 \x20   let q = f();\n\
+                 \x20   println(f\"q={{q.id}}\");\n\
+                 }}\n"
+            ),
+            "dR18\nq=19\ndR19\n",
+        ),
+        (
+            "shadow-block-tail-field-read-is-not-a-move",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let z = {{ let w = mk(22); let w = mk(23); w.id }};\n\
+                 \x20   println(f\"z={{z}}\");\n\
+                 }}\n"
+            ),
+            "dR23\ndR22\nz=23\n",
+        ),
+        (
             "shadow-a-param",
             format!(
                 "{HDR}fn f(r: R) -> i64 {{ let r = mk(99); r.id }}\n\
