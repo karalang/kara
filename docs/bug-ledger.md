@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 331 | 1 |
 | run-vs-build | 268 | 18 |
 | leak | 237 | 8 |
-| missing-feature | 191 | 2 |
+| missing-feature | 191 | 1 |
 | double-free | 158 | 0 |
 | codegen-gap | 155 | 4 |
 | diagnostics | 112 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 1290 | 34 |
 | interp | 285 | 17 |
-| typecheck | 282 | 2 |
+| typecheck | 282 | 1 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
 | cli | 67 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 40 open · 1816 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 39 open · 1817 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (40)
+### Open (39)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -155,7 +155,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-21 | 2026-08-30 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolve field 'id' on this receiver`) and the result binding's own `Drop` body is silently LOST -- both vanish the moment the struct gains one heap field, and the free-function spelling is correct throughout | none |
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
-| B-2026-08-30-40 | 2026-08-30 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a type, not a function", while the same call at `f32` RESOLVES and fails (or succeeds) on its own merits. Two hardcoded width lists in `method_identifier_receiver.rs` omit the reduced-precision widths, so the leading segment is never recognized as a type receiver and the path falls through to the identifier-in-value-position diagnostic | — |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
 | B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- PARTIALLY FIXED (d22cf63): struct/tuple/nested/`if let`/`..` destructure now borrow. TWO REMAIN: an arm using TWO BOUND LEAVES in one expression (`v[0] + n` fails where `v[0] + 1` passes -- the consume classifier counts a SCALAR leaf's use as an escape), and an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`), where the outer binding's borrow-ness does not propagate into the nested pattern | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
@@ -202,9 +201,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 
 </details>
 
-### Fixed (1816)
+### Fixed (1817)
 
-<details><summary>1816 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1817 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2008,6 +2007,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-37 | effect | medium | TWO MORE EFFECT WALKERS TREAT AN f-STRING AS A LEAF, and `ae33af9` fixed only the third -- `modbind_synth::walk_expr` loses a module-binding read wri… | 7366410 |
 | B-2026-08-30-38 | interp+codegen | medium | AN ARGUMENT THAT IS A CONTROL-FLOW OR BLOCK EXPRESSION LOSES ITS `Drop` BODY ENTIRELY -- `one(if c { mk(1) } else { mk(2) })`, the `match` spelling a… | 0d34440b |
 | B-2026-08-30-39 | codegen | medium | `dbg` OF A `Vector`, AND ANY CONTAINER-NESTED `Vector` IN AN F-STRING, PANIC THE COMPILER -- `emit_display_fn_for_type: type_name 'Vector_u64_2' not… | 57327e8 |
+| B-2026-08-30-40 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a ty… | d64f6e4 |
 | B-2026-08-30-41 | interp+codegen | medium | A `T: PartialOrd` BOUND MAKES `a < b` UNRUNNABLE ON BOTH BACKENDS, FOR EVERY TYPE — the tree-walk aborts with "method 'partial_cmp' not found" and `k… | dc6f56f |
 | B-2026-08-30-43 | interp | medium | A METHOD ON A GENERIC `impl` COMPUTES AT f64 UNDER `--interp` AT EVERY NARROW FLOAT WIDTH — `impl[T: Add + Mul] Pair[T] { fn combine(...) -> T }` at… | 8245dc9 |
 | B-2026-08-30-44 | interp | medium | AN UNSIGNED VALUE PRINTS AS `-1` FROM INSIDE A GENERIC BODY UNDER `--interp` — `fn show[T](x: T) -> String { f"{x}" }` renders `u64::MAX` and `u128::… | d1ec5de |
