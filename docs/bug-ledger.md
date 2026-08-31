@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 152 | 1 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
-| soundness | 90 | 5 |
+| soundness | 91 | 5 |
 | perf | 87 | 1 |
 | other | 65 | 1 |
 | crash | 63 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1283 | 36 |
+| codegen | 1284 | 36 |
 | interp | 282 | 20 |
 | typecheck | 281 | 2 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1876 surfaced · 44 open · 1803 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1877 surfaced · 44 open · 1804 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (44)
 
@@ -173,7 +173,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1876 surfaced
 | B-2026-08-31-2 | 2026-08-31 | ownership | medium | `let m = s.r` MOVES A STRUCT FIELD OUT OF A `ref` PARAM WITHOUT A DIAGNOSTIC, AND THE TYPE'S `Drop` BODY THEN RUNS TWICE FOR ONE VALUE ON EVERY BACKEND -- `dR3 n3 dR3`; ASAN/LSan clean, so the cost is observability, not memory | — |
 | B-2026-08-31-3 | 2026-08-31 | interp+codegen | medium | A `match v[i]` ARM THAT MOVES ITS PAYLOAD INTO A BY-VALUE CALL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS AND ONCE IN THE INTERPRETER -- `got 3 dR3 dE dR3` vs `got 3 dE dR3`; the consuming call is the variable, not the index | — |
 | B-2026-08-31-4 | 2026-08-31 | interp+codegen | medium | A LOCAL WHOSE LAST USE IS A `ref` ARGUMENT TO A CALLEE RETURNING A HEAP VALUE IS DROPPED AT SCOPE EXIT INSTEAD OF ITS LIVE-RANGE END ON BOTH COMPILED BACKENDS, AGAINST design.md line 866 -- `str end dE` vs interp `dE str end`; an `i64` return is clean | — |
-| B-2026-08-30-57 | 2026-08-31 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) loses it entirely, and a shadowed ENUM followed by a later `Vec[R]` declaration defers its payload body to function exit; the interpreter is correct on both since B-2026-08-30-51 | none |
+| B-2026-08-31-5 | 2026-08-31 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding exists in the same function; `let b = mk(3); let b = mk(4); ...; let c: Vec[i64] = Vec.new();` ran both bodies at the shadowing `let` before that commit | none |
 
 ### Relocated (2)
 
@@ -206,9 +206,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1876 surfaced
 
 </details>
 
-### Fixed (1803)
+### Fixed (1804)
 
-<details><summary>1803 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1804 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2015,6 +2015,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1876 surfaced
 | B-2026-08-30-49 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 --… | b554da2 |
 | B-2026-08-30-50 | interp+codegen | medium | A MIXED CONTROL-FLOW ARGUMENT LOSES THE FRESH BRANCH'S `Drop` BODY when that branch is the one taken -- `one(if false { k } else { mk(31) })` runs `k… | 76677be1 |
 | B-2026-08-30-51 | interp | high | INTERPRETER: A SHADOWED BINDING'S `Drop` BODY NEVER RUNS AND THE SHADOWING VALUE'S RUNS TWICE -- `let t = mk(1); let t = mk(2);` prints `dR2 dR2` und… | 07dc9e76 |
+| B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
 
 </details>
 
