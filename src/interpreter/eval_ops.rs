@@ -1812,6 +1812,41 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn span_unsigned_int_width(&self, span: &Span) -> Option<u32> {
         let key = crate::resolver::SpanKey::from_span(span);
         let ty = self.typecheck_result.expr_types.get(&key)?;
+        self.type_unsigned_int_width_in_scope(ty)
+    }
+
+    /// [`Self::type_unsigned_int_width`] with the enclosing call's GENERIC
+    /// SUBSTITUTIONS applied first — the signedness twin of the
+    /// `Type::TypeParam` arm in [`Self::span_float_width`], and the same defect
+    /// one type family over (B-2026-08-30-44).
+    ///
+    /// Inside `fn show[T](x: T) -> String { f"{x}" }` the typechecker records
+    /// the operand's type as the PARAM `T`, so the static predicate answered
+    /// `None`, the interpreter kept its signed `Value::Int` reading, and
+    /// `u64::MAX` / `u128::MAX` printed `-1` — while the identical
+    /// interpolation OUTSIDE the generic, and both compiled backends at every
+    /// call site, printed them correctly. Codegen has no matching hole because
+    /// it monomorphizes, so the body is compiled at the concrete width; that is
+    /// what made this a run-vs-build divergence rather than a shared bug.
+    ///
+    /// Only `u64`/`usize`/`u128` can differ: a narrower unsigned width fits the
+    /// signed carrier non-negatively, so the two readings coincide and those
+    /// widths are absent from the static predicate deliberately rather than by
+    /// omission. Resolving to anything else — a signed width, a float, a
+    /// non-primitive — yields `None`, which is the signed reading and the
+    /// previous behaviour exactly.
+    pub(crate) fn type_unsigned_int_width_in_scope(
+        &self,
+        ty: &crate::typechecker::types::Type,
+    ) -> Option<u32> {
+        use crate::typechecker::types::Type;
+        if let Type::TypeParam(name) = ty {
+            return match self.resolve_type_param(name)?.as_str() {
+                "u64" | "usize" => Some(64),
+                "u128" => Some(128),
+                _ => None,
+            };
+        }
         Self::type_unsigned_int_width(ty)
     }
 

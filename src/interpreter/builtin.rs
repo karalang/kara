@@ -344,7 +344,10 @@ impl<'a> super::Interpreter<'a> {
             // reading — `-1` for `u64::MAX`. Narrower unsigned widths fit
             // non-negatively, so signed and unsigned coincide and they are
             // absent from `type_unsigned_int_width` rather than forgotten.
-            Value::Int(n) => match ty.and_then(Self::type_unsigned_int_width) {
+            // Routed through the scope-aware resolver so a `T` bound to `u64`
+            // / `u128` by the enclosing generic call renders unsigned too
+            // (B-2026-08-30-44); outside a generic it is the same lookup.
+            Value::Int(n) => match ty.and_then(|t| self.type_unsigned_int_width_in_scope(t)) {
                 Some(64) => format!("{}", *n as u64),
                 Some(128) => format!("{}", *n as u128),
                 _ => format!("{}", v),

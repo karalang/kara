@@ -49314,3 +49314,103 @@ fn interp_mixed_int_float_branch_arms_are_the_codegen_oracle() {
         assert_eq!(run(src), *want, "{label}");
     }
 }
+
+#[test]
+fn interp_unsigned_value_inside_a_generic_body_reads_unsigned() {
+    // B-2026-08-30-44 — the interpreter carries every integer as a signed
+    // `Value::Int` and recovers unsignedness from the type recorded at the
+    // span. Inside `fn show[T](x: T)` that type is the PARAM `T`, so the
+    // lookup answered `None` and the signed reading stood: `u64::MAX` printed
+    // -1. The identical interpolation OUTSIDE the generic was correct, and so
+    // were both compiled backends at every call site — codegen monomorphizes,
+    // so its body is compiled at the concrete width and cannot have this hole.
+    // That makes the compiled output the ORACLE here, and every expectation
+    // below is what `karac build` already printed before the fix.
+    //
+    // The row describes the DISPLAY path only. The same lookup also feeds
+    // `eval_binary`'s `unsigned_hint`, so the fix reaches ARITHMETIC too, and
+    // that half is the more consequential one — it silently computes wrong
+    // values rather than printing a wrong one. Measured on the pre-fix
+    // interpreter, both inside a generic body at `u64`:
+    //
+    //     u64::MAX / 2   gave 0      (signed: -1 / 2)   should be 9223372036854775807
+    //     u64::MAX < 2   gave true   (signed: -1 < 2)   should be false
+    //
+    // Neither appears in the row, and a display-only fix would have left both.
+    //
+    // Only u64 / usize / u128 can differ: a narrower unsigned width fits the
+    // signed carrier non-negatively, so both readings coincide — which is why
+    // `control-display-u8` and `control-display-u32` were green before the fix
+    // and are controls rather than cases. `control-outside-generic` is the
+    // localizer: the same value, the same interpolation, no generic frame.
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "display-u64",
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() { let b: u64 = 18446744073709551615u64; println(show(b)); }",
+            "18446744073709551615\n",
+        ),
+        (
+            "display-u128",
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() { let b: u128 = 340282366920938463463374607431768211455u128; println(show(b)); }",
+            "340282366920938463463374607431768211455\n",
+        ),
+        (
+            "display-usize",
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() { let b: usize = 18446744073709551615u64 as usize; println(show(b)); }",
+            "18446744073709551615\n",
+        ),
+        (
+            "divide-u64",
+            "fn divide[T: Div](a: T, b: T) -> T { a / b }\n\
+             fn main() { let b: u64 = 18446744073709551615u64; let t: u64 = 2u64; println(divide(b, t)); }",
+            "9223372036854775807\n",
+        ),
+        (
+            "compare-u64",
+            "fn less[T: Ord](a: T, b: T) -> bool { a < b }\n\
+             fn main() { let b: u64 = 18446744073709551615u64; let t: u64 = 2u64; println(less(b, t)); }",
+            "false\n",
+        ),
+        (
+            "compare-u128",
+            "fn less[T: Ord](a: T, b: T) -> bool { a < b }\n\
+             fn main() { let b: u128 = 340282366920938463463374607431768211455u128; let t: u128 = 2u128; println(less(b, t)); }",
+            "false\n",
+        ),
+        (
+            "control-display-i64",
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() { let s: i64 = -9; println(show(s)); }",
+            "-9\n",
+        ),
+        (
+            "control-divide-i64",
+            "fn divide[T: Div](a: T, b: T) -> T { a / b }\n\
+             fn main() { let s: i64 = -9; println(divide(s, 3)); }",
+            "-3\n",
+        ),
+        (
+            "control-display-u8",
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() { let c: u8 = 200; println(show(c)); }",
+            "200\n",
+        ),
+        (
+            "control-display-u32",
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() { let d: u32 = 4294967295u32; println(show(d)); }",
+            "4294967295\n",
+        ),
+        (
+            "control-outside-generic",
+            "fn main() { let b: u64 = 18446744073709551615u64; println(f\"{b}\"); }",
+            "18446744073709551615\n",
+        ),
+    ];
+    for (label, src, want) in cases {
+        assert_eq!(run(src), *want, "{label}");
+    }
+}
