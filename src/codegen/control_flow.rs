@@ -389,7 +389,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.suppress_boxed_payload_view_move(Self::block_tail_expr(fe));
             }
         }
+        // B-2026-08-30-52 (b) — the `if let` twin of the match arm's borrow-mode
+        // payload registration (control_flow_match.rs, B-2026-07-17-20). Only
+        // the `match` site ever recorded these names, so a nested `match` over
+        // the binding this construct made could not see that the binding is an
+        // ALIAS: the same program read correctly through `match` and double
+        // freed through ``if let``, which is the asymmetry B-2026-08-28-67 rules
+        // out. Snapshotted and restored around the block for the reason
+        // B-2026-08-31-14 records — the set is keyed by binding NAME and would
+        // otherwise outlive the construct that made it.
+        let saved_borrowed_agg_payload_vars =
+            self.borrow_vars.borrowed_agg_payload_struct_vars.clone();
+        if !optres_bindings_owned {
+            self.register_borrowed_agg_payload_struct_bindings(pattern);
+        }
         let mut then_val = self.compile_block(then_block)?;
+        self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
         // B-2026-08-28-7 — record the then-arm's tail type so an `if let` used
         // as a VALUE receiver (`if let Some(v) = o { Tag { n: v } } else { … }.n`)
         // can be typed, the same way `compile_block_with_frame` records for a
@@ -867,7 +882,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // compiles (see the if-let site).
         self.pattern_state
             .pattern_binding_source_retains_inline_payload = saved_source_retains;
+        // B-2026-08-30-52 (b) — the `while let` twin of the match arm's borrow-mode
+        // payload registration (control_flow_match.rs, B-2026-07-17-20). Only
+        // the `match` site ever recorded these names, so a nested `match` over
+        // the binding this construct made could not see that the binding is an
+        // ALIAS: the same program read correctly through `match` and double
+        // freed through ``while let``, which is the asymmetry B-2026-08-28-67 rules
+        // out. Snapshotted and restored around the block for the reason
+        // B-2026-08-31-14 records — the set is keyed by binding NAME and would
+        // otherwise outlive the construct that made it.
+        let saved_borrowed_agg_payload_vars =
+            self.borrow_vars.borrowed_agg_payload_struct_vars.clone();
+        if !optres_bindings_owned {
+            self.register_borrowed_agg_payload_struct_bindings(pattern);
+        }
         self.compile_block(body)?;
+        self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
         let body_has_terminator = self
             .builder
             .get_insert_block()

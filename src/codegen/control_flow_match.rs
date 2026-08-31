@@ -352,6 +352,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.pattern_state.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
             || self.scrutinee_is_borrowed_binding(scrutinee)
+            || self.scrutinee_is_readonly_borrow_mode_payload_binding(scrutinee, arms)
             || self.scrutinee_is_readonly_borrowed_place(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_agg_loop_var(scrutinee, arms)
             || self.scrutinee_is_readonly_owned_enum_local(scrutinee, arms)
@@ -1724,6 +1725,78 @@ impl<'ctx> super::Codegen<'ctx> {
         self.no_arm_payload_escapes(arms)
     }
 
+    /// Does every payload binding this arm's pattern makes get used ONLY as the
+    /// scrutinee of a nested `match` / `if let` (B-2026-08-30-52 (b))?
+    ///
+    /// The arm must bind at least one payload name, and each such name must be
+    /// mentioned at least once — a bound-but-unused payload answers `false` and
+    /// keeps the path it takes today, which is the conservative direction and
+    /// costs nothing, since that arm is not the shape that breaks.
+    fn arm_payload_binding_only_feeds_nested_match(&self, pattern: &Pattern, body: &Expr) -> bool {
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_variant_payload_binding_names(pattern, false, &mut names);
+        !names.is_empty()
+            && names
+                .iter()
+                .all(|n| crate::binding_use::binding_only_nested_match_scrutinee(n, body))
+    }
+
+    /// The `if let` / `while let` sibling of
+    /// [`Self::arm_payload_binding_only_feeds_nested_match`], for the shapes
+    /// whose bindings live in a block rather than one arm expression.
+    fn pattern_payload_binding_only_feeds_nested_match_block(
+        &self,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_variant_payload_binding_names(pattern, false, &mut names);
+        !names.is_empty()
+            && names
+                .iter()
+                .all(|n| crate::binding_use::binding_only_nested_match_scrutinee_block(n, block))
+    }
+
+    /// B-2026-08-30-52 (b), the second half: PROPAGATE the outer arm's
+    /// borrow-ness into a nested `match` over the binding it made.
+    ///
+    /// `register_borrowed_agg_payload_struct_bindings` already records every
+    /// borrow-mode payload binding in `borrowed_agg_payload_struct_vars` — a
+    /// set that means precisely "this binding aliases storage someone else
+    /// owns". An inner `match` over such a binding is therefore a match over a
+    /// borrow, and must not register owners for the leaves it destructures;
+    /// without this the inner arm took the payload out from under a source that
+    /// still owned it (`Result` twin: `inner` then an EMPTY line).
+    ///
+    /// The row records that teaching `scrutinee_is_borrowed_binding` about this
+    /// set was measured NOT to fix the bug on its own, and that stands: the
+    /// OUTER classifier declined first, so nothing was ever registered to find
+    /// here. The escape-walk refinement above is what makes the registration
+    /// happen; this is what consumes it. Neither half works alone.
+    ///
+    /// Kept as its own disjunct rather than folded into
+    /// `scrutinee_is_borrowed_binding` because that predicate has nine other
+    /// callers that ask it without any arm context, and the read-only gate
+    /// (`no_arm_payload_escapes`) is not optional here — an inner arm that
+    /// MOVES a leaf out genuinely needs the transfer path.
+    fn scrutinee_is_readonly_borrow_mode_payload_binding(
+        &self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        if !self
+            .borrow_vars
+            .borrowed_agg_payload_struct_vars
+            .contains(name.as_str())
+        {
+            return false;
+        }
+        self.no_arm_payload_escapes(arms)
+    }
+
     /// Register the STRUCT payload binding(s) of a match arm's pattern into
     /// `borrowed_agg_payload_struct_vars` (B-2026-07-17-20). Called only on the
     /// borrow path (`pattern_binding_is_borrow`), where the binding aliases a
@@ -2173,8 +2246,34 @@ impl<'ctx> super::Codegen<'ctx> {
         let destructures = arms
             .iter()
             .any(|a| self.pattern_destructures_heap_payload(optres_te.as_ref(), &a.pattern));
+        // B-2026-08-30-52 (b) — the second shape that needs the BOXED channel.
+        // `Some(p) => match p { … }` binds the payload WHOLE, so `destructures`
+        // is false and a boxed payload (`Option[E]`, whose 4 words overflow
+        // Option's 3-word inline area) never reached the classifier at all —
+        // which is why the `Result` twin of the same program, inline at 5 words,
+        // behaved differently on an axis the source does not mention.
+        //
+        // Admitted under a STRICTER use test than `destructures` gets, because a
+        // whole binding over a box is exactly the shape the row measured as
+        // unsafe to admit wholesale: `binding_only_nested_match_scrutinee`
+        // rejects a bare use (moved on) AND a projection (field-moved-out), the
+        // two classes that broke those five tests, while a nested `match` takes
+        // nothing by itself — whether it does is decided by
+        // `no_arm_payload_escapes` below.
+        let nested_match_only = arms
+            .iter()
+            .any(|a| self.arm_payload_binding_only_feeds_nested_match(&a.pattern, &a.body))
+            && arms.iter().all(|a| {
+                !Self::pattern_consumes_variant_payload(&a.pattern)
+                    || self.pattern_destructures_heap_payload(optres_te.as_ref(), &a.pattern)
+                    || self.arm_payload_binding_only_feeds_nested_match(&a.pattern, &a.body)
+                    || optres_te.as_ref().is_some_and(|te| {
+                        Self::pattern_binds_scalar_variant_payload(te, &a.pattern)
+                    })
+            });
         if !(self.scrutinee_is_inline_optres_local(scrutinee)
-            || (destructures && self.scrutinee_is_boxed_optres_local(scrutinee)))
+            || ((destructures || nested_match_only)
+                && self.scrutinee_is_boxed_optres_local(scrutinee)))
         {
             return false;
         }
@@ -2692,8 +2791,16 @@ impl<'ctx> super::Codegen<'ctx> {
             self.scrutinee_optres_type_expr(scrutinee).as_ref(),
             pattern,
         );
+        // B-2026-08-30-52 (b) — the `if let` copy of the `match` path's boxed
+        // whole-binding admission. B-2026-08-28-67's rule is that the two
+        // spellings must answer the SAME question, and a `match`-only fix would
+        // have left `if let Some(p) = a { match p { … } }` broken under a row
+        // whose other spelling reads correctly.
+        let nested_match_only =
+            self.pattern_payload_binding_only_feeds_nested_match_block(pattern, block);
         if !(self.scrutinee_is_inline_optres_local(scrutinee)
-            || (destructures && self.scrutinee_is_boxed_optres_local(scrutinee)))
+            || ((destructures || nested_match_only)
+                && self.scrutinee_is_boxed_optres_local(scrutinee)))
         {
             return false;
         }
@@ -5706,9 +5813,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         .is_some_and(|x| self.borrow_binding_escapes(x, name))
             }
             ExprKind::Match { scrutinee, arms } => {
-                // A bare-`name` scrutinee could destructure the alias's
-                // payload out — conservative move.
-                self.borrow_binding_escapes(scrutinee, name)
+                // B-2026-08-30-52 (b). A bare-`name` scrutinee USED to be an
+                // unconditional move ("could destructure the alias's payload
+                // out — conservative move"), which is what kept
+                // `match a { Some(p) => match p { A { s } => println(s) } }`
+                // off the borrow path: the outer classifier asked whether `p`
+                // escapes its arm, and the inner `match` said yes before
+                // anything about the inner arms was looked at.
+                //
+                // The refinement asks that question one level down instead: an
+                // inner `match` takes the payload only if some inner arm's OWN
+                // bindings escape THAT arm, which is exactly what
+                // `no_arm_payload_escapes` already answers — recursively, so
+                // the reasoning composes to any nesting depth. Every other
+                // scrutinee shape keeps the full walk, and an unrecognized
+                // inner body still defaults to "escapes", so the conservative
+                // direction is preserved where it was actually doing work.
+                let scrutinee_moves = if bare(scrutinee) {
+                    !self.no_arm_payload_escapes(arms)
+                } else {
+                    self.borrow_binding_escapes(scrutinee, name)
+                };
+                scrutinee_moves
                     || arms.iter().any(|a| {
                         a.guard
                             .as_ref()

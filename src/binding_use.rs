@@ -53,6 +53,39 @@ pub(crate) fn binding_only_read_through_block(name: &str, b: &Block) -> bool {
     t.verdict()
 }
 
+/// True iff `name` is mentioned at least once inside `e` and EVERY mention is
+/// the direct scrutinee of a nested `match` / `if let` / `while let`
+/// (B-2026-08-30-52 (b)).
+///
+/// STRICTLY NARROWER than [`binding_only_read_through`], and the difference is
+/// the whole point. That predicate explains a `b.field` projection, which for a
+/// HEAP-BOXED payload is the field-move-out shape a borrow classification must
+/// not swallow — the box is its own ownership regime, and admitting it
+/// wholesale was measured to break five tests (see
+/// `scrutinee_is_readonly_inline_optres_local`). A nested `match` over the
+/// binding takes nothing by itself: whether it does is decided separately, by
+/// the escape walk over the inner arms.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_only_nested_match_scrutinee(name: &str, e: &Expr) -> bool {
+    let mut t = Tally::default();
+    walk_expr(name, e, &mut t);
+    !t.captured && t.mentions > 0 && t.mentions == t.match_scrutinee
+}
+
+/// `Block` sibling of [`binding_only_nested_match_scrutinee`].
+///
+/// Both carry `allow(dead_code)` off the `llvm` leg: unlike the two predicates
+/// above — which the INTERPRETER calls — their only consumer is
+/// `codegen::control_flow_match`, so on CI's default leg they are genuinely
+/// unreferenced and `-D warnings` fails the build (the B-2026-08-18-23 trap
+/// CLAUDE.md documents).
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+pub(crate) fn binding_only_nested_match_scrutinee_block(name: &str, b: &Block) -> bool {
+    let mut t = Tally::default();
+    walk_block(name, b, &mut t);
+    !t.captured && t.mentions > 0 && t.mentions == t.match_scrutinee
+}
+
 #[derive(Default)]
 struct Tally {
     /// Every `Identifier(name)` node seen, at any depth.
@@ -60,6 +93,11 @@ struct Tally {
     /// The subset of those that sit directly under a projection or as a
     /// method receiver.
     read_through: usize,
+    /// The subset of those that ARE the scrutinee of a nested `match` /
+    /// `if let` / `while let`. Tallied separately from `read_through` because
+    /// its one consumer needs the narrower set — see
+    /// [`binding_only_nested_match_scrutinee`].
+    match_scrutinee: usize,
     /// A closure body mentions `name`. Closures capture by value under the
     /// heap-env model, so the capture materializes the binding however it is
     /// spelled inside — `|| r.id` takes `r` with it.
@@ -93,6 +131,18 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally) {
             if is_bare(name, object) =>
         {
             t.read_through += 1;
+        }
+        _ => {}
+    }
+    match &e.kind {
+        ExprKind::Match {
+            scrutinee: head, ..
+        }
+        | ExprKind::IfLet { value: head, .. }
+        | ExprKind::WhileLet { value: head, .. }
+            if is_bare(name, head) =>
+        {
+            t.match_scrutinee += 1;
         }
         _ => {}
     }

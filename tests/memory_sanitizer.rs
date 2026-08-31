@@ -63709,6 +63709,98 @@ fn main() {
         );
     }
 
+    /// B-2026-08-30-52 (b) under ASAN/LSan — a nested `match` over a payload
+    /// the outer arm bound WHOLE frees the buffer exactly once.
+    ///
+    /// The E2E twin in `tests/codegen.rs` pins the TEXT, which catches the
+    /// double free (`Option[E]`, boxed) and the empty second read
+    /// (`Result[E, i64]`, inline) but says nothing about the other direction:
+    /// standing the arm down without the source keeping the payload is a LEAK,
+    /// and that is silent in output.
+    ///
+    /// TWO THINGS THIS FIXTURE HAD TO GET RIGHT, both found by writing it
+    /// wrong first and watching it pass against a compiler that still had the
+    /// bug:
+    ///
+    ///   * THE SCRUTINEE MUST BE A FUNCTION-SCOPE LOCAL. Declaring `a` inside
+    ///     the `while` puts it on a different path — measured pre-fix, the
+    ///     loop-body spelling double frees under the JIT and is CLEAN under
+    ///     AOT, and this harness builds AOT. Hence a helper called in a loop.
+    ///   * THE PAYLOAD'S BYTES MUST BE READ, not just its length. `.len()`-only
+    ///     use makes the buffer a provably dead allocation LLVM deletes
+    ///     outright — the exact trap `assert_clean_asan_run`'s own comment
+    ///     documents, and it made an earlier draft of this fixture green
+    ///     against the reverted fix. `contains` reads bytes; the allocation
+    ///     floor below is what keeps it that way.
+    #[test]
+    fn asan_nested_match_over_a_borrowed_payload_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum E { A { s: String }, B }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+// BOXED channel: `E` is 4 words, past Option's 3-word inline area.
+fn boxed(i: i64) -> i64 {
+    let mut n = 0;
+    let a: Option[E] = Some(E.A { s: s_of(i) });
+    match a { Some(p) => { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } } None => {} }
+    match a { Some(p) => { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } } None => {} }
+    return n;
+}
+// INLINE channel: Result's payload area is 5 words, so the same type fits.
+fn inline_if_let(i: i64) -> i64 {
+    let mut n = 0;
+    let b: Result[E, i64] = Ok(E.A { s: s_of(i) });
+    if let Ok(p) = b { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } }
+    if let Ok(p) = b { match p { E.A { s } => { if s.contains(digits(i)) { n = n + s.len(); } } E.B => {} } }
+    return n;
+}
+// CONTROL: the inner arm MOVES the leaf, so the transfer path is correct and
+// must stay — standing this one down would leak the buffer instead.
+//
+// Deliberately UNCONDITIONAL. Wrapping the read in an `if` whose condition
+// ALLOCATES (`owned.contains(digits(i))`) double frees on every compiled
+// surface, and that is a separate, pre-existing defect on the TRANSFER path
+// (B-2026-08-31-23) — not something this fixture's subject can fix, so
+// including it here would pin a permanent red.
+fn moved(i: i64) -> i64 {
+    let a: Option[E] = Some(E.A { s: s_of(i) });
+    match a {
+        Some(p) => {
+            match p {
+                E.A { s } => {
+                    let owned: String = s;
+                    let probe: String = digits(i);
+                    return owned.len() + probe.len();
+                }
+                E.B => {}
+            }
+        }
+        None => {}
+    }
+    return 0;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut n = 0i64;
+    let mut i = base;
+    while i < base + 50i64 {
+        n = n + boxed(i) + inline_if_let(i) + moved(i);
+        i = i + 1i64;
+    }
+    if n > 0i64 { println("done"); }
+}
+"#,
+            &["done"],
+            "nested match over a borrowed payload frees once",
+            200,
+        );
+    }
+
     /// B-2026-08-29-66 under ASAN/LSan — the memory half of the auto-par
     /// branch-publish handshake, which the ordering assertions in
     /// `tests/par_codegen.rs` can only see indirectly (a garbage id printed

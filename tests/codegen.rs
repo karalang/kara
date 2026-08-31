@@ -121717,6 +121717,159 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-52 sub-mechanism (b) — AN INNER `match` OVER A PAYLOAD THE
+    /// OUTER ARM BOUND WHOLE TOOK ITS HEAP.
+    ///
+    /// `match a { Some(p) => match p { E.A { s } => println(s) } }` double freed
+    /// on `Option[E]` and printed an EMPTY second line on the `Result[E, i64]`
+    /// twin, while `--interp` was correct on both. Two independent causes, and
+    /// each hides the other:
+    ///
+    ///   * `borrow_binding_escapes`'s `Match` arm called a bare-`name`
+    ///     scrutinee a move OUTRIGHT ("conservative move" in its own comment),
+    ///     so the outer classifier declined before the inner arms were looked
+    ///     at. It now asks `no_arm_payload_escapes` about those arms instead —
+    ///     recursively, so the reasoning composes to any depth.
+    ///   * Nothing propagated the outer binding's borrow-ness INTO the inner
+    ///     `match`. `borrowed_agg_payload_struct_vars` already holds exactly
+    ///     the names that alias someone else's storage; the inner scrutinee now
+    ///     consults it (under the same read-only gate).
+    ///
+    /// The `Option` / `Result` split in the pre-fix symptom is the payload
+    /// WIDTH, not the container: `E` is 4 words, which overflows `Option`'s
+    /// 3-word inline area and fits `Result`'s 5, so the two halves of one
+    /// program took different channels. That is why the boxed channel is
+    /// admitted here too — but only for a binding used SOLELY as a nested
+    /// `match` scrutinee, never a bare use (moved on) or a projection
+    /// (field-moved-out), the two shapes the row measured as unsafe.
+    #[test]
+    fn e2e_optres_nested_match_over_a_whole_bound_payload_does_not_take_it() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "Option[E] — the BOXED channel; double freed before",
+                "enum E { A { s: String }, B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A { s: f\"inner\" });\n\
+                     match a { Some(p) => { match p { E.A { s } => { println(s); } E.B => {} } } None => {} }\n\
+                     match a { Some(p) => { match p { E.A { s } => { println(s); } E.B => {} } } None => {} }\n\
+                 }\n",
+                "inner\ninner\n",
+            ),
+            (
+                "Result[E, i64] — the INLINE channel; printed empty before",
+                "enum E { A { s: String }, B }\n\
+                 fn main() {\n\
+                     let a: Result[E, i64] = Ok(E.A { s: f\"inner\" });\n\
+                     match a { Ok(p) => { match p { E.A { s } => { println(s); } E.B => {} } } Err(_) => {} }\n\
+                     match a { Ok(p) => { match p { E.A { s } => { println(s); } E.B => {} } } Err(_) => {} }\n\
+                 }\n",
+                "inner\ninner\n",
+            ),
+            (
+                "`if let` spelling — its own classifier and its own registration",
+                "enum E { A { s: String }, B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A { s: f\"il\" });\n\
+                     if let Some(p) = a { match p { E.A { s } => { println(s); } E.B => {} } }\n\
+                     if let Some(p) = a { match p { E.A { s } => { println(s); } E.B => {} } } else { println(\"none\"); }\n\
+                 }\n",
+                "il\nil\n",
+            ),
+            (
+                "`if let` over the inline channel",
+                "enum E { A { s: String }, B }\n\
+                 fn main() {\n\
+                     let a: Result[E, i64] = Ok(E.A { s: f\"ilr\" });\n\
+                     if let Ok(p) = a { match p { E.A { s } => { println(s); } E.B => {} } }\n\
+                     if let Ok(p) = a { match p { E.A { s } => { println(s); } E.B => {} } } else { println(\"err\"); }\n\
+                 }\n",
+                "ilr\nilr\n",
+            ),
+            (
+                "tuple-variant payload, not a struct variant",
+                "enum E { A(String), B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A(f\"tv\"));\n\
+                     match a { Some(p) => { match p { E.A(s) => { println(s); } E.B => {} } } None => {} }\n\
+                     match a { Some(p) => { match p { E.A(s) => { println(s); } E.B => {} } } None => {} }\n\
+                 }\n",
+                "tv\ntv\n",
+            ),
+            (
+                "the inner arm reads a FIELD of the leaf, not the leaf",
+                "struct R { id: i64, tag: String }\n\
+                 enum E { A { r: R }, B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A { r: R { id: 7, tag: f\"t\" } });\n\
+                     match a { Some(p) => { match p { E.A { r } => { println(r.id); } E.B => {} } } None => {} }\n\
+                     match a { Some(p) => { match p { E.A { r } => { println(r.tag); } E.B => {} } } None => {} }\n\
+                 }\n",
+                "7\nt\n",
+            ),
+            // CONTROLS. Each of these must keep the path it takes today: the
+            // widening is gated on "every mention of the binding is a nested
+            // `match` scrutinee", and these are the three ways that fails.
+            (
+                "control: the inner arm MOVES the leaf — transfer path, one free",
+                "enum E { A { s: String }, B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A { s: f\"moved\" });\n\
+                     match a { Some(p) => { match p { E.A { s } => { let owned: String = s; println(owned); } E.B => {} } } None => {} }\n\
+                 }\n",
+                "moved\n",
+            ),
+            (
+                "control: the arm moves the payload WHOLE before matching it",
+                "enum E { A { s: String }, B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A { s: f\"whole\" });\n\
+                     match a { Some(p) => { let q: E = p; match q { E.A { s } => println(s), E.B => {} } } None => {} }\n\
+                 }\n",
+                "whole\n",
+            ),
+            (
+                "control: a PROJECTION out of a boxed payload stays off this path",
+                "struct S { s: String, t: String }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { s: f\"aa\", t: f\"bb\" });\n\
+                     match a { Some(p) => { let x: String = p.s; println(x); } None => {} }\n\
+                 }\n",
+                "aa\n",
+            ),
+            (
+                "control: a user `Drop` body on the payload still fires exactly once",
+                "struct R { id: i64 }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+                 enum E { A { r: R }, B }\n\
+                 fn main() {\n\
+                     let a: Option[E] = Some(E.A { r: R { id: 8 } });\n\
+                     match a { Some(p) => { match p { E.A { r } => { println(r.id); } E.B => {} } } None => {} }\n\
+                     println(\"end\");\n\
+                 }\n",
+                "8\ndR8\nend\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter is the reference for this text"
+            );
+            if let Some(aot) = run_program(src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: a nested `match` over a whole-bound payload must not \
+                     take the source's heap"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-30-26 — AN INTEGER <-> `bf16` CONVERSION WAS REFUSED BY BOTH
     /// COMPILED BACKENDS, IN EVERY DIRECTION, WHILE THE INTERPRETER PERFORMED IT.
     ///
