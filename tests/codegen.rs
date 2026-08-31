@@ -12016,7 +12016,7 @@ plain Plain { n: 1, s: s, w: 340282366920938463463374607431768211455 }
     /// carrying one panics the compiler (B-2026-08-31-19) before any of this runs.
     /// `Vec[Vector[T, N]]` is absent for a different reason — its element buffer is
     /// `malloc`ed and accessed at the vector's natural 32-byte alignment, which
-    /// faults depending on heap state (B-2026-08-31-21).
+    /// faults depending on heap state (B-2026-08-31-24).
     ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_vector_array_enum_payload_round_trip`, pinned to the same string.
