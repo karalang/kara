@@ -3972,6 +3972,169 @@ fn capture_path_tuple_index_extends_projection() {
 // surface — slice 3 will consume the mode-tagged set in the borrow
 // checker.
 
+/// B-2026-08-31-41 — a `-> Slice[T]` return must trace to a source that
+/// OUTLIVES THE FRAME, exactly as `-> ref T` and `-> StringSlice` must.
+///
+/// design.md § Slices, "Borrow rules" already said so — "`Slice[T]` follows the
+/// same rules as `ref T` — it cannot outlive the collection it borrows from" —
+/// but `check_ref_return_source_pinning` early-returned on any `Slice` return
+/// type, so the rule was unenforced. `karac check` reported "All checks passed"
+/// on a function returning a slice of a local `Vec`, and the compiled program
+/// then read freed memory while the interpreter printed live values (a
+/// run-vs-build divergence that is really a use-after-free).
+///
+/// The intra-function half of this rule already existed as
+/// `SliceConflictShape::DropOfBorrowed`; only the FUNCTION BOUNDARY was
+/// unchecked.
+#[test]
+fn slice_return_must_outlive_its_backing_owner() {
+    // Rejected: the backing dies at this same return.
+    for (label, src) in [
+        (
+            "local Vec",
+            "fn f() -> Slice[i64] {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(7);\n\
+             \x20   return v.as_slice();\n\
+             }\n",
+        ),
+        (
+            "local Vec, tail form",
+            "fn f() -> Slice[i64] {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(7);\n\
+             \x20   v.as_slice()\n\
+             }\n",
+        ),
+        (
+            // The array's STACK storage dies at the return just as the heap
+            // buffer does. It survives only in `main`'s error-exit position,
+            // where the frame is still live — which is why an array-backed
+            // slice was a valid control for B-2026-08-31-40's refutation and
+            // is still rejected here.
+            "local Array",
+            "fn f() -> Slice[i64] {\n\
+             \x20   let a: Array[i64, 2] = [7, 8];\n\
+             \x20   return a[0..2];\n\
+             }\n",
+        ),
+        (
+            // An OWNED parameter is not a borrow source: it dies at the same
+            // return the local does.
+            "owned param",
+            "fn f(xs: Vec[i64]) -> Slice[i64] { return xs.as_slice(); }\n",
+        ),
+        (
+            // A PLACE CHAIN is judged by its ROOT, and this root is a local.
+            "field of a local struct",
+            "struct B { v: Vec[i64] }\n\
+             fn f() -> Slice[i64] {\n\
+             \x20   let b = B { v: [1, 2] };\n\
+             \x20   return b.v.as_slice();\n\
+             }\n",
+        ),
+    ] {
+        let errors = ownership_errors(src);
+        assert!(
+            errors.iter().any(|e| matches!(
+                e.kind,
+                crate::OwnershipErrorKind::BorrowReturnNotSourcePinned {
+                    shape: crate::BorrowReturnShape::DanglingSource
+                }
+            )),
+            "{label}: a slice outliving its backing must be rejected; got: {errors:?}"
+        );
+    }
+
+    // Accepted: the backing outlives the frame by construction.
+    for (label, src) in [
+        (
+            "ref param",
+            "fn f(v: ref Vec[i64]) -> Slice[i64] { return v.as_slice(); }\n",
+        ),
+        (
+            "by-value Slice param is a borrow handle",
+            "fn f(s: Slice[i64]) -> Slice[i64] { return s; }\n",
+        ),
+        (
+            "mut Slice param",
+            "fn f(s: mut Slice[i64]) -> mut Slice[i64] { return s; }\n",
+        ),
+        (
+            "slice-local bound from a ref param",
+            "fn f(v: ref Vec[i64]) -> Slice[i64] {\n\
+             \x20   let s = v.as_slice();\n\
+             \x20   return s;\n\
+             }\n",
+        ),
+        (
+            // The shape the codegen suite exercises (`Buf.view`): a slice of a
+            // FIELD reached through `ref self`. Sound — `ref self` outlives the
+            // call — and judging the whole expression rather than its root
+            // reported it as an unsupported form, which is how this false
+            // positive was caught.
+            "field through `ref self`",
+            "struct B { v: Vec[i64] }\n\
+             impl B {\n\
+             \x20   fn view(ref self) -> Slice[i64] { return self.v.as_slice(); }\n\
+             }\n",
+        ),
+        (
+            "field through a ref param",
+            "struct B { v: Vec[i64] }\n\
+             fn f(b: ref B) -> Slice[i64] { return b.v.as_slice(); }\n",
+        ),
+    ] {
+        let errors = ownership_ok(src).errors;
+        assert!(
+            !errors.iter().any(|e| matches!(
+                e.kind,
+                crate::OwnershipErrorKind::BorrowReturnNotSourcePinned { .. }
+            )),
+            "{label}: this borrow outlives the frame and must be accepted; got: {errors:?}"
+        );
+    }
+}
+
+/// B-2026-08-31-42 — a SEMICOLON-LESS `return e` in tail position is not an
+/// unsupported borrow-return form.
+///
+/// `collect_return_exprs_in_block` already walks the body's `final_expr` and
+/// pushes the INNER expression of a `return`, but the tail was then pushed
+/// AGAIN as a raw `Return` node. No classifier has an arm for one, so every
+/// classifier answered `UnsupportedForm`: `fn f(x: ref S) -> ref S { return x }`
+/// was rejected while the identical `{ return x; }` and `{ x }` spellings both
+/// passed. Pre-existing for `-> ref T` and `-> StringSlice`; found because the
+/// new `Slice` arm (B-2026-08-31-41) would otherwise have inherited it.
+#[test]
+fn a_semicolonless_tail_return_is_not_an_unsupported_borrow_form() {
+    for (label, src) in [
+        (
+            "ref T",
+            "struct S { a: i64 }\nfn f(x: ref S) -> ref S { return x }\n",
+        ),
+        (
+            "StringSlice",
+            "fn f(s: StringSlice) -> StringSlice { return s }\n",
+        ),
+        (
+            "Slice",
+            "fn f(v: ref Vec[i64]) -> Slice[i64] { return v.as_slice() }\n",
+        ),
+    ] {
+        let errors = ownership_ok(src).errors;
+        assert!(
+            !errors.iter().any(|e| matches!(
+                e.kind,
+                crate::OwnershipErrorKind::BorrowReturnNotSourcePinned {
+                    shape: crate::BorrowReturnShape::UnsupportedForm
+                }
+            )),
+            "{label}: a tail `return` is the same form as `return e;`; got: {errors:?}"
+        );
+    }
+}
+
 /// Pull the per-path mode list for the single closure in `result`.
 fn single_closure_capture_path_modes(
     result: &OwnershipCheckResult,

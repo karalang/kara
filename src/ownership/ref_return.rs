@@ -45,14 +45,21 @@ impl<'a> super::OwnershipChecker<'a> {
         // "follows the same borrow rules as `ref T`"). Without this, a view
         // sliced from an owned local would be a silent use-after-free.
         let is_slice_ret = type_expr_is_string_slice(ret);
+        // B-2026-08-31-41 — `-> Slice[T]` / `-> mut Slice[T]`, the same borrow
+        // return one tier over. Classified separately from `is_slice_ret`
+        // because the SOURCE FORMS differ: a `StringSlice` view comes from
+        // `recv.slice(a, b)`, a vec-slice from `recv.as_slice()` /
+        // `recv.as_slice_mut()` / a range index `recv[a..b]`.
+        let is_vec_slice_ret = type_expr_is_vec_slice(ret);
         // Borrowed-collection return (B-2026-07-11-30): the return type is not
         // itself a `ref` but STORES a `ref` in an element/payload position
         // (`Vec[ref T]`, `Option[ref T]`, a tuple with a `ref` member). design.md
         // Feature 4 Part 3 makes this a borrowed collection whose scope is
         // bounded by every element source, so a local-sourced element escapes
         // exactly as a `-> ref Struct` field does. Traced conservatively below.
-        let is_container_ref_ret = !is_ref_ret && !is_slice_ret && type_expr_has_ref_element(ret);
-        if !is_ref_ret && !is_slice_ret && !is_container_ref_ret {
+        let is_container_ref_ret =
+            !is_ref_ret && !is_slice_ret && !is_vec_slice_ret && type_expr_has_ref_element(ret);
+        if !is_ref_ret && !is_slice_ret && !is_vec_slice_ret && !is_container_ref_ret {
             // Tier-1: plain `ref T` / `mut ref T` (+ `StringSlice`) returns, plus
             // the borrowed-collection case above. Everything else is not a
             // borrow return.
@@ -82,6 +89,18 @@ impl<'a> super::OwnershipChecker<'a> {
                 ref_params.extend(p.pattern.binding_names());
             }
         }
+        // A by-value `Slice[T]` / `mut Slice[T]` parameter is a borrow HANDLE
+        // whose backing storage belongs to the caller, so it outlives this
+        // frame and is a valid source for a returned slice
+        // (`fn f(s: Slice[i64]) -> Slice[i64] { s }`). Exactly the
+        // `StringSlice` rule above, and the reason the legal
+        // `fn pick(v: ref Vec[i64]) -> Slice[i64]` family keeps passing:
+        // `v` is already a `ref` param.
+        for p in &f.params {
+            if type_expr_is_vec_slice(&p.ty) {
+                ref_params.extend(p.pattern.binding_names());
+            }
+        }
         let ref_returning_fns = self.ref_returning_fn_names();
         let mut ref_locals: HashSet<String> = HashSet::new();
         collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
@@ -100,13 +119,28 @@ impl<'a> super::OwnershipChecker<'a> {
         if is_slice_ret {
             collect_string_slice_locals(&f.body, &ref_params, &ref_locals, &mut slice_locals);
         }
+        if is_vec_slice_ret {
+            collect_vec_slice_locals(&f.body, &ref_params, &ref_locals, &mut slice_locals);
+        }
 
         // Every return site: explicit `return e;` anywhere in the body,
         // plus the body's tail expression.
         let mut returns: Vec<&Expr> = Vec::new();
         collect_return_exprs_in_block(&f.body, &mut returns);
         if let Some(tail) = &f.body.final_expr {
-            returns.push(tail);
+            // A SEMICOLON-LESS `return e` in tail position is ALREADY collected
+            // above — `collect_return_exprs_in_block` walks `final_expr` and
+            // pushes the INNER expression. Pushing the tail again added the raw
+            // `Return` node as a second "return site", and no classifier has an
+            // arm for it, so every one answered `UnsupportedForm`:
+            // `fn f(x: ref S) -> ref S { return x }` was rejected with "this
+            // borrow-return form is not yet supported" while the identical
+            // `{ return x; }` and `{ x }` spellings both passed. Pre-existing
+            // for `-> ref T` and `-> StringSlice` (B-2026-08-31-42); fixed here
+            // because the new `Slice` arm would otherwise inherit it.
+            if !matches!(tail.kind, ExprKind::Return(_)) {
+                returns.push(tail);
+            }
         }
 
         for e in returns {
@@ -117,7 +151,12 @@ impl<'a> super::OwnershipChecker<'a> {
             // nested in an `if`/`match` arm still falls through to
             // `classify_borrow_return` (→ `UnsupportedForm`), keeping 3a in
             // lockstep with codegen (which only lowers a top-level call tail).
-            let shape = if is_slice_ret {
+            let shape = if is_vec_slice_ret {
+                // `-> Slice[T]`: the view must trace to a borrowable source.
+                // A slice of an owned local — or of an OWNED parameter, which
+                // dies at the same return — dangles.
+                classify_vec_slice_return(e, &ref_params, &ref_locals, &slice_locals)
+            } else if is_slice_ret {
                 // `-> StringSlice`: the view must trace to a borrowable source
                 // (`ref` param / `ref self` / a `StringSlice` param / ref-local
                 // / slice-local). A view sliced from an owned local dangles.
@@ -298,7 +337,19 @@ impl<'a> super::OwnershipChecker<'a> {
         let mut returns: Vec<&Expr> = Vec::new();
         collect_return_exprs_in_block(&f.body, &mut returns);
         if let Some(tail) = &f.body.final_expr {
-            returns.push(tail);
+            // A SEMICOLON-LESS `return e` in tail position is ALREADY collected
+            // above — `collect_return_exprs_in_block` walks `final_expr` and
+            // pushes the INNER expression. Pushing the tail again added the raw
+            // `Return` node as a second "return site", and no classifier has an
+            // arm for it, so every one answered `UnsupportedForm`:
+            // `fn f(x: ref S) -> ref S { return x }` was rejected with "this
+            // borrow-return form is not yet supported" while the identical
+            // `{ return x; }` and `{ x }` spellings both passed. Pre-existing
+            // for `-> ref T` and `-> StringSlice` (B-2026-08-31-42); fixed here
+            // because the new `Slice` arm would otherwise inherit it.
+            if !matches!(tail.kind, ExprKind::Return(_)) {
+                returns.push(tail);
+            }
         }
         for e in returns {
             let is_dangling = match &e.kind {
@@ -573,6 +624,28 @@ fn combine_borrow_shapes(
 }
 
 /// A `StringSlice` type-expr — a `Path` whose head segment is `StringSlice`.
+/// Whether `te` is a `Slice[T]` / `mut Slice[T]` return type.
+///
+/// B-2026-08-31-41 — the sibling of [`type_expr_is_string_slice`], and it is a
+/// borrow return for exactly the reason that one is. design.md § Slices,
+/// "Borrow rules": "`Slice[T]` follows the same rules as `ref T` — it cannot
+/// outlive the collection it borrows from." Without this arm the whole
+/// source-pinning check early-returned on any `-> Slice[T]` signature, so
+/// `fn f() -> Slice[i64] { let mut v = Vec.new(); …; return v.as_slice() }`
+/// passed `karac check` and then read freed memory under `karac build` while
+/// the interpreter printed live values.
+///
+/// `mut Slice[T]` is `TypeKind::MutSlice`, a spelling distinct from the
+/// `Path(["Slice"])` one — both reach here, and only covering the path form
+/// would leave the `mut` escape unchecked.
+fn type_expr_is_vec_slice(te: &TypeExpr) -> bool {
+    matches!(&te.kind, TypeKind::MutSlice(_))
+        || matches!(
+            &te.kind,
+            TypeKind::Path(p) if p.segments.first().map(|s| s.as_str()) == Some("Slice")
+        )
+}
+
 fn type_expr_is_string_slice(te: &TypeExpr) -> bool {
     matches!(
         &te.kind,
@@ -632,6 +705,166 @@ fn classify_string_slice_return(
         ExprKind::Block(b) => classify_string_slice_block(b, ref_params, ref_locals, slice_locals),
         // `match`, chained calls returning a view, etc. — sound follow-ons.
         _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Source-pinning classification for a `-> Slice[T]` / `-> mut Slice[T]`
+/// return expression (B-2026-08-31-41). The `StringSlice` twin of
+/// [`classify_string_slice_return`], differing only in which expression forms
+/// PRODUCE the view: `recv.as_slice()` / `recv.as_slice_mut()` and a range
+/// index `recv[a..b]`, where the string view uses `recv.slice(a, b)`.
+///
+/// A returned slice must trace to a source that outlives the frame — a `ref` /
+/// `mut ref` parameter, `ref self`, a by-value `Slice` parameter, a ref-local,
+/// or a slice-local bound from one of those. A slice of an owned local or an
+/// OWNED PARAMETER dangles: both die at this return, and the compiled program
+/// then reads freed memory while the interpreter prints live values.
+///
+/// Unrecognized forms are `UnsupportedForm`, which is a clean error rather
+/// than an unsound accept — the same trade every other classifier here makes.
+fn classify_vec_slice_return(
+    e: &Expr,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    match &e.kind {
+        // `recv.as_slice()` / `recv.as_slice_mut()` — borrows from `recv`'s root.
+        ExprKind::MethodCall { object, method, .. }
+            if method == "as_slice" || method == "as_slice_mut" =>
+        {
+            classify_vec_slice_root(object, ref_params, ref_locals, slice_locals)
+        }
+        // `recv[a..b]` — a range index is the other slice-producing form. The
+        // index expression itself is irrelevant to provenance; only the
+        // receiver's root decides whether the view outlives its storage.
+        ExprKind::Index { object, .. } => {
+            classify_vec_slice_root(object, ref_params, ref_locals, slice_locals)
+        }
+        // A slice-typed identifier / `self` / place chain: delegate to the same
+        // root walk, so `self.v` and `b.inner.xs` are judged by their ROOT.
+        ExprKind::Identifier(_)
+        | ExprKind::SelfValue
+        | ExprKind::FieldAccess { .. }
+        | ExprKind::TupleIndex { .. } => {
+            classify_vec_slice_root(e, ref_params, ref_locals, slice_locals)
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            let Some(else_e) = else_branch.as_deref() else {
+                return Some(BorrowReturnShape::UnsupportedForm);
+            };
+            combine_borrow_shapes(
+                classify_vec_slice_block(then_block, ref_params, ref_locals, slice_locals),
+                classify_vec_slice_return(else_e, ref_params, ref_locals, slice_locals),
+            )
+        }
+        ExprKind::Block(b) => classify_vec_slice_block(b, ref_params, ref_locals, slice_locals),
+        _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Walk a slice's source expression down to its ROOT binding and judge whether
+/// that root outlives the frame.
+///
+/// The `StringSlice` sibling [`classify_slice_receiver_root`] only accepts a
+/// bare identifier or `self`, which is why this is a separate walk rather than
+/// a reuse: a slice source is very often a PLACE CHAIN. `fn view(ref self) ->
+/// Slice[i64] { return self.v.as_slice(); }` is sound — `ref self` outlives the
+/// call, so a slice of `self.v` does too — and judging it by the whole
+/// expression instead of its root reported it as an unsupported form.
+///
+/// Mirrors `borrow.rs`'s `place_expr_root` in which expression shapes count as
+/// projections off a root: field access, index, tuple index, and a
+/// slice-of-slice through `as_slice`. Anything else is `UnsupportedForm` — a
+/// clean error rather than an unsound accept.
+fn classify_vec_slice_root(
+    e: &Expr,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    match &e.kind {
+        ExprKind::Identifier(n) => {
+            if ref_params.contains(n) || ref_locals.contains(n) || slice_locals.contains(n) {
+                None
+            } else {
+                Some(BorrowReturnShape::DanglingSource)
+            }
+        }
+        ExprKind::SelfValue => {
+            if ref_params.contains("self") {
+                None
+            } else {
+                Some(BorrowReturnShape::DanglingSource)
+            }
+        }
+        // Projections off a root — the root decides.
+        ExprKind::FieldAccess { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::TupleIndex { object, .. } => {
+            classify_vec_slice_root(object, ref_params, ref_locals, slice_locals)
+        }
+        // A slice taken from a slice keeps the original root.
+        ExprKind::MethodCall { object, method, .. }
+            if method == "as_slice" || method == "as_slice_mut" =>
+        {
+            classify_vec_slice_root(object, ref_params, ref_locals, slice_locals)
+        }
+        _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// A statement-free block's tail, classified as a vec-slice source. The
+/// [`classify_string_slice_block`] twin.
+fn classify_vec_slice_block(
+    b: &Block,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    if !b.stmts.is_empty() {
+        return Some(BorrowReturnShape::UnsupportedForm);
+    }
+    match &b.final_expr {
+        Some(e) => classify_vec_slice_return(e, ref_params, ref_locals, slice_locals),
+        None => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Top-level `let s = <borrowable>.as_slice()` / `let s = <borrowable>[a..b]`
+/// bindings — `s` carries the receiver's borrow and is itself a valid source.
+/// The [`collect_string_slice_locals`] twin, and conservative in the same way:
+/// only the body's direct statements are scanned, so a missed nested binding
+/// yields at worst a false `UnsupportedForm`, never an unsound accept.
+fn collect_vec_slice_locals(
+    block: &Block,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    out: &mut HashSet<String>,
+) {
+    for stmt in &block.stmts {
+        if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+            if let PatternKind::Binding(name) = &pattern.kind {
+                let borrowable = match &value.kind {
+                    ExprKind::MethodCall { object, method, .. }
+                        if method == "as_slice" || method == "as_slice_mut" =>
+                    {
+                        classify_vec_slice_root(object, ref_params, ref_locals, out).is_none()
+                    }
+                    ExprKind::Index { object, .. } => {
+                        classify_vec_slice_root(object, ref_params, ref_locals, out).is_none()
+                    }
+                    _ => false,
+                };
+                if borrowable {
+                    out.insert(name.clone());
+                }
+            }
+        }
     }
 }
 
