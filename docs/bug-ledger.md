@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 328 | 4 |
-| run-vs-build | 259 | 15 |
+| miscompile | 329 | 5 |
+| run-vs-build | 261 | 16 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
 | double-free | 158 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1276 | 32 |
+| codegen | 1278 | 34 |
 | typecheck | 281 | 2 |
-| interp | 277 | 18 |
+| interp | 279 | 19 |
 | other | 70 | 0 |
 | ownership | 68 | 0 |
 | cli | 67 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1867 surfaced · 40 open · 1798 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1870 surfaced · 42 open · 1799 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (40)
+### Open (42)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1867 surfaced
 | B-2026-08-29-45 | 2026-08-29 | interp+codegen | medium | A BINDING MOVED INTO A `Vec` LITERAL RUNS ITS `Drop` BODY TWICE -- both `let v = [r]` (param) and `let m = R { .. }; let v = [m]` (plain local) print two bodies where one is due, while `let v = [R { .. }]` with a FRESH element is correct; the element walk arms without the source's ownership being taken over | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
 | B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
-| B-2026-08-29-58 | 2026-08-29 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the interpreter -- the callee's own scope drop fires and the caller's argument walk fires too. All three compiled surfaces run it once. The `let`-bound twin (`let inner = r;`) is correct everywhere | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
@@ -170,6 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1867 surfaced
 | B-2026-08-30-50 | 2026-08-30 | interp+codegen | medium | A MIXED CONTROL-FLOW ARGUMENT LOSES THE FRESH BRANCH'S `Drop` BODY when that branch is the one taken -- `one(if false { k } else { mk(31) })` runs `k`'s body and never `mk(31)`'s, on all four surfaces; the SAME construct let-bound runs both, so this is argument-position-specific | none |
 | B-2026-08-30-51 | 2026-08-30 | interp | high | INTERPRETER: A SHADOWED BINDING'S `Drop` BODY NEVER RUNS AND THE SHADOWING VALUE'S RUNS TWICE -- `let t = mk(1); let t = mk(2);` prints `dR2 dR2` under `--interp` against `dR2 dR1` on every compiled backend, so one resource is released twice and another never | none |
 | B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY `match`/`if let` ARM THAT DESTRUCTURES THE PAYLOAD RATHER THAN BINDING IT WHOLE STILL TAKES ITS HEAP, ON EVERY PAYLOAD REPRESENTATION -- `Some(S { s })` reads back garbage, `Some((s, n))` and an inner `match` over a bound enum payload abort with a double free, and `Result[E]` prints empty, while the SAME payloads bound WHOLE and read without destructuring are correct | — |
+| B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
+| B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
+| B-2026-08-30-55 | 2026-08-30 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter (neither the enum's own nor its payload's) against two compiled, and a NAMED one runs one too MANY. The free-fn twin and the struct-param twin are both correct, which localizes it to the intersection B-2026-08-28-70 did not reach | — |
 
 ### Relocated (2)
 
@@ -202,9 +204,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1867 surfaced
 
 </details>
 
-### Fixed (1798)
+### Fixed (1799)
 
-<details><summary>1798 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1799 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1975,6 +1977,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1867 surfaced
 | B-2026-08-29-55 | codegen | medium | ARGUMENT TEMPORARIES ARE HELD TO THE END OF THE STATEMENT ON THE COMPILED BACKENDS INSTEAD OF DYING WHEN THE CALL RETURNS -- `take(R { id: 1 }, R { i… | 4b73d1e2 |
 | B-2026-08-29-56 | codegen | high | A HEAP-CARRYING `Option` BOUND TO A LOCAL AND RETURNED IS FREED TWICE WHEN THE CALLER UNWRAPS IT -- `fn collect() -> Option[String] { let buf = Some(… | bc1c37c |
 | B-2026-08-29-57 | interp | medium | `return out` as a block's FINAL EXPRESSION -- no trailing semicolon -- makes the INTERPRETER run the returned local's `Drop` body TWICE, once at call… | fc450fe |
+| B-2026-08-29-58 | interp | medium | A `match` arm that ASSIGNS the param's payload to an outer local the callee does NOT return runs the payload's `Drop` body ONE TIME TOO MANY on the i… | e7c7d44 |
 | B-2026-08-29-60 | interp+codegen | low | `asinh` / `acosh` / `atanh` diverge between `run` and `build` at f64 as well as f32 -- Rust std implements the inverse hyperbolics as formulas rather… | cc4f0c6 |
 | B-2026-08-29-61 | codegen | medium | ONE AOT BINARY RETURNS TWO ANSWERS FOR THE SAME VALUE: `karac build` constant-folds a compile-time-known f32 `cosh`/`sinh`/`log10` in double precisio… | d95d6f7 |
 | B-2026-08-29-64 | ownership | low | design.md's REPL section states use-after-move is a blocking `error[E0382]` with "strictness identical to compiled code"; the compiler emits code E05… | 2f8aa27 |
