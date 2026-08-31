@@ -2450,29 +2450,20 @@ impl<'a> super::Interpreter<'a> {
                     return v;
                 }
             }
-            let is_primitive = matches!(
-                target,
-                "i8" | "i16"
-                    | "i32"
-                    | "i64"
-                    | "u8"
-                    | "u16"
-                    | "u32"
-                    | "u64"
-                    | "usize"
-                    | "isize"
-                    | "f32"
-                    | "f64"
-                    | "bool"
-                    | "char"
-                    | "String"
-                    // B-2026-07-22-11: total-order float wrappers — method
-                    // syntax `a.gt(b)` sibling of the lowered `F32.gt` path.
-                    | "F32"
-                    | "F64"
-                    | "F16"
-                    | "Bf16"
-            );
+            // B-2026-08-30-40 — canonical list plus the wrappers, not a
+            // longhand copy. This is the METHOD-syntax twin of the `Call(Path)`
+            // gate in `eval_call.rs`, and it carried the same omission: without
+            // `f16` / `bf16` / `i128` / `u128` the receiver was not recognized
+            // as a type at all and fell through to being EVALUATED as a value,
+            // dying with "name 'f16' resolved but has no binding at run time.
+            // This is a compiler bug" — an internal-error text for what is an
+            // ordinary associated call.
+            //
+            // B-2026-07-22-11: the total-order float wrappers stay spelled out
+            // beside it (method syntax `a.gt(b)`, the sibling of the lowered
+            // `F32.gt` path). They are stdlib STRUCTS, not prelude primitives.
+            let is_primitive = crate::prelude::PRELUDE_PRIMITIVES.contains(&target)
+                || matches!(target, "F32" | "F64" | "F16" | "Bf16");
             if is_primitive {
                 if method == "from" {
                     if let Some(arg) = args.first() {

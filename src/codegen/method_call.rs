@@ -3280,23 +3280,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // (add/sub/eq/lt/bitand/not/…) by delegating to `compile_assoc_call`,
         // which already knows the primitive fast-path.
         if let ExprKind::Identifier(type_name) = &object.kind {
-            let is_primitive = matches!(
-                type_name.as_str(),
-                "i8" | "i16"
-                    | "i32"
-                    | "i64"
-                    | "u8"
-                    | "u16"
-                    | "u32"
-                    | "u64"
-                    | "usize"
-                    | "isize"
-                    | "f32"
-                    | "f64"
-                    | "bool"
-                    | "char"
-                    | "String"
-            );
+            // B-2026-08-30-40 — the canonical primitive list, not a longhand
+            // copy. This copy stopped at `f32`/`f64` and omitted `i128`,
+            // `u128`, `f16` and `bf16`, so `f16.add(a, b)` was not recognized
+            // as a type receiver and fell out of dispatch with "no handler for
+            // method 'add' on variable 'f16'" — a message calling the type a
+            // variable, and blaming the compiler for what the typechecker had
+            // just accepted. The interpreter's two twin gates carried the same
+            // omission and are fixed alongside; all three must move together,
+            // or admitting the widths at typecheck only moves the failure.
+            let is_primitive = crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name.as_str());
             if is_primitive {
                 const OP_METHODS: &[&str] = &[
                     "from", "add", "sub", "mul", "div", "rem", "neg", "eq", "ne", "lt", "le", "gt",

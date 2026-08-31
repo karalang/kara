@@ -1436,23 +1436,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // Lowered operator dispatch: `<Primitive>.<op>(args)` — synthesized
         // by the lowering pass. Reroute to the existing BinOp/UnaryOp
         // intrinsic compilation so we don't have to duplicate codegen logic.
-        let is_primitive = matches!(
-            type_name,
-            "i8" | "i16"
-                | "i32"
-                | "i64"
-                | "u8"
-                | "u16"
-                | "u32"
-                | "u64"
-                | "usize"
-                | "isize"
-                | "f32"
-                | "f64"
-                | "bool"
-                | "char"
-                | "String"
-        );
+        // B-2026-08-30-40 — the canonical primitive list, not a longhand copy.
+        // This is the arm that actually COMPUTES a `<Primitive>.<op>(a, b)`, and
+        // it carried the same `f32`/`f64` stop as the three gates above it. With
+        // those widened and this one left behind, `f16.add(a, b)` reached
+        // dispatch and fell past the operator table to a path that yielded ZERO
+        // — a silent wrong answer, strictly worse than the rejection this row
+        // started from. All four sites move together for that reason.
+        let is_primitive = crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name);
         if is_primitive {
             let bin_op = match method {
                 "add" => Some(BinOp::Add),

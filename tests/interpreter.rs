@@ -32872,6 +32872,54 @@ nan  false false false false
     );
 }
 
+/// B-2026-08-30-40 — the `f16.` / `bf16.` associated-call namespace RUNS, and
+/// gives the same answers as `f32.` / `f64.` / `i64.`.
+///
+/// The row reported a typecheck rejection: `f16.add(a, b)` was refused with
+/// "'f16' is a type, not a function". Widening the two typechecker gates it
+/// named turned that into a GREEN CHECK THAT FAILED IN BOTH BACKENDS, and
+/// widening the interpreter's two gates alongside left codegen returning
+/// literal ZEROS for every f16 and bf16 operation — a silent wrong answer,
+/// strictly worse than the rejection the row started from. Four more copies of
+/// the same longhand width list had to move together; this fixture is what
+/// proves they did.
+///
+/// The `f32` / `f64` / `i64` / `String` / `bool` rows are the controls: they
+/// worked before and are what the new widths are being held to. A fix that
+/// admitted the narrow widths by loosening the gate for everyone would show up
+/// here as one of these changing.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_narrow_float_assoc_call_namespace_runs`,
+/// pinned to the same string.
+#[test]
+fn test_narrow_float_assoc_call_namespace_runs() {
+    assert_eq!(
+        run(r#"fn main() {
+    let n = env.args().len() as i64;
+    let a: f16 = ((n as f32) + 1.5f32) as f16;
+    let b: bf16 = ((n as f32) + 2.5f32) as bf16;
+    let c: f32 = (n as f32) + 3.5f32;
+    let d: f64 = (n as f64) + 4.5;
+    println(f"f16  {f16.add(a, a)} {f16.sub(a, a)} {f16.mul(a, a)} {f16.div(a, a)}");
+    println(f"bf16 {bf16.add(b, b)} {bf16.sub(b, b)} {bf16.mul(b, b)}");
+    println(f"f32  {f32.add(c, c)} {f32.mul(c, c)}");
+    println(f"f64  {f64.add(d, d)} {f64.mul(d, d)}");
+    println(f"i64  {i64.add(n, n)} {i64.lt(n, n + 1)}");
+    println(f"str  {String.add(f"a", f"b")}");
+    println(f"bool {bool.eq(true, true)}");
+}
+"#),
+        r#"f16  5 0 6.25 1
+bf16 7 0 12.25
+f32  9 20.25
+f64  11 30.25
+i64  2 true
+str  ab
+bool true
+"#
+    );
+}
+
 /// B-2026-08-01-4 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_arg_temp_drop_fires_at_statement_end`, same source and
 /// expected string. The interpreter is the semantics oracle here (fresh

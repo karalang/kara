@@ -1709,33 +1709,23 @@ impl<'a> super::Interpreter<'a> {
                     if segments.len() == 2 {
                         let target = segments[0].as_str();
                         let method = segments[1].as_str();
-                        let is_primitive = matches!(
-                            target,
-                            "i8" | "i16"
-                                | "i32"
-                                | "i64"
-                                | "u8"
-                                | "u16"
-                                | "u32"
-                                | "u64"
-                                | "usize"
-                                | "isize"
-                                | "f32"
-                                | "f64"
-                                | "bool"
-                                | "char"
-                                | "String"
-                                // B-2026-07-22-11: the total-order float
-                                // wrappers. `a > b` on an `F32`/`F64` lowers to
-                                // `F32.gt(a, b)`; route it to the binop
-                                // evaluator (whose TotalFloat arms give the
-                                // total order) instead of the "no evaluation
-                                // rule" path.
-                                | "F32"
-                                | "F64"
-                                | "F16"
-                                | "Bf16"
-                        );
+                        // B-2026-08-30-40 — the canonical primitive list plus
+                        // the wrappers, not a longhand copy. The copy stopped at
+                        // `f32`/`f64` and omitted `i128`, `u128`, `f16`, `bf16`,
+                        // so `f16.add(a, b)` was never recognized as a lowered
+                        // operator call and the interpreter tried to EVALUATE
+                        // `f16` as a value: "name 'f16' resolved but has no
+                        // binding at run time. This is a compiler bug".
+                        //
+                        // B-2026-07-22-11: the total-order float wrappers are
+                        // kept alongside. `a > b` on an `F32`/`F64` lowers to
+                        // `F32.gt(a, b)`; route it to the binop evaluator (whose
+                        // TotalFloat arms give the total order) instead of the
+                        // "no evaluation rule" path. They are not in
+                        // `PRELUDE_PRIMITIVES` — they are stdlib STRUCTS — so
+                        // they stay spelled out.
+                        let is_primitive = crate::prelude::PRELUDE_PRIMITIVES.contains(&target)
+                            || matches!(target, "F32" | "F64" | "F16" | "Bf16");
                         if is_primitive {
                             if let Some(result) = self.dispatch_lowered_op(method, args, span) {
                                 return result;

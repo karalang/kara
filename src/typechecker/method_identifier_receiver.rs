@@ -216,23 +216,25 @@ impl<'a> super::TypeChecker<'a> {
         if let ExprKind::Identifier(type_name) = &object.kind {
             let is_known_type = self.env.structs.contains_key(type_name)
                 || self.env.enums.contains_key(type_name)
-                || matches!(
-                    type_name.as_str(),
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "usize"
-                        | "isize"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                        | "char"
-                        | "String"
-                );
+                // B-2026-08-30-40 — the canonical primitive list, not a
+                // longhand copy of it. This spelling stopped at `f32`/`f64` and
+                // omitted `i128`, `u128`, `f16` and `bf16`, so a path call on
+                // any of those four was never recognized as a TYPE receiver at
+                // all: `f16.from(x)`, `f16.parse(s)` and `i128.parse(s)` fell
+                // through to the identifier-in-value-position diagnostic and
+                // were rejected with "'f16' is a type, not a function — a
+                // numeric conversion is the cast `x as f16`", advice that has
+                // nothing to do with what was written. The same call at `f32`
+                // RESOLVES and then fails on its own merits ("no associated
+                // function 'parse' on type 'f32'"), which is the contrast that
+                // makes this a namespace gap rather than a missing member.
+                //
+                // `PRELUDE_PRIMITIVES` is the list every other module reads
+                // (`is_known_type_name` among them) and it carries all four, so
+                // taking it directly both fixes the omission and stops this copy
+                // drifting again — the same recurrence B-2026-08-30-25 records
+                // for the width list in `method_callee_type_name`.
+                || crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name.as_str());
             if is_known_type {
                 // Comptime `Type` reflection (substrate 2): `MyType.name()`,
                 // `.fields()`, `.variants()`, `.is_struct()`, … The reflection
@@ -487,22 +489,23 @@ impl<'a> super::TypeChecker<'a> {
                 // "no handler for method" — a green-check-then-crash
                 // (B-2026-07-22-10). Struct / enum / `String` receivers keep
                 // the fall-through (they may still resolve downstream).
-                if matches!(
-                    type_name.as_str(),
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "usize"
-                        | "isize"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                        | "char"
-                ) {
+                // B-2026-08-30-40 — the same canonical list as the gate
+                // above, MINUS `String`. This is the arm that turns a
+                // recognized type receiver with no such member into the clean
+                // "no associated function 'X' on type 'T'" rejection, and the
+                // comment above it says why `String` is excluded: struct / enum
+                // / `String` receivers keep the fall-through because they may
+                // still resolve downstream. `PRELUDE_PRIMITIVES` includes
+                // `String`, so the exclusion is spelled out rather than left to
+                // the reader to notice.
+                //
+                // Without the widening the four reduced-precision / 128-bit
+                // widths never reached here either, so even once the gate above
+                // admits them they would fall through to a worse message. The
+                // two sites have to move together.
+                if crate::prelude::PRELUDE_PRIMITIVES.contains(&type_name.as_str())
+                    && type_name != "String"
+                {
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }

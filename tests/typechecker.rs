@@ -47426,3 +47426,77 @@ fn narrow_float_receivers_keep_their_real_methods() {
         }
     }
 }
+
+/// B-2026-08-30-40 — EVERY primitive must be reachable as a TYPE RECEIVER, and
+/// a missing member on one must say so.
+///
+/// A SWEEP, for the same reason `every_primitive_receiver_rejects_an_invented_method`
+/// is one: this is the same longhand-list omission, in four more copies. Each
+/// stopped at `f32`/`f64` and left out `i128`, `u128`, `f16` and `bf16`, so a
+/// path call on any of those four was not recognized as a type receiver at all
+/// and collapsed to the identifier-in-value-position diagnostic — "'f16' is a
+/// type, not a function — a numeric conversion is the cast `x as f16`", advice
+/// with nothing to do with what was written.
+///
+/// It asserts the message the reader should get, not merely that some error
+/// fired. Both texts are errors; only one of them names the real problem, and
+/// the whole cost of this defect was that the wrong one was chosen.
+#[test]
+fn every_primitive_is_reachable_as_a_type_receiver() {
+    for ty in [
+        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+        "f16", "bf16", "f32", "f64", "bool", "char",
+    ] {
+        let src = format!(
+            "fn main() {{\n    let n = env.args().len() as i64;\n    \
+             let r = {ty}.definitely_not_a_member(n);\n}}\n"
+        );
+        let errs = typecheck_errors(&src);
+        let want = format!("no associated function 'definitely_not_a_member' on type '{ty}'");
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(&want)),
+            "{ty}: a missing member on a type receiver must say so — the \
+             receiver was not recognized as a TYPE at all if this reports \
+             'is a type, not a function' instead. Wanted {want:?}, got: {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+        );
+        assert!(
+            !errs
+                .iter()
+                .any(|e| e.to_string().contains("is a type, not a function")),
+            "{ty}: reported the identifier-in-value-position diagnostic, which \
+             means the type-receiver gate does not know this width",
+        );
+    }
+}
+
+/// B-2026-08-30-40 — the ordering members stay REJECTED on a bare float, and
+/// identically at every width.
+///
+/// The companion guard to the sweep above: that one checks the gate ADMITS each
+/// width, this one checks admitting them did not start accepting members the
+/// type does not have. `f32.lt` was already rejected — bare floats are
+/// deliberately not `Ord` (IEEE NaN), so `lt`/`le`/`gt`/`ge` are not registered
+/// for them — and `f16.lt` must be rejected the same way rather than becoming
+/// a green check that fails in a backend.
+#[test]
+fn ordering_members_stay_rejected_on_every_bare_float() {
+    for ty in ["f16", "bf16", "f32", "f64"] {
+        for method in ["lt", "le", "gt", "ge"] {
+            let src = format!(
+                "fn main() {{\n    \
+                 let n = env.args().len() as i64;\n    \
+                 let x: {ty} = ((n as f32) + 1.5f32) as {ty};\n    \
+                 let r = {ty}.{method}(x, x);\n}}\n"
+            );
+            let errs = typecheck_errors(&src);
+            let want = format!("no associated function '{method}' on type '{ty}'");
+            assert!(
+                errs.iter().any(|e| e.to_string().contains(&want)),
+                "{ty}.{method}: bare floats have no `Ord`, so this must be \
+                 rejected exactly as it is at f32 — got: {:?}",
+                errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+            );
+        }
+    }
+}
