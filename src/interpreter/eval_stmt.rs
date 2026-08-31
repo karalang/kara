@@ -2747,6 +2747,21 @@ impl<'a> super::Interpreter<'a> {
                     self.note_escaping_site(t);
                 }
             }
+            // B-2026-08-30-50 — a by-value call ARGUMENT is the fourth escaping
+            // position; codegen's `note_escaping_site` carries the same arm and
+            // the same gate. See it for why the MINTING test is load-bearing:
+            // the seed disarms the binding the taken arm hands over, so it is
+            // sound only where the argument temp then owns the value, and that
+            // registration needs a minting tail to name a type from. An
+            // ALL-PLACES wrapper has none, and seeding it dropped the taken
+            // value's body on the compiled backends.
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                for a in args {
+                    if self.wrapper_has_minting_tail(&a.value) {
+                        self.note_escaping_site(&a.value);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -2757,10 +2772,31 @@ impl<'a> super::Interpreter<'a> {
     /// arm tails are already known by the time one of them is reached.
     pub(crate) fn note_escaping_stmt_sites(&mut self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Let { value, .. } => self.note_escaping_site(value),
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                self.note_escaping_site(value)
+            }
+            // B-2026-08-30-50 — an ASSIGNMENT's RHS is an escaping position for
+            // the same reason a `let`'s initializer is: the value goes to the
+            // target rather than dying here.
+            StmtKind::Assign { value, .. } => self.note_escaping_site(value),
             StmtKind::Expr(e) => {
                 if let ExprKind::Return(Some(inner)) = &e.kind {
                     self.note_escaping_site(inner);
+                }
+                // B-2026-08-30-50 — a call in STATEMENT position
+                // (`one(if c { b } else { mk(11) });`, result discarded). Its
+                // arguments still escape INTO the call, so its wrapper
+                // arguments need seeding exactly as they would inside a `let`;
+                // without this the discarded spelling lost the minting arm's
+                // body while the `let`-bound one ran it.
+                //
+                // The call, NOT the statement's expression generally: a
+                // discarded `if` stays excluded (see `note_escaping_site`) --
+                // its arm tails go nowhere, and marking them takes a program
+                // that runs one body today to zero. A call's arguments are the
+                // opposite: they have a consumer by construction.
+                if matches!(&e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. }) {
+                    self.note_escaping_site(e);
                 }
             }
             _ => {}

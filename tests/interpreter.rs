@@ -35228,6 +35228,119 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
             "in-s\ndR2\ndR1\nin-s\ndR4\ndR3\nv=14\n",
         ),
         (
+            "mixed-wrapper-arg-fresh-branch-taken",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let k = mk(30);\n\
+                 \x20   let v = one(if false {{ k }} else {{ mk(31) }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            // TWO objects die here and both must run: the argument temp the
+            // taken (minting) arm produced, and `k`, which the untaken arm
+            // never handed over so it dies in place. B-2026-08-30-38 ran
+            // only `k`'s.
+            "in-one\ndR31\ndR30\nv=31\n",
+        ),
+        (
+            "mixed-wrapper-arg-binding-branch-taken",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let j = mk(40);\n\
+                 \x20   let v = one(if true {{ j }} else {{ mk(41) }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            // ONE object, ONE body. The conditional-move flag disarms `j`
+            // on this path, so the argument temp is the single owner —
+            // this is the case that would double-fire if the binding kept
+            // its own drop, and it is why the seed must reach here.
+            "in-one\ndR40\nv=40\n",
+        ),
+        (
+            "all-places-wrapper-arg-is-not-seeded",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let a1 = mk(1);\n\
+                 \x20   let a2 = mk(2);\n\
+                 \x20   let v = one(if true {{ a1 }} else {{ a2 }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            // No tail MINTS, so nothing can name a type for an argument
+            // temp — and the seed is withheld for exactly that reason.
+            // Seeding it anyway disarmed `a1` with no registration to
+            // replace it and its body vanished on all three compiled
+            // surfaces; both bindings stay armed and die in place instead.
+            "in-one\ndR2\ndR1\nv=1\n",
+        ),
+        (
+            "mixed-wrapper-arg-in-statement-position",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let b = mk(10);\n\
+                 \x20   one(if false {{ b }} else {{ mk(11) }});\n\
+                 \x20   println(\"after\");\n\
+                 }}\n"
+            ),
+            // A DISCARDED call still consumes its arguments, so its
+            // wrapper arguments are seeded like a `let`'s. A discarded
+            // `if` is deliberately not — its arm tails have no consumer.
+            "in-one\ndR11\ndR10\nafter\n",
+        ),
+        (
+            "mixed-wrapper-arg-method-call",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 struct H {{ n: i64 }}\n\
+                 impl H {{ fn take(mut ref self, r: R) -> i64 {{ println(\"in-take\"); r.id }} }}\n\
+                 fn main() {{\n\
+                 \x20   let c = mk(20);\n\
+                 \x20   let mut h = H {{ n: 0 }};\n\
+                 \x20   let v = h.take(if false {{ c }} else {{ mk(21) }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            "in-take\ndR21\ndR20\nv=21\n",
+        ),
+        (
+            "mixed-wrapper-arg-passthrough-callee",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn pass(r: R) -> R {{ r }}\n\
+                 fn main() {{\n\
+                 \x20   let d = mk(30);\n\
+                 \x20   let v = pass(if false {{ d }} else {{ mk(31) }});\n\
+                 \x20   println(f\"v={{v.id}}\");\n\
+                 }}\n"
+            ),
+            // The passthrough guard still holds through the widening: the
+            // minting arm's value travels out of the call, so the RESULT's
+            // owner runs its body at its own last use, after the read.
+            "dR30\nv=31\ndR31\n",
+        ),
+        (
+            "mixed-wrapper-arg-match-arm-binding",
+            format!(
+                "{HDR}fn mk(n: i64) -> R {{ R {{ id: n }} }}\n\
+                 fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let g = mk(50);\n\
+                 \x20   let v = one(match 2 {{ 1 => g, _ => mk(51) }});\n\
+                 \x20   println(f\"v={{v}}\");\n\
+                 }}\n"
+            ),
+            "in-one\ndR51\ndR50\nv=51\n",
+        ),
+        (
             "wrapper-arg-struct-literal-tail",
             format!(
                 "{HDR}fn one(r: R) -> i64 {{ println(\"in-one\"); r.id }}\n\

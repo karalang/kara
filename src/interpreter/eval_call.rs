@@ -3304,6 +3304,94 @@ impl<'a> super::Interpreter<'a> {
     fn tail_arg_type_name(&self, e: &Expr) -> Option<String> {
         self.fresh_temp_arg_type_name(e)
             .or_else(|| self.wrapper_tail_arg_type_name(e))
+            .or_else(|| self.cond_moved_place_tail_type_name(e))
+    }
+
+    /// B-2026-08-30-50 — does this expression have at least one tail that
+    /// MINTS a fresh owned temp? The gate on seeding a call argument as an
+    /// escaping site, and the twin of codegen's `first_minting_branch_tail`
+    /// asked as a yes/no.
+    ///
+    /// Only a minting tail gives the argument walk a producer to name a type
+    /// from, so only then does something take over ownership from the binding
+    /// the seed disarms. Kept separate from [`Self::tail_arg_type_name`]
+    /// because that one deliberately ALSO admits a place tail — which is the
+    /// very thing this must not count.
+    pub(crate) fn wrapper_has_minting_tail(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => {
+                let Some(tail) = b.final_expr.as_deref() else {
+                    return false;
+                };
+                self.wrapper_has_minting_tail(tail)
+                    || self
+                        .block_local_binding_tail_rhs(b, tail)
+                        .is_some_and(|rhs| self.wrapper_has_minting_tail(rhs))
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.wrapper_has_minting_tail(t))
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|t| self.wrapper_has_minting_tail(t))
+            }
+            ExprKind::Match { arms, .. } => {
+                arms.iter().any(|a| self.wrapper_has_minting_tail(&a.body))
+            }
+            _ => self.fresh_temp_arg_type_name(e).is_some(),
+        }
+    }
+
+    /// B-2026-08-30-50 — a wrapper tail that hands out a BINDING, admitted
+    /// because the conditional-move machinery disarms that binding on exactly
+    /// the path where this tail runs.
+    ///
+    /// B-2026-08-30-38 had to DECLINE this shape, and the decline was correct
+    /// on its own terms: the binding kept its own name-keyed drop, so claiming
+    /// the merged value too would have run one body twice. What changes here is
+    /// not the predicate's boldness but the FACT it rests on -- seeding a call
+    /// argument as an escaping site (`note_escaping_site`) makes
+    /// `record_conditional_move_tail` fire at the taken arm's tail, which is
+    /// the runtime bit that turns "maybe moved" into "moved". The binding is
+    /// then disarmed on the path that hands it over and armed on every other,
+    /// so the argument temp is the single owner rather than a second one.
+    ///
+    /// GATED ON THE SITE, not on the shape, and that is the whole safety
+    /// argument: the span must be one the seeding actually marked. An
+    /// identifier tail in a position the seeding does not reach keeps its
+    /// binding armed, so admitting it there would be the double fire again.
+    /// The two are wired to the same set, so they cannot drift apart.
+    ///
+    /// Codegen twin: the `Identifier` arm of `arg_producer_mints_fresh_owned_temp`,
+    /// gated on the flag that machinery creates for the same binding.
+    fn cond_moved_place_tail_type_name(&self, e: &Expr) -> Option<String> {
+        let ExprKind::Identifier(name) = &e.kind else {
+            return None;
+        };
+        if !self
+            .cond_move_escaping_sites
+            .contains(&(e.span.offset, e.span.length))
+        {
+            return None;
+        }
+        let tn = match self.env.get(name)? {
+            Value::Struct { name, .. } => name,
+            Value::EnumVariant { enum_name, .. } => enum_name,
+            _ => return None,
+        };
+        self.program
+            .drop_method_keys
+            .contains_key(&tn)
+            .then_some(tn)
     }
 
     /// The `let` RHS that produced a block's identifier TAIL, when the block

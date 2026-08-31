@@ -8931,6 +8931,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.note_escaping_site(t);
                 }
             }
+            // B-2026-08-30-50 — a by-value call ARGUMENT is the fourth escaping
+            // position. Without this seed a wrapper argument's arm tails were
+            // never marked, so `record_conditional_move_tail` /
+            // `arm_conditional_move_tail_flag` never fired there and a binding
+            // handed over by the taken arm stayed armed -- which is why
+            // B-2026-08-30-38 had to decline a mixed construct outright rather
+            // than claim its merged value.
+            //
+            // ONLY when some tail MINTS, and that gate is load-bearing rather
+            // than tidy. The seed disarms the binding on the path that hands it
+            // over, so it is only sound where something else then owns the
+            // value -- and the argument temp is registered exactly when a
+            // minting tail exists to name its type
+            // (`first_minting_branch_tail`). An ALL-PLACES wrapper
+            // (`one(if c { a1 } else { a2 })`) has no such tail: seeding it
+            // disarmed the taken binding with no registration to replace it,
+            // measured as the taken value's body disappearing on all three
+            // compiled surfaces while the interpreter still ran it. Leaving it
+            // unseeded keeps both backends at their prior, correct behaviour --
+            // each binding armed, dying in place.
+            ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
+                for a in args {
+                    if self.first_minting_branch_tail(&a.value).is_some() {
+                        self.note_escaping_site(&a.value);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -8940,10 +8967,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// interpreter's `note_escaping_stmt_sites` is the same rule.
     pub(super) fn note_escaping_stmt_sites(&mut self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Let { value, .. } => self.note_escaping_site(value),
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                self.note_escaping_site(value)
+            }
+            // B-2026-08-30-50 — an ASSIGNMENT's RHS is an escaping position for
+            // the same reason a `let`'s initializer is: the value goes to the
+            // target rather than dying here.
+            StmtKind::Assign { value, .. } => self.note_escaping_site(value),
             StmtKind::Expr(e) => {
                 if let ExprKind::Return(Some(inner)) = &e.kind {
                     self.note_escaping_site(inner);
+                }
+                // B-2026-08-30-50 — a call in STATEMENT position
+                // (`one(if c { b } else { mk(11) });`, result discarded). Its
+                // arguments still escape INTO the call, so its wrapper
+                // arguments need seeding exactly as they would inside a `let`;
+                // without this the discarded spelling lost the minting arm's
+                // body while the `let`-bound one ran it.
+                //
+                // The call, NOT the statement's expression generally: a
+                // discarded `if` stays excluded (see `note_escaping_site`) --
+                // its arm tails go nowhere, and marking them takes a program
+                // that runs one body today to zero. A call's arguments are the
+                // opposite: they have a consumer by construction.
+                if matches!(&e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. }) {
+                    self.note_escaping_site(e);
                 }
             }
             _ => {}

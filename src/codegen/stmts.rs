@@ -14968,7 +14968,25 @@ impl<'ctx> super::Codegen<'ctx> {
         match &e.kind {
             ExprKind::StructLiteral { .. } => true,
             ExprKind::Path { .. } => self.enum_name_of_expr(e).is_some(),
-            ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n).is_some(),
+            // A bare unit VARIANT mints. So, for B-2026-08-30-50, does a
+            // binding the conditional-move machinery holds a drop flag for:
+            // that flag is cleared on the path whose tail hands the binding
+            // over (`arm_conditional_move_tail_flag`), so on that path the
+            // binding no longer runs its own body and the argument temp is the
+            // single owner -- while on every other path the flag stays armed
+            // and the binding dies in place, beside the fresh value this
+            // registers. B-2026-08-30-38 had to decline the shape precisely
+            // because that runtime bit was missing in argument position;
+            // seeding the argument as an escaping site is what supplies it.
+            //
+            // LOOKUP-ONLY, never creating a flag: a binding without one was
+            // not admitted by that machinery, so it keeps its own armed drop
+            // and must not be claimed here. The flag exists by now because
+            // both arms are lowered before the registrar runs.
+            ExprKind::Identifier(n) => {
+                self.fresh_bare_unit_variant_enum(n).is_some()
+                    || self.drop_rc.cond_move_drop_flags.contains_key(n.as_str())
+            }
             _ => false,
         }
     }
@@ -15052,6 +15070,62 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `else if` chain and an arm-wrapped block resolve like their flat
     /// spellings. Only meaningful after that predicate has accepted `e`.
     fn first_branch_tail<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
+        // B-2026-08-30-50 — prefer a MINTING tail over a place one. Since
+        // B-2026-08-30-38 every admitted tail was a producer and "first" was
+        // as good as any; a mixed construct now admits a place tail too, and
+        // that tail names a BINDING, which the registrar's arms cannot
+        // classify -- so handing it back registered nothing and the fix lost
+        // the very body it was meant to add. The tails merge into one value,
+        // so a minting one answers for all of them.
+        if let Some(minting) = self.first_minting_branch_tail(e) {
+            return Some(minting);
+        }
+        self.first_any_branch_tail(e)
+    }
+
+    /// [`Self::first_branch_tail`] restricted to tails that MINT, i.e. the ones
+    /// the registrar can name a type from. `None` when every tail hands out a
+    /// binding.
+    pub(super) fn first_minting_branch_tail<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => {
+                let tail = b.final_expr.as_deref()?;
+                self.first_minting_branch_tail(tail).or_else(|| {
+                    self.block_local_binding_tail_rhs(b, tail)
+                        .and_then(|rhs| self.first_minting_branch_tail(rhs))
+                })
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => then_block
+                .final_expr
+                .as_deref()
+                .and_then(|t| self.first_minting_branch_tail(t))
+                .or_else(|| {
+                    else_branch
+                        .as_deref()
+                        .and_then(|t| self.first_minting_branch_tail(t))
+                }),
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .find_map(|a| self.first_minting_branch_tail(&a.body)),
+            _ => (self.expr_yields_fresh_owned_temp(e)
+                || matches!(
+                    &e.kind,
+                    ExprKind::StructLiteral { .. } | ExprKind::Path { .. }
+                )
+                || matches!(&e.kind, ExprKind::Identifier(n)
+                    if self.fresh_bare_unit_variant_enum(n).is_some()))
+            .then_some(e),
+        }
+    }
+
+    fn first_any_branch_tail<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Seq(b)
@@ -15065,15 +15139,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // that names no type.
                 match self.block_local_binding_tail_rhs(b, tail) {
                     Some(rhs) if !self.branch_tail_mints_fresh_owned_temp_inner(tail, true) => {
-                        self.first_branch_tail(rhs)
+                        self.first_any_branch_tail(rhs)
                     }
-                    _ => self.first_branch_tail(tail),
+                    _ => self.first_any_branch_tail(tail),
                 }
             }
             ExprKind::If { then_block, .. } => {
-                self.first_branch_tail(then_block.final_expr.as_deref()?)
+                self.first_any_branch_tail(then_block.final_expr.as_deref()?)
             }
-            ExprKind::Match { arms, .. } => self.first_branch_tail(&arms.first()?.body),
+            ExprKind::Match { arms, .. } => self.first_any_branch_tail(&arms.first()?.body),
             _ => Some(e),
         }
     }
