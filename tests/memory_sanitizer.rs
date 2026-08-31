@@ -64212,6 +64212,107 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-34 — a heap field read off a FRESH TEMP and consumed by an
+    /// owning aggregate double freed on both compiled backends. The E2E twin
+    /// pins the text; this is the memory gate, because that is what the defect
+    /// actually is.
+    ///
+    /// `consume_freshtemp_field_move` zeroes the accessed field in the staged
+    /// temp slot so the temp's struct drop frees only the UNREAD remainder. It
+    /// was hooked at the let / assign / return / fn-tail sites and at the
+    /// ordinary call-argument path, and at NONE of the aggregate-literal
+    /// consume sites — so a struct literal, an array/`Vec` literal, a tuple, or
+    /// a variant constructor took the same pointer while the temp kept its
+    /// cleanup, and both freed it.
+    ///
+    /// `two_fields_one_taken` is the LEAK-direction control and the reason this
+    /// fixture exists rather than the E2E twin alone: the fix TRANSFERS
+    /// ownership, so getting it wrong in the other direction — zeroing a field
+    /// the aggregate never took — leaks silently and prints correctly. `mk2`
+    /// returns a temp with TWO heap fields and the literal takes one; the
+    /// other must still be freed by the temp. LSan sees that only on the Linux
+    /// CI leg, never on a local macOS asan run.
+    ///
+    /// Same fixture rules as its siblings: FUNCTION-SCOPE locals, and the
+    /// payload's BYTES read via `contains` rather than its length, since a
+    /// `.len()`-only buffer is a dead allocation LLVM deletes outright.
+    #[test]
+    fn asan_a_fresh_temp_field_read_consumed_by_an_aggregate_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct P { a: String, b: i64 }
+struct W { a: String }
+struct TwoHeap { a: String, c: String }
+enum E { Ea { a: String }, En }
+enum T { Ta(String), Tn }
+fn payload(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+fn mkp(n: i64) -> P { return P { a: payload(n), b: n }; }
+fn mk2(n: i64) -> TwoHeap { return TwoHeap { a: payload(n), c: payload(n + 10) }; }
+fn struct_literal_field() -> bool {
+    let x: P = P { a: mkp(1).a, b: 1 };
+    return x.a.contains("padded");
+}
+fn vec_literal_element() -> bool {
+    let v: Vec[String] = [mkp(2).a];
+    return v[0].contains("padded");
+}
+fn tuple_element() -> bool {
+    let t: (String, i64) = (mkp(3).a, 3);
+    return t.0.contains("padded");
+}
+fn enum_struct_variant() -> bool {
+    let e: E = E.Ea { a: mkp(4).a };
+    let mut hit: bool = false;
+    match e { E.Ea { a } => { hit = a.contains("padded"); } E.En => {} }
+    return hit;
+}
+fn enum_tuple_variant() -> bool {
+    let e: T = T.Ta(mkp(5).a);
+    let mut hit: bool = false;
+    match e { T.Ta(s) => { hit = s.contains("padded"); } T.Tn => {} }
+    return hit;
+}
+fn optres_ctor_arg() -> bool {
+    let o: Option[String] = Some(mkp(6).a);
+    let mut hit: bool = false;
+    match o { Some(s) => { hit = s.contains("padded"); } None => {} }
+    return hit;
+}
+fn two_fields_one_taken() -> bool {
+    let x: W = W { a: mk2(7).a };
+    return x.a.contains("padded");
+}
+fn ordinary_call_arg_control() -> bool {
+    let x: W = W { a: payload(8) };
+    return x.a.contains("padded");
+}
+fn main() {
+    println(struct_literal_field());
+    println(vec_literal_element());
+    println(tuple_element());
+    println(enum_struct_variant());
+    println(enum_tuple_variant());
+    println(optres_ctor_arg());
+    println(two_fields_one_taken());
+    println(ordinary_call_arg_control());
+    println("done");
+}
+"#,
+            &[
+                "true", "true", "true", "true", "true", "true", "true", "true", "done",
+            ],
+            "fresh-temp-field-read-consumed-by-an-aggregate",
+            // Measured 120 on the fixed compiler; floored under it so a future
+            // optimizer that folds these payloads away trips the vacuity check
+            // rather than passing over allocations that never happened.
+            90,
+        );
+    }
     /// B-2026-08-31-30 — the `if let` / `let … else` / NESTED spellings of a
     /// struct destructure double freed the moved-out field's buffer, and unlike
     /// the flat `match` spelling's quiet duplicate BODY (B-2026-08-31-26) this

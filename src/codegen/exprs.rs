@@ -3279,7 +3279,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     let saved_agg_te = self
                         .stage_declared_aggregate_te(Some(&field_init.value), field_te.as_ref());
                     let val = self.compile_expr(&field_init.value)?;
+                    // B-2026-08-31-34 — an aggregate-literal element/field
+                    // initializer that READS A HEAP FIELD OFF A FRESH TEMP
+                    // (`P { a: mkp(1).a }`, `[mkp(1).a]`, `(mkp(1).a, 1)`) is a
+                    // MOVE, exactly as `let a = mkp(1).a;` is. The let / assign
+                    // / return / fn-tail sites have consumed it since
+                    // B-2026-07-22-2; the aggregate-literal sites never did, so
+                    // the temp kept its cleanup for the field while the literal
+                    // took the same pointer and both freed it. The helper
+                    // self-gates on the staged slot matching this exact field
+                    // name AND object span, so every other initializer no-ops.
+                    self.consume_freshtemp_field_move(&field_init.value);
                     self.restore_declared_aggregate_te(saved_agg_te);
+                    // B-2026-08-31-34 — a field initializer that READS A HEAP
+                    // FIELD OFF A FRESH TEMP (`P { a: mkp(1).a, b: 1 }`) is a
+                    // MOVE, exactly as `let a = mkp(1).a;` is. The let / assign
+                    // / return / fn-tail sites have called this since
+                    // B-2026-07-22-2; the aggregate-literal consume sites never
+                    // did, so the temp kept its own cleanup for the field while
+                    // the literal's owner took the same pointer and both freed
+                    // it: `free(): double free detected in tcache 2` on both
+                    // compiled backends, against a clean interpreter.
+                    //
+                    // The helper self-gates on the staged slot matching this
+                    // exact field name AND object span, so a non-fresh-temp
+                    // initializer (a named local's field, a direct call, a
+                    // literal) no-ops.
+                    self.consume_freshtemp_field_move(&field_init.value);
                     // Owned String/Vec PARAM captured into a field
                     // (`Node { name: s }` where `s: String` is a param):
                     // deep-copy — the caller retains the buffer's free
@@ -3545,6 +3571,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 let saved_agg_te = self
                     .stage_declared_aggregate_te(Some(&field_init.value), tuple_field_te.as_ref());
                 let val = self.compile_expr(&field_init.value)?;
+                // B-2026-08-31-34 — an aggregate-literal element/field
+                // initializer that READS A HEAP FIELD OFF A FRESH TEMP
+                // (`P { a: mkp(1).a }`, `[mkp(1).a]`, `(mkp(1).a, 1)`) is a
+                // MOVE, exactly as `let a = mkp(1).a;` is. The let / assign
+                // / return / fn-tail sites have consumed it since
+                // B-2026-07-22-2; the aggregate-literal sites never did, so
+                // the temp kept its cleanup for the field while the literal
+                // took the same pointer and both freed it. The helper
+                // self-gates on the staged slot matching this exact field
+                // name AND object span, so every other initializer no-ops.
+                self.consume_freshtemp_field_move(&field_init.value);
                 self.restore_declared_aggregate_te(saved_agg_te);
                 // Owned String/Vec PARAM captured into a field — deep-copy,
                 // same rationale as the shared-struct branch above.
@@ -3768,6 +3805,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|fs| fs.iter().find(|(n, _)| n == &field_init.name))
             .map(|(_, ty)| *ty);
         let val = self.compile_expr(&field_init.value)?;
+        // B-2026-08-31-34 — an aggregate-literal element/field
+        // initializer that READS A HEAP FIELD OFF A FRESH TEMP
+        // (`P { a: mkp(1).a }`, `[mkp(1).a]`, `(mkp(1).a, 1)`) is a
+        // MOVE, exactly as `let a = mkp(1).a;` is. The let / assign
+        // / return / fn-tail sites have consumed it since
+        // B-2026-07-22-2; the aggregate-literal sites never did, so
+        // the temp kept its cleanup for the field while the literal
+        // took the same pointer and both freed it. The helper
+        // self-gates on the staged slot matching this exact field
+        // name AND object span, so every other initializer no-ops.
+        self.consume_freshtemp_field_move(&field_init.value);
         let slot = self
             .builder
             .build_alloca(storage_ty, &format!("union.{}.lit", name))

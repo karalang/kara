@@ -1501,6 +1501,15 @@ impl<'ctx> super::Codegen<'ctx> {
         for e in elems {
             let v = (|| -> Result<BasicValueEnum<'ctx>, String> {
                 let v = self.compile_expr(e)?;
+                // B-2026-08-31-34 — an aggregate-literal ELEMENT that READS A HEAP
+                // FIELD OFF A FRESH TEMP (`[mkp(1).a]`) is a MOVE, exactly as
+                // `let a = mkp(1).a;` is. The let / assign / return / fn-tail sites
+                // have consumed it since B-2026-07-22-2; the aggregate-literal sites
+                // never did, so the temp kept its own cleanup for the field while the
+                // literal took the same pointer and both freed it. The helper
+                // self-gates on the staged slot matching this exact field name AND
+                // object span, so every other element expression no-ops.
+                self.consume_freshtemp_field_move(e);
                 // B-2026-08-22-18 — the fixed-array member of the move-aware
                 // element-ownership family the Vec and tuple literals already
                 // belong to (B-2026-07-04-1). The array takes ownership of each
@@ -1616,6 +1625,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(items.len());
         for e in items {
             let v = self.compile_expr(e)?;
+            // B-2026-08-31-34 — an aggregate-literal ELEMENT that READS A HEAP
+            // FIELD OFF A FRESH TEMP (`[mkp(1).a]`) is a MOVE, exactly as
+            // `let a = mkp(1).a;` is. The let / assign / return / fn-tail sites
+            // have consumed it since B-2026-07-22-2; the aggregate-literal sites
+            // never did, so the temp kept its own cleanup for the field while the
+            // literal took the same pointer and both freed it. The helper
+            // self-gates on the staged slot matching this exact field name AND
+            // object span, so every other element expression no-ops.
+            self.consume_freshtemp_field_move(e);
             // Move-aware element ownership (mirror `compile_tuple`): the Vec
             // literal takes ownership of each element, so any INDEPENDENT
             // scope-exit cleanup the element registered must be suppressed once

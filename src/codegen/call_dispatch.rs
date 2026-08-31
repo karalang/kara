@@ -3305,7 +3305,7 @@ impl<'ctx> super::Codegen<'ctx> {
         match &t.kind {
             ExprKind::StructLiteral { fields, .. } => fields
                 .iter()
-                .any(|f| Self::field_init_aliases_a_temp(&f.value)),
+                .any(|f| self.field_init_aliases_a_temp(&f.value)),
             ExprKind::Match { arms, .. } => arms
                 .iter()
                 .any(|arm| self.discard_branch_tail_aliases_a_temp(&arm.body)),
@@ -3331,7 +3331,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// place expression; false only for values MINTED at this site. See
     /// [`Self::discard_branch_tail_aliases_a_temp`] for why the test is
     /// freshness rather than root-of-place.
-    fn field_init_aliases_a_temp(e: &Expr) -> bool {
+    fn field_init_aliases_a_temp(&self, e: &Expr) -> bool {
+        // B-2026-08-31-34 — a heap field read off a FRESH TEMP no longer
+        // aliases: the aggregate-literal consume sites now call
+        // `consume_freshtemp_field_move`, which zeroes that field in the temp's
+        // slot, so the literal is its SOLE owner and the temp's drop frees only
+        // the unread remainder.
+        //
+        // The doc comment above declines this shape on the stated ground that
+        // "the aliasing is PRE-EXISTING and is not this row's to repair — the
+        // `let`-BOUND spelling of the same literal already double-frees". That
+        // premise is what B-2026-08-31-34 repaired, so the reason to decline is
+        // gone; keeping the decline instead LEAKS, because this site then
+        // registers no owner while the takeover has already disarmed the temp
+        // (measured: `LeakSanitizer: detected memory leaks, 32 byte(s)` on
+        // `asan_discarded_branch_of_body_less_heap_literals_frees_once`).
+        //
+        // Narrowed to EXACTLY what the takeover transfers — a field read whose
+        // object is a fresh owned temp — so a place rooted at a NAMED local
+        // (`P { a: t.a }`) still declines, which is the false-negative the
+        // guard's own history warns about.
+        if let ExprKind::FieldAccess { object, .. } = &e.kind {
+            if self.expr_yields_fresh_owned_temp(object) {
+                return false;
+            }
+        }
         !matches!(
             &e.kind,
             ExprKind::Call { .. }
@@ -5727,6 +5751,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_or_default();
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(&arg.value)?;
+                // B-2026-08-31-34 — a variant-constructor ARGUMENT that READS A
+                // HEAP FIELD OFF A FRESH TEMP (`Some(mkp(1).a)`, `T.V(mkp(1).a)`)
+                // is a MOVE, exactly as `let a = mkp(1).a;` is. The let / assign /
+                // return / fn-tail sites and the ORDINARY call-argument path have
+                // consumed it since B-2026-07-22-2; the variant-ctor path never did,
+                // so the temp kept its own cleanup for the field while the
+                // constructed payload took the same pointer and both freed it. The
+                // helper self-gates on the staged slot matching this exact field
+                // name AND object span, so every other argument no-ops.
+                self.consume_freshtemp_field_move(&arg.value);
                 // F-string payload (`Some(f"…")`): disarm the staged
                 // accumulator cleanup — the enum's drop owns the buffer
                 // now. Owned String/Vec PARAM payload (`Some(s)` where
@@ -5832,6 +5866,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_default();
         for (i, arg) in args.iter().enumerate() {
             let val = self.compile_expr(&arg.value)?;
+            // B-2026-08-31-34 — a variant-constructor ARGUMENT that READS A
+            // HEAP FIELD OFF A FRESH TEMP (`Some(mkp(1).a)`, `T.V(mkp(1).a)`)
+            // is a MOVE, exactly as `let a = mkp(1).a;` is. The let / assign /
+            // return / fn-tail sites and the ORDINARY call-argument path have
+            // consumed it since B-2026-07-22-2; the variant-ctor path never did,
+            // so the temp kept its own cleanup for the field while the
+            // constructed payload took the same pointer and both freed it. The
+            // helper self-gates on the staged slot matching this exact field
+            // name AND object span, so every other argument no-ops.
+            self.consume_freshtemp_field_move(&arg.value);
             // Same consume-site ownership pair as the shared-enum branch
             // above: f-string payloads move in (disarm the staged acc
             // cleanup); owned String/Vec PARAM payloads deep-copy (the
@@ -6062,6 +6106,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
                 })?;
                 let val = self.compile_expr(&init.value)?;
+                // B-2026-08-31-34 — an aggregate-literal element/field
+                // initializer that READS A HEAP FIELD OFF A FRESH TEMP
+                // (`P { a: mkp(1).a }`, `[mkp(1).a]`, `(mkp(1).a, 1)`) is a
+                // MOVE, exactly as `let a = mkp(1).a;` is. The let / assign
+                // / return / fn-tail sites have consumed it since
+                // B-2026-07-22-2; the aggregate-literal sites never did, so
+                // the temp kept its cleanup for the field while the literal
+                // took the same pointer and both freed it. The helper
+                // self-gates on the staged slot matching this exact field
+                // name AND object span, so every other initializer no-ops.
+                self.consume_freshtemp_field_move(&init.value);
                 self.suppress_fstr_acc_if_moved_out(&init.value);
                 let val = self.maybe_defensive_copy_param_arg(&init.value, val);
                 // B-2026-08-30-56 — coerce to the CLASS the field declares
@@ -6110,6 +6165,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
             })?;
             let val = self.compile_expr(&init.value)?;
+            // B-2026-08-31-34 — an aggregate-literal element/field
+            // initializer that READS A HEAP FIELD OFF A FRESH TEMP
+            // (`P { a: mkp(1).a }`, `[mkp(1).a]`, `(mkp(1).a, 1)`) is a
+            // MOVE, exactly as `let a = mkp(1).a;` is. The let / assign
+            // / return / fn-tail sites have consumed it since
+            // B-2026-07-22-2; the aggregate-literal sites never did, so
+            // the temp kept its cleanup for the field while the literal
+            // took the same pointer and both freed it. The helper
+            // self-gates on the staged slot matching this exact field
+            // name AND object span, so every other initializer no-ops.
+            self.consume_freshtemp_field_move(&init.value);
             // F-string payload moves in — disarm the staged accumulator
             // cleanup so it isn't freed again at scope end.
             self.suppress_fstr_acc_if_moved_out(&init.value);

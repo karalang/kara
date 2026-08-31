@@ -96,6 +96,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             let v = self.compile_expr(elem_expr)?;
+            // B-2026-08-31-34 — a tuple ELEMENT that READS A HEAP FIELD OFF A
+            // FRESH TEMP (`(mkp(1).a, 1)`) is a MOVE, exactly as
+            // `let a = mkp(1).a;` is. The let / assign / return / fn-tail sites
+            // have consumed it since B-2026-07-22-2; the aggregate-literal
+            // sites never did, so the temp kept its own cleanup for the field
+            // while the tuple took the same pointer and both freed it. The
+            // helper self-gates on the staged slot matching this exact field
+            // name AND object span, so every other element expression no-ops.
+            self.consume_freshtemp_field_move(elem_expr);
             // Clear whatever survived: the element may not have been a tuple
             // literal at all (a call returning one, say), and a hint left
             // standing would be picked up by the NEXT element.

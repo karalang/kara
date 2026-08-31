@@ -123224,6 +123224,142 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-34 — A HEAP FIELD READ OFF A FRESH TEMP AND CONSUMED BY AN
+    /// OWNING AGGREGATE DOUBLE FREED ON BOTH COMPILED BACKENDS.
+    ///
+    /// `let a = mkp(1).a;` has transferred the field out of the temp since
+    /// B-2026-07-22-2: `consume_freshtemp_field_move` zeroes the accessed
+    /// field's heap in the staged temp slot, so the temp's struct drop frees
+    /// only the UNREAD remainder. That call was hooked at the let / assign /
+    /// return / fn-tail sites and at the ordinary call-argument path — and at
+    /// none of the AGGREGATE-LITERAL consume sites. So the same read consumed
+    /// by a struct literal, an array/`Vec` literal, a tuple, or a variant
+    /// constructor left the temp's cleanup armed while the aggregate took the
+    /// same pointer, and both freed it.
+    ///
+    /// SIX SITES, which is the whole fix: the three struct-literal initializer
+    /// loops, the enum struct-variant initializer loops, the array and
+    /// vec-prefix literal element loops, the tuple element loop, and the
+    /// variant-constructor argument loops.
+    ///
+    /// THE ROW UNDER-DESCRIBED THE AXIS. It recorded a struct literal; probing
+    /// found `Vec` literals, tuples, `Some(...)`, and a user enum's
+    /// tuple-variant constructor fail identically, while the ORDINARY call
+    /// argument `takes(mkp(1).a)` was already correct. The axis is the
+    /// destination's kind, not the struct literal.
+    ///
+    /// The interpreter is the oracle throughout — it gets every one of these
+    /// right, which is what makes the compiled column the wrong side.
+    #[test]
+    fn e2e_a_fresh_temp_field_read_consumed_by_an_aggregate_frees_once() {
+        const PRELUDE: &str = "fn payload(t: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-bytes-\");\n\
+             s.push_str(f\"{t}\");\n\
+             return s;\n\
+         }\n\
+         struct P { a: String, b: i64 }\n\
+         struct V { v: Vec[i64], b: i64 }\n\
+         struct W { a: String }\n\
+         struct TwoHeap { a: String, c: String }\n\
+         enum E { Ea { a: String }, En }\n\
+         enum T { Ta(String), Tn }\n\
+         fn mkp(n: i64) -> P { return P { a: payload(n), b: n }; }\n\
+         fn mk2(n: i64) -> TwoHeap { return TwoHeap { a: payload(n), c: payload(n + 10) }; }\n\
+         fn mkv(n: i64) -> V { let mut q: Vec[i64] = Vec.new(); q.push(n); return V { v: q, b: n }; }\n\
+         fn takes(s: String) -> i64 { return s.len(); }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "struct literal, `String` field",
+                "let x: P = P { a: mkp(1).a, b: 1 };\n println(x.a.len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "struct literal, `Vec` field",
+                "let w: V = V { v: mkv(1).v, b: 1 };\n println(w.v.len());",
+                "1\n47\nend\n",
+            ),
+            (
+                "single-field struct literal",
+                "let x: W = W { a: mkp(1).a };\n println(x.a.len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "`Vec` literal element",
+                "let v2: Vec[String] = [mkp(1).a];\n println(v2[0].len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "tuple element",
+                "let tp: (String, i64) = (mkp(1).a, 1);\n println(tp.0.len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "enum STRUCT-variant initializer",
+                "let e: E = E.Ea { a: mkp(1).a };\n\
+                 match e { E.Ea { a } => println(a.len()), E.En => {} }",
+                "47\n47\nend\n",
+            ),
+            (
+                "enum TUPLE-variant constructor argument",
+                "let e: T = T.Ta(mkp(1).a);\n\
+                 match e { T.Ta(s) => println(s.len()), T.Tn => {} }",
+                "47\n47\nend\n",
+            ),
+            (
+                "`Some(...)` constructor argument",
+                "let o: Option[String] = Some(mkp(1).a);\n\
+                 match o { Some(s) => println(s.len()), None => {} }",
+                "47\n47\nend\n",
+            ),
+            (
+                "LEAK-direction control: the temp's OTHER heap field is untouched",
+                "let x: W = W { a: mk2(1).a };\n println(x.a.len());",
+                "47\n47\nend\n",
+            ),
+            // CONTROLS — each was already correct and must stay so. Together
+            // they are what localizes the defect to the DESTINATION's kind.
+            (
+                "control: the read bound to a plain local first",
+                "let t: P = mkp(1);\n let x: P = P { a: t.a, b: 1 };\n println(x.a.len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "control: a DIRECT call as the field initializer",
+                "let x: P = P { a: payload(1), b: 1 };\n println(x.a.len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "control: the same read at a plain `let`",
+                "let a: String = mkp(1).a;\n println(a.len());",
+                "47\n47\nend\n",
+            ),
+            (
+                "control: the same read as an ORDINARY call argument",
+                "println(takes(mkp(1).a));",
+                "47\n47\nend\n",
+            ),
+        ];
+        for (label, stmts, want) in cases {
+            let src = format!(
+                "{PRELUDE}fn main() {{\n    {stmts}\n    let extra: String = payload(9);\n    \
+                 println(extra.len());\n    println(\"end\");\n}}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the temp and the aggregate must not both free the field"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-31-30 — THE `if let` / `let … else` / NESTED-`match` SPELLINGS
     /// OF A STRUCT DESTRUCTURE DOUBLE FREED A MOVED-OUT HEAP FIELD.
     ///
