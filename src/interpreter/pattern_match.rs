@@ -413,14 +413,12 @@ impl<'a> super::Interpreter<'a> {
         // `m8 dR8 dE dR8` where one payload body is due. ONE HOP only — a
         // deeper chain (`w.s.e`) has no such record and keeps today's
         // behaviour, matching codegen's `disarm_projection_enum_payload_bodies`.
-        if let ExprKind::FieldAccess { object, field } = &place.kind {
-            if let ExprKind::Identifier(src) = &object.kind {
+        if let ExprKind::FieldAccess { .. } = &place.kind {
+            if let Some((src, field_path)) = Self::projection_field_name_path(place) {
                 let Value::EnumVariant { enum_name, .. } = scrutinee else {
                     return;
                 };
                 let enum_name = enum_name.clone();
-                let src = src.clone();
-                let field = field.clone();
                 // `Option`/`Result` are deliberately NOT recorded here: the
                 // field walk routes them through `run_discarded_value_user_drops`
                 // ahead of the user-enum arm this mask guards, and nothing
@@ -431,7 +429,7 @@ impl<'a> super::Interpreter<'a> {
                     && self.match_disarms_payload_walk(&enum_name, arms)
                 {
                     self.moved_out_struct_field_payload_bodies
-                        .insert((src, field));
+                        .insert((src, field_path));
                 }
             }
             return;
@@ -448,6 +446,27 @@ impl<'a> super::Interpreter<'a> {
         if self.match_disarms_payload_walk(&enum_name, arms) {
             self.moved_out_enum_payload_bindings.insert(name);
         }
+    }
+
+    /// B-2026-08-29-36 — resolve a chain of struct FIELD accesses rooted at a
+    /// plain identifier into `(root, [field name per hop])`, the interpreter's
+    /// twin of codegen's `projection_field_index_path`.
+    ///
+    /// Names rather than indices because this backend walks a `Value::Struct`'s
+    /// field MAP, where codegen GEPs by position; the two are the same path
+    /// expressed in each backend's own currency. `None` for a non-identifier
+    /// root, which keeps the uncertain-⇒-silent rule the one-hop form had.
+    pub(crate) fn projection_field_name_path(expr: &Expr) -> Option<(String, Vec<String>)> {
+        let ExprKind::FieldAccess { object, field } = &expr.kind else {
+            return None;
+        };
+        let (root, mut path) = match &object.kind {
+            ExprKind::Identifier(root) => (root.clone(), Vec::new()),
+            ExprKind::FieldAccess { .. } => Self::projection_field_name_path(object)?,
+            _ => return None,
+        };
+        path.push(field.clone());
+        Some((root, path))
     }
 
     /// Single-pattern form of [`Self::disarm_moved_out_enum_payload`], for the
@@ -479,20 +498,18 @@ impl<'a> super::Interpreter<'a> {
                 && !scope.is_some_and(|b| me.let_form_only_reads_payload_through(en, pattern, b))
         };
         match &scrutinee_place.kind {
-            ExprKind::FieldAccess { object, field } => {
-                if let ExprKind::Identifier(src) = &object.kind {
+            ExprKind::FieldAccess { .. } => {
+                if let Some((src, field_path)) = Self::projection_field_name_path(scrutinee_place) {
                     let Value::EnumVariant { enum_name, .. } = scrutinee else {
                         return;
                     };
                     let enum_name = enum_name.clone();
-                    let src = src.clone();
-                    let field = field.clone();
                     if enum_name != "Option"
                         && enum_name != "Result"
                         && takes_payload(self, &enum_name)
                     {
                         self.moved_out_struct_field_payload_bodies
-                            .insert((src, field));
+                            .insert((src, field_path));
                     }
                 }
                 return;
@@ -670,7 +687,7 @@ impl<'a> super::Interpreter<'a> {
                         .is_some_and(|params| params.contains(n.as_str()))
                         && self
                             .moved_out_struct_field_payload_bodies
-                            .contains(&(n.clone(), field.clone()))
+                            .contains(&(n.clone(), vec![field.clone()]))
                 }
                 _ => false,
             },

@@ -57,6 +57,38 @@ pub(crate) struct FieldSkipTree {
 }
 
 impl FieldSkipTree {
+    /// B-2026-08-29-36 — build a tree from this level's whole-field mask plus
+    /// a set of PAYLOAD PATHS.
+    ///
+    /// A one-element path masks a payload at this level, which is exactly what
+    /// `payload_here` already meant. A LONGER one walks `nested`, creating one
+    /// level per intermediate field, so the mask lands on the walker of the
+    /// struct that actually owns the enum — the shape a two-hop projection
+    /// scrutinee (`match w.s.e { .. }`) needs. The emitter has consumed
+    /// `nested` since B-2026-08-28-23; until this row nothing ever built a
+    /// non-empty one, so a deeper chain silently kept the unmasked walk and
+    /// ran the payload body a second time on the slot the move-out zeroed.
+    pub(crate) fn from_payload_paths(
+        here: std::collections::BTreeSet<usize>,
+        paths: &std::collections::HashSet<Vec<usize>>,
+    ) -> Self {
+        let mut tree = FieldSkipTree {
+            here,
+            ..Default::default()
+        };
+        for path in paths {
+            let Some((last, prefix)) = path.split_last() else {
+                continue;
+            };
+            let mut cur = &mut tree;
+            for idx in prefix {
+                cur = cur.nested.entry(*idx).or_default();
+            }
+            cur.payload_here.insert(*last);
+        }
+        tree
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.here.is_empty() && self.payload_here.is_empty() && self.nested.is_empty()
     }

@@ -168,7 +168,13 @@ pub(crate) struct TypeDecls<'ctx> {
     /// not move, only its payload), so masking it through that map would lose
     /// `dE`. Accumulates across arms and is cleared per function alongside its
     /// sibling.
-    pub(crate) struct_moved_field_payload_bodies: HashMap<String, std::collections::HashSet<usize>>,
+    /// B-2026-08-29-36 — a PATH of field indices, not a single index. A
+    /// one-element path is the original one-hop case (`match s.e { .. }`);
+    /// a longer one records a deeper projection scrutinee (`match w.s.e`),
+    /// whose mask has to be threaded down through `FieldSkipTree::nested`
+    /// against each intermediate field's own walker.
+    pub(crate) struct_moved_field_payload_bodies:
+        HashMap<String, std::collections::HashSet<Vec<usize>>>,
     /// B-2026-08-31-30 — the NESTED sibling of `struct_moved_field_bodies`:
     /// outer field index -> the INNER field indices a nested struct sub-pattern
     /// moved out (`match q { Q { h: H { r, .. } } => … }`). The outer field

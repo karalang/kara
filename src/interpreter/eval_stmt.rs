@@ -1303,7 +1303,7 @@ impl<'a> super::Interpreter<'a> {
     /// consuming arm over `<name>.<field>` recorded. No-op when nothing was
     /// taken, which is every walk that is not downstream of such an arm.
     pub(super) fn seed_payload_masked_fields(&mut self, name: &str) {
-        let fields: std::collections::HashSet<String> = self
+        let fields: std::collections::HashSet<Vec<String>> = self
             .moved_out_struct_field_payload_bodies
             .iter()
             .filter(|(n, _)| n == name)
@@ -2478,7 +2478,13 @@ impl<'a> super::Interpreter<'a> {
                     }
                     // B-2026-08-29-33 — payload masked when a consuming arm
                     // over this field took it; the own body above is not.
-                    if !payload_masked.contains(field.as_str()) {
+                    // B-2026-08-29-36 — a ONE-element path masks here; a
+                    // longer one belongs to a deeper level and is re-seeded
+                    // for the nested walk below instead.
+                    if !payload_masked
+                        .iter()
+                        .any(|p| p.as_slice() == [field.clone()])
+                    {
                         self.run_enum_payload_user_drops_value(&field_value);
                     }
                 }
@@ -2513,6 +2519,20 @@ impl<'a> super::Interpreter<'a> {
             if self.program.drop_method_keys.contains_key(field_type) {
                 let field_type = field_type.clone();
                 self.run_user_drop_body_only(&field_type, field_value.clone());
+            }
+            // B-2026-08-29-36 — thread a DEEPER mask one level down. The mask
+            // is taken (not borrowed) at entry precisely so a nested walk
+            // cannot inherit this level's by name collision; a path longer
+            // than one hop is the case where it SHOULD travel, so re-seed it
+            // explicitly with the head stripped. Codegen's twin is
+            // `FieldSkipTree::nested`, consumed by the same recursion.
+            let sub: std::collections::HashSet<Vec<String>> = payload_masked
+                .iter()
+                .filter(|p| p.len() > 1 && p[0] == field)
+                .map(|p| p[1..].to_vec())
+                .collect();
+            if !sub.is_empty() {
+                self.pending_payload_masked_fields = Some(sub);
             }
             self.drop_user_drop_fields_of_value(&field_value);
         }

@@ -514,7 +514,11 @@ pub struct Interpreter<'a> {
     /// did not move — only its payload did. Masking through that set removes the
     /// field from the walked value entirely and loses that own body.
     /// Codegen's twin is `disarm_struct_field_enum_payload_bodies_at`.
-    pub(crate) moved_out_struct_field_payload_bodies: HashSet<(String, String)>,
+    /// B-2026-08-29-36 — the second element is a field PATH, not one field
+    /// name. One element is the original one-hop case (`match s.e`); more is a
+    /// deeper projection scrutinee (`match w.s.e`), whose mask has to travel
+    /// down the walker's own recursion to the struct that owns the enum.
+    pub(crate) moved_out_struct_field_payload_bodies: HashSet<(String, Vec<String>)>,
     /// B-2026-08-29-33, tuple leg — `(variable, element index)` pairs whose ENUM
     /// element's PAYLOAD bodies such an arm took, with the element's own body
     /// still owed. The tuple sibling of the set above; codegen's twin is
@@ -525,7 +529,10 @@ pub struct Interpreter<'a> {
     /// walk it must skip at its TOP level. Taken (not borrowed) at entry, so the
     /// mask applies to exactly one level and the walker's recursion into nested
     /// struct fields cannot inherit it by name collision.
-    pub(crate) pending_payload_masked_fields: Option<HashSet<String>>,
+    /// B-2026-08-29-36 — paths rather than names, and re-seeded (not merely
+    /// taken) before the walker recurses into a nested struct field, so a
+    /// two-hop mask reaches the level that owns the enum.
+    pub(crate) pending_payload_masked_fields: Option<HashSet<Vec<String>>>,
     /// B-2026-08-29-24 — the enum-PAYLOAD peer of the two sets above: `(enum
     /// binding, declared payload index)` slots whose body belongs to somebody
     /// else, today because a variant constructor moved a param VIEW into that

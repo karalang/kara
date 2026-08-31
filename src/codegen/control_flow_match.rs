@@ -8819,17 +8819,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // moved out of the binding), so its tree carries `here` and no nested
         // level; the tree shape exists for the caller-side argument sites,
         // which resolve a path.
-        let payload_skip: std::collections::BTreeSet<usize> = self
-            .type_decls
-            .struct_moved_field_payload_bodies
-            .get(var_name)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
-        let skip = super::synth_drop::FieldSkipTree {
-            here: skip.iter().copied().collect(),
-            payload_here: payload_skip,
-            nested: Default::default(),
-        };
+        let here_now: std::collections::BTreeSet<usize> = skip.iter().copied().collect();
+        let skip = self.field_skip_tree_for_var(var_name, here_now);
         self.suppress_struct_field_bodies_for_var(var_name);
         if let Some(bodies) =
             self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip)
@@ -9000,36 +8991,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name.as_str())
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
-        let payload_here: std::collections::BTreeSet<usize> = self
-            .type_decls
-            .struct_moved_field_payload_bodies
-            .get(var_name.as_str())
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
-        let nested: std::collections::BTreeMap<usize, super::synth_drop::FieldSkipTree> = self
-            .type_decls
-            .struct_moved_nested_field_bodies
-            .get(var_name.as_str())
-            .map(|m| {
-                m.iter()
-                    .map(|(outer, inner)| {
-                        (
-                            *outer,
-                            super::synth_drop::FieldSkipTree {
-                                here: inner.clone(),
-                                payload_here: Default::default(),
-                                nested: Default::default(),
-                            },
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let skip = super::synth_drop::FieldSkipTree {
-            here,
-            payload_here,
-            nested,
-        };
+        let skip = self.field_skip_tree_for_var(var_name.as_str(), here);
         match self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip) {
             Some(bodies) => {
                 // As on the payload sibling: no fallback registration when
@@ -9065,7 +9027,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn disarm_struct_field_enum_payload_bodies_at(
         &mut self,
         var_name: &str,
-        field_idx: usize,
+        field_path: &[usize],
     ) {
         let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
             return;
@@ -9087,7 +9049,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_moved_field_payload_bodies
             .entry(var_name.to_string())
             .or_default()
-            .insert(field_idx);
+            .insert(field_path.to_vec());
         // Both masks are re-read from their maps so repeated arms accumulate
         // and the two kinds compose — a struct can have one field moved
         // wholesale and another's payload taken.
@@ -9097,17 +9059,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name)
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
-        let payload_here: std::collections::BTreeSet<usize> = self
-            .type_decls
-            .struct_moved_field_payload_bodies
-            .get(var_name)
-            .map(|s| s.iter().copied().collect())
-            .unwrap_or_default();
-        let skip = super::synth_drop::FieldSkipTree {
-            here,
-            payload_here,
-            nested: Default::default(),
-        };
+        let skip = self.field_skip_tree_for_var(var_name, here);
         // IN-PLACE swap, not retract-and-re-register: this runs inside a match
         // ARM, whose cleanup frame is inner to the owner's, so a re-register
         // would move the owner's walk into the arm and drain it there. See
@@ -9235,26 +9187,90 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`w.s.e`) would need the mask threaded through `FieldSkipTree::nested`
     /// against the intermediate field's walker, and it keeps today's behaviour
     /// until something measures it.
+    /// The COMPLETE field-skip tree for `var_name`, given this level's
+    /// whole-field mask.
+    ///
+    /// Three rows now feed one tree and two of them feed `nested` from
+    /// opposite directions: B-2026-08-29-36's deep projection PATHS mask a
+    /// payload one or more levels down (`match w.s.e`), and B-2026-08-31-30's
+    /// nested struct SUB-PATTERNS mask whole inner fields
+    /// (`match q { Q { h: H { r, .. } } => … }`). A variable can carry both,
+    /// and every site that rebuilds its masked walker replaces the action
+    /// wholesale — so a site that assembles only its own row's half silently
+    /// drops the other's, depending on which arm compiled last. One builder,
+    /// used by all three sites, is what makes that unrepresentable.
+    fn field_skip_tree_for_var(
+        &self,
+        var_name: &str,
+        here: std::collections::BTreeSet<usize>,
+    ) -> super::synth_drop::FieldSkipTree {
+        let payload_paths = self
+            .type_decls
+            .struct_moved_field_payload_bodies
+            .get(var_name)
+            .cloned()
+            .unwrap_or_default();
+        let mut skip = super::synth_drop::FieldSkipTree::from_payload_paths(here, &payload_paths);
+        if let Some(m) = self
+            .type_decls
+            .struct_moved_nested_field_bodies
+            .get(var_name)
+        {
+            for (outer, inner) in m {
+                skip.nested
+                    .entry(*outer)
+                    .or_default()
+                    .here
+                    .extend(inner.iter().copied());
+            }
+        }
+        skip
+    }
+
+    /// B-2026-08-29-36 — resolve a chain of struct FIELD accesses rooted at a
+    /// plain identifier into `(root, [field index per hop])`.
+    ///
+    /// One hop is the shape B-2026-08-29-33 handled; anything deeper had no
+    /// resolution at all, which is why `match w.s.e { .. }` kept the unmasked
+    /// walk. `None` for any root that is not an identifier, and for any hop
+    /// whose owning type or field name cannot be resolved — the same
+    /// uncertain-⇒-silent rule the one-hop form applied.
+    fn projection_field_index_path(&self, expr: &Expr) -> Option<(String, Vec<usize>)> {
+        let ExprKind::FieldAccess { object, field } = &expr.kind else {
+            return None;
+        };
+        let (root, mut path) = match &object.kind {
+            ExprKind::Identifier(root) => (root.clone(), Vec::new()),
+            ExprKind::FieldAccess { .. } => self.projection_field_index_path(object)?,
+            _ => return None,
+        };
+        // The owning type of THIS hop: the root's recorded type at depth 1,
+        // and the resolved chain type deeper in.
+        let obj_ty = if path.is_empty() {
+            self.var_types.var_type_names.get(root.as_str())?.clone()
+        } else {
+            self.place_chain_type_name(object)?
+        };
+        let idx = self
+            .type_decls
+            .struct_field_names
+            .get(obj_ty.as_str())?
+            .iter()
+            .position(|n| n == field)?;
+        path.push(idx);
+        Some((root, path))
+    }
+
     fn disarm_projection_enum_payload_bodies(&mut self, scrutinee: &Expr) {
         match &scrutinee.kind {
-            ExprKind::FieldAccess { object, field } => {
-                let ExprKind::Identifier(root) = &object.kind else {
+            ExprKind::FieldAccess { .. } => {
+                let Some((root, path)) = self.projection_field_index_path(scrutinee) else {
                     return;
                 };
-                let root = root.clone();
-                let Some(struct_name) = self.var_types.var_type_names.get(root.as_str()).cloned()
-                else {
+                if path.is_empty() {
                     return;
-                };
-                let Some(fidx) = self
-                    .type_decls
-                    .struct_field_names
-                    .get(struct_name.as_str())
-                    .and_then(|names| names.iter().position(|n| n == field))
-                else {
-                    return;
-                };
-                self.disarm_struct_field_enum_payload_bodies_at(&root, fidx);
+                }
+                self.disarm_struct_field_enum_payload_bodies_at(&root, &path);
             }
             ExprKind::TupleIndex { object, index } => {
                 let ExprKind::Identifier(root) = &object.kind else {

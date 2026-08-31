@@ -50076,6 +50076,170 @@ fn test_no_else_if_arm_owns_the_value_it_mints() {
 /// observable a body-less struct's memory bug has. If the compiled fix ever
 /// starts double-owning, this file is where the divergence shows up as a
 /// doubled `dD`.
+/// B-2026-08-29-36 — interpreter twin of
+/// `codegen::e2e_deep_projection_scrutinee_runs_one_payload_body`, carrying the
+/// SAME 14 shapes in the same order.
+///
+/// A projection scrutinee DEEPER than one hop
+/// (`match w.s.e { .. }`) whose arm materializes the payload.
+///
+/// B-2026-08-29-33 taught the one-hop form to stop the owner re-running a
+/// payload body the arm already ran, and keyed its mask on a single field
+/// index. A deeper chain resolved to nothing, so the owner's walk stayed
+/// unmasked and fired a SECOND time — on the interpreter against the live
+/// object (`dR8`), on both compiled backends against the slot the move-out
+/// cap-zeroed (`dR0`). One defect, two symptoms: an extra body everywhere
+/// and a run-vs-build divergence in what that body printed.
+///
+/// The mask is now a PATH. `FieldSkipTree::nested` has been consumed by
+/// the emitter since B-2026-08-28-23; what was missing was anything that
+/// built a non-empty one.
+///
+/// Every row here must read exactly as its one-hop analogue does.
+#[test]
+fn test_deep_projection_scrutinee_runs_one_payload_body() {
+    let hdr = "struct R { id: i64 }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               enum E { A(R), B }\n\
+               impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+               struct S { e: E }\n\
+               struct W { s: S }\n\
+               struct X { w: W }\n\
+               struct Sd { e: E }\n\
+               impl Drop for Sd { fn drop(mut ref self) { println(\"dSd\") } }\n\
+               struct Wd { s: Sd }\n\
+               struct S2 { n: i64, e: E }\n\
+               struct W2 { k: R, s: S2 }\n\
+               struct Coll { e: E, s: S }\n\
+               struct Two { a: S, b: S }\n";
+    for (label, body, want) in [
+        (
+            "control: one hop",
+            "let s = S { e: E.A(R { id: 8 }) };\n\
+             match s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m8\ndR8\ndE\n",
+        ),
+        (
+            "two hops — the row",
+            "let w = W { s: S { e: E.A(R { id: 8 }) } };\n\
+             match w.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m8\ndR8\ndE\n",
+        ),
+        (
+            "three hops",
+            "let x = X { w: W { s: S { e: E.A(R { id: 8 }) } } };\n\
+             match x.w.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m8\ndR8\ndE\n",
+        ),
+        (
+            "two hops, intermediate struct has its OWN Drop",
+            "let w = Wd { s: Sd { e: E.A(R { id: 8 }) } };\n\
+             match w.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m8\ndR8\ndSd\ndE\n",
+        ),
+        (
+            "two hops, sibling fields still walked",
+            "let w = W2 { k: R { id: 3 }, s: S2 { n: 1, e: E.A(R { id: 8 }) } };\n\
+             match w.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m8\ndR8\ndE\ndR3\n",
+        ),
+        (
+            "two hops, `if let` spelling",
+            "let w = W { s: S { e: E.A(R { id: 8 }) } };\n\
+             if let E.A(r) = w.s.e { let m = r; println(f\"m{m.id}\") }",
+            "m8\ndR8\ndE\n",
+        ),
+        (
+            "two hops, a statement follows",
+            "let w = W { s: S { e: E.A(R { id: 8 }) } };\n\
+             match w.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }\n\
+             println(\"after\");",
+            "m8\ndR8\ndE\nafter\n",
+        ),
+        // CONTROLS the mask must keep DECLINING. A non-consuming arm did
+        // not take the payload, so the owner still owes that body; the
+        // `B` arm holds no payload at all.
+        (
+            "control: two hops, arm does NOT consume",
+            "let w = W { s: S { e: E.A(R { id: 8 }) } };\n\
+             match w.s.e { E.A(r) => { println(f\"n{r.id}\") } E.B => {} }",
+            "n8\ndE\ndR8\n",
+        ),
+        (
+            "control: two hops, payload-less arm taken",
+            "let w = W { s: S { e: E.B } };\n\
+             match w.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => { println(\"bee\") } }",
+            "bee\ndE\n",
+        ),
+        // COMPOSITION. A path mask must land on the level that owns the
+        // enum and nowhere else — these are the rows that fail if the
+        // nesting is built or consumed at the wrong depth.
+        (
+            "name collision: masking the INNER `e` leaves the outer's payload",
+            "let c = Coll { e: E.A(R { id: 1 }), s: S { e: E.A(R { id: 8 }) } };\n\
+             match c.s.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m8\ndR8\ndE\ndE\ndR1\n",
+        ),
+        (
+            "name collision: masking the OUTER `e` leaves the inner's payload",
+            "let c = Coll { e: E.A(R { id: 1 }), s: S { e: E.A(R { id: 8 }) } };\n\
+             match c.e { E.A(r) => { let m = r; println(f\"m{m.id}\") } E.B => {} }",
+            "m1\ndR1\ndE\ndR8\ndE\n",
+        ),
+        (
+            "compose: a one-hop and a two-hop mask on the same variable",
+            "let c = Coll { e: E.A(R { id: 1 }), s: S { e: E.A(R { id: 8 }) } };\n\
+             match c.e { E.A(r) => { let m = r; println(f\"o{m.id}\") } E.B => {} }\n\
+             match c.s.e { E.A(r) => { let m = r; println(f\"i{m.id}\") } E.B => {} }",
+            "o1\ndR1\ni8\ndR8\ndE\ndE\n",
+        ),
+        (
+            "compose: both sibling subtrees masked",
+            "let t = Two { a: S { e: E.A(R { id: 1 }) }, b: S { e: E.A(R { id: 2 }) } };\n\
+             match t.a.e { E.A(r) => { let m = r; println(f\"a{m.id}\") } E.B => {} }\n\
+             match t.b.e { E.A(r) => { let m = r; println(f\"b{m.id}\") } E.B => {} }",
+            "a1\ndR1\nb2\ndR2\ndE\ndE\n",
+        ),
+        (
+            "compose: only ONE sibling subtree masked",
+            "let t = Two { a: S { e: E.A(R { id: 1 }) }, b: S { e: E.A(R { id: 2 }) } };\n\
+             match t.a.e { E.A(r) => { let m = r; println(f\"a{m.id}\") } E.B => {} }",
+            "a1\ndR1\ndE\ndR2\ndE\n",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+    // PINNED AT A KNOWN GAP, not asserted as correct. A `self`-ROOTED
+    // projection scrutinee is not masked at ANY depth — the resolver needs
+    // an identifier root and `self` is its own expression kind — so the
+    // payload body runs twice. Both backends agree, so it is an agreed gap
+    // rather than a divergence, and it is a different axis from this row:
+    // the ONE-hop `self.e` doubles identically, which is what shows this is
+    // about the root kind and not the depth this row fixed. Filed
+    // separately.
+    let selfrooted = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct S { e: E }\n\
+         struct H1 { e: E }\n\
+         impl H1 { fn take(mut ref self) -> i64 { match self.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } }\n\
+         struct H2 { s: S }\n\
+         impl H2 { fn take(mut ref self) -> i64 { match self.s.e { E.A(r) => { let m = r; return m.id; } E.B => { return 0; } } } }\n\
+         fn main() {\n\
+         \x20   let mut a = H1 { e: E.A(R { id: 1 }) };\n\
+         \x20   println(a.take());\n\
+         \x20   let mut b = H2 { s: S { e: E.A(R { id: 2 }) } };\n\
+         \x20   println(b.take());\n\
+         }\n";
+    assert_eq!(
+        run(selfrooted),
+        "dR1\n1\ndE\ndR1\ndR2\n2\ndE\ndR2\n",
+        "[pinned GAP: `self`-rooted projection, one hop and two]"
+    );
+}
+
 #[test]
 fn test_discarded_branch_of_body_less_heap_literals_keeps_one_owner() {
     let hdr = "struct P { a: String, b: i64 }\n\
