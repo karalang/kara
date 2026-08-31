@@ -4325,14 +4325,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(vec_llvm_ty, val_ptr, "vecfn.val")
             .unwrap();
-        // This function takes the value BY POINTER and its callers pass
-        // whatever they have: an alloca (correctly aligned) or a pointer into
-        // a malloc'd element buffer (16-byte aligned at best). It cannot tell
-        // them apart, so it must load at the alignment the weaker caller can
-        // guarantee — otherwise `vmovaps` faults on a `Vec[Vector[i64, 4]]`
-        // element, which is where B-2026-08-31-24's last surviving crash came
-        // from after every direct element access had been relaxed.
-        self.relax_heap_elem_align(loaded.as_instruction_value(), vec_llvm_ty);
         if let BasicValueEnum::VectorValue(vv) = loaded {
             // A declined lane kind leaves `Vector(` unterminated, so close the
             // parenthesis either way rather than emitting a half-rendered part.

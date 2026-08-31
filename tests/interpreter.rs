@@ -32931,8 +32931,7 @@ bool true
 /// The bug was an ALIGNMENT one, invisible to this backend: the interpreter has no
 /// `vmovaps` and no malloc'd element buffer to under-align, so it rendered all of
 /// this correctly throughout. It is here as the oracle the compiled side is
-/// asserted against, and because the fixture doubles as the alignment sweep's
-/// source — a shape added there to widen the IR check widens this too.
+/// asserted against — a shape added to one fixture widens the other.
 ///
 /// Twin of `tests/codegen.rs`'s `e2e_vec_of_vector_operations_round_trip`, pinned
 /// to the same string.

@@ -3866,64 +3866,6 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// B-2026-08-31-24 — the alignment a load or store of `ty` must carry when
-    /// it goes through a pointer into a HEAP BUFFER.
-    ///
-    /// `karac_alloc_or_panic` / `karac_realloc_or_panic` inherit `malloc`'s
-    /// guarantee, which is 16 bytes. An LLVM VECTOR type wants more — a
-    /// `<4 x i64>` wants 32 — and LLVM gives every load and store the type's
-    /// natural alignment unless told otherwise, which x86-64 lowers to
-    /// `vmovaps` / `vmovaps`. Those FAULT on a merely-16-aligned address, so
-    /// every access to a `Vec[Vector[T, N]]` element buffer was a latent
-    /// SIGSEGV whose firing depended on where `malloc` happened to place the
-    /// chunk.
-    ///
-    /// Returns `Some` only for a vector type, so every other element keeps
-    /// LLVM's choice and the common path is byte-identical. The value is the
-    /// LANE's alignment, which is all the address is guaranteed to have and is
-    /// the same assumption `try_compile_vector_adjacent_load`'s `vsimd.load`
-    /// already makes for the identical situation one call away.
-    pub(super) fn heap_elem_align(&self, ty: BasicTypeEnum<'ctx>) -> Option<u32> {
-        Self::llvm_type_contains_vector(ty).then_some(8)
-    }
-
-    /// Does `ty` contain an LLVM VECTOR anywhere inside it?
-    ///
-    /// The predicate has to be STRUCTURAL, not a `matches!` on the type itself:
-    /// an aggregate inherits its most-aligned member, so `[2 x <4 x i64>]` and
-    /// a `struct { <4 x i64>, i64 }` want 32-byte alignment just as much as the
-    /// bare vector does. A first cut that only recognized `VectorType` fixed
-    /// every direct `Vec[Vector[..]]` access and left
-    /// `Vec[Array[Vector[i64, 4], 2]]` and `Vec[Holder]` still faulting on
-    /// `vmovaps` right after the `karac_realloc_or_panic` that produced the
-    /// buffer (B-2026-08-31-24).
-    fn llvm_type_contains_vector(ty: BasicTypeEnum<'ctx>) -> bool {
-        match ty {
-            BasicTypeEnum::VectorType(_) | BasicTypeEnum::ScalableVectorType(_) => true,
-            BasicTypeEnum::ArrayType(at) => Self::llvm_type_contains_vector(at.get_element_type()),
-            BasicTypeEnum::StructType(st) => (0..st.count_fields())
-                .filter_map(|i| st.get_field_type_at_index(i))
-                .any(Self::llvm_type_contains_vector),
-            _ => false,
-        }
-    }
-
-    /// Apply [`Self::heap_elem_align`] to a just-emitted load or store.
-    /// A no-op for every non-vector element type, so call sites can invoke it
-    /// unconditionally rather than each re-deriving the predicate — which is
-    /// the point: the sites are spread across `collections.rs`,
-    /// `vec_method.rs` and `control_flow_for.rs`, and a per-site test would
-    /// have to be written for each one to catch a missed one.
-    pub(super) fn relax_heap_elem_align(
-        &self,
-        inst: Option<inkwell::values::InstructionValue<'ctx>>,
-        ty: BasicTypeEnum<'ctx>,
-    ) {
-        if let (Some(inst), Some(align)) = (inst, self.heap_elem_align(ty)) {
-            let _ = inst.set_alignment(align);
-        }
-    }
-
     /// Compute the i64-word count of an LLVM aggregate type. Used by
     /// `payload_word_count_for_type_expr` for user structs whose source
     /// `TypeExpr` isn't directly available (we only kept the resolved
