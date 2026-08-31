@@ -23,6 +23,8 @@ use super::env::{FunctionSig, ImplInfo};
 use super::inference::substitute_type_params;
 use super::types::{method_callee_type_name, type_display, SubstValue, Type};
 use super::TypeErrorKind;
+use crate::typechecker::type_to_concrete_or_param_name;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 impl<'a> super::TypeChecker<'a> {
@@ -520,6 +522,32 @@ impl<'a> super::TypeChecker<'a> {
                             .collect()
                     })
                     .unwrap_or_default();
+                // B-2026-08-30-43 — hand the same binding to the interpreter.
+                // It is computed here anyway; the tree-walk had no way to see
+                // it, because an impl binds `T` from the RECEIVER's type args
+                // and only free-function calls ever pushed a substitution
+                // frame. Keyed by `(span, method)` like `method_impl_dispatch`
+                // above, since `MethodCall.span == receiver.span` aliases a
+                // chain. Entries that do not name a concrete type are dropped
+                // rather than recorded as themselves: `resolve_type_param`
+                // treats any hit as an answer, so recording `T -> "T"` would
+                // shadow an OUTER frame that does know what `T` is, turning a
+                // resolvable nested call into an unresolvable one.
+                if !recv_subs.is_empty() {
+                    let frame: FxHashMap<String, String> = recv_subs
+                        .iter()
+                        .filter_map(|(name, sv)| match sv {
+                            SubstValue::Type(t) => type_to_concrete_or_param_name(t)
+                                .filter(|resolved| resolved != name)
+                                .map(|resolved| (name.clone(), resolved)),
+                            _ => None,
+                        })
+                        .collect();
+                    if !frame.is_empty() {
+                        self.method_impl_type_subs
+                            .insert((SpanKey::from_span(span), method.to_string()), frame);
+                    }
+                }
                 // Resolve `Self` in the signature to the concrete receiver
                 // type. `recv_subs` only binds the impl's own generic params
                 // (e.g. `T`); a method declared `-> Self` (or taking

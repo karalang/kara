@@ -49414,3 +49414,111 @@ fn interp_unsigned_value_inside_a_generic_body_reads_unsigned() {
         assert_eq!(run(src), *want, "{label}");
     }
 }
+
+#[test]
+fn interp_generic_impl_method_resolves_its_own_type_param() {
+    // B-2026-08-30-43 — only FREE-FUNCTION calls ever pushed a generic
+    // substitution frame (`push_type_subs_for_call`, one call site). A method
+    // on a generic `impl` binds `T` from the RECEIVER's type args, not from the
+    // call's arguments, so nothing reached `call_type_subs` and
+    // `resolve_type_param("T")` answered `None` for the whole body. Everything
+    // the tree-walk recovers through that stack was skipped inside such a body.
+    //
+    // The typechecker already computed the binding (`recv_subs`, used to solve
+    // the signature); it is now also recorded under `(span, method)` — the same
+    // key `method_impl_dispatch` uses, because `MethodCall.span ==
+    // receiver.span` aliases a chain — and pushed around the body.
+    //
+    // Codegen monomorphizes, so its bodies are compiled at the concrete type
+    // and it is the oracle for the FLOAT cases below: each expected value is
+    // what `karac build` already printed.
+    //
+    // `via-generic-caller` is the control that matters most. It was ALREADY
+    // correct before this fix, because the enclosing free-function call pushes
+    // a frame binding `T`, which the impl body then resolves through. It is
+    // here to show the new frame COMPOSES with that one rather than shadowing
+    // it — a fix that pushed an unresolved `T -> "T"` would break this case
+    // while fixing the others, which is why the typechecker side drops any
+    // entry that does not name a concrete type.
+    //
+    // `f64-combine` is the width control: f64 needs no narrowing, so it was
+    // green before and stays green. `i64-field` and `string-field` are the
+    // non-narrow, non-unsigned leaves.
+    //
+    // The u64 cases assert the UNSIGNED reading, which is what the interpreter
+    // now prints and what the language defines. The compiled backends still
+    // print -1 for them — that is B-2026-08-31-12's remaining half, filed
+    // separately, and it is why those cases have no codegen twin here.
+    let hdr = "struct Pair[T] { x: T, y: T }\n\
+               impl[T: Add + Mul] Pair[T] {\n\
+                   fn combine(ref self) -> T { self.x * self.y + self.x }\n\
+                   fn twice(ref self) -> T { self.combine() + self.combine() }\n\
+               }\n\
+               struct Box[T] { v: T }\n\
+               impl[T] Box[T] {\n\
+                   fn get(ref self) -> String { f\"{self.v}\" }\n\
+                   fn chained(ref self) -> String { self.get() }\n\
+               }\n\
+               struct Two[A, B] { a: A, b: B }\n\
+               impl[A, B] Two[A, B] { fn show(ref self) -> String { f\"{self.a}/{self.b}\" } }\n\
+               fn outer[T](b: Box[T]) -> String { b.get() }\n";
+    let big = "18446744073709551615";
+    let cases: &[(&str, String, String)] = &[
+        (
+            "f32-combine",
+            format!(
+                "{hdr}fn main() {{ let a: f32 = 0.1; let b: f32 = 0.3; let p = Pair[f32] {{ x: a, y: b }}; println(p.combine()); }}"
+            ),
+            "0.12999999523162842\n".to_string(),
+        ),
+        (
+            "f32-method-calls-method",
+            format!(
+                "{hdr}fn main() {{ let a: f32 = 0.1; let b: f32 = 0.3; let p = Pair[f32] {{ x: a, y: b }}; println(p.twice()); }}"
+            ),
+            "0.25999999046325684\n".to_string(),
+        ),
+        (
+            "u64-field",
+            format!("{hdr}fn main() {{ let n: u64 = {big}u64; let bx = Box[u64] {{ v: n }}; println(bx.get()); }}"),
+            format!("{big}\n"),
+        ),
+        (
+            "u64-field-chained",
+            format!("{hdr}fn main() {{ let n: u64 = {big}u64; let bx = Box[u64] {{ v: n }}; println(bx.chained()); }}"),
+            format!("{big}\n"),
+        ),
+        (
+            "two-param-impl",
+            format!(
+                "{hdr}fn main() {{ let n: u64 = {big}u64; let t = Two[u64, i64] {{ a: n, b: -5 }}; println(t.show()); }}"
+            ),
+            format!("{big}/-5\n"),
+        ),
+        (
+            "control-via-generic-caller",
+            format!("{hdr}fn main() {{ let n: u64 = {big}u64; println(outer(Box[u64] {{ v: n }})); }}"),
+            format!("{big}\n"),
+        ),
+        (
+            "control-f64-combine",
+            format!(
+                "{hdr}fn main() {{ let a: f64 = 0.1; let b: f64 = 0.3; let p = Pair[f64] {{ x: a, y: b }}; println(p.combine()); }}"
+            ),
+            "0.13\n".to_string(),
+        ),
+        (
+            "control-i64-field",
+            format!("{hdr}fn main() {{ let bi = Box[i64] {{ v: -7 }}; println(bi.get()); }}"),
+            "-7\n".to_string(),
+        ),
+        (
+            "control-string-field",
+            format!("{hdr}fn main() {{ let bs = Box[String] {{ v: \"hi\" }}; println(bs.get()); }}"),
+            "hi\n".to_string(),
+        ),
+    ];
+    for (label, src, want) in cases {
+        assert_eq!(run(src), *want, "{label}");
+    }
+}

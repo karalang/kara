@@ -514,6 +514,45 @@ impl<'a> super::Interpreter<'a> {
                     }
                     None => false,
                 };
+                // B-2026-08-30-43 — push the impl's own generic substitution
+                // for the duration of the body. Only free-function calls had a
+                // frame (`push_type_subs_for_call`, one call site), so inside
+                // `impl[T] Box[T] { fn get(ref self) { … } }` every lookup that
+                // goes through `resolve_type_param` answered `None`: the
+                // narrow-float rounding kept full f64 bits (`combine()` at f32
+                // read 0.13000000312924387 against both compiled backends'
+                // 0.12999999523162842) and the unsigned reading was skipped.
+                //
+                // Resolved against the current top frame first, exactly as
+                // `push_type_subs_for_call` does, so a generic impl method
+                // called from inside another generic still lands on a concrete
+                // name rather than the caller's parameter letter.
+                let pushed_impl_subs = match self.typecheck_result.method_impl_type_subs.get(&(
+                    crate::resolver::SpanKey::from_span(span),
+                    method.to_string(),
+                )) {
+                    Some(frame) => {
+                        let mut resolved: std::collections::HashMap<String, String> =
+                            std::collections::HashMap::new();
+                        for (name, target) in frame {
+                            let mut current = target.clone();
+                            for _ in 0..16 {
+                                let next = self
+                                    .type_subs_stack
+                                    .last()
+                                    .and_then(|f| f.get(&current).cloned());
+                                match next {
+                                    Some(n) if n != current => current = n,
+                                    _ => break,
+                                }
+                            }
+                            resolved.insert(name.clone(), current);
+                        }
+                        self.type_subs_stack.push(resolved);
+                        true
+                    }
+                    None => false,
+                };
                 // B-2026-08-01-13: expose the method's OWNED param names to
                 // the body's param-scrutinee / destructure gates, exactly as
                 // `eval_call` does for free fns — codegen's
@@ -648,6 +687,9 @@ impl<'a> super::Interpreter<'a> {
                 self.owned_param_frame_is_method.pop();
                 if pushed_self_mode {
                     self.self_param_stack.pop();
+                }
+                if pushed_impl_subs {
+                    self.type_subs_stack.pop();
                 }
 
                 if contract_fault.is_none() {

@@ -1499,6 +1499,22 @@ pub struct TypeCheckResult {
     /// them (`impl_args_match` compares the args vector) — the only thing
     /// missing was a way to NAME the winner for the runtimes.
     pub method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
+    /// For every method call dispatched to a user `impl` with its own generic
+    /// params, the impl's `T -> concrete` binding at that call site. Keyed by
+    /// `(span, method)` for the same reason `method_impl_dispatch` above is:
+    /// `MethodCall.span == receiver.span`, so a chained `a.inner().outer()`
+    /// would let the outer link clobber the inner one's entry.
+    ///
+    /// The interpreter pushes this as a `type_subs_stack` frame around the
+    /// method body. Only FREE-FUNCTION calls had such a frame before
+    /// (`push_type_subs_for_call`, one call site), because an impl binds `T`
+    /// from the RECEIVER's type args rather than from the call's arguments, so
+    /// nothing reached `call_type_subs` and `resolve_type_param("T")` answered
+    /// `None` for the whole body. Everything the tree-walk recovers through
+    /// that stack was therefore skipped inside a generic impl method — the
+    /// narrow-float rounding measured by B-2026-08-30-45's sibling
+    /// B-2026-08-30-43, and the unsigned-integer reading of B-2026-08-31-12.
+    pub method_impl_type_subs: FxHashMap<(SpanKey, String), FxHashMap<String, String>>,
     /// Call sites of a DIRECT iterator terminal on an iterable collection
     /// receiver (`v.sum()` / `.product()` / `.max()` / `.min()` with no
     /// `.iter()` hop), which `src/lowering.rs` rewrites into the canonical
@@ -2219,6 +2235,8 @@ pub struct TypeChecker<'a> {
     pub(super) method_callee_types: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_impl_dispatch`.
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
+    /// Working half of `TypeCheckResult::method_impl_type_subs`.
+    pub(super) method_impl_type_subs: FxHashMap<(SpanKey, String), FxHashMap<String, String>>,
     /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
     /// not a unique identity, computed once from the program AST via the same
     /// shared helper codegen and the interpreter use. Keyed by impl-target span.
@@ -2629,6 +2647,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: FxHashSet::default(),
             method_callee_types: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
+            method_impl_type_subs: FxHashMap::default(),
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
             checked_container_hashers: FxHashSet::default(),
             direct_iter_terminals: FxHashSet::default(),
@@ -2923,6 +2942,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
             method_impl_dispatch: self.method_impl_dispatch,
+            method_impl_type_subs: self.method_impl_type_subs,
             direct_iter_terminals: self.direct_iter_terminals,
             method_typeparam_receiver: self.method_typeparam_receiver,
             method_typeparam_trait_key: self.method_typeparam_trait_key,
