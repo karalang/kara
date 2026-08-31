@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 101 | 0 |
 | soundness | 93 | 4 |
 | perf | 87 | 1 |
-| crash | 66 | 1 |
+| crash | 67 | 1 |
 | other | 65 | 1 |
 | use-after-free | 26 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1311 | 38 |
+| codegen | 1312 | 38 |
 | interp | 295 | 23 |
 | typecheck | 283 | 0 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1913 surfaced · 47 open · 1836 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1914 surfaced · 47 open · 1837 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (47)
 
@@ -152,7 +152,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1913 surfaced
 | B-2026-08-30-21 | 2026-08-30 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolve field 'id' on this receiver`) and the result binding's own `Drop` body is silently LOST -- both vanish the moment the struct gains one heap field, and the free-function spelling is correct throughout | none |
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
-| B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
 | B-2026-08-30-55 | 2026-08-30 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter (neither the enum's own nor its payload's) against two compiled, and a NAMED one runs one too MANY. The free-fn twin and the struct-param twin are both correct, which localizes it to the intersection B-2026-08-28-70 did not reach | — |
@@ -177,6 +176,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1913 surfaced
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-41 | 2026-08-31 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[i64] { let mut v = Vec.new(); ...; return v.as_slice() }`, and the compiled program then READS FREED MEMORY while the interpreter prints the live values, so it also reads as a run-vs-build divergence | — |
+| B-2026-08-31-42 | 2026-08-31 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a param or a return; the wasm ABI decomposes the struct into fields, so the `bfloat` field is promoted exactly as a bare param was, and B-2026-08-30-42's signature rewrite does not reach it. `ref self` builds (a pointer is not decomposed) and is a real workaround | — |
 
 ### Relocated (2)
 
@@ -209,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1913 surfaced
 
 </details>
 
-### Fixed (1836)
+### Fixed (1837)
 
-<details><summary>1836 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1837 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2020,6 +2020,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1913 surfaced
 | B-2026-08-30-39 | codegen | medium | `dbg` OF A `Vector`, AND ANY CONTAINER-NESTED `Vector` IN AN F-STRING, PANIC THE COMPILER -- `emit_display_fn_for_type: type_name 'Vector_u64_2' not… | 57327e8 |
 | B-2026-08-30-40 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a ty… | d64f6e4 |
 | B-2026-08-30-41 | interp+codegen | medium | A `T: PartialOrd` BOUND MAKES `a < b` UNRUNNABLE ON BOTH BACKENDS, FOR EVERY TYPE — the tree-walk aborts with "method 'partial_cmp' not found" and `k… | dc6f56f |
+| B-2026-08-30-42 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process ab… | cd4e081 |
 | B-2026-08-30-43 | interp | medium | A METHOD ON A GENERIC `impl` COMPUTES AT f64 UNDER `--interp` AT EVERY NARROW FLOAT WIDTH — `impl[T: Add + Mul] Pair[T] { fn combine(...) -> T }` at… | 8245dc9 |
 | B-2026-08-30-44 | interp | medium | AN UNSIGNED VALUE PRINTS AS `-1` FROM INSIDE A GENERIC BODY UNDER `--interp` — `fn show[T](x: T) -> String { f"{x}" }` renders `u64::MAX` and `u128::… | d1ec5de |
 | B-2026-08-30-45 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}"… | da21408 |
