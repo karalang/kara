@@ -939,6 +939,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source slot so the scrutinee's struct drop skips the buffer
                 // the new binding now owns.
                 self.suppress_destructured_struct_pattern_cleanup(scrutinee, &arm.pattern);
+                // B-2026-08-31-26 — the BODIES half of #16. The line above
+                // zeroes the moved-out fields' memory in the source; without
+                // this the source's bodies walk still visited them and ran a
+                // user `Drop` body a second time on the cleared husk.
+                self.disarm_arm_destructured_struct_field_bodies(scrutinee, &arm.pattern);
                 // B-2026-07-21-7: ref-chain struct clone — the expr-based
                 // suppression above bails on the borrowed root, so fire the
                 // same per-field cap-zeroing against the CLONE slot instead
@@ -8803,6 +8808,139 @@ impl<'ctx> super::Codegen<'ctx> {
                 bodies,
                 UserDropKind::StructFieldBodies,
             );
+        }
+    }
+
+    /// B-2026-08-31-26 — the MATCH-ARM sibling of
+    /// [`Self::disarm_struct_field_bodies_at`]. A consuming arm that
+    /// destructures a bare struct scrutinee (`match h { H { r, .. } => … }`)
+    /// moves each bound field into the arm's binding, and
+    /// [`Self::suppress_destructured_struct_pattern_cleanup`] already zeroes
+    /// those fields' MEMORY in the source so nothing is freed twice. The
+    /// BODIES half was missing: the source's `__karac_dropbodies_*` walk still
+    /// visited the moved-out field, so a field type with a user `impl Drop`
+    /// ran its body a SECOND time, on the husk the cap-zeroing had just left
+    /// behind — `dR47 dR0` where `dR47` is due, `dR0` reading a cleared object.
+    ///
+    /// No memory error, which is why it stayed quiet: the buffer is freed
+    /// exactly once and ASAN sees nothing. Only the observable body count is
+    /// wrong, so a fixture has to assert the COUNT, not just that the program
+    /// survives.
+    ///
+    /// Masks in place through [`Self::replace_user_drop_fn_for_var`] rather
+    /// than re-registering, for the reason spelled out on the payload sibling
+    /// below: this runs inside a match ARM whose cleanup frame is inner to the
+    /// owner's, and a re-register would move the owner's walk into the arm and
+    /// drain it there.
+    pub(super) fn disarm_arm_destructured_struct_field_bodies(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        // A borrow-mode arm binds a VIEW: the source keeps ownership and its
+        // walk must stay armed. Same gate the Option/Result field sibling
+        // above uses, and the invariant the read-only-arm family
+        // (B-2026-08-30-47 / -52) rests on.
+        if self.pattern_state.pattern_binding_is_borrow {
+            return;
+        }
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            return;
+        };
+        let var_name = match &scrutinee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        let Some(struct_name) = self
+            .var_types
+            .var_type_names
+            .get(var_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        // A `shared` struct drops through refcounts, not this walk.
+        if self.type_decls.shared_types.contains_key(&struct_name) {
+            return;
+        }
+        let Some(field_names) = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let mut masked_any = false;
+        for field_pat in fields {
+            // Only a WHOLE-field move into one binding is suppressible, the
+            // same gate the memory half applies: a nested destructure leaves
+            // the field itself in place and its walk must stand.
+            let whole_move = match &field_pat.pattern {
+                None => true,
+                Some(p) => matches!(p.kind, PatternKind::Binding(_)),
+            };
+            if !whole_move {
+                continue;
+            }
+            let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
+                continue;
+            };
+            self.type_decls
+                .struct_moved_field_bodies
+                .entry(var_name.clone())
+                .or_default()
+                .insert(idx);
+            masked_any = true;
+        }
+        if !masked_any {
+            return;
+        }
+        if !self.variables.contains_key(var_name.as_str()) {
+            return;
+        }
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var_name.as_str())
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        // Both masks re-read from their maps so repeated arms accumulate and
+        // the whole-field and payload-only kinds compose.
+        let here: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_bodies
+            .get(var_name.as_str())
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        let payload_here: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_payload_bodies
+            .get(var_name.as_str())
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        let skip = super::synth_drop::FieldSkipTree {
+            here,
+            payload_here,
+            nested: Default::default(),
+        };
+        match self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip) {
+            Some(bodies) => {
+                // As on the payload sibling: no fallback registration when
+                // there is no action to replace. An absent action means the
+                // owner's walk lives elsewhere (a `ref self` receiver, say),
+                // and inventing one here fires the caller's struct inside the
+                // callee.
+                let _ = self.replace_user_drop_fn_for_var(
+                    &var_name,
+                    UserDropKind::StructFieldBodies,
+                    bodies,
+                );
+            }
+            // Nothing survives the mask — leave the action retracted.
+            None => self.suppress_struct_field_bodies_for_var(&var_name),
         }
     }
 

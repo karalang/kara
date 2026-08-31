@@ -122758,6 +122758,80 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-26 / B-2026-08-31-27 — A DESTRUCTURING `match` ARM MUST RUN
+    /// EACH `Drop` BODY EXACTLY ONCE, AND THE TWO BACKENDS WERE WRONG IN
+    /// OPPOSITE DIRECTIONS.
+    ///
+    /// -26: both COMPILED backends ran a moved-out field's body TWICE for a
+    /// bare struct scrutinee (`match h { P { r, .. } => … }`).
+    /// `suppress_destructured_struct_pattern_cleanup` (#16) already cap-zeroed
+    /// the moved field's MEMORY in the source, so nothing was freed twice —
+    /// but the source's `__karac_dropbodies_*` walk still visited the field and
+    /// ran the body a second time on the husk the zeroing had just left. The
+    /// bodies half is now `disarm_arm_destructured_struct_field_bodies`.
+    ///
+    /// -27: the INTERPRETER ran it ZERO times whenever the pattern reached
+    /// through a container. Two causes:
+    ///   * `arm_moved_user_drop_payload_bindings` collected a payload binding
+    ///     only when the sub-pattern was a bare name, so `Some(P { r, .. })`
+    ///     registered no Drop slot at all;
+    ///   * `is_drop_binding`'s STRUCT arm asked whether the bound type declares
+    ///     a `Drop` of its OWN, while the enum arm beside it asked the
+    ///     TRANSITIVE question — so a payload struct with a Drop-bearing FIELD
+    ///     was silently skipped.
+    ///
+    /// NEITHER IS A MEMORY ERROR, and that is why both survived a tree with
+    /// this much ASAN coverage: -26 frees exactly once (the second body just
+    /// reads a cleared object) and -27 frees nothing extra. Only the observable
+    /// body COUNT was wrong, so this fixture asserts the exact output text on
+    /// both backends rather than merely that the program survives.
+    ///
+    /// The interpreter is NOT the oracle here — it was the wrong one for ten of
+    /// these rows. Every expected value is what `karac build` printed, which is
+    /// also what the five controls already agreed on before either fix.
+    #[test]
+    fn e2e_destructuring_arm_runs_each_drop_body_exactly_once() {
+        const PRELUDE: &str = "struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s}\"); } }\n\
+             struct P { r: R, n: i64 }\n\
+             enum E { A { r: R }, B }\n\
+             enum T { A(R), B }\n\
+             enum W { C(P), D }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            ("bare struct, `..` rest [B-2026-08-31-26]", "let h: P = P { r: R { s: \"a\" }, n: 4 };\n match h { P { r, .. } => println(r.s) }", "a\ndRa\nend\n"),
+            ("bare struct, every field named [B-2026-08-31-26]", "let h: P = P { r: R { s: \"a\" }, n: 4 };\n match h { P { r, n } => println(r.s) }", "a\ndRa\nend\n"),
+            ("bare struct, RENAMED binding [B-2026-08-31-26]", "let h: P = P { r: R { s: \"a\" }, n: 4 };\n match h { P { r: q, .. } => println(q.s) }", "a\ndRa\nend\n"),
+            ("bare struct, BLOCK arm body [B-2026-08-31-26]", "let h: P = P { r: R { s: \"a\" }, n: 4 };\n match h { P { r, n } => { if n > 0 { println(r.s) } else { println(\"z\") } } }", "a\ndRa\nend\n"),
+            ("`Option` + struct payload destructure [B-2026-08-31-27]", "let o: Option[P] = Some(P { r: R { s: \"a\" }, n: 4 });\n match o { Some(P { r, .. }) => println(r.s), None => {} }", "a\ndRa\nend\n"),
+            ("`Option` + enum STRUCT-variant [B-2026-08-31-27]", "let o: Option[E] = Some(E.A { r: R { s: \"a\" } });\n match o { Some(E.A { r }) => println(r.s), Some(E.B) => {}, None => {} }", "a\ndRa\nend\n"),
+            ("`Option` + enum TUPLE-variant [B-2026-08-31-27]", "let o: Option[T] = Some(T.A(R { s: \"a\" }));\n match o { Some(T.A(r)) => println(r.s), Some(T.B) => {}, None => {} }", "a\ndRa\nend\n"),
+            ("`Result` + struct payload [B-2026-08-31-27]", "let o: Result[P, i64] = Ok(P { r: R { s: \"a\" }, n: 4 });\n match o { Ok(P { r, .. }) => println(r.s), Err(_) => {} }", "a\ndRa\nend\n"),
+            ("USER enum + struct payload [B-2026-08-31-27]", "let w: W = W.C(P { r: R { s: \"a\" }, n: 4 });\n match w { W.C(P { r, .. }) => println(r.s), W.D => {} }", "a\ndRa\nend\n"),
+            ("whole-bound payload, field-only `Drop` [B-2026-08-31-27]", "let o: Option[P] = Some(P { r: R { s: \"a\" }, n: 4 });\n match o { Some(p) => println(p.n), None => {} }", "4\ndRa\nend\n"),
+            ("control: no binding at all", "let h: P = P { r: R { s: \"a\" }, n: 4 };\n match h { P { .. } => println(\"w\") }", "w\ndRa\nend\n"),
+            ("control: binds only the NON-Drop field", "let h: P = P { r: R { s: \"a\" }, n: 4 };\n match h { P { n, .. } => println(n) }", "4\ndRa\nend\n"),
+            ("control: bare enum scrutinee, always correct", "let e: E = E.A { r: R { s: \"a\" } };\n match e { E.A { r } => println(r.s), E.B => {} }", "a\ndRa\nend\n"),
+            ("control: NESTED match over a whole-bound payload", "let o: Option[E] = Some(E.A { r: R { s: \"a\" } });\n match o { Some(p) => { match p { E.A { r } => println(r.s), E.B => {} } }, None => {} }", "a\ndRa\nend\n"),
+            ("control: payload IS the `Drop` type", "let o: Option[R] = Some(R { s: \"a\" });\n match o { Some(r) => println(r.s), None => {} }", "a\ndRa\nend\n"),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter must run each body exactly once"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: run and build must agree");
+            }
+        }
+    }
+
     /// B-2026-08-31-23 — A CONSUMING ARM OVER A BOXED USER-ENUM PAYLOAD
     /// DOUBLE FREED, WHILE THE SAME ARM OVER A BOXED STRUCT PAYLOAD WAS FINE.
     ///

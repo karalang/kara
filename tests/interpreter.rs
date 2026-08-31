@@ -51018,3 +51018,96 @@ fn interp_partial_cmp_value_receiver_resolves_on_a_concrete_type() {
     // `partial_cmp_value_receiver_typechecks_while_float_cmp_stays_rejected`,
     // where the diagnostic helpers are.
 }
+
+/// B-2026-08-31-27 — the DEFAULT-LEG half of
+/// `tests/codegen.rs`'s `e2e_destructuring_arm_runs_each_drop_body_exactly_once`.
+/// That twin is the real gate (it pins both backends against each other), but it
+/// is `--features llvm` only; this one runs on the leg CI executes on every push,
+/// so an interpreter regression cannot wait for the codegen job.
+///
+/// The interpreter ran a payload's `Drop` body ZERO times whenever the pattern
+/// reached through a container: `arm_moved_user_drop_payload_bindings` collected
+/// a binding only from a bare-name sub-pattern, and `is_drop_binding`'s struct
+/// arm asked only whether the bound type declares a `Drop` of its OWN while the
+/// enum arm beside it asked the transitive question.
+///
+/// Every expected value is what `karac build` prints — the compiled backends
+/// were correct at all of these and the interpreter was not, so it is not its
+/// own oracle here.
+#[test]
+fn interp_a_destructuring_arm_runs_each_payload_drop_body_once() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s}\"); } }\n\
+         struct P { r: R, n: i64 }\n\
+         enum E { A { r: R }, B }\n\
+         enum T { A(R), B }\n\
+         enum W { C(P), D }\n";
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "`Option` + struct payload destructure",
+            "let o: Option[P] = Some(P { r: R { s: \"a\" }, n: 4 });\n\
+             match o { Some(P { r, .. }) => println(r.s), None => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "`Option` + enum STRUCT-variant destructure",
+            "let o: Option[E] = Some(E.A { r: R { s: \"a\" } });\n\
+             match o { Some(E.A { r }) => println(r.s), Some(E.B) => {}, None => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "`Option` + enum TUPLE-variant destructure",
+            "let o: Option[T] = Some(T.A(R { s: \"a\" }));\n\
+             match o { Some(T.A(r)) => println(r.s), Some(T.B) => {}, None => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "`Result` + struct payload destructure",
+            "let o: Result[P, i64] = Ok(P { r: R { s: \"a\" }, n: 4 });\n\
+             match o { Ok(P { r, .. }) => println(r.s), Err(_) => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "USER enum + struct payload destructure",
+            "let w: W = W.C(P { r: R { s: \"a\" }, n: 4 });\n\
+             match w { W.C(P { r, .. }) => println(r.s), W.D => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "whole-bound payload whose type has only a Drop-bearing FIELD",
+            "let o: Option[P] = Some(P { r: R { s: \"a\" }, n: 4 });\n\
+             match o { Some(p) => println(p.n), None => {} }",
+            "4\ndRa\nend\n",
+        ),
+        // Controls — each already agreed with the compiled backends before the
+        // fix, and each is a path the widening must not disturb.
+        (
+            "control: bare enum scrutinee",
+            "let e: E = E.A { r: R { s: \"a\" } };\n\
+             match e { E.A { r } => println(r.s), E.B => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "control: NESTED match over a whole-bound payload",
+            "let o: Option[E] = Some(E.A { r: R { s: \"a\" } });\n\
+             match o { Some(p) => { match p { E.A { r } => println(r.s), E.B => {} } }, None => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "control: the payload IS the Drop type",
+            "let o: Option[R] = Some(R { s: \"a\" });\n\
+             match o { Some(r) => println(r.s), None => {} }",
+            "a\ndRa\nend\n",
+        ),
+        (
+            "control: binds only the NON-Drop field",
+            "let h: P = P { r: R { s: \"a\" }, n: 4 };\n\
+             match h { P { n, .. } => println(n) }",
+            "4\ndRa\nend\n",
+        ),
+    ];
+    for (label, stmts, want) in cases {
+        let src = format!("{PRELUDE}fn main() {{\n    {stmts}\n    println(\"end\");\n}}\n");
+        assert_eq!(run(&src), *want, "{label}");
+    }
+}

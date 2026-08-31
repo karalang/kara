@@ -183,10 +183,23 @@ impl<'a> super::Interpreter<'a> {
                             // variant payload qualifies here exactly as it does
                             // there. Option/Result are excluded: a nested
                             // built-in payload rides its own walker.
+                            // B-2026-08-31-27 — the STRUCT arm asked only
+                            // whether the bound type declares a `Drop` of its
+                            // OWN, while the enum arm beside it already asked
+                            // the TRANSITIVE question. So a payload struct with
+                            // no `Drop` of its own but a Drop-bearing FIELD
+                            // (`struct P { r: R }`) registered no slot and ran
+                            // nothing, where the same payload wrapped in an
+                            // enum ran its field body — and both compiled
+                            // backends ran it. `value_runs_user_drop` is the
+                            // value-level twin of `type_name_runs_user_drop`
+                            // used just below, so the two arms now ask the same
+                            // question; the drain and
+                            // `invoke_user_drop_if_applicable` both already
+                            // knew how to walk such a value once it is
+                            // registered (B-2026-07-29-39).
                             let is_drop_binding = match self.env.get(&n) {
-                                Some(Value::Struct { name: tn, .. }) => {
-                                    self.program.drop_method_keys.contains_key(&tn)
-                                }
+                                Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
                                 Some(Value::EnumVariant { enum_name: en, .. })
                                     if en != "Option" && en != "Result" =>
                                 {
@@ -272,17 +285,17 @@ impl<'a> super::Interpreter<'a> {
                     {
                         continue;
                     }
-                    if let Some(Value::Struct { name: tn, fields }) = self.env.get(&n) {
-                        if self.program.drop_method_keys.contains_key(&tn) {
-                            let tn = tn.clone();
-                            self.run_user_drop_body_on_value(
-                                &tn,
-                                Value::Struct {
-                                    name: tn.clone(),
-                                    fields,
-                                },
-                            );
-                        }
+                    if let Some(v @ Value::Struct { .. }) = self.env.get(&n) {
+                        // B-2026-08-31-27 — own body (which itself walks the
+                        // fields) when the type declares one, and the FIELD
+                        // WALK ALONE when it does not. The second half was
+                        // missing, so a `struct P { r: R }` payload registered
+                        // by the widened gate above would have been drained to
+                        // silence here. `run_discarded_value_user_drops`'s
+                        // struct arm is exactly this pair and is already the
+                        // documented twin of codegen's discard registrar, so
+                        // routing through it keeps one spelling of the rule.
+                        self.run_discarded_value_user_drops(v);
                     // B-2026-08-28-63 — the NON-BLOCK arm body's copy of the
                     // same widening. A block body drains through
                     // `eval_block_inner`'s adopted Drop slots (where
@@ -821,9 +834,18 @@ impl<'a> super::Interpreter<'a> {
             if matches!(variant.as_str(), "Some" | "Ok" | "Err") {
                 if let PatternKind::TupleVariant { patterns, .. } = &pattern.kind {
                     for sub in patterns {
-                        if let PatternKind::Binding(n) = &sub.kind {
-                            out.push(n.clone());
-                        }
+                        // B-2026-08-31-27 — a sub-pattern that DESTRUCTURES the
+                        // payload (`Some(P { r, .. })`, `Some(E.A { r })`,
+                        // `Some(T.A(r))`) introduces owning bindings exactly as
+                        // a bare one does, but only the bare spelling was
+                        // collected — so the destructured arm registered no
+                        // slot and ran no body at all, while both compiled
+                        // backends ran one. Collecting the names the
+                        // sub-pattern introduces over-approximates on purpose:
+                        // the caller's runtime-value filter is what keeps a
+                        // scalar binding silent, which is the same reason the
+                        // bare spelling can be collected shape-only here.
+                        out.extend(crate::cfg::pattern_bindings(sub));
                     }
                 }
             }
@@ -835,35 +857,37 @@ impl<'a> super::Interpreter<'a> {
         match &pattern.kind {
             PatternKind::TupleVariant { patterns, .. } => {
                 for (i, sub) in patterns.iter().enumerate() {
-                    if let PatternKind::Binding(n) = &sub.kind {
-                        if decls
-                            .get(i)
-                            .map(|(_, te)| self.type_expr_runs_user_drop(te))
-                            .unwrap_or(false)
-                        {
-                            out.push(n.clone());
-                        }
+                    // B-2026-08-31-27 — as in the Option/Result branch above, a
+                    // DESTRUCTURING sub-pattern binds out of the payload just
+                    // as a bare one does. The declared-type gate is unchanged
+                    // and still decides whether this position runs a body at
+                    // all; only the set of names taken from the position that
+                    // passes it is widened.
+                    if decls
+                        .get(i)
+                        .map(|(_, te)| self.type_expr_runs_user_drop(te))
+                        .unwrap_or(false)
+                    {
+                        out.extend(crate::cfg::pattern_bindings(sub));
                     }
                 }
             }
             PatternKind::Struct { fields, .. } => {
                 for fp in fields {
-                    let bind_name = match &fp.pattern {
-                        None => Some(fp.name.clone()),
-                        Some(sub) => match &sub.kind {
-                            PatternKind::Binding(n) => Some(n.clone()),
-                            _ => None,
-                        },
-                    };
-                    if let Some(n) = bind_name {
-                        let runs = decls
-                            .iter()
-                            .find(|(dn, _)| dn.as_deref() == Some(fp.name.as_str()))
-                            .map(|(_, te)| self.type_expr_runs_user_drop(te))
-                            .unwrap_or(false);
-                        if runs {
-                            out.push(n);
-                        }
+                    let runs = decls
+                        .iter()
+                        .find(|(dn, _)| dn.as_deref() == Some(fp.name.as_str()))
+                        .map(|(_, te)| self.type_expr_runs_user_drop(te))
+                        .unwrap_or(false);
+                    if !runs {
+                        continue;
+                    }
+                    // B-2026-08-31-27 — the shorthand `{ r }` binds `r`; an
+                    // explicit sub-pattern binds whatever IT introduces, which
+                    // was previously collected only when it was a bare name.
+                    match &fp.pattern {
+                        None => out.push(fp.name.clone()),
+                        Some(sub) => out.extend(crate::cfg::pattern_bindings(sub)),
                     }
                 }
             }
