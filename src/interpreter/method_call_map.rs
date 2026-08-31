@@ -224,6 +224,17 @@ impl<'a> super::Interpreter<'a> {
                         .get(1)
                         .map(|a| {
                             let v = self.eval_expr_inner(&a.value);
+                            // B-2026-08-30-48 — the same implicit int-to-float
+                            // widening the `Vec.push` path already applies. A
+                            // map's value type is not in reach at the mutation
+                            // site, but the TYPECHECKER recorded the argument
+                            // span in `float_coerced_arg_sites` when it checked
+                            // it against `V`, so the shared helper converts here
+                            // exactly as it does for a sequence element. Without
+                            // it `mp.insert(1, m)` into a `Map[i64, f64]` left a
+                            // `Value::Int` in the slot: 2^53+1 read back as
+                            // ...993 against both compiled backends' ...992.
+                            let v = self.coerce_float_slot_arg(&v, Some(a));
                             // B-2026-08-08-29 — a `Map[K, weak V]` insert
                             // DOWNGRADES, the twin of the `Vec[weak T]` push.
                             self.downgrade_weak_container_store(a, v)
@@ -254,6 +265,7 @@ impl<'a> super::Interpreter<'a> {
                         .get(1)
                         .map(|a| {
                             let v = self.eval_expr_inner(&a.value);
+                            let v = self.coerce_float_slot_arg(&v, Some(a));
                             self.downgrade_weak_container_store(a, v)
                         })
                         .unwrap_or(Value::Unit);

@@ -2620,6 +2620,16 @@ impl<'a> Interpreter<'a> {
         // implicit widening the language permits; the struct definition names
         // the type, so it converts here rather than staying an Int that the
         // first float comparison on the field then aborts on.
+        //
+        // B-2026-08-30-48 — the same widening for an enum STRUCT-VARIANT
+        // literal (`P.V { f: n }` with `f: f64`). `find_struct_def` looks up a
+        // STRUCT by name, and `V` is not one, so this map came back empty and
+        // the field kept its `Int` — the row's "the enum variant path has no
+        // equivalent". The declarations are available from
+        // `variant_payload_decls`, which is the same source codegen's
+        // `enum_variant_field_type_exprs` consults, so the two backends read
+        // one description. Only consulted when the struct lookup misses, so no
+        // struct literal changes behaviour.
         let field_tys: HashMap<String, TypeExpr> = self
             .find_struct_def(&name)
             .map(|sd| {
@@ -2627,6 +2637,15 @@ impl<'a> Interpreter<'a> {
                     .iter()
                     .map(|f| (f.name.clone(), f.ty.clone()))
                     .collect()
+            })
+            .or_else(|| {
+                let enum_name = path.get(path.len().checked_sub(2)?)?;
+                Some(
+                    self.variant_payload_decls(enum_name, &name)?
+                        .into_iter()
+                        .filter_map(|(fname, ty)| Some((fname?, ty)))
+                        .collect(),
+                )
             })
             .unwrap_or_default();
         for field in fields {

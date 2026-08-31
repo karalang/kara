@@ -229,6 +229,30 @@ pub(crate) fn coerce_int_value_to_declared_float(
     te: &TypeExpr,
     src_unsigned_width: Option<u32>,
 ) -> Value {
+    coerce_int_value_to_declared_float_elems(val, te, src_unsigned_width, &[])
+}
+
+/// [`coerce_int_value_to_declared_float`] with PER-ELEMENT source signedness
+/// for an aggregate literal (B-2026-08-30-48, half (a)).
+///
+/// The single `src_unsigned_width` is the width of the RHS *expression*, and a
+/// tuple / array literal's own type is not an integer — so it was always
+/// `None` and every element converted as SIGNED. `let t: (f64, i64) = (u, 1)`
+/// with `u: u64 = u64::MAX` therefore read -1 where both compiled backends
+/// read 1.8446744073709552e19. Each element has its own source expression and
+/// its own signedness, so the caller resolves them and passes them positionally.
+///
+/// `elem_widths` is consulted only at the TOP level of an aggregate; a nested
+/// aggregate's elements fall back to `src_unsigned_width` exactly as before.
+/// That is the measured shape (a flat literal) and keeping the recursion
+/// width-agnostic avoids inventing an index scheme for a case no measurement
+/// reached — see the row's own SCOPE NOTE about this shape space.
+pub(crate) fn coerce_int_value_to_declared_float_elems(
+    val: Value,
+    te: &TypeExpr,
+    src_unsigned_width: Option<u32>,
+    elem_widths: &[Option<u32>],
+) -> Value {
     /// The element type of a fixed-size array annotation, in either spelling
     /// the parser produces: the dedicated `TypeKind::Array` node, and the
     /// `Array[T, N]` PATH form that Kāra's `[]` generic syntax yields.
@@ -272,16 +296,18 @@ pub(crate) fn coerce_int_value_to_declared_float(
                 items
                     .into_iter()
                     .zip(elem_tes.iter())
-                    .map(|(v, t)| coerce_int_value_to_declared_float(v, t, src_unsigned_width))
+                    .enumerate()
+                    .map(|(i, (v, t))| {
+                        let w = elem_widths.get(i).copied().flatten().or(src_unsigned_width);
+                        coerce_int_value_to_declared_float(v, t, w)
+                    })
                     .collect(),
             )
         }
         // `let a: Array[f64, 2] = [v, v]` — a fixed-size array annotation names
-        // its element type, so every slot converts. `Vec[f64]` deliberately does
-        // NOT appear here: a Vec's element type is not reachable from any
-        // annotation at the mutation site (`vp.push(v)` is a method call whose
-        // receiver span the typechecker overwrites with the call's own `Unit`
-        // result), which is why that half is filed separately.
+        // its element type, so every slot converts. `Vec[f64]` is handled by its
+        // own arm below rather than here, because `Array[T, N]` and `Vec[T]`
+        // reach their element type through different spellings.
         (Value::Array(_), _) if array_elem_te(te).is_some() => {
             let element = array_elem_te(te).unwrap();
             let Value::Array(rc) = &val else {
@@ -291,14 +317,126 @@ pub(crate) fn coerce_int_value_to_declared_float(
                 .read()
                 .unwrap()
                 .iter()
-                .map(|v| {
-                    coerce_int_value_to_declared_float(v.clone(), &element, src_unsigned_width)
+                .enumerate()
+                .map(|(i, v)| {
+                    let w = elem_widths.get(i).copied().flatten().or(src_unsigned_width);
+                    coerce_int_value_to_declared_float(v.clone(), &element, w)
                 })
                 .collect();
             *rc.write().unwrap() = converted;
             val
         }
+        // B-2026-08-30-48 — the shapes that converted NOT AT ALL, leaving a
+        // `Value::Int` in a slot the program declared `f64`. Each derives its
+        // element/payload type from the ANNOTATION's own generic argument, so
+        // no program-wide lookup is needed and the conversion is the same one
+        // the scalar arm above performs.
+        //
+        // These arms cover the ANNOTATED-BINDING site only. A later MUTATION
+        // (`vp.push(v)`, `mp.insert(k, v)`) has no annotation in reach, and is
+        // covered by the separate `float_coerced_arg_sites` channel: the
+        // typechecker records the argument span when it checks it against the
+        // container's element type, and `coerce_float_slot_arg` converts at the
+        // store. `Vec.push` was already wired to it (B-2026-08-14-6); the two
+        // `Map`/`SortedMap` insert sites are wired in the same commit as this.
+        (Value::Array(_), _) if generic_elem_te(te, &["Vec", "Slice"], 0).is_some() => {
+            let element = generic_elem_te(te, &["Vec", "Slice"], 0).unwrap();
+            let Value::Array(rc) = &val else {
+                unreachable!()
+            };
+            let converted: Vec<Value> = rc
+                .read()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let w = elem_widths.get(i).copied().flatten().or(src_unsigned_width);
+                    coerce_int_value_to_declared_float(v.clone(), &element, w)
+                })
+                .collect();
+            *rc.write().unwrap() = converted;
+            val
+        }
+        // `let o: Option[f64] = Some(n)` / `let r: Result[f64, E] = Ok(n)`.
+        // Only the SUCCESS payload is the annotation's first generic argument;
+        // `Err`'s type is the second, so it is converted against that instead
+        // rather than being coerced to the ok type.
+        (Value::EnumVariant { .. }, _)
+            if generic_elem_te(te, &["Option", "Result"], 0).is_some() =>
+        {
+            let Value::EnumVariant {
+                enum_name,
+                variant,
+                data,
+            } = val
+            else {
+                unreachable!()
+            };
+            let idx = if variant == "Err" { 1 } else { 0 };
+            let data = match (data, generic_elem_te(te, &["Option", "Result"], idx)) {
+                (EnumData::Tuple(vals), Some(t)) => EnumData::Tuple(
+                    vals.into_iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            let w = elem_widths.get(i).copied().flatten().or(src_unsigned_width);
+                            coerce_int_value_to_declared_float(v, &t, w)
+                        })
+                        .collect(),
+                ),
+                (d, _) => d,
+            };
+            Value::EnumVariant {
+                enum_name,
+                variant,
+                data,
+            }
+        }
+        // `let m: Map[i64, f64] = …` — the VALUE half only; a key is the first
+        // generic argument and is left alone.
+        (Value::Map(_), _) if generic_elem_te(te, &["Map", "SortedMap"], 1).is_some() => {
+            let element = generic_elem_te(te, &["Map", "SortedMap"], 1).unwrap();
+            let Value::Map(rc) = &val else { unreachable!() };
+            let (hasher, converted) = {
+                let guard = rc.read().unwrap();
+                let entries: Vec<(Value, Value)> = guard
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            coerce_int_value_to_declared_float(
+                                v.clone(),
+                                &element,
+                                src_unsigned_width,
+                            ),
+                        )
+                    })
+                    .collect();
+                (guard.hasher(), entries)
+            };
+            // Rebuilt through `from_entries_with_hasher` rather than assigned
+            // field-wise so the map keeps the hasher it was BUILT with
+            // (B-2026-08-21-6) and its index stays consistent with the entries.
+            *rc.write().unwrap() =
+                super::value::MapData::from_entries_with_hasher(hasher, converted);
+            val
+        }
         _ => val,
+    }
+}
+
+/// The `idx`-th generic argument of `te` when its head is one of `heads` —
+/// `Option[f64]` -> `f64`, `Map[i64, f64]` at idx 1 -> `f64`. `None` for any
+/// other shape, which is what keeps the arms above off every unrelated value.
+fn generic_elem_te(te: &TypeExpr, heads: &[&str], idx: usize) -> Option<TypeExpr> {
+    let TypeKind::Path(p) = &te.kind else {
+        return None;
+    };
+    if !heads.contains(&p.segments.last()?.as_str()) {
+        return None;
+    }
+    match p.generic_args.as_ref()?.get(idx)? {
+        GenericArg::Type(t) => Some(t.clone()),
+        _ => None,
     }
 }
 

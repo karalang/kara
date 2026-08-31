@@ -60,7 +60,7 @@ impl<'a> super::Interpreter<'a> {
     ///
     /// Already-`Float` values and non-flagged arguments pass through untouched,
     /// so the conversion is idempotent and inert everywhere else.
-    fn coerce_float_slot_arg(&self, val: &Value, arg: Option<&CallArg>) -> Value {
+    pub(super) fn coerce_float_slot_arg(&self, val: &Value, arg: Option<&CallArg>) -> Value {
         let Some(arg) = arg else {
             return val.clone();
         };

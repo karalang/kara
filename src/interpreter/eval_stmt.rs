@@ -4484,8 +4484,37 @@ impl<'a> super::Interpreter<'a> {
                 // widening into a float-annotated slot converts the value
                 // rather than its two's-complement carrier.
                 let src_u = self.span_unsigned_int_width(&value.span);
+                // B-2026-08-30-48 half (a) — an aggregate LITERAL's own type is
+                // not an integer, so `src_u` above is `None` for it and every
+                // element converted as signed: `let t: (f64, i64) = (u, 1)` with
+                // `u: u64 = u64::MAX` read -1 against both compiled backends'
+                // 1.8446744073709552e19. Each element has its own expression and
+                // its own signedness, so resolve them here where the spans are.
+                //
+                // A CONSTRUCTOR CALL is the same shape one level in: `Some(u)`
+                // has no integer type of its own either, so the payload also
+                // converted as signed — `let o: Option[f64] = Some(u)` read -1
+                // where `Some(i)` at the same width read correctly. The args
+                // are positional here and positional in `EnumData::Tuple`, so
+                // the same index carries them across.
+                let elem_widths: Vec<Option<u32>> = match &value.kind {
+                    ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
+                        .iter()
+                        .map(|e| self.span_unsigned_int_width(&e.span))
+                        .collect(),
+                    ExprKind::Call { args, .. } => args
+                        .iter()
+                        .map(|a| self.span_unsigned_int_width(&a.value.span))
+                        .collect(),
+                    _ => Vec::new(),
+                };
                 let val = match ty.as_ref() {
-                    Some(te) => super::exec::coerce_int_value_to_declared_float(val, te, src_u),
+                    Some(te) => super::exec::coerce_int_value_to_declared_float_elems(
+                        val,
+                        te,
+                        src_u,
+                        &elem_widths,
+                    ),
                     None => val,
                 };
                 let rhs_is_place = matches!(

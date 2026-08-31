@@ -40947,6 +40947,98 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-48's compiled twin — the ORACLE half.
+    ///
+    /// That row is an interpreter defect: an int reaching a float slot through
+    /// an aggregate or a variant payload converted as SIGNED (a tuple / array
+    /// literal has no integer type of its own, so the source width lookup
+    /// answered `None`), or did not convert at all. Both compiled backends were
+    /// already correct at every shape, which is what made them the oracle, and
+    /// `interp_int_reaching_a_float_slot_through_an_aggregate_converts` in
+    /// `tests/interpreter.rs` asserts exactly the values below.
+    ///
+    /// Pinning them here is the point: without it a codegen regression would
+    /// silently redefine the reference the interpreter test is measured against,
+    /// and the pair would agree on a wrong answer. `u64::MAX` separates `uitofp`
+    /// (18446744073709552000) from `sitofp` (-1); 2^53+1 separates a real
+    /// conversion (...992) from a skipped one (...993).
+    #[test]
+    fn e2e_int_into_float_through_an_aggregate_is_the_interpreter_oracle() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "tuple-u64",
+                "fn main() { let u: u64 = 18446744073709551615u64;\n\
+                 let t: (f64, i64) = (u, 1); println(t.0); }",
+                "18446744073709552000\n",
+            ),
+            (
+                "tuple-mixed-signs",
+                "fn main() { let u: u64 = 18446744073709551615u64; let s: i64 = -3;\n\
+                 let t: (f64, f64) = (u, s); println(f\"{t.0} {t.1}\"); }",
+                "18446744073709552000 -3\n",
+            ),
+            (
+                "array-u64",
+                "fn main() { let u: u64 = 18446744073709551615u64;\n\
+                 let a: Array[f64, 2] = [u, 1.0]; println(a[0]); }",
+                "18446744073709552000\n",
+            ),
+            (
+                "option-payload-u64",
+                "fn main() { let u: u64 = 18446744073709551615u64;\n\
+                 let o: Option[f64] = Some(u);\n\
+                 match o { Some(x) => println(x), None => println(-1.0) } }",
+                "18446744073709552000\n",
+            ),
+            (
+                "tuple-i64-2p53",
+                "fn main() { let m: i64 = 9007199254740993;\n\
+                 let t: (f64, i64) = (m, 1); println(t.0); }",
+                "9007199254740992\n",
+            ),
+            (
+                "array-i64-2p53",
+                "fn main() { let m: i64 = 9007199254740993;\n\
+                 let a: Array[f64, 2] = [m, 1.0]; println(a[0]); }",
+                "9007199254740992\n",
+            ),
+            (
+                "control-tuple-all-float",
+                "fn main() { let t: (f64, f64) = (1.5, 2.5); println(f\"{t.0} {t.1}\"); }",
+                "1.5 2.5\n",
+            ),
+            (
+                "control-vec-i64",
+                "fn main() { let v: Vec[i64] = [7]; println(v[0]); }",
+                "7\n",
+            ),
+            (
+                "map-insert-2p53",
+                "fn main() { let m: i64 = 9007199254740993;\n\
+                 let mut mp: Map[i64, f64] = Map.new(); mp.insert(1, m);\n\
+                 match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+                "9007199254740992\n",
+            ),
+            (
+                "map-insert-u64",
+                "fn main() { let u: u64 = 18446744073709551615u64;\n\
+                 let mut mp: Map[i64, f64] = Map.new(); mp.insert(1, u);\n\
+                 match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+                "18446744073709552000\n",
+            ),
+            (
+                "map-insert-f32",
+                "fn main() { let m: u32 = 4294967295u32;\n\
+                 let mut mp: Map[i64, f32] = Map.new(); mp.insert(1, m);\n\
+                 match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+                "4294967296\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            assert_eq!(run_program(src).as_deref(), Some(*want), "{label}");
+        }
+    }
+
     #[test]
     fn e2e_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         let hdr = "struct R { id: i64 }\n\

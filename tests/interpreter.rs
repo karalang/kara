@@ -49593,3 +49593,198 @@ fn interp_generic_impl_method_resolves_its_own_type_param() {
         assert_eq!(run(src), *want, "{label}");
     }
 }
+
+#[test]
+fn interp_int_reaching_a_float_slot_through_an_aggregate_converts() {
+    // B-2026-08-30-48 — an int RHS at a float-annotated binding is an implicit
+    // widening the language performs, and B-2026-08-14-2 made the interpreter
+    // do it for a SCALAR slot. Two holes were left, and both compiled backends
+    // are correct at every shape below, so `karac build`'s output is the oracle
+    // and every expectation here is what it already printed.
+    //
+    // (a) SIGNEDNESS through an aggregate literal. The conversion consults the
+    //     RHS expression's unsigned width, but a tuple / array literal's own
+    //     type is not an integer, so the lookup answered `None` and every
+    //     element converted as SIGNED. `let t: (f64, i64) = (u, 1)` with
+    //     `u: u64 = u64::MAX` read -1 against the compiled 1.8446744073709552e19.
+    //     Each element has its own expression and its own signedness, so they
+    //     are now resolved positionally at the `let`. The same shape one level
+    //     in is a CONSTRUCTOR CALL: `Some(u)` has no integer type either, which
+    //     is what `option-payload-u64` covers.
+    //
+    // (b) SHAPES THAT CONVERTED NOT AT ALL, leaving a `Value::Int` in a slot
+    //     the program declared `f64`: a `Vec` element, an `Option`/`Result`
+    //     payload, and an enum STRUCT-variant field. Each derives its target
+    //     type from the annotation's own generic argument (or, for the variant,
+    //     from the variant's payload declaration), so no program-wide lookup is
+    //     needed — the conversion is the same one the scalar arm performs.
+    //
+    // The probe value is 2^53+1: it survives as ...993 when nothing converts
+    // and lands on ...992 once it round-trips a double, so it separates a
+    // correct store from a skipped conversion. `u64::MAX` separates `uitofp`
+    // from `sitofp` the same way (18446744073709552000 vs -1).
+    //
+    // Measured on the pre-fix interpreter: 8 of these 15 diverged from AOT and
+    // 7 agreed — the 5 named controls plus `tuple-i64-2p53` / `array-i64-2p53`,
+    // whose recursion B-2026-08-14-2 already added and whose SIGNED reading was
+    // correct for a signed source. Post-fix all 15 agree.
+    let cases: &[(&str, &str, &str)] = &[
+        // (a) signedness through an aggregate literal
+        (
+            "tuple-u64",
+            "fn main() { let u: u64 = 18446744073709551615u64;\n\
+             let t: (f64, i64) = (u, 1); println(t.0); }",
+            "18446744073709552000\n",
+        ),
+        (
+            "tuple-mixed-signs",
+            "fn main() { let u: u64 = 18446744073709551615u64; let s: i64 = -3;\n\
+             let t: (f64, f64) = (u, s); println(f\"{t.0} {t.1}\"); }",
+            "18446744073709552000 -3\n",
+        ),
+        (
+            "array-u64",
+            "fn main() { let u: u64 = 18446744073709551615u64;\n\
+             let a: Array[f64, 2] = [u, 1.0]; println(a[0]); }",
+            "18446744073709552000\n",
+        ),
+        (
+            "option-payload-u64",
+            "fn main() { let u: u64 = 18446744073709551615u64;\n\
+             let o: Option[f64] = Some(u);\n\
+             match o { Some(x) => println(x), None => println(-1.0) } }",
+            "18446744073709552000\n",
+        ),
+        // (b) shapes that did not convert at all
+        (
+            "vec-literal-element",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let v: Vec[f64] = [m]; println(v[0]); }",
+            "9007199254740992\n",
+        ),
+        (
+            "option-payload",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let o: Option[f64] = Some(m);\n\
+             match o { Some(x) => println(x), None => println(-1.0) } }",
+            "9007199254740992\n",
+        ),
+        (
+            "result-payload",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let r: Result[f64, i64] = Ok(m);\n\
+             match r { Ok(x) => println(x), Err(_) => println(-1.0) } }",
+            "9007199254740992\n",
+        ),
+        (
+            "enum-struct-variant-field",
+            "enum P { V { f: f64 } }\n\
+             fn main() { let m: i64 = 9007199254740993;\n\
+             match P.V { f: m } { V { f } => println(f) } }",
+            "9007199254740992\n",
+        ),
+        // Already correct before the fix — here so a regression in the
+        // recursion B-2026-08-14-2 added is caught alongside the new arms.
+        (
+            "tuple-i64-2p53",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let t: (f64, i64) = (m, 1); println(t.0); }",
+            "9007199254740992\n",
+        ),
+        (
+            "array-i64-2p53",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let a: Array[f64, 2] = [m, 1.0]; println(a[0]); }",
+            "9007199254740992\n",
+        ),
+        // A LATER MUTATION, not an annotated binding: `Map`/`SortedMap.insert`
+        // reaches its element type through `float_coerced_arg_sites` (the
+        // channel `Vec.push` has used since B-2026-08-14-6), which the two map
+        // store sites never consulted. `map-insert-f32` additionally pins that
+        // the DECLARED WIDTH rides along — 4294967295 is not representable in
+        // f32 and every compiled backend rounds it to 4294967296.
+        (
+            "map-insert-2p53",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let mut mp: Map[i64, f64] = Map.new(); mp.insert(1, m);\n\
+             match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+            "9007199254740992\n",
+        ),
+        (
+            "map-insert-u64",
+            "fn main() { let u: u64 = 18446744073709551615u64;\n\
+             let mut mp: Map[i64, f64] = Map.new(); mp.insert(1, u);\n\
+             match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+            "18446744073709552000\n",
+        ),
+        (
+            "sortedmap-insert",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let mut mp: SortedMap[i64, f64] = SortedMap.new(); mp.insert(1, m);\n\
+             match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+            "9007199254740992\n",
+        ),
+        (
+            "map-insert-f32",
+            "fn main() { let m: u32 = 4294967295u32;\n\
+             let mut mp: Map[i64, f32] = Map.new(); mp.insert(1, m);\n\
+             match mp.get(1) { Some(x) => println(x), None => println(-1.0) } }",
+            "4294967296\n",
+        ),
+        // Already correct before the fix — `Vec.push` is the shape the map
+        // sites were missing, so a regression there breaks the same channel.
+        (
+            "vec-push",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let mut v: Vec[f64] = Vec.new(); v.push(m); println(v[0]); }",
+            "9007199254740992\n",
+        ),
+        // Controls. The first two are the scalar and struct-field slots that
+        // already converted; the rest are the same aggregate and insert SHAPES
+        // with nothing to convert, so a fix that over-reached would move them.
+        (
+            "control-scalar-let",
+            "fn main() { let m: i64 = 9007199254740993; let d: f64 = m; println(d); }",
+            "9007199254740992\n",
+        ),
+        (
+            "control-struct-field",
+            "struct S { f: f64 }\n\
+             fn main() { let m: i64 = 9007199254740993; let s = S { f: m }; println(s.f); }",
+            "9007199254740992\n",
+        ),
+        (
+            "control-tuple-all-float",
+            "fn main() { let t: (f64, f64) = (1.5, 2.5); println(f\"{t.0} {t.1}\"); }",
+            "1.5 2.5\n",
+        ),
+        (
+            "control-option-string",
+            "fn main() { let o: Option[String] = Some(\"hi\");\n\
+             match o { Some(x) => println(x), None => println(\"no\") } }",
+            "hi\n",
+        ),
+        (
+            "control-vec-i64",
+            "fn main() { let v: Vec[i64] = [7]; println(v[0]); }",
+            "7\n",
+        ),
+        (
+            "control-map-insert-i64",
+            "fn main() { let m: i64 = 9007199254740993;\n\
+             let mut mp: Map[i64, i64] = Map.new(); mp.insert(1, m);\n\
+             match mp.get(1) { Some(x) => println(x), None => println(-1) } }",
+            "9007199254740993\n",
+        ),
+        (
+            "control-map-insert-str",
+            "fn main() { let mut mp: Map[i64, String] = Map.new();\n\
+             mp.insert(1, \"hi\");\n\
+             match mp.get(1) { Some(x) => println(x), None => println(\"no\") } }",
+            "hi\n",
+        ),
+    ];
+    for (label, src, want) in cases {
+        assert_eq!(run(src), *want, "{label}");
+    }
+}
