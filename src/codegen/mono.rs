@@ -1329,13 +1329,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // isn't caught by a "Vec" prefix): only the `{ptr,i64,i64}` builtin
             // collections collide on `$struct`. A user type of the same head is
             // already disambiguated by `mangle_mono_name`'s concrete-name path.
-            let head = match subst_names.get(&param.name) {
-                Some(h) => h.as_str(),
-                None => continue,
+            let head = subst_names.get(&param.name).map(|h| h.as_str());
+            let is_collision_class = match head {
+                Some(h) => {
+                    matches!(h, "String" | "Vec" | "VecDeque")
+                        && !self.type_decls.struct_types.contains_key(h)
+                        && !self.type_decls.enum_layouts.contains_key(h)
+                }
+                None => tokens.is_some_and(|t| t.contains_key(&param.name)),
             };
-            let is_collision_class = matches!(head, "String" | "Vec" | "VecDeque")
-                && !self.type_decls.struct_types.contains_key(head)
-                && !self.type_decls.enum_layouts.contains_key(head);
             if !is_collision_class {
                 continue;
             }

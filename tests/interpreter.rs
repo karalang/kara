@@ -48,6 +48,74 @@ fn run_no_errors(source: &str) -> String {
     out.join("")
 }
 
+/// B-2026-08-31-48 (oracle half) — one generic fn at several nameless-aggregate
+/// type arguments.
+///
+/// The interpreter has no monomorphization at all, so it was correct throughout
+/// and is the oracle here: the compiled side gave every `Array` / `Slice` /
+/// `Vector` / tuple instantiation of one generic fn the SAME symbol and failed
+/// module verification (`call [2 x i64] @"ident$opaque"([3 x i64] %a3)`).
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_generic_fn_at_nameless_aggregate_args_gets_distinct_monos`, pinned to
+/// the same string.
+#[test]
+fn test_generic_fn_at_nameless_aggregate_args() {
+    assert_eq!(
+        run(r#"struct H { n: i64 }
+
+impl H {
+    fn pick[T](self, x: T) -> T { return x }
+}
+
+fn ident[T](x: T) -> T { return x }
+
+fn main() {
+    let a2: Array[i64, 2] = Array[3, 4];
+    let a3: Array[i64, 3] = Array[7, 8, 9];
+    let r2: Array[i64, 2] = ident(a2);
+    let r3: Array[i64, 3] = ident(a3);
+    println(f"len {r2[1]} {r3[2]}");
+
+    let ai: Array[i64, 2] = Array[1, 2];
+    let asx: Array[String, 2] = Array["a", "b"];
+    let ri: Array[i64, 2] = ident(ai);
+    let rs: Array[String, 2] = ident(asx);
+    println(f"elem {ri[0]} {rs[1]}");
+
+    let v: Vec[i64] = [5, 6];
+    let u: Vec[String] = ["z"];
+    let s1: Slice[i64] = v.as_slice();
+    let s2: Slice[String] = u.as_slice();
+    let q1: Slice[i64] = ident(s1);
+    let q2: Slice[String] = ident(s2);
+    println(f"slice {q1[1]} {q2[0]}");
+
+    let v4: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let v8: Vector[i64, 8] = Vector[i64, 8](1, 2, 3, 4, 5, 6, 7, 8);
+    println(f"vector {ident(v4).reduce_sum()} {ident(v8).reduce_sum()}");
+
+    let t1: (i64, i64) = (1, 2);
+    let t2: (i64, String) = (3, "x");
+    println(f"tuple {ident(t1).0} {ident(t2).0}");
+
+    let m2: Array[i64, 2] = H { n: 0 }.pick(a2);
+    let m3: Array[i64, 3] = H { n: 0 }.pick(a3);
+    println(f"method {m2[0]} {m3[0]}");
+
+    let st: String = "hi";
+    let bv: Vec[i64] = [8, 9];
+    let bu: Vec[String] = ["k"];
+    let cs: String = ident(st);
+    let cv: Vec[i64] = ident(bv);
+    let cu: Vec[String] = ident(bu);
+    println(f"prior {cs} {cv[0]} {cu[0]}");
+}
+"#),
+        "len 4 9\nelem 1 b\nslice 6 z\nvector 10 36\ntuple 1 3\nmethod 3 7\nprior hi 8 k\n"
+    );
+}
+
 /// B-2026-08-31-29 (oracle half) — `let g = ref arr[i]` over an `Array[T, N]`
 /// base reads the element.
 ///

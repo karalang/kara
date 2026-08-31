@@ -515,6 +515,19 @@ pub fn type_to_mono_mangle_token(ty: &Type) -> Option<String> {
                 .collect();
             Some(format!("tup_{}", parts.join("_")))
         }
+        Type::Array { element, size } => {
+            let elem = type_to_mono_mangle_token(element)?;
+            size.as_literal().map(|n| format!("Array_{elem}_{n}"))
+        }
+        Type::Vector { element, lanes } => {
+            let elem = type_to_mono_mangle_token(element)?;
+            lanes.as_literal().map(|n| format!("Vector_{elem}_{n}"))
+        }
+        Type::Slice { element, mutable } => {
+            let elem = type_to_mono_mangle_token(element)?;
+            let m = if *mutable { "mut" } else { "s" };
+            Some(format!("Slice_{m}_{elem}"))
+        }
         Type::Ref(inner) | Type::MutRef(inner) => type_to_mono_mangle_token(inner),
         _ => None,
     }
