@@ -32920,6 +32920,74 @@ bool true
     );
 }
 
+/// B-2026-08-31-9 — a `#[derive(Display)]` struct renders its `Vector` and
+/// narrow-float FIELDS, and renders them the same way at every depth.
+///
+/// Two defects with one symptom. `display_field_is_leaf` omitted `f16`/`bf16`,
+/// so a narrow-float field refused to compile at all — while the same field
+/// read on its own (`f"{h.a}"`) rendered correctly on both backends, which is
+/// the refusal inverted with respect to difficulty. And a `Vector` field could
+/// not join that list: the parts path synthesizes each field expression with
+/// the BASE's span, and a vector interpolation resolves through the span-keyed
+/// `vector_typed_exprs` table, so it misses and falls to the SCALAR renderer.
+/// Admitting it as a leaf printed `WithVec { v: 1, n: 1 }` — one stray lane,
+/// the B-2026-08-29-52 defect — which is why the vector case routes through the
+/// by-pointer renderer instead.
+///
+/// THE `nest` ROW IS THE ONE THAT PROVES THE APPROACH. That spelling already
+/// worked before this fix, because a container element goes through
+/// `emit_struct_debug_display_fn` — the same by-pointer renderer the top-level
+/// case now uses. `top` and `nest` printing the same struct identically is the
+/// assertion that the two paths agree rather than merely both succeeding.
+///
+/// `plain` is the control: a struct whose fields the parts path handles must
+/// keep taking it and keep its text, since the fix adds a second path rather
+/// than replacing the first. `u128` is in it because that width was this same
+/// list's previous omission (B-2026-08-19-23).
+///
+/// Twin of `tests/codegen.rs`'s `e2e_derived_display_renders_vector_and_narrow_float_fields`,
+/// pinned to the same string.
+#[test]
+fn test_derived_display_renders_vector_and_narrow_float_fields() {
+    assert_eq!(
+        run(r#"#[derive(Display)]
+struct WithVec { v: Vector[i32, 4], n: i64 }
+#[derive(Display)]
+struct WithNarrow { a: f16, b: bf16, c: f32 }
+#[derive(Display)]
+struct Plain { n: i64, s: String, w: u128 }
+
+fn main() {
+    let n = env.args().len() as i64;
+    let iv: Vector[i32, 4] = Vector[i32, 4](1i32, -2i32, 3i32, (0i32 - 4i32));
+    let fv: Vector[f64, 2] = Vector[f64, 2](1.5f64, -2.25f64);
+
+    let h = WithVec { v: iv, n: n };
+    println(f"top   {h}");
+    let hs: Vec[WithVec] = [h];
+    println(f"nest  {hs}");
+
+    let g = WithVec { v: fv2(), n: n };
+    println(f"float {g}");
+
+    let m = WithNarrow { a: ((n as f32) + 1.5f32) as f16, b: ((n as f32) + 2.5f32) as bf16, c: (n as f32) + 3.5f32 };
+    println(f"narrow {m}");
+
+    let p = Plain { n: n, s: f"s", w: 340282366920938463463374607431768211455u128 };
+    println(f"plain {p}");
+}
+
+fn fv2() -> Vector[i32, 4] { return Vector[i32, 4](9i32, 8i32, 7i32, 6i32) }
+"#),
+        r#"top   WithVec { v: Vector(1, -2, 3, -4), n: 1 }
+nest  [WithVec { v: Vector(1, -2, 3, -4), n: 1 }]
+float WithVec { v: Vector(9, 8, 7, 6), n: 1 }
+narrow WithNarrow { a: 2.5, b: 3.5, c: 4.5 }
+plain Plain { n: 1, s: s, w: 340282366920938463463374607431768211455 }
+"#
+    );
+}
+
 /// B-2026-08-01-4 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_arg_temp_drop_fires_at_statement_end`, same source and
 /// expected string. The interpreter is the semantics oracle here (fresh

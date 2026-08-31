@@ -1819,6 +1819,19 @@ impl<'ctx> super::Codegen<'ctx> {
     fn display_field_is_leaf(&self, te: &crate::ast::TypeExpr) -> bool {
         if let crate::ast::TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
+                // B-2026-08-31-9 — the canonical primitive list first, so this
+                // copy cannot drift again. It omitted `f16` and `bf16`, so a
+                // `#[derive(Display)]` struct with a narrow-float FIELD refused
+                // to compile, while the same field read on its own (`f"{h.a}"`)
+                // rendered correctly on both backends — the refusal inverted
+                // with respect to difficulty, exactly as the B-2026-08-26-33
+                // note below records for the enum case.
+                //
+                // `Vector[T, N]` is deliberately NOT admitted here — see
+                // `struct_display_needs_type_directed_fn`.
+                if crate::prelude::PRELUDE_PRIMITIVES.contains(&seg.as_str()) {
+                    return true;
+                }
                 return matches!(
                     seg.as_str(),
                     "i8" | "i16"
@@ -1984,11 +1997,60 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Render a user-struct expression to an owning `String` value by
     /// compiling the synthetic f-string built from its fields.
+    /// B-2026-08-31-9 — does this struct have a field the F-STRING PARTS path
+    /// cannot render but the TYPE-DIRECTED one can?
+    ///
+    /// Today that is exactly `Vector[T, N]`, and the reason is the parts path's
+    /// one structural limitation: it synthesizes each field's expression with
+    /// the BASE's span, and a vector interpolation resolves through the
+    /// span-keyed `vector_typed_exprs` table — so the synthesized part looks up
+    /// a span belonging to the struct, misses, and falls through to the SCALAR
+    /// renderer. Measured: admitting `Vector` as a leaf makes `f"{h}"` print
+    /// `Holder { v: 1, n: 1 }` — one stray lane, the exact B-2026-08-29-52
+    /// defect — while `dbg(h)` on the same value is correct.
+    ///
+    /// The type-directed renderer has no such dependency: it dispatches on the
+    /// field's `TypeExpr` and reaches the `Vector` arm B-2026-08-30-39 added.
+    /// It is also already proven on this shape — the SAME struct nested in a
+    /// `Vec` renders correctly today, because a container element goes through
+    /// `emit_struct_debug_display_fn`. This routes the top-level spelling to
+    /// the path the nested one already takes.
+    ///
+    /// Narrow on purpose: a positive test for the one field class known to need
+    /// it, rather than a catch-all fallback on `build_struct_display_parts`
+    /// failing. A catch-all would also swallow genuinely unsupported shapes,
+    /// and `emit_display_fn_for_type_expr` PANICS rather than erroring for
+    /// those — trading a clean diagnostic for a compiler crash.
+    fn struct_display_needs_type_directed_fn(&self, type_name: &str) -> bool {
+        self.type_decls
+            .struct_field_type_exprs
+            .get(type_name)
+            .is_some_and(|tes| {
+                tes.iter().any(|te| {
+                    matches!(&te.kind, crate::ast::TypeKind::Path(p)
+                        if p.segments.last().map(|s| s.as_str()) == Some("Vector"))
+                })
+            })
+    }
+
     pub(super) fn compile_struct_display_string(
         &mut self,
         base: &Expr,
         type_name: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-08-31-9 — route a struct with a `Vector` field through the
+        // by-pointer renderer the nested spelling already uses.
+        if self.struct_display_needs_type_directed_fn(type_name) {
+            let val = self.compile_expr(base)?;
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "struct Display: no current function".to_string())?;
+            let slot = self.create_entry_alloca(fn_val, "sd.val", val.get_type());
+            self.builder.build_store(slot, val).unwrap();
+            let disp = self.emit_struct_debug_display_fn(type_name);
+            let (_acc, out) = self.render_via_display_fn(disp, slot);
+            return Ok(out);
+        }
         let parts = self.build_struct_display_parts(base, type_name)?;
         let lit = Expr {
             kind: ExprKind::InterpolatedStringLit(parts),
