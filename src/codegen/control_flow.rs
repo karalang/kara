@@ -2091,13 +2091,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // mis-reading the struct as the String `{ptr,i64,i64}` layout
             // below (which would extract a non-pointer field and ICE).
             if !self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into()) {
-                return Err(
-                    "Display of a struct argument is supported when the argument is a \
-                     variable or field access (e.g. `let x = …; println(x)` / `x.to_string()`); \
-                     bind a struct literal or call result to a `let` first (user-struct \
-                     Display, subtask-5 follow-on)"
-                        .to_string(),
-                );
+                return Err(self.deferred_display_error(&args[0].value, true));
             }
             // String struct `{ ptr, i64, i64 }` (data, len, cap). An earlier
             // fix moved this off a bare `%s` (which puts/printf treats as a

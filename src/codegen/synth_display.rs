@@ -298,11 +298,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (buf_ptr, len) = self.format_i128_to_stack_buf(v, type_name == "u128");
                 self.emit_string_append_raw(acc, buf_ptr, len);
             }
-            "f32" | "f64" => {
+            // B-2026-08-31-10 — f16/bf16 belong on this arm too. They were
+            // absent, so an `Option[f16]` reaching the type-directed renderer
+            // fell to the catch-all and PANICKED the compiler. The formatter
+            // widens any narrower float to f64 itself (routing bf16 through
+            // f32, per B-2026-07-22-1), so the arm needs no width-specific
+            // work — exactly as it needed none for f32.
+            "f32" | "f64" | "f16" | "bf16" => {
                 // Render with Rust's shortest-round-trip `{}` (via the runtime
                 // formatter) so a struct's `Display` prints floats identically
                 // to the interpreter — not C `%g`. `format_f64_to_stack_buf`
-                // widens f32→f64 itself.
+                // widens narrower floats to f64 itself.
                 let v = self
                     .builder
                     .build_load(ty, val_ptr, "v")
@@ -1238,34 +1244,24 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn is_inline_displayable_payload(te: &TypeExpr) -> bool {
         if let TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
-                return matches!(
-                    seg.as_str(),
-                    "i8" | "i16"
-                        | "i32"
-                        | "i64"
-                        | "isize"
-                        | "u8"
-                        | "u16"
-                        | "u32"
-                        | "u64"
-                        | "usize"
-                        // The 128-bit widths are inline-displayable like any
-                        // other scalar — they occupy TWO payload words rather
-                        // than one, which the word rejoin in
-                        // `rebuild_value_from_payload_words` handles. Absent
-                        // here, `println(o)` on an `Option[i128]` fell through
-                        // to the struct-argument error path and reported
-                        // "bind a struct literal to a `let` first" about a
-                        // plain variable (B-2026-08-19-23).
-                        | "i128"
-                        | "u128"
-                        | "f32"
-                        | "f64"
-                        | "bool"
-                        | "char"
-                        | "String"
-                        | "str"
-                );
+                // The 128-bit widths are inline-displayable like any other
+                // scalar — they occupy TWO payload words rather than one,
+                // which the word rejoin in `rebuild_value_from_payload_words`
+                // handles. Absent here, `println(o)` on an `Option[i128]` fell
+                // through to the struct-argument error path and reported "bind
+                // a struct literal to a `let` first" about a plain variable
+                // (B-2026-08-19-23).
+                //
+                // B-2026-08-31-10: this was a hand-written width list that
+                // stopped at f32/f64, so `Option[f16]` / `Option[bf16]` hit
+                // that same misleading error even though
+                // `rebuild_value_from_payload_words`'s float branch has
+                // truncated-then-bitcast narrow floats correctly since
+                // B-2026-07-20-12. `PRELUDE_PRIMITIVES` is the canonical list
+                // every other module reads; `str` is the one extra name here
+                // (it is not a prelude primitive but shares String's layout).
+                return crate::prelude::PRELUDE_PRIMITIVES.contains(&seg.as_str())
+                    || seg.as_str() == "str";
             }
         }
         false
@@ -1344,19 +1340,186 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn is_reconstructable_display_payload(&self, te: &TypeExpr) -> bool {
+        self.reconstructable_display_payload_inner(te, &mut Vec::new())
+    }
+
+    /// `seen` is the stack of user-struct names currently being expanded. A
+    /// RECURSIVE type re-enters its own name and would otherwise recurse
+    /// forever — `shared struct ListNode { val: i64, next: Option[ListNode] }`
+    /// overflowed the compiler's stack rather than answering, on a program that
+    /// already compiled and rendered before this predicate learned to walk
+    /// struct fields at all (B-2026-08-31-10). A repeat is answered `true`: the
+    /// only way to build a finite recursive type is through an indirection
+    /// (`shared`, or an `Option` that boxes), so the cycle's own edge always
+    /// reconstructs — and the surrounding fields are still checked on the way
+    /// down.
+    fn reconstructable_display_payload_inner(&self, te: &TypeExpr, seen: &mut Vec<String>) -> bool {
         if Self::is_inline_displayable_payload(te) {
             return true;
         }
-        if let TypeKind::Path(p) = &te.kind {
-            if let Some(seg) = p.segments.last() {
-                if let Some(field_tes) = self.type_decls.struct_field_type_exprs.get(seg) {
-                    return !field_tes.is_empty()
-                        && field_tes.len() <= 3
-                        && field_tes.iter().all(Self::is_scalar_word_display_field);
-                }
+        match &te.kind {
+            // A tuple is rebuilt FIELD BY FIELD from sequential words
+            // (`rebuild_value_from_payload_word_slice`'s struct branch), so the
+            // recursion is the honest condition: every field must reconstruct.
+            TypeKind::Tuple(elems) => {
+                !elems.is_empty()
+                    && elems
+                        .iter()
+                        .all(|e| self.reconstructable_display_payload_inner(e, seen))
             }
+            TypeKind::Path(p) => {
+                let Some(seg) = p.segments.last().map(String::as_str) else {
+                    return false;
+                };
+                // HANDLE-shaped stdlib collections. The payload is the
+                // `{ptr, len, cap}` triple (or a bare handle pointer) that the
+                // reconstruction already round-trips — the SAME shape as
+                // `String`, which this predicate has always admitted. Element
+                // types take no part in the reconstruction; they are only
+                // rendered, by the type-directed dispatcher. `VecDeque` is
+                // absent because it has no `Display` at all — the typechecker
+                // rejects the interpolation before codegen sees it — and this
+                // list holds only shapes that were measured against the
+                // interpreter.
+                if matches!(seg, "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet") {
+                    return true;
+                }
+                // A `shared` type is an RC HANDLE — one pointer word, whatever
+                // its fields are — so it reconstructs by `inttoptr` and its
+                // renderer walks the pointee. Checked ahead of the by-value
+                // struct arm below for the same reason
+                // `emit_display_fn_for_type_expr` checks `shared_types` ahead of
+                // `struct_field_names`: a shared type is registered in BOTH, and
+                // the field walk is wrong for it.
+                if self.type_decls.shared_types.contains_key(seg) {
+                    return true;
+                }
+                // A NESTED Option/Result is a plain struct of words, and the
+                // deboxing unpack handles the spilled case.
+                if matches!(seg, "Option" | "Result") {
+                    return p.generic_args.as_ref().is_some_and(|args| {
+                        args.iter().all(|a| match a {
+                            GenericArg::Type(t) => {
+                                self.reconstructable_display_payload_inner(t, seen)
+                            }
+                            _ => false,
+                        })
+                    });
+                }
+                // MEASURED EXCLUSIONS (B-2026-08-31-10). `Vector[T, N]` lowers
+                // to an LLVM vector type, which `llvm_type_word_count` counts
+                // as ONE word (its `_ => 1` catch-all) — so a 4-lane payload
+                // claims a single slot, is never deboxed, and reconstructs as
+                // garbage. Admitting it here printed
+                // `Some(Vector(0, 94011124162560, 1, 0))` against the
+                // interpreter's `Some(Vector(1, 2, 3, 4))`. `Array[T, N]` has
+                // no arm in `emit_display_fn_for_type_expr` at all and PANICS
+                // the compiler. Both are pre-existing gaps in the enum-payload
+                // machinery — a user enum with a `Vector` payload already
+                // prints the same garbage — so they stay on the deferred-error
+                // path rather than becoming a new way to reach them.
+                if matches!(seg, "Vector" | "Array" | "Slice") {
+                    return false;
+                }
+                // A user struct: rebuilt field by field, so recurse. The old
+                // rule here was "≤ 3 fields, all one-word scalars", which
+                // refused a struct with a `String` field or a fourth `i64`
+                // even though `rebuild_payload_deboxing_if_spilled` handles
+                // both (measured: `Option[P]` with `P { x: i64, y: String }`
+                // and `Option[Q]` with four `i64`s both render identically to
+                // the interpreter).
+                if let Some(field_tes) = self.type_decls.struct_field_type_exprs.get(seg) {
+                    if seen.iter().any(|s| s == seg) {
+                        return true;
+                    }
+                    seen.push(seg.to_string());
+                    let ok = !field_tes.is_empty()
+                        && field_tes
+                            .iter()
+                            .all(|f| self.reconstructable_display_payload_inner(f, seen));
+                    seen.pop();
+                    return ok;
+                }
+                // A user enum reaching here already has a `Display` — the
+                // typechecker rejects the f-string otherwise — and its own
+                // renderer walks its variants.
+                self.type_decls.enum_layouts.contains_key(seg)
+            }
+            _ => false,
         }
-        false
+    }
+
+    /// B-2026-08-31-10 — the message for a Display the synthesizer declines.
+    ///
+    /// One string used to serve two very different arrivals here. The first is
+    /// the one it describes: an f-string (or `println`) interpolating a struct
+    /// LITERAL or a call result, where binding to a `let` really is the fix.
+    /// The second is an `Option`/`Result` PLACE EXPRESSION whose payload shape
+    /// `is_reconstructable_display_payload` declines — already a `let`-bound
+    /// variable, so the prescribed remedy was not merely unhelpful but false,
+    /// and the text named neither the type nor the part of it that is
+    /// unsupported. `f"{o}"` on an `Option[Vector[i64, 4]]` read as advice to
+    /// bind a variable that is three lines up.
+    ///
+    /// `arg` distinguishes the `println(x)` spelling from the f-string one so
+    /// each keeps its own example, which is the only thing the two messages
+    /// ever differed in.
+    ///
+    /// The declined-payload arm deliberately prescribes NO source-level
+    /// rewrite. The obvious one — destructure with `match`/`if let` and format
+    /// the binding — is itself wrong for the two shapes that reach it: an
+    /// `Array[i64, 3]` payload bound by a match arm prints `Some(1)` under
+    /// codegen against the interpreter's `Some([1, 2, 3])`, and a
+    /// `Vector[i64, 4]` prints `Some(0)` against `Some(Vector(1, 2, 3, 4))`.
+    /// Advising it would trade a clean compile error for silently wrong
+    /// output. The one honest escape is the backend that does render it.
+    pub(super) fn deferred_display_error(&self, e: &Expr, arg: bool) -> String {
+        let key = (e.span.offset, e.span.length);
+        if let Some(te) = self.display.display_option_result_types.get(&key) {
+            let full = crate::formatter::render_type_expr(te);
+            let payloads: Vec<TypeExpr> = if let Some(pte) = Self::option_payload_te(te) {
+                vec![pte]
+            } else if let Some((ok_te, err_te)) = Self::result_payload_tes(te) {
+                vec![ok_te, err_te]
+            } else {
+                Vec::new()
+            };
+            let declined = payloads.into_iter().find(|pte| {
+                !self
+                    .is_reconstructable_display_payload(&Self::peel_scalar_ref_display_payload(pte))
+            });
+            if let Some(pte) = declined {
+                let payload = crate::formatter::render_type_expr(&pte);
+                return format!(
+                    "Display of `{full}` is not yet supported under codegen: its `{payload}` \
+                     payload cannot be reconstructed from the enum's inline payload words. \
+                     The tree-walk backend (`karac run --interp`) renders it."
+                );
+            }
+            return format!("Display of `{full}` is not yet supported under codegen.");
+        }
+        // A place expression that got here is NOT the literal/call-result case
+        // the advice below addresses, so do not offer it.
+        if matches!(
+            e.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
+        ) {
+            return "Display of this value is not yet supported under codegen (user-struct \
+                    Display, subtask-5 follow-on)"
+                .to_string();
+        }
+        if arg {
+            "Display of a struct argument is supported when the argument is a variable or \
+             field access (e.g. `let x = …; println(x)` / `x.to_string()`); bind a struct \
+             literal or call result to a `let` first (user-struct Display, subtask-5 \
+             follow-on)"
+                .to_string()
+        } else {
+            "Display of a struct in an f-string is supported when the interpolated expression \
+             is a variable or field access (e.g. `f\"{x}\"`); bind a struct literal or call \
+             result to a `let` first (user-struct Display, subtask-5 follow-on)"
+                .to_string()
+        }
     }
 
     /// Mangle a `TypeExpr` into the identifier fragment that keys every

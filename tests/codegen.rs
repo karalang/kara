@@ -3862,6 +3862,27 @@ mod codegen_tests {
         }
     }
 
+    /// The error text codegen declines a program with. Runs the FULL pipeline
+    /// (ownership included) so the span-keyed display tables the diagnostic
+    /// reads are populated exactly as `karac build` populates them.
+    fn codegen_error(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        match compile_to_ir(&parsed.program, Some(&ownership), None) {
+            Ok(_) => panic!("expected codegen to decline this program, but it compiled"),
+            Err(e) => e,
+        }
+    }
+
     fn ir_for(src: &str) -> String {
         let mut parsed = karac::parse(src);
         assert!(
@@ -11953,6 +11974,193 @@ float WithVec { v: Vector(9, 8, 7, 6), n: 1 }
 narrow WithNarrow { a: 2.5, b: 3.5, c: 4.5 }
 plain Plain { n: 1, s: s, w: 340282366920938463463374607431768211455 }
 "#
+        );
+    }
+
+    /// B-2026-08-31-10 — an `Option`/`Result` whose payload is a MULTI-WORD
+    /// value renders under codegen, identically to the interpreter.
+    ///
+    /// `is_reconstructable_display_payload` — the gate on the Option/Result
+    /// Display synthesizer — admitted primitives, `String`, and a struct of at
+    /// most three one-word scalars. Everything else fell through to the
+    /// deferred struct-Display error, so `f"{o}"` on an `Option[Vec[i64]]` did
+    /// not compile while the interpreter printed `Some([9])`.
+    ///
+    /// The gate was more conservative than the machinery behind it. The payload
+    /// renderer (`emit_enum_field_display`) already deboxes a spilled payload
+    /// and dispatches type-directedly, which is why a USER enum with the same
+    /// `Vec` payload — `#[derive(Display)] enum E { V(Vec[i64]) }` — has always
+    /// rendered: it reaches that renderer without passing this gate. The oracle
+    /// for the widening is therefore "whatever a user enum can already print".
+    ///
+    /// Each row is a shape the old gate refused. `four` and `struct` exceed it
+    /// in the two different ways it was written (a fourth field; a `String`
+    /// field), and both are boxed payloads, so they exercise the deboxing arm.
+    /// `f16`/`bf16` are the SEPARATE half of the same row: a sixth hand-written
+    /// primitive-width list stopping at f32/f64 (B-2026-08-30-25 /
+    /// B-2026-08-30-40 / B-2026-08-31-9 are the others), which also needed an
+    /// arm in `emit_display_fn_for_type` — without it the widened gate turned a
+    /// clean error into a compiler PANIC.
+    ///
+    /// The bare `println(ov)` line covers the argument spelling, which reaches
+    /// the same synthesizer through a different error site. The `call` row is
+    /// the span-keyed call-result path (as opposed to the name-keyed variable
+    /// one); it renders correctly but LEAKS its payload once per evaluation —
+    /// a pre-existing hole in the Option/Result f-string temp path that
+    /// predates this widening (B-2026-08-31-17), which is why the ASAN twin
+    /// uses a `let`-bound spelling instead.
+    ///
+    /// `Vector[T, N]` and `Array[T, N]` are deliberately NOT here: admitting
+    /// them printed `Some(Vector(0, 94011124162560, 1, 0))` and `Some(1)`
+    /// against the interpreter — a pre-existing miscompile of the enum-payload
+    /// word reconstruction that `match` shares, filed separately. They keep the
+    /// clean refusal; `codegen_declined_option_payload_names_its_shape` pins it.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_option_result_display_multiword_payloads`, pinned to the same
+    /// string.
+    #[test]
+    fn e2e_option_result_display_multiword_payloads() {
+        let Some(out) = run_program(
+            r#"#[derive(Display)]
+struct P { x: i64, y: String }
+#[derive(Display)]
+struct Q { a: i64, b: i64, c: i64, d: i64 }
+#[derive(Display)]
+enum Inner { A(i64), B }
+
+fn mk(n: i64) -> Option[Vec[i64]] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    return Some(v)
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    v.push(n + 1);
+    let ov: Option[Vec[i64]] = Some(v);
+    println(f"vec    {ov}");
+    println(ov);
+
+    let ot: Option[(i64, i64)] = Some((n, n + 1));
+    println(f"tuple  {ot}");
+
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"a", n);
+    let om: Option[Map[String, i64]] = Some(m);
+    println(f"map    {om}");
+
+    let mut sm: SortedMap[String, i64] = SortedMap.new();
+    sm.insert(f"k", n);
+    let osm: Option[SortedMap[String, i64]] = Some(sm);
+    println(f"smap   {osm}");
+
+    let oo: Option[Option[i64]] = Some(Some(n));
+    println(f"nested {oo}");
+
+    let op: Option[P] = Some(P { x: n, y: f"s" });
+    println(f"struct {op}");
+
+    let oq: Option[Q] = Some(Q { a: n, b: n, c: n, d: n });
+    println(f"four   {oq}");
+
+    let oi: Option[Inner] = Some(Inner.A(n));
+    println(f"enum   {oi}");
+
+    let of: Option[f16] = Some(((n as f32) + 1.5f32) as f16);
+    println(f"f16    {of}");
+    let ob: Option[bf16] = Some(((n as f32) + 2.25f32) as bf16);
+    println(f"bf16   {ob}");
+
+    let mut vs: Vec[String] = Vec.new();
+    vs.push(f"q");
+    let re: Result[i64, Vec[String]] = Err(vs);
+    println(f"result {re}");
+
+    println(f"call   {mk(n)}");
+
+    let nn: Option[Vec[i64]] = None;
+    println(f"none   {nn}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"vec    Some([1, 2])
+Some([1, 2])
+tuple  Some((1, 2))
+map    Some({a: 1})
+smap   Some(SortedMap{k: 1})
+nested Some(Some(1))
+struct Some(P { x: 1, y: s })
+four   Some(Q { a: 1, b: 1, c: 1, d: 1 })
+enum   Some(A(1))
+f16    Some(2.5)
+bf16   Some(3.25)
+result Err([q])
+call   Some([1])
+none   None
+"#
+        );
+    }
+
+    /// B-2026-08-31-10 (diagnostic half) — the payload shapes that STAY
+    /// declined say which type and which payload, and stop prescribing a `let`
+    /// that is already there.
+    ///
+    /// One string served two arrivals: an f-string interpolating a struct
+    /// LITERAL or call result, where "bind it to a `let` first" is the fix, and
+    /// an Option/Result PLACE EXPRESSION whose payload the synthesizer declines
+    /// — already `let`-bound, so the advice was false as well as unhelpful.
+    ///
+    /// The message also prescribes no rewrite, deliberately. The obvious one —
+    /// destructure and format the binding — is itself wrong for both shapes
+    /// that reach it: `match` on an `Option[Array[i64, 3]]` prints `Some(1)`
+    /// under codegen against the interpreter's `Some([1, 2, 3])`, and an
+    /// `Option[Vector[i64, 4]]` prints `Some(0)` against
+    /// `Some(Vector(1, 2, 3, 4))`. Advising it would trade a clean compile
+    /// error for silently wrong output.
+    ///
+    /// The literal/call-result case must KEEP the old text — the fix adds a
+    /// branch rather than replacing the message.
+    #[test]
+    fn codegen_declined_option_payload_names_its_shape() {
+        let err = codegen_error(
+            r#"fn main() {
+    let vv: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    let ovv: Option[Vector[i64, 4]] = Some(vv);
+    println(f"{ovv}");
+}
+"#,
+        );
+        assert!(
+            err.contains("Option[Vector[i64, 4]]") && err.contains("`Vector[i64, 4]` payload"),
+            "declined payload must name the type and the payload; got: {err}"
+        );
+        assert!(
+            !err.contains("bind a struct literal"),
+            "declined place expression must not advise a `let` that is already there; got: {err}"
+        );
+        assert!(
+            !err.contains("match") && !err.contains("if let"),
+            "must not prescribe a destructure that miscompiles for this shape; got: {err}"
+        );
+
+        let lit_err = codegen_error(
+            r#"#[derive(Display)]
+struct P { x: i64 }
+fn mk() -> P { return P { x: 1 } }
+fn main() { println(f"{mk()}"); }
+"#,
+        );
+        assert!(
+            lit_err.contains("bind a struct literal or call result to a `let` first"),
+            "the literal/call-result case keeps its own advice; got: {lit_err}"
         );
     }
 

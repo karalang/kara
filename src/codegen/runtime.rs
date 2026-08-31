@@ -13622,13 +13622,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if val.is_struct_value()
             && !self.llvm_ty_is_vec_struct(val.into_struct_value().get_type().into())
         {
-            return Err(
-                "Display of a struct in an f-string is supported when the interpolated \
-                 expression is a variable or field access (e.g. `f\"{x}\"`); bind a struct \
-                 literal or call result to a `let` first (user-struct Display, subtask-5 \
-                 follow-on)"
-                    .to_string(),
-            );
+            return Err(self.deferred_display_error(e, false));
         }
         Ok(self.compile_fstr_part_to_cstr(val, e))
     }

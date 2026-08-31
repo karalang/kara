@@ -32847,7 +32847,12 @@ fn gt_po[T: PartialOrd](a: T, b: T) -> bool { return a > b }
 fn ge_po[T: PartialOrd](a: T, b: T) -> bool { return a >= b }
 
 fn main() {
-    let n = env.args().len() as i64;
+    // The seed is the literal 1 rather than `env.args().len()`: an IN-PROCESS
+    // interpreter test sees the TEST binary's argv, which is 1 only when the
+    // suite runs unfiltered and 2+ under `cargo test <filter>`. The codegen
+    // twin keeps `env.args()` because it needs an opaque seed to survive -O2
+    // folding, and 1 is what that yields under its harness.
+    let n: i64 = 1;
     println(f"ord  {lt_ord(n, n + 1)} {lt_ord(f"a", f"b")}");
     println(f"i64  {lt_po(n, n + 1)} {le_po(n, n)} {gt_po(n + 1, n)} {ge_po(n, n + 1)}");
     let u: u64 = 18446744073709551615u64;
@@ -32920,6 +32925,106 @@ bool true
     );
 }
 
+/// B-2026-08-31-10 — the ORACLE half: what an `Option`/`Result` with a
+/// multi-word payload prints. Twin of `tests/codegen.rs`'s
+/// `e2e_option_result_display_multiword_payloads`, pinned to the same string.
+///
+/// The interpreter rendered every one of these all along; codegen's
+/// `is_reconstructable_display_payload` gate refused them and the f-string
+/// failed to compile. This side is what the compiled side is asserted against,
+/// so it belongs in the tree even though it never went RED — a future change
+/// that alters, say, how a `Map` payload nests inside `Some(…)` has to move
+/// both.
+#[test]
+fn test_option_result_display_multiword_payloads() {
+    assert_eq!(
+        run(r#"#[derive(Display)]
+struct P { x: i64, y: String }
+#[derive(Display)]
+struct Q { a: i64, b: i64, c: i64, d: i64 }
+#[derive(Display)]
+enum Inner { A(i64), B }
+
+fn mk(n: i64) -> Option[Vec[i64]] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    return Some(v)
+}
+
+fn main() {
+    // The seed is the literal 1 rather than `env.args().len()`: an IN-PROCESS
+    // interpreter test sees the TEST binary's argv, which is 1 only when the
+    // suite runs unfiltered and 2+ under `cargo test <filter>`. The codegen
+    // twin keeps `env.args()` because it needs an opaque seed to survive -O2
+    // folding, and 1 is what that yields under its harness.
+    let n: i64 = 1;
+
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    v.push(n + 1);
+    let ov: Option[Vec[i64]] = Some(v);
+    println(f"vec    {ov}");
+    println(ov);
+
+    let ot: Option[(i64, i64)] = Some((n, n + 1));
+    println(f"tuple  {ot}");
+
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"a", n);
+    let om: Option[Map[String, i64]] = Some(m);
+    println(f"map    {om}");
+
+    let mut sm: SortedMap[String, i64] = SortedMap.new();
+    sm.insert(f"k", n);
+    let osm: Option[SortedMap[String, i64]] = Some(sm);
+    println(f"smap   {osm}");
+
+    let oo: Option[Option[i64]] = Some(Some(n));
+    println(f"nested {oo}");
+
+    let op: Option[P] = Some(P { x: n, y: f"s" });
+    println(f"struct {op}");
+
+    let oq: Option[Q] = Some(Q { a: n, b: n, c: n, d: n });
+    println(f"four   {oq}");
+
+    let oi: Option[Inner] = Some(Inner.A(n));
+    println(f"enum   {oi}");
+
+    let of: Option[f16] = Some(((n as f32) + 1.5f32) as f16);
+    println(f"f16    {of}");
+    let ob: Option[bf16] = Some(((n as f32) + 2.25f32) as bf16);
+    println(f"bf16   {ob}");
+
+    let mut vs: Vec[String] = Vec.new();
+    vs.push(f"q");
+    let re: Result[i64, Vec[String]] = Err(vs);
+    println(f"result {re}");
+
+    println(f"call   {mk(n)}");
+
+    let nn: Option[Vec[i64]] = None;
+    println(f"none   {nn}");
+}
+"#),
+        r#"vec    Some([1, 2])
+Some([1, 2])
+tuple  Some((1, 2))
+map    Some({a: 1})
+smap   Some(SortedMap{k: 1})
+nested Some(Some(1))
+struct Some(P { x: 1, y: s })
+four   Some(Q { a: 1, b: 1, c: 1, d: 1 })
+enum   Some(A(1))
+f16    Some(2.5)
+bf16   Some(3.25)
+result Err([q])
+call   Some([1])
+none   None
+"#
+    );
+}
+
 /// B-2026-08-31-9 — a `#[derive(Display)]` struct renders its `Vector` and
 /// narrow-float FIELDS, and renders them the same way at every depth.
 ///
@@ -32958,7 +33063,12 @@ struct WithNarrow { a: f16, b: bf16, c: f32 }
 struct Plain { n: i64, s: String, w: u128 }
 
 fn main() {
-    let n = env.args().len() as i64;
+    // The seed is the literal 1 rather than `env.args().len()`: an IN-PROCESS
+    // interpreter test sees the TEST binary's argv, which is 1 only when the
+    // suite runs unfiltered and 2+ under `cargo test <filter>`. The codegen
+    // twin keeps `env.args()` because it needs an opaque seed to survive -O2
+    // folding, and 1 is what that yields under its harness.
+    let n: i64 = 1;
     let iv: Vector[i32, 4] = Vector[i32, 4](1i32, -2i32, 3i32, (0i32 - 4i32));
     let fv: Vector[f64, 2] = Vector[f64, 2](1.5f64, -2.25f64);
 

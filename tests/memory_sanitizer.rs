@@ -788,6 +788,93 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-10 — the memory half of widening the Option/Result Display
+    /// gate to multi-word payloads.
+    ///
+    /// Every shape here used to be REFUSED by codegen, so none of them has ever
+    /// had its ownership exercised on the compiled side. The renderer appends a
+    /// COPY of the payload's bytes into a fresh accumulator and must not touch
+    /// the payload's own buffer — so the two ways to get this wrong are a leak
+    /// (the rendered value's `Vec`/`String`/`Map` never freed) and a
+    /// double-free/UAF (the renderer freeing a payload its owner still holds).
+    /// Neither shows up in an output comparison, which is why the E2E twin
+    /// cannot stand in for this.
+    ///
+    /// `ov` is rendered TWICE and then READ again, so a renderer that freed what
+    /// it rendered surfaces as a use-after-free on the `len()` rather than
+    /// staying latent, and a renderer that freed it twice surfaces as a
+    /// double-free. `om` and `re` cover the other two payload families the
+    /// widening admits (a `Map` handle; a `Result`'s error arm), each carrying
+    /// `String`s so there is real heap behind the handle.
+    ///
+    /// The loop is a `let`-bound Option per iteration rather than an
+    /// interpolated CALL RESULT (`f"{mk(i)}"`), which leaks its payload once per
+    /// evaluation — a PRE-EXISTING hole in the Option/Result f-string temp
+    /// path, not something this widening introduced: the same fixture with an
+    /// `Option[String]` return, a shape admitted since B-2026-07-08-9, leaks 20
+    /// buffers on the unmodified compiler. Filed as B-2026-08-31-17; when that
+    /// lands, the call-result spelling belongs here too.
+    #[test]
+    fn asan_option_display_multiword_payload_frees_once() {
+        let Some((out, status)) = run_under_asan(
+            r#"fn mk(n: i64) -> Option[Vec[String]] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"abcdefghijklmnopqrstuvwxyz{n}");
+    return Some(v)
+}
+
+fn main() {
+    let n: i64 = env.args().len();
+    let mut i = 0;
+    while i < 20 {
+        let o = mk(i + n);
+        println(f"call {o}");
+        i = i + 1;
+    }
+
+    let mut w: Vec[String] = Vec.new();
+    w.push(f"0123456789012345678901234567890123456789");
+    let ov: Option[Vec[String]] = Some(w);
+    println(f"var  {ov}");
+    println(f"var  {ov}");
+    match ov {
+        Some(v) => { println(f"len  {v.len()}"); }
+        None => { println("len  none"); }
+    }
+
+    let mut m: Map[String, String] = Map.new();
+    m.insert(f"kkkkkkkkkkkkkkkkkkkkkkkk", f"vvvvvvvvvvvvvvvvvvvvvvvv");
+    let om: Option[Map[String, String]] = Some(m);
+    println(f"map  {om}");
+
+    let mut e: Vec[String] = Vec.new();
+    e.push(f"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    let re: Result[i64, Vec[String]] = Err(e);
+    println(f"res  {re}");
+    println("end");
+}
+"#,
+            "asan_option_display_multiword_payload_frees_once",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(
+            out.matches("call Some([abcdefghijklmnopqrstuvwxyz").count(),
+            20,
+            "the loop did not render every iteration:\n{out}"
+        );
+        for want in [
+            "var  Some([0123456789012345678901234567890123456789])",
+            "len  1",
+            "map  Some({kkkkkkkkkkkkkkkkkkkkkkkk: vvvvvvvvvvvvvvvvvvvvvvvv})",
+            "res  Err([eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee])",
+            "end",
+        ] {
+            assert!(out.contains(want), "missing {want:?}:\n{out}");
+        }
+    }
+
     /// Masking a returned field's `Drop` BODY out of an own-`Drop` parent's
     /// wrapper does not mask its MEMORY (B-2026-08-28-21).
     ///

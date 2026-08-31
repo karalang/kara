@@ -34479,20 +34479,30 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
 /// CANNOT render an `E`, the build must fail loudly rather than emit an empty
 /// message.
 ///
-/// `Option[(i64, i64)]` is the live example. It passes
-/// `E_MAIN_ERR_NOT_DISPLAY`, the interpreter renders it `Some((1, 2))`, and
-/// the f-string renderer has no path for an `Option` with an aggregate
-/// payload — so before the fail-closed change `karac build` succeeded and the
-/// program printed `Error: ` and exited 1. The same operand in an ordinary
-/// `f"{o}"` was already a hard codegen error, so the fallback was also making
-/// the entry point disagree with the rest of the language.
+/// `Option[Vector[i64, 4]]` is the live example. It passes
+/// `E_MAIN_ERR_NOT_DISPLAY`, the interpreter renders it
+/// `Some(Vector(1, 2, 3, 4))`, and the f-string renderer declines an `Option`
+/// whose payload is an LLVM vector — so before the fail-closed change
+/// `karac build` succeeded and the program printed `Error: ` and exited 1. The
+/// same operand in an ordinary `f"{o}"` was already a hard codegen error, so
+/// the fallback was also making the entry point disagree with the rest of the
+/// language.
+///
+/// The original example here was `Option[(i64, i64)]`, which B-2026-08-31-10
+/// taught the renderer — so the second half asserts THAT shape now builds and
+/// agrees with the interpreter. Keeping both rows is the point: the fixture
+/// has to stay pinned to a shape codegen genuinely cannot render, and the
+/// shape it used to use is now a regression guard for the capability that
+/// retired it, rather than a deleted line nobody can find again.
 #[cfg(feature = "llvm")]
 #[test]
 fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     let tmp = scratch_project("mainerr-failclosed");
     write(
         &tmp.join("m.kara"),
-        "fn main() -> Result[(), Option[(i64, i64)]] { return Err(Some((1, 2))); }\n",
+        "fn main() -> Result[(), Option[Vector[i64, 4]]] {\n\
+         \x20   return Err(Some(Vector[i64, 4](1, 2, 3, 4)));\n\
+         }\n",
     );
     let o = karac_bin()
         .current_dir(&tmp)
@@ -34502,7 +34512,6 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     let exe = tmp.join("m");
     let built_ok = o.status.success() && exe.exists();
     let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
-    let _ = std::fs::remove_dir_all(&tmp);
 
     assert!(
         !built_ok,
@@ -34510,10 +34519,50 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
          binary that prints `Error: ` with nothing after it"
     );
     assert!(
-        stderr.contains("cannot render") && stderr.contains("Option[(i64, i64)]"),
+        stderr.contains("cannot render") && stderr.contains("Option[Vector[i64, 4]]"),
         "the diagnostic must name the offending error type and say the exit \
          line would print nothing; got: {stderr}"
     );
+
+    // The retired example: renderable since B-2026-08-31-10, on every backend.
+    write(
+        &tmp.join("n.kara"),
+        "fn main() -> Result[(), Option[(i64, i64)]] { return Err(Some((1, 2))); }\n",
+    );
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "n.kara"])
+        .output()
+        .expect("karac run --interp");
+    let want = String::from_utf8_lossy(&interp.stderr)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(want, "Error: Some((1, 2))", "interpreter oracle");
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "n.kara"])
+        .output()
+        .expect("karac build");
+    let exe2 = tmp.join("n");
+    if built.status.success() && exe2.exists() {
+        let r = std::process::Command::new(&exe2)
+            .output()
+            .expect("run built");
+        let got = String::from_utf8_lossy(&r.stderr)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(got, want, "AOT must match the interpreter");
+    } else {
+        panic!(
+            "`Option[(i64, i64)]` as main's error type must build now; got: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// B-2026-08-26-28 — A NESTED `Result` AS `main`'s ERROR TYPE MUST KEEP BOTH
