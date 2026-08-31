@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 336 | 3 |
-| run-vs-build | 274 | 24 |
+| run-vs-build | 275 | 25 |
 | leak | 240 | 7 |
 | missing-feature | 191 | 1 |
-| double-free | 161 | 2 |
+| double-free | 161 | 1 |
 | codegen-gap | 156 | 2 |
 | diagnostics | 114 | 2 |
 | false-positive | 101 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1308 | 39 |
+| codegen | 1309 | 39 |
 | interp | 295 | 24 |
 | typecheck | 283 | 0 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1909 surfaced · 47 open · 1833 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1910 surfaced · 47 open · 1834 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (47)
 
@@ -169,7 +169,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1909 surfaced
 | B-2026-08-31-22 | 2026-08-31 | interp+codegen | medium | A DISCARDED `if`/`else` WHOSE ARMS ARE OWN-`Drop` ENUM CTORS RUNS ONE BODY ON THE INTERPRETER AND NONE ON EITHER COMPILED BACKEND -- `let _ = if c { E.A(mk(8)) } else { E.B };` prints `dE` under `--interp` and nothing under `karac run` / `karac build`, while stranding 6 B; the DIRECT spelling `let _ = E.A(mk(8));` is correct at `dE dR8` on all three. | — |
 | B-2026-08-31-25 | 2026-08-31 | codegen | medium | `Slice[T]` HAS NO Display UNDER CODEGEN AT ANY DEPTH -- `f"{s}"` on a slice is a hard build error where the interpreter prints `[1, 2]`, and it is the last shape the Option/Result Display gate still has to decline | — |
 | B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
-| B-2026-08-31-30 | 2026-08-31 | codegen | high | THE `if let` / `let ... else` / NESTED-`match` SPELLINGS OF A STRUCT DESTRUCTURE DOUBLE FREE A MOVED-OUT HEAP FIELD ON BOTH COMPILED BACKENDS -- only the flat `match` spelling has the #16 source-field suppression | — |
 | B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | — |
 | B-2026-08-31-32 | 2026-08-31 | interp | medium | THE INTERPRETER RUNS NO `Drop` BODY AT ALL FOR A FRESH-TEMP STRUCT SCRUTINEE THAT AN ARM DESTRUCTURES -- `match H { .. } { H { r, .. } => .. }`; both compiled backends run it once | — |
 | B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | — |
@@ -177,6 +176,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1909 surfaced
 | B-2026-08-31-35 | 2026-08-31 | interp+codegen | medium | A DISCARDED BRANCH WHOSE ARM LITERAL CONSUMES A LOCAL RUNS THAT LOCAL'S `Drop` BODY TWICE ON ALL THREE BACKENDS -- `let t = mkd(7); let _ = if n == 0 { W { r: t, b: 1 } } else { .. };` prints `dD7` twice, once at the discard and once at the local's own scope end; the projected spelling (`W { r: t.r, .. }` over a local `W`) doubles identically | — |
 | B-2026-08-31-36 | 2026-08-31 | interp | medium | THE INTERPRETER BINDS THE WHOLE CONTAINER, NOT THE ELEMENT, FOR `let g = ref c[i]` WHEN `c` IS A `Slice` OR A `Map` -- codegen and the typechecker both say `i64`, the interpreter says `Slice` | — |
 | B-2026-08-31-37 | 2026-08-31 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly reachable | — |
+| B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 
 ### Relocated (2)
 
@@ -209,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1909 surfaced
 
 </details>
 
-### Fixed (1833)
+### Fixed (1834)
 
-<details><summary>1833 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1834 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2048,6 +2048,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1909 surfaced
 | B-2026-08-31-26 | codegen | medium | BOTH COMPILED BACKENDS RUN A STRUCT FIELD'S `Drop` BODY TWICE WHEN A `match` ARM DESTRUCTURES A BARE STRUCT SCRUTINEE AND MOVES THE FIELD OUT -- the… | 6673f7d |
 | B-2026-08-31-27 | interp | medium | THE INTERPRETER NEVER RUNS A FIELD'S `Drop` BODY WHEN A SINGLE-LEVEL `match` ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD AND MOVES THE FIELD OUT --… | 6673f7d |
 | B-2026-08-31-29 | codegen | medium | `let g = ref arr[i]` ON AN `Array[Vector[T, N], M]` PANICS THE COMPILER -- the ref binding is loaded as the LANE type (`i64`) instead of the vector,… | 73e6e86 |
+| B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
 
 </details>
 
