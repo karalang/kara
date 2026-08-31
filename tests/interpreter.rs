@@ -50089,3 +50089,130 @@ fn interp_generic_impl_field_is_the_codegen_unsignedness_oracle() {
         assert_eq!(run(&src), want, "{label}");
     }
 }
+
+#[test]
+fn interp_partial_cmp_value_receiver_resolves_on_a_concrete_type() {
+    // B-2026-08-31-13. `x.partial_cmp(y)` was rejected at typecheck on every
+    // concrete receiver with "expects 2 argument(s), found 1", while the
+    // identically-registered `x.cmp(y)` was accepted.
+    //
+    // `register_builtin_impl`'s comparison signatures carry the RECEIVER in
+    // `params` (`param_names: [self, other]`, `params: [ty, ty]`); a user impl
+    // does not, because its receiver rides `self_param`. The value-receiver
+    // dispatch counted `params.len()` and so expected 2 where 1 was given.
+    // `cmp` escaped only because a name-keyed exemption routed it away from
+    // that dispatch entirely. Dropping a leading `self` param is structural, so
+    // it covers every baked method with one rather than a name at a time.
+    //
+    // `nan` is the case that makes this worth having: `PartialOrd` is a
+    // separate trait from `Ord` precisely so an incomparable pair can answer
+    // `None`, and a bare float is the population that needs it — `f.cmp(g)` is
+    // and stays rejected, because floats have no baked `Ord`.
+    //
+    // The compiled twin is `e2e_partial_cmp_value_receiver_runs_on_a_concrete_-
+    // type` in tests/codegen.rs; the row is a typecheck REJECTION, so both
+    // backends agreed before the fix and the pair pins that they now agree on
+    // running it.
+    let m = "match X { Some(Less) => println(\"L\"), Some(Equal) => println(\"E\"),\n\
+             Some(Greater) => println(\"G\"), None => println(\"N\") }";
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            "i64",
+            format!(
+                "let n: i64 = 3; let o: i64 = 4; {}",
+                m.replace('X', "n.partial_cmp(o)")
+            ),
+            "L\n",
+        ),
+        (
+            "u64",
+            format!(
+                "let n: u64 = 18446744073709551615u64; let o: u64 = 2u64; {}",
+                m.replace('X', "n.partial_cmp(o)")
+            ),
+            "G\n",
+        ),
+        (
+            "f64",
+            format!(
+                "let x: f64 = 1.5; let y: f64 = 2.5; {}",
+                m.replace('X', "x.partial_cmp(y)")
+            ),
+            "L\n",
+        ),
+        (
+            "f64-nan",
+            format!(
+                "let x: f64 = 0.0 / 0.0; let y: f64 = 2.5; {}",
+                m.replace('X', "x.partial_cmp(y)")
+            ),
+            "N\n",
+        ),
+        (
+            "String",
+            format!(
+                "let a: String = \"x\"; let b: String = \"y\"; {}",
+                m.replace('X', "a.partial_cmp(b)")
+            ),
+            "L\n",
+        ),
+        (
+            "char",
+            format!(
+                "let a: char = 'x'; let b: char = 'y'; {}",
+                m.replace('X', "a.partial_cmp(b)")
+            ),
+            "L\n",
+        ),
+        (
+            "bool",
+            format!(
+                "let a: bool = false; let b: bool = true; {}",
+                m.replace('X', "a.partial_cmp(b)")
+            ),
+            "L\n",
+        ),
+        (
+            "parenthesized-receiver",
+            format!(
+                "let n: i64 = 3; {}",
+                m.replace('X', "(n).partial_cmp(n + 1)")
+            ),
+            "L\n",
+        ),
+        // Controls: the sibling that always worked, and the two paths the row
+        // notes are unaffected because a type-param receiver resolves by a
+        // different route.
+        (
+            "control-cmp",
+            "let n: i64 = 3; let o: i64 = 4;\n\
+             match n.cmp(o) { Less => println(\"L\"), Equal => println(\"E\"),\n\
+             Greater => println(\"G\") }"
+                .into(),
+            "L\n",
+        ),
+        (
+            "control-operator",
+            "let n: i64 = 3; let o: i64 = 4; println(n < o);".into(),
+            "true\n",
+        ),
+    ];
+    for (label, body, want) in cases {
+        let src = format!("fn main() {{\n    {body}\n}}");
+        assert_eq!(run(&src), want, "{label}");
+    }
+    // The `T: PartialOrd` bound path, which the row records as unaffected —
+    // lowering emits the same value-receiver shape there and it always worked,
+    // because a type-param receiver resolves through `dispatch_trait_assoc_fn`
+    // rather than the concrete impl table.
+    assert_eq!(
+        run("fn g[T: PartialOrd](a: T, b: T) -> bool { a < b }\n\
+             fn main() { let n: i64 = 3; let o: i64 = 4; println(g(n, o)); }"),
+        "true\n",
+        "control-bound"
+    );
+    // The float carve-out — `f64` has no baked `Ord`, so `x.cmp(y)` must stay
+    // REJECTED (B-2026-08-11-9) — lives in `tests/typechecker.rs` as
+    // `partial_cmp_value_receiver_typechecks_while_float_cmp_stays_rejected`,
+    // where the diagnostic helpers are.
+}

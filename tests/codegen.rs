@@ -25200,6 +25200,97 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-13's compiled half. The defect was a TYPECHECK rejection —
+    /// `x.partial_cmp(y)` on a concrete receiver failed with "expects 2
+    /// argument(s), found 1" — so both backends agreed before the fix by
+    /// refusing to build at all. This pins that they now agree on RUNNING it,
+    /// beside `interp_partial_cmp_value_receiver_resolves_on_a_concrete_type`
+    /// in tests/interpreter.rs.
+    ///
+    /// `f64-nan` is the case that makes the method worth having: `PartialOrd`
+    /// is separate from `Ord` so an incomparable pair answers `None`, and a
+    /// bare float is the population that needs it. `f.cmp(g)` is and stays
+    /// rejected — floats have no baked `Ord` — which the typechecker test
+    /// asserts.
+    #[test]
+    fn e2e_partial_cmp_value_receiver_runs_on_a_concrete_type() {
+        let arms = "Some(Less) => println(\"L\"), Some(Equal) => println(\"E\"), \
+                    Some(Greater) => println(\"G\"), None => println(\"N\")";
+        for (label, body, want) in [
+            (
+                "i64",
+                format!("let n: i64 = 3; let o: i64 = 4; match n.partial_cmp(o) {{ {arms} }}"),
+                "L\n",
+            ),
+            (
+                "u64",
+                format!(
+                    "let n: u64 = 18446744073709551615u64; let o: u64 = 2u64;\n\
+                     match n.partial_cmp(o) {{ {arms} }}"
+                ),
+                "G\n",
+            ),
+            (
+                "f64",
+                format!("let x: f64 = 1.5; let y: f64 = 2.5; match x.partial_cmp(y) {{ {arms} }}"),
+                "L\n",
+            ),
+            (
+                "f64-nan",
+                format!(
+                    "let x: f64 = 0.0 / 0.0; let y: f64 = 2.5;\n\
+                     match x.partial_cmp(y) {{ {arms} }}"
+                ),
+                "N\n",
+            ),
+            (
+                "String",
+                format!(
+                    "let a: String = \"x\"; let b: String = \"y\";\n\
+                     match a.partial_cmp(b) {{ {arms} }}"
+                ),
+                "L\n",
+            ),
+            (
+                "char",
+                format!(
+                    "let a: char = 'x'; let b: char = 'y'; match a.partial_cmp(b) {{ {arms} }}"
+                ),
+                "L\n",
+            ),
+            (
+                "parenthesized-receiver",
+                format!("let n: i64 = 3; match (n).partial_cmp(n + 1) {{ {arms} }}"),
+                "L\n",
+            ),
+            // The sibling that always worked, and the bound path the row
+            // records as unaffected (a type-param receiver resolves by a
+            // different route than a concrete one).
+            (
+                "control-cmp",
+                "let n: i64 = 3; let o: i64 = 4;\n\
+                 match n.cmp(o) { Less => println(\"L\"), Equal => println(\"E\"), \
+                 Greater => println(\"G\") }"
+                    .to_string(),
+                "L\n",
+            ),
+            (
+                "control-operator",
+                "let n: i64 = 3; let o: i64 = 4; println(n < o);".to_string(),
+                "true\n",
+            ),
+        ] {
+            let src = format!("fn main() {{\n    {body}\n}}");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+        // The `T: PartialOrd` BOUND path, which B-2026-08-30-41 made runnable
+        // and this row notes is unaffected: lowering emits the same
+        // value-receiver shape, and it always worked.
+        let src = "fn g[T: PartialOrd](a: T, b: T) -> bool { a < b }\n\
+                   fn main() { let n: i64 = 3; let o: i64 = 4; println(g(n, o)); }";
+        assert_eq!(run_program(src).as_deref(), Some("true\n"), "control-bound");
+    }
+
     #[test]
     fn test_e2e_generic_arithmetic_at_reduced_precision() {
         // The compiled twin of `tests/interpreter.rs`'s

@@ -47500,3 +47500,69 @@ fn ordering_members_stay_rejected_on_every_bare_float() {
         }
     }
 }
+
+#[test]
+fn partial_cmp_value_receiver_typechecks_while_float_cmp_stays_rejected() {
+    // B-2026-08-31-13. The value-receiver spelling `x.partial_cmp(y)` was
+    // rejected on every concrete receiver with "expects 2 argument(s), found
+    // 1", because `register_builtin_impl`'s comparison signatures carry the
+    // RECEIVER in `params` (`[self, other]`) where a user impl does not. The
+    // dispatch now drops a leading `self` param, which is structural and so
+    // covers every baked method with one.
+    //
+    // These are the TYPE assertions the runtime tests in tests/interpreter.rs
+    // and tests/codegen.rs cannot make: that the call types as
+    // `Option[Ordering]` rather than merely running, and that the float
+    // carve-out survives.
+    for (label, src) in [
+        (
+            "i64",
+            "fn main() { let n: i64 = 3; let m: i64 = 4;\n\
+             let p: Option[Ordering] = n.partial_cmp(m); }",
+        ),
+        (
+            "f64",
+            "fn main() { let x: f64 = 1.5; let y: f64 = 2.5;\n\
+             let p: Option[Ordering] = x.partial_cmp(y); }",
+        ),
+        (
+            "String",
+            "fn main() { let a: String = \"x\"; let b: String = \"y\";\n\
+             let p: Option[Ordering] = a.partial_cmp(b); }",
+        ),
+        (
+            "control-cmp-types-as-Ordering",
+            "fn main() { let n: i64 = 3; let m: i64 = 4; let o: Ordering = n.cmp(m); }",
+        ),
+    ] {
+        // `typecheck_ok` panics unless the program is clean, which is the
+        // assertion — `typecheck_errors` is the erroring-case helper and
+        // panics on a clean program, so it cannot stand in here.
+        let _ = typecheck_ok(src);
+        let _ = label;
+    }
+
+    // The return type is really checked, not poisoned: a wrong annotation must
+    // be REJECTED. Without this the test would pass on a `Type::Error` result,
+    // which is universally assignable — the exact shape `cmp` on a primitive
+    // still has (see the note in `method_user_impl.rs`, filed separately).
+    let errs = typecheck_errors(
+        "fn main() { let n: i64 = 3; let m: i64 = 4; let s: String = n.partial_cmp(m); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Option[Ordering]") && e.message.contains("String")),
+        "expected a String-vs-Option[Ordering] mismatch, got {errs:?}"
+    );
+
+    // `Ord` is deliberately NOT registered for the bare floats (IEEE NaN
+    // breaks a total order), so `x.cmp(y)` has no baked impl and must stay
+    // rejected — B-2026-08-11-9 closed exactly this, and the fix must not
+    // reopen it while making `partial_cmp` work for the same receiver.
+    let errs =
+        typecheck_errors("fn main() { let x: f64 = 1.5; let y: f64 = 2.5; let o = x.cmp(y); }");
+    assert!(
+        !errs.is_empty(),
+        "`f64.cmp` has no baked `Ord` impl and must stay rejected"
+    );
+}

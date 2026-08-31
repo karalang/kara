@@ -279,6 +279,31 @@ impl<'a> super::TypeChecker<'a> {
                 // lowering and are untouched; so is a `partial_cmp`/`total_cmp`
                 // surface, if one is ever added. Rejecting the spelling that does
                 // not work is right either way.
+                //
+                // B-2026-08-31-13 — `partial_cmp` is deliberately NOT in the
+                // list above, even though B-2026-08-30-41 registered it beside
+                // `cmp` with an identical `(self, other)` shape. It does not
+                // need to be: the value-receiver arity is now computed
+                // STRUCTURALLY, by dropping a leading `self` param in this
+                // function's pick branch below, so `partial_cmp` resolves
+                // through the impl table and types as `Option[Ordering]` on
+                // every receiver that has the impl — floats included, which is
+                // the population `PartialOrd` exists for and which `cmp`
+                // cannot serve.
+                //
+                // The list stays for the OTHER seven, and removing it was tried
+                // and MEASURED WRONG. Routing `eq`/`ne`/`lt`/`le`/`gt`/`ge`
+                // through the impl table makes them type-check and run under
+                // `--interp` while `karac build` fails with "no handler for
+                // method 'eq' on variable 'n'" — codegen has no dispatcher arm
+                // for the value-receiver spelling of those. Turning a
+                // silently-poisoned call into a check-green build-red one is
+                // the worse trade, so the exemption stays until those arms
+                // exist. The `cmp` poison it also shields — `let s: String =
+                // n.cmp(m)` type-checks and prints `Less` into a `String` slot,
+                // where the same call on a String receiver is correctly
+                // rejected — is filed separately rather than fixed here, for
+                // the same reason.
                 let receiver_has_baked_cmp_impl = !matches!(receiver_for_lookup, Type::Float(_));
                 let is_exempt_builtin =
                     receiver_has_baked_cmp_impl && PRIMITIVE_VALUE_METHODS.contains(&method);
@@ -568,6 +593,35 @@ impl<'a> super::TypeChecker<'a> {
                     substitute_type_params(&sig.return_type, &recv_subs),
                     receiver_for_lookup,
                 );
+                // B-2026-08-31-13 — a BAKED builtin impl carries its receiver
+                // IN `params`: `register_builtin_impl`'s comparison signatures
+                // are `param_names: [self, other], params: [ty, ty]`. A USER
+                // impl does not — its receiver rides `self_param` and never
+                // reaches `FunctionSig::params` — which is why the comment
+                // below could say "excluding self" and be right for every case
+                // that had been exercised.
+                //
+                // So the value-receiver spelling of a baked two-arg method
+                // counted 2 expected against 1 given: `x.partial_cmp(y)` was
+                // rejected with "expects 2 argument(s), found 1" on every
+                // concrete receiver. `cmp` escaped only because a name-keyed
+                // exemption above routed it away from this dispatch entirely —
+                // into a branch that returns `Type::Error`, so it was never
+                // really checked either.
+                //
+                // Dropping the leading `self` here is structural rather than
+                // name-keyed, so it covers every baked method with a `self`
+                // param at once; the exemption list then no longer has to grow
+                // a name each time one is added.
+                let params: Vec<Type> = if sig.param_names.first().map(Option::as_deref)
+                    == Some(Some("self"))
+                    && params.len() == sig.param_names.len()
+                    && !params.is_empty()
+                {
+                    params[1..].to_vec()
+                } else {
+                    params
+                };
                 // Check argument count (excluding self)
                 if args.len() != params.len() {
                     self.type_error(
