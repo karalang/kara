@@ -24247,6 +24247,122 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_generic_mono_symbols_are_distinct_per_128_bit_signedness() {
+        // The integer twin of the float-width test above, and the sharper case
+        // (B-2026-08-30-45). `llvm_type_to_mangle_str` renders an integer by BIT
+        // WIDTH, and LLVM's `IntType` carries no signedness at all — so `i128`
+        // and `u128` do not merely happen to collide, they are structurally
+        // indistinguishable in that channel and no fix there is possible. The
+        // NAME channel (`is_scalar_primitive_mangle_name`) is the only place the
+        // declared type survives, and its list stopped at 64 bits.
+        //
+        // Asserted on the symbol rather than the argument type on purpose: BOTH
+        // monomorphs take `i128` in the IR, because that is the whole point —
+        // signedness is not in the LLVM type. Two distinct symbols is therefore
+        // exactly what "these are different functions" can look like here.
+        let ir = ir_for(
+            "fn show[T](x: T) -> String { f\"{x}\" }\n\
+             fn main() {\n\
+                 let a: i128 = -7i128;\n\
+                 let b: u128 = 340282366920938463463374607431768211455u128;\n\
+                 println(show(a)); println(show(b));\n\
+             }",
+        );
+        for sym in ["show$i128", "show$u128"] {
+            assert!(
+                ir.contains(&format!("@\"{sym}\"(")),
+                "expected a distinct `{sym}` monomorph; IR:\n{ir}"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_generic_at_both_128_bit_signednesses_keeps_each_ones_value() {
+        // B-2026-08-30-45 — behavioural half of the symbol test above. One body
+        // served both widths and whichever was emitted FIRST decided the
+        // signedness for both, so the defect is order-dependent and symmetric.
+        // Both directions are here because they fail differently, and only one
+        // of them was in the row:
+        //
+        //   i128-then-u128   `u128::MAX` printed -1
+        //   u128-then-i128   `i128 -7`   printed 340282366920938463463374607431768211449
+        //
+        // that second number being 2^128 - 7 — the i128 rendered through the
+        // u128 monomorph. Measuring only the first direction would leave the
+        // impression that u128 is the broken width; it is not, the SHARED
+        // SYMBOL is, and either width can be the loser.
+        //
+        // The single-width programs are the controls that localize it, and they
+        // are why the row's conclusion ("nothing about 128-bit codegen is
+        // broken, only the symbol was shared") holds: each is correct pre-fix.
+        // `control-i64-u64-only` and `control-f16-bf16` guard the two families
+        // the name channel already listed.
+        //
+        // Compiled output only, no interpreter twin: `--interp` prints -1 for
+        // every u128 here regardless, which is B-2026-08-30-44 and still open.
+        let big = "340282366920938463463374607431768211455";
+        let show = "fn show[T](x: T) -> String { f\"{x}\" }\n";
+        let cases: &[(&str, String, String)] = &[
+            (
+                "i128-then-u128",
+                format!(
+                    "{show}fn main() {{ let a: i128 = -7i128; let b: u128 = {big}u128; println(show(a)); println(show(b)); }}"
+                ),
+                format!("-7\n{big}\n"),
+            ),
+            (
+                "u128-then-i128",
+                format!(
+                    "{show}fn main() {{ let b: u128 = {big}u128; let a: i128 = -7i128; println(show(b)); println(show(a)); }}"
+                ),
+                format!("{big}\n-7\n"),
+            ),
+            (
+                "two-param-generic",
+                format!(
+                    "fn pair[T](x: T, y: T) -> String {{ f\"{{x}},{{y}}\" }}\n\
+                     fn main() {{ let a: i128 = -3i128; let b: i128 = 4i128; let c: u128 = {big}u128; let d: u128 = 1u128; println(pair(a, b)); println(pair(c, d)); }}"
+                ),
+                format!("-3,4\n{big},1\n"),
+            ),
+            (
+                "both-plus-i64-u64",
+                format!(
+                    "{show}fn main() {{ let a: i128 = -7i128; let b: u128 = {big}u128; let c: i64 = -5; let d: u64 = 18446744073709551615u64; println(show(a)); println(show(b)); println(show(c)); println(show(d)); }}"
+                ),
+                format!("-7\n{big}\n-5\n18446744073709551615\n"),
+            ),
+            (
+                "control-u128-only",
+                format!("{show}fn main() {{ let b: u128 = {big}u128; println(show(b)); }}"),
+                format!("{big}\n"),
+            ),
+            (
+                "control-i128-only",
+                format!("{show}fn main() {{ let a: i128 = -7i128; println(show(a)); }}"),
+                "-7\n".to_string(),
+            ),
+            (
+                "control-i64-u64-only",
+                format!(
+                    "{show}fn main() {{ let c: i64 = -5; let d: u64 = 18446744073709551615u64; println(show(c)); println(show(d)); }}"
+                ),
+                "-5\n18446744073709551615\n".to_string(),
+            ),
+            (
+                "control-f16-bf16",
+                format!(
+                    "{show}fn main() {{ let a: f16 = 1.5f16; let b: bf16 = 2.5bf16; println(show(a)); println(show(b)); }}"
+                ),
+                "1.5\n2.5\n".to_string(),
+            ),
+        ];
+        for (label, src, want) in cases {
+            assert_eq!(run_program(src).as_deref(), Some(want.as_str()), "{label}");
+        }
+    }
+
+    #[test]
     fn test_e2e_generic_arithmetic_at_reduced_precision() {
         // The compiled twin of `tests/interpreter.rs`'s
         // `test_generic_arithmetic_computes_at_the_instantiated_float_width`
@@ -40361,6 +40477,76 @@ fn main() {
             assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
         }
     }
+    #[test]
+    fn e2e_int_into_float_enum_payload_signedness_width_and_passthrough() {
+        // B-2026-08-30-56 companion to `e2e_int_into_float_enum_payload_converts`
+        // above, which fixed the defect. That test covers WHICH CONSTRUCTION
+        // PATHS reach the coercion; this one covers WHAT THE COERCION DOES once
+        // reached, on four axes it does not exercise. Written after that fix
+        // landed, so it is coverage rather than a regression test for it — every
+        // case below passes on the commit that closed the row.
+        //
+        //  * SIGNEDNESS. Every case there sources from `i64`, where `sitofp` and
+        //    `uitofp` agree. `u64::MAX` is where they do not: 1.8446744e19 under
+        //    `uitofp` against -1 under `sitofp`. Pre-fix this shape printed NaN
+        //    (the bit pattern as a double), so it was never a passing case whose
+        //    signedness happened to be right — it is newly covered.
+        //  * TARGET WIDTH. All eight of those are `f64`. `Option[f32]` proves the
+        //    conversion follows the payload's declared width and not a fixed
+        //    double.
+        //  * THE B-2026-08-19-19 GUARD. That row's whole point is that coercing a
+        //    generic payload to the all-i64 base TRUNCATES `Option[i128]` to its
+        //    low word, printing 0. The fix rests on resolving `T` to the real type
+        //    instead, and the surrounding prose says so — but no case pinned it.
+        //    This is that row's exact repro; it fails on any future "fix" that
+        //    reaches the generic skip by deleting it.
+        //  * NON-SCALAR AND ABSENT PAYLOADS. `coerce_enum_payload_scalar` returns
+        //    early unless the value is an int or a float, and a `None` has no
+        //    payload word at all. Both must pass through the newly-reached call
+        //    untouched; a `String` payload silently coerced would be a pointer
+        //    reinterpreted as a number.
+        //
+        // `enum-struct-variant-narrow` is the same-class control for the
+        // struct-variant path that fix newly routed through the coercion: `u8`
+        // into a `u8` field must stay 200, not be re-widened or re-narrowed.
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "option-unsigned-src",
+                "fn main() { let u: u64 = 18446744073709551615u64; let o: Option[f64] = Some(u); match o { Some(x) => println(x), None => println(-1.0) } }",
+                "18446744073709552000\n",
+            ),
+            (
+                "option-f32-payload",
+                "fn main() { let n: i64 = 7; let o: Option[f32] = Some(n); match o { Some(x) => println(x), None => println(-1.0) } }",
+                "7\n",
+            ),
+            (
+                "control-option-i128",
+                "fn main() { let big: i128 = 1267650600228229401496703205376i128; let o: Option[i128] = Some(big); match o { Some(x) => println(x), None => println(-1) } }",
+                "1267650600228229401496703205376\n",
+            ),
+            (
+                "control-option-string",
+                "fn main() { let s: Option[String] = Some(\"hi\"); match s { Some(x) => println(x), None => println(\"no\") } }",
+                "hi\n",
+            ),
+            (
+                "control-option-none",
+                "fn main() { let n: Option[f64] = None; match n { Some(x) => println(x), None => println(\"none\") } }",
+                "none\n",
+            ),
+            (
+                "enum-struct-variant-narrow",
+                "enum N { V { b: u8 } }\n\
+                 fn main() { match N.V { b: 200 } { V { b } => println(b) } }",
+                "200\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            assert_eq!(run_program(src).as_deref(), Some(*want), "{label}");
+        }
+    }
+
     #[test]
     fn e2e_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
         let hdr = "struct R { id: i64 }\n\
