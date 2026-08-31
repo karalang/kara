@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 161 | 0 |
 | codegen-gap | 157 | 2 |
 | diagnostics | 114 | 2 |
-| false-positive | 101 | 0 |
-| soundness | 93 | 4 |
+| false-positive | 102 | 0 |
+| soundness | 93 | 3 |
 | perf | 87 | 1 |
 | crash | 67 | 1 |
 | other | 65 | 1 |
@@ -113,8 +113,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1314 | 38 |
 | interp | 296 | 23 |
 | typecheck | 283 | 0 |
+| ownership | 71 | 1 |
 | other | 70 | 0 |
-| ownership | 70 | 2 |
 | cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1916 surfaced · 47 open · 1839 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1917 surfaced · 46 open · 1841 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (47)
+### Open (46)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -173,7 +173,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1916 surfaced
 | B-2026-08-31-37 | 2026-08-31 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly reachable | — |
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
-| B-2026-08-31-41 | 2026-08-31 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[i64] { let mut v = Vec.new(); ...; return v.as_slice() }`, and the compiled program then READS FREED MEMORY while the interpreter prints the live values, so it also reads as a run-vs-build divergence | — |
 | B-2026-08-31-42 | 2026-08-31 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a param or a return; the wasm ABI decomposes the struct into fields, so the `bfloat` field is promoted exactly as a bare param was, and B-2026-08-30-42's signature rewrite does not reach it. `ref self` builds (a pointer is not decomposed) and is a real workaround | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-44 | 2026-08-31 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE -- a discarded branch whose arm literal initializes a field from a LOCAL (`P { a: t.a, b: 1 }`, projected, or `P { a: s, b: 1 }`, moved in whole) still registers NO memory, because the guard that declines it was written against an aliasing double free that B-2026-08-31-34 has now fixed | — |
@@ -209,9 +208,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1916 surfaced
 
 </details>
 
-### Fixed (1839)
+### Fixed (1841)
 
-<details><summary>1839 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1841 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2054,6 +2053,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1916 surfaced
 | B-2026-08-31-29 | codegen | medium | `let g = ref arr[i]` ON AN `Array[Vector[T, N], M]` PANICS THE COMPILER -- the ref binding is loaded as the LANE type (`i64`) instead of the vector,… | 73e6e86 |
 | B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
 | B-2026-08-31-34 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b:… | 2b3b966 |
+| B-2026-08-31-41 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[… | c5b5f6a |
+| B-2026-08-31-42 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
 
 </details>
 
