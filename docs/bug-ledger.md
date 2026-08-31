@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 331 | 1 |
 | run-vs-build | 268 | 18 |
-| leak | 237 | 8 |
+| leak | 238 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 158 | 0 |
 | codegen-gap | 155 | 4 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1290 | 34 |
+| codegen | 1291 | 34 |
 | interp | 285 | 17 |
 | typecheck | 282 | 1 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 39 open · 1817 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1886 surfaced · 39 open · 1818 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (39)
 
@@ -156,7 +156,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
-| B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- PARTIALLY FIXED (d22cf63): struct/tuple/nested/`if let`/`..` destructure now borrow. TWO REMAIN: an arm using TWO BOUND LEAVES in one expression (`v[0] + n` fails where `v[0] + 1` passes -- the consume classifier counts a SCALAR leaf's use as an escape), and an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`), where the outer binding's borrow-ness does not propagate into the nested pattern | — |
+| B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- MOSTLY FIXED. Struct/tuple/nested/`if let`/`..` destructure borrow (d22cf63), and an arm using TWO BOUND LEAVES in one expression now does too (c64cbfd, via the lowered-operator predicate `consume_class` already had). ONE REMAINS: an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`) still double frees, because the outer binding's borrow-ness does not propagate into the nested pattern | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
 | B-2026-08-30-55 | 2026-08-30 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter (neither the enum's own nor its payload's) against two compiled, and a NAMED one runs one too MANY. The free-fn twin and the struct-param twin are both correct, which localizes it to the intersection B-2026-08-28-70 did not reach | — |
@@ -201,9 +201,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 
 </details>
 
-### Fixed (1817)
+### Fixed (1818)
 
-<details><summary>1817 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1818 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2024,6 +2024,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-31-5 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding… | 9eeb04a2 |
 | B-2026-08-31-11 | codegen | medium | A GENERIC CALLING ANOTHER GENERIC LOSES THE UNSIGNED READING ON BOTH COMPILED BACKENDS — `wrap[T](x) { show(x) }` prints `u64::MAX` as `-1` from JIT… | d87ae4f |
 | B-2026-08-31-12 | interp+codegen | medium | A `u64` FIELD READ INSIDE A GENERIC `impl` PRINTS AS `-1` ON ALL THREE BACKENDS — `impl[T] Box[T] { fn get(ref self) -> String { f"{self.v}" } }` at… | 17279ac |
+| B-2026-08-31-14 | codegen | high | A BORROW-MODE PAYLOAD BINDING NAME STAYED REGISTERED FOR EVERY LATER MATCH IN THE SAME FUNCTION -- `borrowed_agg_payload_struct_vars` is keyed by BIN… | c64cbfd |
 
 </details>
 
