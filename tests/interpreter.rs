@@ -35860,18 +35860,25 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
             ),
             "dR1\ndR2\ndR1\nv=7\n",
         ),
-        // A `Vec` literal doubles too, but a plain LOCAL moved into one doubles
-        // identically — so it is a move-suppression hole, not this rule. Both
-        // spellings pinned, plus the FRESH-element case that is correct, since
-        // the three together are what identify the defect.
-        // UNFIXED (B-2026-08-29-45).
+        // A `Vec` literal doubled too, but a plain LOCAL moved into one doubled
+        // identically — so it was a move-suppression hole, not this rule. Both
+        // spellings stay pinned, plus the FRESH-element case, since the three
+        // together are what identified the defect.
+        //
+        // NOW FIXED under B-2026-08-29-45, which needed both halves: the
+        // move-suppression retraction for the local source and a caller-retains
+        // mask (`mask_param_view_container_literal_elems`) for the param one.
+        // These two expectations were the known-bad output recorded on purpose;
+        // they are now the correct single body. The MIXED literal stays unfixed
+        // by design — a `Vec`'s arity is not fixed, so it cannot carry the
+        // per-slot mask a tuple can, and both backends decline it together.
         (
             "pin-vec-param-view",
             format!(
                 "{HDR}fn take(r: R) -> i64 {{ let v2 = [r]; 7 }}\n\
                  fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
             ),
-            "dR1\ndR1\nv=7\n",
+            "dR1\nv=7\n",
         ),
         (
             "pin-vec-local",
@@ -35879,7 +35886,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
                 "{HDR}fn take() -> i64 {{ let m = R {{ id: 4 }}; let v2 = [m]; 7 }}\n\
                  fn main() {{ let v = take(); println(f\"v={{v}}\") }}\n"
             ),
-            "dR4\ndR4\nv=7\n",
+            "dR4\nv=7\n",
         ),
         (
             "vec-fresh-elem-is-correct",

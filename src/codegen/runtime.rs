@@ -6626,6 +6626,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.payload_vars.param_view_locals.contains(src.as_str()))
     }
 
+    /// B-2026-08-29-45 — is `value` an ARRAY / `Vec`-prefix literal EVERY
+    /// element of which is a param view, so the element bodies belong to the
+    /// CALLER and this binding must not arm a walker of its own?
+    ///
+    /// The array/Vec sibling of `optres_ctor_payloads_are_all_param_views` and
+    /// `enum_ctor_payload_bodies_are_caller_owned`, and it exists for the same
+    /// caller-retains reason: a value moved out of an owned param is a VIEW,
+    /// the caller runs its `Drop` body, and a container that also owned it ran
+    /// the body twice (`let v: Vec[R] = [r];` in a `fn take(r: R)` printed
+    /// `dR1 dR1` where one is due, agreed by every backend).
+    ///
+    /// ALL-OR-NOTHING on purpose. The tuple and fixed-array walkers can mask
+    /// individual slots (`tuple_literal_param_view_elems`), so a MIXED literal
+    /// keeps the fresh element's body there. A `Vec` has no such per-index
+    /// mask that survives a later `push`, so admitting only the all-views case
+    /// keeps both container kinds on one rule; a mixed array/`Vec` literal is
+    /// left exactly as it was rather than half-fixed.
+    pub(super) fn container_literal_elems_are_all_param_views(&self, value: &Expr) -> bool {
+        let elems: &[Expr] = match &value.kind {
+            ExprKind::ArrayLiteral(elems) => elems,
+            ExprKind::PrefixCollectionLiteral { items, .. } => items,
+            _ => return false,
+        };
+        !elems.is_empty() && elems.iter().all(|e| self.expr_is_param_view(e))
+    }
+
     /// B-2026-08-29-19 — does `value` construct `enum_name`'s variant entirely
     /// out of PARAM VIEWS, so the payload bodies belong to the CALLER and this
     /// binding must not arm a walker of its own?
@@ -9807,7 +9833,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // moved-from slot (printing an empty name). Safe because the
             // container's element walk is now the owner on both axes — the
             // vec-of-tuple bodies walker and the tuple element drop.
-            ExprKind::StructLiteral { .. } | ExprKind::Tuple(_) => {
+            // B-2026-08-29-45 — the ARRAY/`Vec` literal joins the two aggregate
+            // arms. `let m = R { .. }; let v = [m];` armed the container's
+            // element-body walk without retracting `m`'s own ownership, so the
+            // body ran at `m`'s NLL death AND again through the walk. The
+            // STRONG disarm is right here for the reason given just above: the
+            // container's element walk becomes the owner on both axes.
+            ExprKind::StructLiteral { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::PrefixCollectionLiteral { .. } => {
                 let mut sources = Vec::new();
                 Self::collect_aggregate_literal_sources(e, &mut sources);
                 for n in sources {
@@ -9837,6 +9872,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             ExprKind::Tuple(elems) => {
                 for el in elems {
+                    Self::collect_aggregate_literal_sources(el, out);
+                }
+            }
+            // B-2026-08-29-45 — recurse through an ARRAY/`Vec` literal too, so
+            // a source nested inside one (`[Outer { r: m }]`) is reached for
+            // the same reason nesting through a struct literal or a tuple is.
+            ExprKind::ArrayLiteral(elems) => {
+                for el in elems {
+                    Self::collect_aggregate_literal_sources(el, out);
+                }
+            }
+            // The `Vec[..]` PREFIX spelling is a distinct AST node from the
+            // bare `[..]` one — `let v: Vec[R] = [m];` parses as this — so
+            // handling only `ArrayLiteral` fixed the `Array[R, N]` annotation
+            // and left the `Vec` one, the row's own repro, still doubling.
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for el in items {
                     Self::collect_aggregate_literal_sources(el, out);
                 }
             }

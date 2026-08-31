@@ -286,6 +286,11 @@ impl<'a> super::Interpreter<'a> {
             self.mask_param_view_enum_ctor_slots(stmt);
             // B-2026-08-29-24 — and the tuple sibling: `let t = (r, 5);`.
             self.mask_param_view_tuple_literal_elems(stmt);
+            // B-2026-08-29-45 — the ARRAY / `Vec`-literal sibling of the three
+            // masks above. Codegen's twin is the
+            // `container_literal_elems_are_all_param_views` gate at the same
+            // `let` registration.
+            self.mask_param_view_container_literal_elems(stmt);
             // Move-suppression for `forget(x);` — the FFI ownership-handoff
             // primitive removes the source binding's Drop slot so the
             // destructor never fires (Slice 4).
@@ -1729,6 +1734,50 @@ impl<'a> super::Interpreter<'a> {
     /// destination for the same reason, and per element, so a mixed literal
     /// keeps the fresh element's body. Codegen's twin masks the same index out
     /// of `emit_tuple_elem_user_drop_bodies_fn_skipping`.
+    /// B-2026-08-29-45 — an ARRAY / `Vec` literal EVERY element of which is a
+    /// param VIEW: the bodies belong to the CALLER, so this binding must not
+    /// walk its elements at all. `fn take(r: R) { let v: Vec[R] = [r]; }` ran
+    /// `dR1` twice — once here, once at the caller's fire.
+    ///
+    /// ALL-OR-NOTHING, matching codegen's
+    /// `container_literal_elems_are_all_param_views` exactly: the tuple sibling
+    /// above can mask individual indices because a tuple's arity is fixed,
+    /// while a `Vec`'s is not, so a MIXED literal is left as it was rather than
+    /// half-fixed. The two backends have to draw this line in the same place or
+    /// the mixed case becomes a run-vs-build divergence instead of an agreed
+    /// gap.
+    fn mask_param_view_container_literal_elems(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(bname) = &pattern.kind else {
+            return;
+        };
+        let elems: &[Expr] = match &value.kind {
+            ExprKind::ArrayLiteral(elems) => elems,
+            ExprKind::PrefixCollectionLiteral { items, .. } => items,
+            _ => return,
+        };
+        // Same method-frame guard as the siblings (B-2026-08-27-48).
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return;
+        }
+        if elems.is_empty() {
+            return;
+        }
+        let all_views = elems.iter().all(|e| {
+            matches!(&e.kind, ExprKind::Identifier(src)
+                if self.owned_param_names_stack
+                    .last()
+                    .is_some_and(|params| params.contains(src.as_str())))
+        });
+        if !all_views {
+            return;
+        }
+        self.moved_out_container_bodies_bindings
+            .insert(bname.clone());
+    }
+
     fn mask_param_view_tuple_literal_elems(&mut self, stmt: &Stmt) {
         let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
             return;
@@ -3842,7 +3891,21 @@ impl<'a> super::Interpreter<'a> {
             // which only sees a BARE rebind), so `let r = Res{..}; let t = (r,
             // 9);` fired r's body at its own death AND again through the
             // tuple's element walk.
-            ExprKind::Tuple(_) => self.record_container_move_sources_in_aggregate_arg(value),
+            // B-2026-08-29-45 — the ARRAY/`Vec` literal arm, missing entirely.
+            // `let m = R { .. }; let v = [m];` armed the container's
+            // element-body walk without retracting `m`'s own ownership, so the
+            // body ran at `m`'s NLL death AND again through the walk —
+            // `dR4 dR4` where one is due, on every backend, which is why no A/B
+            // gate reported it. Routed through the whole-value channel like the
+            // TUPLE arm beside it and for the same reason: the container's
+            // element walk is the owner on both axes, so a source carrying its
+            // OWN `impl Drop` must land on that channel rather than the
+            // container-only one.
+            ExprKind::Tuple(_)
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::PrefixCollectionLiteral { .. } => {
+                self.record_container_move_sources_in_aggregate_arg(value)
+            }
             // STRUCT literals keep the container-only recording, mirroring
             // codegen's split: the whole-value channel is wrong for the
             // WILDCARD position (`let _ = W { r: r0 }`), where no struct-literal
@@ -3875,6 +3938,24 @@ impl<'a> super::Interpreter<'a> {
             }
             ExprKind::Tuple(elems) => {
                 for el in elems {
+                    Self::collect_aggregate_literal_sources(el, out);
+                }
+            }
+            // B-2026-08-29-45 — recurse through an ARRAY/`Vec` literal too, so
+            // a source nested inside one (`[Outer { r: m }]`) is reached for
+            // the same reason nesting through a struct literal or a tuple is.
+            ExprKind::ArrayLiteral(elems) => {
+                for el in elems {
+                    Self::collect_aggregate_literal_sources(el, out);
+                }
+            }
+            // The `Vec[..]` / `Set[..]` PREFIX spelling is a distinct AST node
+            // from the bare `[..]` one, so it needs its own arm: `let v: Vec[R]
+            // = [m];` parses as this, not as `ArrayLiteral`, and handling only
+            // the latter fixed the `Array[R, N]` annotation while leaving the
+            // `Vec` one — the row's own repro — still doubling.
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for el in items {
                     Self::collect_aggregate_literal_sources(el, out);
                 }
             }
@@ -4101,7 +4182,17 @@ impl<'a> super::Interpreter<'a> {
     /// (it disarms the source's OWN body too). Codegen twin: the
     /// StructLiteral / Tuple arms of `disarm_container_bodies_for_arg`.
     pub(crate) fn record_container_move_sources_in_aggregate_arg(&mut self, e: &Expr) {
-        if !matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)) {
+        // B-2026-08-29-45 — the ARRAY/`Vec` literal admitted alongside the two
+        // aggregate shapes. Without it the new dispatch arm in
+        // `record_container_bodies_move_sources` reached here and bailed, and
+        // `let m = R { .. }; let v = [m];` still ran `m`'s body twice.
+        if !matches!(
+            &e.kind,
+            ExprKind::StructLiteral { .. }
+                | ExprKind::Tuple(_)
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::PrefixCollectionLiteral { .. }
+        ) {
             return;
         }
         let mut names = Vec::new();

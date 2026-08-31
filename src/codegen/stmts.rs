@@ -8782,6 +8782,51 @@ impl<'ctx> super::Codegen<'ctx> {
                         for source_name in struct_lit_sources {
                             self.suppress_user_drop_for_var(source_name);
                         }
+                        // B-2026-08-29-45 — the ARRAY / `Vec`-prefix literal
+                        // sibling of the struct-literal loop above. Moving an
+                        // existing binding into a container literal
+                        // (`let m = R { .. }; let v: Vec[R] = [m];`) arms the
+                        // container's element-body walk without retracting the
+                        // source's own ownership, so the body ran at `m`'s NLL
+                        // death AND again through the walk — `dR4 dR4` where
+                        // one is due, agreed by every backend, which is why no
+                        // A/B gate reported it.
+                        //
+                        // TWO AST NODES, not one: `let v: Vec[R] = [m]` parses
+                        // as `PrefixCollectionLiteral` and `let a: Array[R, 1]
+                        // = [m]` as `ArrayLiteral`, so handling either alone
+                        // fixes one annotation and leaves the other doubling.
+                        //
+                        // The STRONG disarm is right here for the reason the
+                        // aggregate arms of `disarm_container_bodies_for_arg`
+                        // give: the container's element walk becomes the owner
+                        // on both axes, so a source carrying its OWN `impl
+                        // Drop` must lose its body action too, not just its
+                        // container-element walk.
+                        if matches!(
+                            &value.kind,
+                            ExprKind::ArrayLiteral(_) | ExprKind::PrefixCollectionLiteral { .. }
+                        ) {
+                            // The CALLER-RETAINS half of the same row. When every
+                            // element is a param VIEW the bodies belong to the
+                            // caller, so this binding must arm no walker at all —
+                            // retract the one registered above and make the
+                            // view-ness transitive, exactly as the `Some(r)` and
+                            // enum-ctor sites do. Checked BEFORE the source
+                            // retraction below because a param source has no
+                            // action of its own to retract; the double body comes
+                            // from the caller's fire plus this walk.
+                            if self.container_literal_elems_are_all_param_views(value) {
+                                self.suppress_container_elem_bodies_for_var(var_name);
+                                self.payload_vars.param_view_locals.insert(var_name.clone());
+                            } else {
+                                let mut elem_sources = Vec::new();
+                                Self::collect_aggregate_literal_sources(value, &mut elem_sources);
+                                for source_name in elem_sources {
+                                    self.suppress_user_drop_for_var(&source_name);
+                                }
+                            }
+                        }
                         let move_source_name = match &value.kind {
                             ExprKind::Identifier(n) => Some(n.as_str()),
                             ExprKind::SelfValue => Some("self"),

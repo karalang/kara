@@ -43693,12 +43693,21 @@ fn main() {
             .as_deref(),
             Some("dR1\ndR2\ndR1\nv=7\n")
         );
-        // A `Vec` literal doubles as well, and the row that prompted this fix
-        // listed it beside the others — but it is NOT the same defect: a plain
-        // LOCAL moved into one doubles identically, with no param anywhere, so
-        // the cause is a move-suppression hole rather than caller-retains.
-        // Both spellings pinned, because it is the pair that shows which bug it
-        // is. UNFIXED (B-2026-08-29-45).
+        // A `Vec` literal doubled as well, and the row that prompted THIS fix
+        // listed it beside the others — but it was NOT the same defect: a plain
+        // LOCAL moved into one doubled identically, with no param anywhere, so
+        // the cause was a move-suppression hole rather than caller-retains.
+        // Both spellings stay pinned, because the pair is what showed which bug
+        // it was.
+        //
+        // NOW FIXED under B-2026-08-29-45, which needed BOTH halves — the
+        // move-suppression retraction for the local source and this file's own
+        // caller-retains treatment (`container_literal_elems_are_all_param_-
+        // views`) for the param one. The expectations below were the
+        // known-bad output this fixture deliberately recorded; they are now the
+        // correct single body. The MIXED literal (`[r, R { id: 2 }]`) stays
+        // unfixed by design — see that row's close note for why a `Vec` cannot
+        // carry the per-slot mask a tuple can.
         assert_eq!(
             run_program(&format!(
                 "{hdr}\
@@ -43706,7 +43715,7 @@ fn main() {
                  fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\"); }}"
             ))
             .as_deref(),
-            Some("dR1\ndR1\nv=7\n")
+            Some("dR1\nv=7\n")
         );
         assert_eq!(
             run_program(&format!(
@@ -43715,7 +43724,7 @@ fn main() {
                  fn main() {{ let v = take(); println(f\"v={{v}}\"); }}"
             ))
             .as_deref(),
-            Some("dR4\ndR4\nv=7\n")
+            Some("dR4\nv=7\n")
         );
         // ...and the same Vec literal with a FRESH element is correct, which is
         // what makes the two above a move-suppression hole and not a walker
@@ -123396,6 +123405,105 @@ fn main() {
                     "{label}: a nested `match` over a whole-bound payload must not \
                      take the source's heap"
                 );
+            }
+        }
+    }
+
+    /// B-2026-08-29-45 — MOVING A BINDING INTO A CONTAINER LITERAL RAN ITS
+    /// `Drop` BODY TWICE, on every backend.
+    ///
+    /// Two independent halves, and the row's own triple is what separates
+    /// them:
+    ///
+    ///   * MOVE-SUPPRESSION. `let m = R { .. }; let v: Vec[R] = [m];` armed the
+    ///     container's element-body walk without retracting `m`'s own
+    ///     ownership, so the body ran at `m`'s NLL death AND through the walk.
+    ///     No param anywhere, so the cause cannot be caller-retains.
+    ///   * CALLER-RETAINS. `fn take(r: R) { let v: Vec[R] = [r]; }` — `r` is a
+    ///     param VIEW whose body the CALLER runs, so the container must arm no
+    ///     walker at all. The tuple, struct-literal and `Some(...)` wraps have
+    ///     handled this since B-2026-08-29-24; the array/`Vec` arm was
+    ///     deliberately left out there rather than half-fixed.
+    ///
+    /// TWO AST NODES, not one, and this is the trap: `let v: Vec[R] = [m]`
+    /// parses as `PrefixCollectionLiteral` while `let a: Array[R, 1] = [m]`
+    /// parses as `ArrayLiteral`. A first cut handled only `ArrayLiteral` and
+    /// silently fixed the `Array` annotation while leaving the `Vec` one — the
+    /// row's own repro — still doubling. Both annotations are pinned here for
+    /// that reason.
+    ///
+    /// ALL THREE BACKENDS AGREED ON THE WRONG ANSWER, which is why no A/B gate
+    /// reported this and why the fixture asserts an exact count rather than
+    /// run==build. It is also not a memory error — the buffer is freed once —
+    /// so no ASAN fixture can see it either.
+    ///
+    /// The MIXED literal (`[r, R { id: 2 }]`, one view and one fresh) is
+    /// deliberately NOT fixed: the tuple walker can mask individual slots
+    /// because its arity is fixed, and a `Vec`'s is not. Both backends draw
+    /// that line in the same place, so it stays an agreed gap rather than
+    /// becoming a divergence.
+    #[test]
+    fn e2e_a_binding_moved_into_a_container_literal_drops_once() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct S { r: R }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "local moved into a `Vec` literal",
+                "fn take() -> i64 { let m: R = R { id: 4 }; let v: Vec[R] = [m]; return 7; }",
+                "dR4\nv=7\n",
+            ),
+            (
+                "local moved into an `Array` literal",
+                "fn take() -> i64 { let m: R = R { id: 4 }; let a: Array[R, 1] = [m]; return 7; }",
+                "dR4\nv=7\n",
+            ),
+            (
+                "PARAM view moved into a `Vec` literal",
+                "fn take2(r: R) -> i64 { let v: Vec[R] = [r]; return 7; }\n\
+                 fn take() -> i64 { return take2(R { id: 1 }); }",
+                "dR1\nv=7\n",
+            ),
+            (
+                "PARAM view moved into an `Array` literal",
+                "fn take2(r: R) -> i64 { let a: Array[R, 1] = [r]; return 7; }\n\
+                 fn take() -> i64 { return take2(R { id: 1 }); }",
+                "dR1\nv=7\n",
+            ),
+            // CONTROLS — the shapes that were already correct, and together the
+            // reason the two halves above are separable.
+            (
+                "control: a FRESH element, no named source",
+                "fn take() -> i64 { let v: Vec[R] = [R { id: 4 }]; return 7; }",
+                "dR4\nv=7\n",
+            ),
+            (
+                "control: the TUPLE wrap of the same local",
+                "fn take() -> i64 { let m: R = R { id: 4 }; let t: (R, i64) = (m, 1); return 7; }",
+                "dR4\nv=7\n",
+            ),
+            (
+                "control: the `Some(...)` wrap of the same local",
+                "fn take() -> i64 { let m: R = R { id: 4 }; let o: Option[R] = Some(m); return 7; }",
+                "dR4\nv=7\n",
+            ),
+            (
+                "control: the STRUCT-literal wrap of a param view",
+                "fn take2(r: R) -> i64 { let s: S = S { r: r }; return 7; }\n\
+                 fn take() -> i64 { return take2(R { id: 1 }); }",
+                "dR1\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: one value, one body");
             }
         }
     }
