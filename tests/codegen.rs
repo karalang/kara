@@ -984,6 +984,193 @@ mod codegen_tests {
         }
     }
 
+    /// A `Vector[T, N]` reached through a CONTAINER must render the same text on
+    /// every backend (B-2026-08-30-39) — the nested half of the depth-0 twin
+    /// above.
+    ///
+    /// Before the fix these were not a wrong answer, they were a compiler
+    /// PANIC with no span: `emit_display_fn_for_type_expr` had no `Vector` arm,
+    /// so every container layer over a vector fell through to the by-name
+    /// catch-all and aborted `karac build` with
+    /// `type_name 'Vector_u64_2' not yet supported`. The interpreter rendered
+    /// all of them, and depth 0 already worked through the f-string PART
+    /// renderer — which is what made the boundary so sharp and so easy to hit.
+    ///
+    /// EVERY ROW IS A DIFFERENT RECURSION PATH into the new arm, not a
+    /// restatement of one: `Vec` reaches it through `emit_vec_display_fn_te`,
+    /// the tuple through `emit_tuple_display_fn`, the `Map` through its value
+    /// emitter. Two-deep rows are here because a fix applied at the outermost
+    /// container rather than at the shared dispatcher would pass the one-deep
+    /// rows and fail these.
+    ///
+    /// The signed row is the control that keeps the lane rule honest — `-1`
+    /// must still print `-1` one level down, which is what stops "render lanes
+    /// unsigned" from being implemented unconditionally. The `u128` row is the
+    /// second width whose top half misses a 64-bit carrier.
+    #[test]
+    fn e2e_nested_vector_display_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "Vec of vector",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 let vs: Vec[Vector[u64, 2]] = [u];\n\
+                 println(f\"{vs}\");",
+                "[Vector(18446744073709551615, 1)]\n",
+            ),
+            (
+                "Vec of Vec of vector",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 let vv: Vec[Vec[Vector[u64, 2]]] = [[u]];\n\
+                 println(f\"{vv}\");",
+                "[[Vector(18446744073709551615, 1)]]\n",
+            ),
+            (
+                "tuple holding a vector",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 let t = (u, 7i64);\n\
+                 println(f\"{t}\");",
+                "(Vector(18446744073709551615, 1), 7)\n",
+            ),
+            (
+                "tuple inside a tuple",
+                "let u: Vector[i32, 2] = Vector[i32, 2](1i32, -2i32);\n\
+                 let t = ((u, 1i64), 2i64);\n\
+                 println(f\"{t}\");",
+                "((Vector(1, -2), 1), 2)\n",
+            ),
+            (
+                "Map value of vector type",
+                "let iv: Vector[i32, 4] = Vector[i32, 4](1i32, -2i32, 3i32, -4i32);\n\
+                 let mut m: Map[i64, Vector[i32, 4]] = Map.new();\n\
+                 m.insert(1i64, iv);\n\
+                 println(f\"{m}\");",
+                "{1: Vector(1, -2, 3, -4)}\n",
+            ),
+            (
+                "Vec of float vector",
+                "let fv: Vector[f64, 2] = Vector[f64, 2](1.5f64, -2.25f64);\n\
+                 let fs: Vec[Vector[f64, 2]] = [fv];\n\
+                 println(f\"{fs}\");",
+                "[Vector(1.5, -2.25)]\n",
+            ),
+            // The control: a genuinely signed lane must still read as signed one
+            // level down, exactly as it does at depth 0.
+            (
+                "Vec of signed vector",
+                "let s: Vector[i64, 2] = Vector[i64, 2](-1, 1);\n\
+                 let ss: Vec[Vector[i64, 2]] = [s];\n\
+                 println(f\"{ss}\");",
+                "[Vector(-1, 1)]\n",
+            ),
+            (
+                "Vec of u128 vector",
+                "let w: Vector[u128, 2] = \n\
+                 Vector[u128, 2](340282366920938463463374607431768211455u128, 1u128);\n\
+                 let ws: Vec[Vector[u128, 2]] = [w];\n\
+                 println(f\"{ws}\");",
+                "[Vector(340282366920938463463374607431768211455, 1)]\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter is the reference for this text and no \
+                 longer produces it",
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backend disagrees with the \
+                     interpreter — it PANICKED the compiler before B-2026-08-30-39",
+                );
+            }
+        }
+    }
+
+    /// `dbg()` of a `Vector[T, N]` must give the same text on every backend
+    /// (B-2026-08-30-39) — the `Debug`-mode sibling of the two `Display`
+    /// comparisons above.
+    ///
+    /// `dbg` panicked at EVERY depth, including depth 0 where `println(v)` and
+    /// `f"{v}"` were both already correct, because it does not go through the
+    /// f-string part renderer at all: it recovers the argument's `TypeExpr` and
+    /// calls the by-pointer dispatcher, which had no `Vector` arm. The depth-0
+    /// row is therefore not redundant with the `Display` twin — it is the one
+    /// that shows the two paths reaching the same renderer.
+    ///
+    /// It also covers the SECOND half of the fix, which the `Display` rows
+    /// cannot: `type_to_type_expr` had no `Type::Vector` arm, so the TypeExpr
+    /// `dbg` recovered was `TypeKind::Error` and the panic named
+    /// `type_name 'unknown'` rather than the real `'Vector_u64_2'`. A fix that
+    /// added only the display arm would still abort here.
+    ///
+    /// `dbg` writes to STDERR, which is why this reads `stderr` rather than
+    /// going through `run_program`.
+    #[test]
+    fn e2e_dbg_of_a_vector_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "dbg at depth 0",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 dbg(u);",
+                "Vector(18446744073709551615, 1)",
+            ),
+            (
+                "dbg of a Vec of vectors",
+                "let u: Vector[u64, 2] = Vector[u64, 2](18446744073709551615u64, 1u64);\n\
+                 let vs: Vec[Vector[u64, 2]] = [u];\n\
+                 dbg(vs);",
+                "[Vector(18446744073709551615, 1)]",
+            ),
+            (
+                "dbg of a float vector",
+                "let f: Vector[f64, 2] = Vector[f64, 2](1.5f64, -2.25f64);\n\
+                 dbg(f);",
+                "Vector(1.5, -2.25)",
+            ),
+            // Signed and narrow controls, same role as in the Display twin.
+            (
+                "dbg of a signed vector",
+                "let s: Vector[i64, 2] = Vector[i64, 2](-1, 1);\n\
+                 dbg(s);",
+                "Vector(-1, 1)",
+            ),
+            (
+                "dbg of a u8 vector above i8 range",
+                "let n: Vector[u8, 4] = Vector[u8, 4](200u8, 1u8, 2u8, 3u8);\n\
+                 dbg(n);",
+                "Vector(200, 1, 2, 3)",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (_out, interp_dbg) =
+                karac::run_program_with_dbg(&src, karac::interpreter::DbgOutputMode::Terminal);
+            let interp = interp_dbg.join("\n");
+            assert!(
+                interp.contains(want),
+                "{label}: the interpreter must render the vector's lanes — \
+                 got {interp:?}, wanted {want:?}",
+            );
+            if let Some(run) = run_program_capturing(&src) {
+                assert!(
+                    run.stderr.contains(want),
+                    "{label}: the compiled backend disagrees with the \
+                     interpreter — it PANICKED the compiler before \
+                     B-2026-08-30-39 — got {:?}, wanted {want:?}",
+                    run.stderr,
+                );
+            }
+        }
+    }
+
     /// `dbg()` of a `Set` / `SortedSet` / `SortedMap` must give the SAME text on
     /// every backend (B-2026-08-30-46) — the `Debug`-mode twin of the `Display`
     /// comparison above.

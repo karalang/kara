@@ -1461,6 +1461,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_map_display_fn(&k, &v);
                     }
                 }
+                // B-2026-08-30-39 — `Vector[T, N]`. Without this arm every
+                // NESTED spelling of a vector (an element of a `Vec`, a tuple
+                // field, any `dbg` argument) fell through to the by-name
+                // catch-all below and panicked the compiler, while the same
+                // value at depth 0 rendered correctly through the f-string part
+                // renderer. Sits with the other extent-bearing shapes because
+                // the const arg is part of the identity, not decoration.
+                if head == Some("Vector") {
+                    let args = p.generic_args.as_ref();
+                    let elem_te = args.and_then(|a| a.first()).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    let lanes = args.and_then(|a| a.get(1)).and_then(|a| match a {
+                        GenericArg::Const(e) => match &e.kind {
+                            ExprKind::Integer(n, _) => Some(*n),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                    if let (Some(elem), Some(n)) = (elem_te, lanes) {
+                        return self.emit_vector_display_fn(&elem, n, te);
+                    }
+                }
                 if head == Some("Set") {
                     if let Some(GenericArg::Type(elem_te)) =
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
@@ -3692,79 +3716,124 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(self.render_via_display_fn(disp, slot)))
     }
 
-    /// B-2026-08-29-52 — render a whole `Vector[T, N]` interpolation part as
-    /// `Vector(l0, l1, …)`, matching the interpreter's `Value::Vector` arm.
+    /// B-2026-08-30-39 — the by-pointer display FUNCTION for `Vector[T, N]`,
+    /// the sibling of [`Self::emit_tuple_display_fn`] and the half
+    /// [`Self::try_compile_vector_display`] could not supply.
     ///
-    /// Without this arm a vector part fell through to the scalar renderer,
-    /// which produced a DIFFERENT wrong answer on each compiled backend: the
-    /// JIT printed the aggregate's address (the same number for two vectors of
-    /// different element types, which is what identified it as an address),
-    /// and AOT printed a single lane read out of the middle of it. Neither
-    /// backend nor `karac check` said anything.
+    /// That one renders an f-string PART: it appends into a live accumulator at
+    /// the interpolation site, keyed on the expression's span. Every CONTAINER
+    /// layer instead needs a `fn(value_ptr, acc)` it can call per element, and
+    /// there was none — so a vector inside a `Vec`, a tuple, or any `dbg`
+    /// argument fell through `emit_display_fn_for_type_expr` to the by-name
+    /// catch-all and PANICKED the compiler with no span, against an interpreter
+    /// that rendered all of them.
     ///
-    /// The lane count and element kind come from the compiled `<N x T>` value
-    /// itself. SIGNEDNESS cannot: an LLVM `iN` is signless, so `u8` and `i8`
-    /// lanes are the same type here. That comes from `unsigned_vector_exprs`,
-    /// the span table the SIMD `reduce_min`/`reduce_max` paths already trust
-    /// for the same question.
+    /// SIGNEDNESS COMES FROM THE ELEMENT TYPE HERE, not from the span table the
+    /// part renderer consults. An LLVM `iN` is signless, which is why the
+    /// expression-keyed path needs `unsigned_vector_exprs` at all; a function
+    /// emitted for a `TypeExpr` has the answer in hand and needs no side table.
+    /// That also makes this path work where the table has no entry, which is
+    /// every nested position — the table records interpolation sites.
     ///
-    /// The decision to take this arm has to be made BEFORE compiling `e` —
-    /// once the scalar path has run there is no way back — which is why it
-    /// keys on the span table rather than on the compiled value's LLVM type.
-    ///
-    /// KNOWN RESIDUAL, deliberately not matched: for an unsigned lane holding a
-    /// value above `i64::MAX`, this prints the value and the INTERPRETER prints
-    /// a signed reinterpretation (`Vector[u64, 2]` of `u64::MAX` renders
-    /// `Vector(18446744073709551615, 1)` here and `Vector(-1, 1)` there). The
-    /// interpreter's `Value::Vector` holds plain `Value::Int` lanes with no
-    /// element type, so its Display cannot recover the signedness its own
-    /// INDEXED read gets right (`u[0]` prints the unsigned value). That is a
-    /// defect in the reference, filed separately rather than reproduced here —
-    /// encoding a known-wrong sign convention into new code to preserve
-    /// agreement would make the wrong answer harder to remove later.
-    pub(super) fn try_compile_vector_display(
+    /// The lane loop is shared with the part renderer
+    /// ([`Self::disp_append_vector_lanes`]) precisely so `Vector[u64, 2]` of
+    /// `u64::MAX` cannot render `18446744073709551615` at depth 0 and
+    /// `-1` one level down.
+    pub(super) fn emit_vector_display_fn(
         &mut self,
-        e: &Expr,
-    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
-        let key = (e.span.offset, e.span.length);
-        if !self.span_tables.vector_typed_exprs.contains(&key) {
-            return Ok(None);
+        elem_te: &TypeExpr,
+        lanes: i128,
+        vector_te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(vector_te);
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
+        if let Some(f) = self.disp_cache_get(&type_name) {
+            return f;
         }
-        let val = self.compile_expr(e)?;
-        let BasicValueEnum::VectorValue(vv) = val else {
-            return Ok(None);
-        };
-        let unsigned = self.span_tables.unsigned_vector_exprs.contains(&key);
-        let lanes = vv.get_type().get_size();
-        let elem_ty = vv.get_type().get_element_type();
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.disp_cache_put(type_name, f);
+            return f;
+        }
 
-        let vec_ty = self.vec_struct_type();
+        let vec_llvm_ty = self.llvm_type_for_type_expr(vector_te);
+        let unsigned = super::tensor::type_expr_is_unsigned_int(elem_te);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.disp_cache_put(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // `lanes` is carried for the caller's shape check only; the loop reads
+        // the count back off the loaded value, so a disagreement between the
+        // TypeExpr's const arg and the lowered `<N x T>` cannot desynchronize
+        // the rendering from the memory being read.
+        let _ = lanes;
+        let loaded = self
+            .builder
+            .build_load(vec_llvm_ty, val_ptr, "vecfn.val")
+            .unwrap();
+        if let BasicValueEnum::VectorValue(vv) = loaded {
+            // A declined lane kind leaves `Vector(` unterminated, so close the
+            // parenthesis either way rather than emitting a half-rendered part.
+            match self.disp_append_vector_lanes(acc, vv, unsigned) {
+                Ok(true) => {}
+                _ => self.disp_append_lit(acc, "Vector(?)"),
+            }
+        } else {
+            self.disp_append_lit(acc, "Vector(?)");
+        }
+
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
+    /// B-2026-08-30-39 — append `Vector(l0, l1, …)` for a loaded `<N x T>`.
+    ///
+    /// Extracted from [`Self::try_compile_vector_display`] so the F-STRING PART
+    /// renderer (that one) and the by-pointer display FUNCTION
+    /// ([`Self::emit_vector_display_fn`]) share one body. They render the same
+    /// value at different depths — `f"{v}"` versus a `v` nested in a `Vec`, a
+    /// tuple or a `dbg` — and two copies of this lane loop would be two places
+    /// for the lane-signedness rule to drift apart, which is exactly the class
+    /// of bug B-2026-08-29-52 filed against the scalar fallback.
+    ///
+    /// `unsigned` is the caller's to determine, because the two have different
+    /// evidence available: the part renderer reads the `unsigned_vector_exprs`
+    /// span table (an LLVM `iN` is signless, so the compiled value cannot
+    /// answer), while the function knows its element `TypeExpr` outright.
+    ///
+    /// Returns `false` — having emitted nothing — for a lane type neither
+    /// integer nor float. The typechecker restricts `T` to `Numeric`, so this
+    /// is unreachable rather than merely rare; both callers decline gracefully
+    /// instead of asserting.
+    fn disp_append_vector_lanes(
+        &mut self,
+        acc: PointerValue<'ctx>,
+        vv: inkwell::values::VectorValue<'ctx>,
+        unsigned: bool,
+    ) -> Result<bool, String> {
         let i64_t = self.context.i64_type();
         let i32_t = self.context.i32_type();
-        let fn_val = self.current_fn.unwrap();
-        let acc = self.create_entry_alloca(fn_val, "vecd.acc", vec_ty.into());
-        // Entry-block zero AND use-site init, for the reason spelled out on
-        // `render_via_display_fn`: the caller registers this accumulator for
-        // function-scope cleanup, whose drain runs on paths that never reached
-        // the render.
-        self.zero_init_str_acc_at_entry(acc);
-        let dpp = self
-            .builder
-            .build_struct_gep(vec_ty, acc, 0, "vecd.dpp")
-            .unwrap();
-        let lp = self
-            .builder
-            .build_struct_gep(vec_ty, acc, 1, "vecd.lp")
-            .unwrap();
-        let cp = self
-            .builder
-            .build_struct_gep(vec_ty, acc, 2, "vecd.cp")
-            .unwrap();
-        self.builder.build_store(dpp, ptr_ty.const_null()).unwrap();
-        self.builder.build_store(lp, i64_t.const_zero()).unwrap();
-        self.builder.build_store(cp, i64_t.const_zero()).unwrap();
-
+        let lanes = vv.get_type().get_size();
+        let elem_ty = vv.get_type().get_element_type();
         self.disp_append_lit(acc, "Vector(");
         for i in 0..lanes {
             if i > 0 {
@@ -3845,10 +3914,88 @@ impl<'ctx> super::Codegen<'ctx> {
                 // The typechecker restricts `T` to `Numeric`, so there is no
                 // third case; bail rather than assert, and the caller falls
                 // through to the paths that ran before this arm existed.
-                _ => return Ok(None),
+                _ => return Ok(false),
             }
         }
+
         self.disp_append_lit(acc, ")");
+        Ok(true)
+    }
+
+    /// B-2026-08-29-52 — render a whole `Vector[T, N]` interpolation part as
+    /// `Vector(l0, l1, …)`, matching the interpreter's `Value::Vector` arm.
+    ///
+    /// Without this arm a vector part fell through to the scalar renderer,
+    /// which produced a DIFFERENT wrong answer on each compiled backend: the
+    /// JIT printed the aggregate's address (the same number for two vectors of
+    /// different element types, which is what identified it as an address),
+    /// and AOT printed a single lane read out of the middle of it. Neither
+    /// backend nor `karac check` said anything.
+    ///
+    /// The lane count and element kind come from the compiled `<N x T>` value
+    /// itself. SIGNEDNESS cannot: an LLVM `iN` is signless, so `u8` and `i8`
+    /// lanes are the same type here. That comes from `unsigned_vector_exprs`,
+    /// the span table the SIMD `reduce_min`/`reduce_max` paths already trust
+    /// for the same question.
+    ///
+    /// The decision to take this arm has to be made BEFORE compiling `e` —
+    /// once the scalar path has run there is no way back — which is why it
+    /// keys on the span table rather than on the compiled value's LLVM type.
+    ///
+    /// KNOWN RESIDUAL, deliberately not matched: for an unsigned lane holding a
+    /// value above `i64::MAX`, this prints the value and the INTERPRETER prints
+    /// a signed reinterpretation (`Vector[u64, 2]` of `u64::MAX` renders
+    /// `Vector(18446744073709551615, 1)` here and `Vector(-1, 1)` there). The
+    /// interpreter's `Value::Vector` holds plain `Value::Int` lanes with no
+    /// element type, so its Display cannot recover the signedness its own
+    /// INDEXED read gets right (`u[0]` prints the unsigned value). That is a
+    /// defect in the reference, filed separately rather than reproduced here —
+    /// encoding a known-wrong sign convention into new code to preserve
+    /// agreement would make the wrong answer harder to remove later.
+    pub(super) fn try_compile_vector_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        if !self.span_tables.vector_typed_exprs.contains(&key) {
+            return Ok(None);
+        }
+        let val = self.compile_expr(e)?;
+        let BasicValueEnum::VectorValue(vv) = val else {
+            return Ok(None);
+        };
+        let unsigned = self.span_tables.unsigned_vector_exprs.contains(&key);
+
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let acc = self.create_entry_alloca(fn_val, "vecd.acc", vec_ty.into());
+        // Entry-block zero AND use-site init, for the reason spelled out on
+        // `render_via_display_fn`: the caller registers this accumulator for
+        // function-scope cleanup, whose drain runs on paths that never reached
+        // the render.
+        self.zero_init_str_acc_at_entry(acc);
+        let dpp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 0, "vecd.dpp")
+            .unwrap();
+        let lp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 1, "vecd.lp")
+            .unwrap();
+        let cp = self
+            .builder
+            .build_struct_gep(vec_ty, acc, 2, "vecd.cp")
+            .unwrap();
+        self.builder.build_store(dpp, ptr_ty.const_null()).unwrap();
+        self.builder.build_store(lp, i64_t.const_zero()).unwrap();
+        self.builder.build_store(cp, i64_t.const_zero()).unwrap();
+
+        let ok = self.disp_append_vector_lanes(acc, vv, unsigned)?;
+        if !ok {
+            return Ok(None);
+        }
 
         let out = self.builder.build_load(vec_ty, acc, "vecd.val").unwrap();
         Ok(Some((acc, out)))

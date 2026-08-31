@@ -2582,14 +2582,22 @@ fn main() {
 /// `value.rs`, which sees a bare `Value::Int(-1)` carrier and prints `-1`.
 /// Asserting both in ONE program is the point — either line alone looks right.
 ///
-/// The nested cases (`Vec` / tuple / `Option` of a vector) are interpreter-ONLY
-/// on purpose, and it is not an oversight that they have no codegen twin: the
-/// compiled backends cannot render a nested vector AT ALL today — they abort
-/// with `emit_display_fn_for_type: type_name 'Vector_u64_2' not yet supported`
-/// (B-2026-08-30-39), which is why the twin in `tests/codegen.rs` twins only
-/// the depth-0 spellings. They are still worth pinning here: they come from the
-/// container arms recursing INTO the new one, so they are what proves the fix
-/// was made at the recursion point rather than special-cased at depth 0.
+/// The nested cases (`Vec` / tuple of a vector) are worth pinning here because
+/// they come from the container arms recursing INTO the new one, so they are
+/// what proves the fix was made at the recursion point rather than
+/// special-cased at depth 0.
+///
+/// They HAD no codegen twin when this was written, because the compiled
+/// backends could not render a nested vector at all — they aborted with
+/// `emit_display_fn_for_type: type_name 'Vector_u64_2' not yet supported`.
+/// B-2026-08-30-39 closed that, and the `Vec` and tuple rows are now twinned in
+/// `tests/codegen.rs::e2e_nested_vector_display_agrees_with_the_interpreter`.
+///
+/// `inopt` is the one row that is still interpreter-only, and for a reason
+/// unrelated to vectors: an `Option` whose payload makes the option's LLVM
+/// value a non-`String` struct has no f-string Display path in codegen at all
+/// — `Option[Vec[i64]]` fails identically, while `Option[i64]` is fine. Filed
+/// separately; do not read its absence here as a vector gap.
 ///
 /// `i64` lanes are in the table as the control that keeps the fix honest — a
 /// signed `-1` must still print `-1`, which is what stops "render lanes

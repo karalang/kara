@@ -1592,6 +1592,37 @@ impl<'a> super::TypeChecker<'a> {
                 },
                 span,
             },
+            // B-2026-08-30-39 — `Vector[T, N]`. Without this arm it fell to the
+            // `_ => Error` fallback below, and every consumer that reconstructs
+            // a TypeExpr for a vector-typed expression got a shape carrying no
+            // type at all. The visible cost was a compiler PANIC rather than a
+            // wrong lowering: `dbg(v)` and a vector inside a tuple f-string both
+            // reach `emit_display_fn_for_type_expr` through this function, whose
+            // mangle of `TypeKind::Error` is the string `"unknown"`, so they
+            // aborted with `type_name 'unknown' not yet supported` while the
+            // spellings that keep a source-written TypeExpr aborted with the
+            // real `'Vector_u64_2'`. Two different messages, and only this one
+            // was a lost type.
+            //
+            // Shaped like the `Array` arm above rather than reusing `path`,
+            // because the extent is a CONST generic arg: `Vector[u64, 2]` and
+            // `Vector[u64, 4]` are different layouts and must not collapse onto
+            // one mangled name (B-2026-08-27-25's rule, which
+            // `display_mangle_te` already implements for both spellings).
+            Type::Vector { element, lanes } => TypeExpr {
+                kind: TypeKind::Path(PathExpr {
+                    segments: vec!["Vector".to_string()],
+                    generic_args: Some(vec![
+                        GenericArg::Type(Self::type_to_type_expr(element)),
+                        GenericArg::Const(Expr {
+                            kind: ExprKind::Integer(lanes.as_literal().unwrap_or(0).into(), None),
+                            span,
+                        }),
+                    ]),
+                    span,
+                }),
+                span,
+            },
             Type::Slice { element, mutable } => {
                 let inner = Box::new(Self::type_to_type_expr(element));
                 if *mutable {
