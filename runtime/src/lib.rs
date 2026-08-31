@@ -209,6 +209,14 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         alloc::karac_realloc_or_panic,
         alloc::karac_alloc_zeroed_or_panic,
         alloc::karac_free_buf,
+        // B-2026-08-31-24 — the OVER-ALIGNED pair, for a buffer whose element
+        // type wants more than `malloc`'s guaranteed 16 (a `Vector[i64, 4]`
+        // wants 32). Same JIT-load-bearing status as the ordinary pair: a
+        // `Vec[Vector[T, N]]` program's module declares them, so leaving them
+        // off this list is the B-2026-07-12-22 failure mode again — AOT links
+        // (the archive has the symbol) while `karac run` dies at lookup.
+        alloc::karac_alloc_aligned_or_panic,
+        alloc::karac_realloc_aligned_or_panic,
     );
     // Embedded critical-section RAII guard (`critical_section.acquire()`,
     // b6ea37a1). Codegen's synthesized drop calls

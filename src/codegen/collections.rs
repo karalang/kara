@@ -1664,17 +1664,38 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_mul(n_const, elem_size, "vec.lit.alloc_bytes")
             .unwrap();
-        let buf = self
-            .builder
-            .build_call(
-                self.runtime_fns.malloc_fn,
-                &[alloc_bytes.into()],
-                "vec.lit.buf",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        // B-2026-08-31-24 — an OVER-ALIGNED element type (a `Vector[i64, 4]`
+        // wants 32; `malloc` guarantees 16) must come from the aligned
+        // allocator, because every element access below is emitted at the
+        // element's natural alignment and x86-64 selects `vmovaps` for it,
+        // which faults on a merely-16-aligned buffer. Ordinary element types
+        // answer `None` and keep the plain `malloc` they always had.
+        let buf = match self.over_alignment_for_elem(elem_ty) {
+            Some(align) => {
+                let f = self.alloc_aligned_or_panic_fn_decl();
+                self.builder
+                    .build_call(
+                        f,
+                        &[alloc_bytes.into(), i64_t.const_int(align, false).into()],
+                        "vec.lit.buf",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value()
+            }
+            None => self
+                .builder
+                .build_call(
+                    self.runtime_fns.malloc_fn,
+                    &[alloc_bytes.into()],
+                    "vec.lit.buf",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value(),
+        };
 
         // Store each item at its source-order slot via GEP. Bit-copy
         // semantics — for aggregate element types (Vec[Vec[T]], etc.)

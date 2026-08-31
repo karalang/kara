@@ -25,6 +25,17 @@ extern "C" {
     fn calloc(nmemb: usize, size: usize) -> *mut u8;
 }
 
+extern "C" {
+    /// C11 / POSIX aligned allocation. Returns 0 on success and writes the
+    /// pointer through `memptr`; returns an errno value (EINVAL / ENOMEM)
+    /// on failure WITHOUT setting `errno`. Memory it returns is freed with
+    /// plain `free`, which is why the aligned path below needs no free-side
+    /// counterpart (POSIX.1-2008 posix_memalign, and C11 7.22.3.1 for
+    /// `aligned_alloc`, both make `free` the correct deallocator).
+    fn posix_memalign(memptr: *mut *mut u8, alignment: usize, size: usize) -> i32;
+    fn free(ptr: *mut core::ffi::c_void);
+}
+
 /// Hard ceiling on any single runtime allocation: `2^61 - 1` bytes (~2.3 EB).
 ///
 /// This can never fire on a satisfiable request — current hardware tops out
@@ -80,6 +91,102 @@ pub extern "C" fn karac_alloc_or_panic(size: usize) -> *mut u8 {
         std::process::abort();
     }
     p
+}
+
+/// The alignment every supported platform's `malloc` already guarantees.
+/// `posix_memalign` rejects an alignment below `sizeof(void*)` and the aligned
+/// path is pointless at or under this, so requests up to it fall through to the
+/// ordinary allocator — which keeps the recycling buffer cache on the hot path
+/// for every ordinary element type.
+pub const KARAC_MALLOC_GUARANTEED_ALIGN: usize = 16;
+
+/// Panicking **over-aligned** allocation — the entry point for a buffer whose
+/// ELEMENT type wants more alignment than `malloc` guarantees
+/// (B-2026-08-31-24).
+///
+/// A `Vector[i64, 4]` is `<4 x i64>`: 32 bytes wanted, 16 delivered. Codegen
+/// emits every element access at the type's natural alignment, so x86-64
+/// selects `vmovaps`, which FAULTS on a merely-16-aligned address — and whether
+/// a given `malloc` chunk happens to be 32-aligned depends on the heap's
+/// history, so the same program crashed or not according to what allocated
+/// before it.
+///
+/// Fixing it at the ALLOCATION rather than at each access is what makes it one
+/// change instead of ~230: there are ~10 buffer-allocation sites in codegen and
+/// 229 element load/store sites. It also keeps the aligned-move selection that
+/// is the point of a SIMD element type.
+///
+/// **Deliberately bypasses the recycling buffer cache.** `karac_alloc_fallible`
+/// may serve a request from a parked buffer, and a parked buffer carries only
+/// `malloc`'s alignment — reusing one here would reintroduce the fault
+/// intermittently, with exactly the heap-history-dependent signature that made
+/// this defect so hard to see. Parking an over-aligned buffer on the way OUT is
+/// harmless (over-alignment satisfies any weaker request), so only `take` is
+/// skipped and `karac_free_buf` needs no change.
+#[no_mangle]
+pub extern "C" fn karac_alloc_aligned_or_panic(size: usize, align: usize) -> *mut u8 {
+    if align <= KARAC_MALLOC_GUARANTEED_ALIGN {
+        return karac_alloc_or_panic(size);
+    }
+    if size as u64 > KARAC_MAX_ALLOC_BYTES {
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    // `posix_memalign` requires a power-of-two multiple of `sizeof(void*)`, and
+    // that the SIZE be a multiple of the alignment is NOT required by POSIX
+    // (unlike C11 `aligned_alloc`) — but rounding up costs nothing and keeps
+    // the buffer usable by either allocator if this is ever retargeted.
+    let n = if size == 0 {
+        align
+    } else {
+        size.next_multiple_of(align)
+    };
+    let mut out: *mut u8 = std::ptr::null_mut();
+    let rc = unsafe { posix_memalign(&mut out as *mut *mut u8, align, n) };
+    if rc != 0 || out.is_null() {
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    out
+}
+
+/// Panicking **over-aligned** reallocation — the grow-path twin of
+/// [`karac_alloc_aligned_or_panic`] (B-2026-08-31-24).
+///
+/// There is no aligned `realloc` in POSIX or C11, and plain `realloc` on
+/// `posix_memalign` memory may return a chunk carrying only `malloc`'s
+/// alignment — which would put the fault back one grow later.
+///
+/// So: `realloc` FIRST. That preserves the contents (the allocator knows the
+/// old size; the caller does not have to) and extends in place when it can.
+/// Then check the result: if it is already aligned — which it often is, since
+/// the previous buffer was — keep it and no copy happens at all. Only a
+/// misaligned result costs an aligned allocation plus one copy, and that copy
+/// reads `new_size` bytes from a buffer that is now exactly `new_size` big, so
+/// it is in bounds by construction.
+///
+/// Taking `(ptr, new_size, align)` rather than also an old size is what keeps
+/// the codegen call sites a mechanical one-argument change from the ordinary
+/// realloc they replace.
+#[no_mangle]
+pub extern "C" fn karac_realloc_aligned_or_panic(
+    ptr: *mut u8,
+    new_size: usize,
+    align: usize,
+) -> *mut u8 {
+    if align <= KARAC_MALLOC_GUARANTEED_ALIGN {
+        return karac_realloc_or_panic(ptr, new_size);
+    }
+    let grown = karac_realloc_or_panic(ptr, new_size);
+    if (grown as usize).is_multiple_of(align) {
+        return grown;
+    }
+    let fresh = karac_alloc_aligned_or_panic(new_size, align);
+    unsafe {
+        std::ptr::copy_nonoverlapping(grown, fresh, new_size);
+        free(grown as *mut core::ffi::c_void);
+    }
+    fresh
 }
 
 /// Panicking reallocation — the grow-path counterpart of

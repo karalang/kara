@@ -25861,6 +25861,357 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-24 — a `Vec` whose element type is OVER-ALIGNED (a
+    /// `Vector[T, N]` wider than 16 bytes) put its element buffer on plain
+    /// malloc memory, which guarantees only 16-byte alignment, and then read
+    /// and wrote the elements at the vector's NATURAL alignment. On x86-64
+    /// LLVM selects `vmovaps` for a 32-byte-aligned `<4 x i64>` access, and
+    /// `vmovaps` faults on a 16-aligned address — so the program SIGSEGV'd.
+    ///
+    /// The IR is the assertion because it is the mechanism, and because the
+    /// crash itself is alignment-of-the-day: whether a given malloc result
+    /// happens to land on 32 is deterministic per binary but arbitrary across
+    /// shapes, which is why two of the twelve program shapes in the E2E twin
+    /// below ran clean even before the fix. The symbol either appears or it
+    /// does not.
+    ///
+    /// Fixing this at the ~10 ALLOCATION sites rather than at the 229 element
+    /// ACCESS sites is what keeps it one change: de-tuning every access to
+    /// `align 1` would also give up the aligned-move selection that is the
+    /// entire point of a SIMD element type.
+    #[test]
+    fn test_ir_over_aligned_vec_element_buffer_uses_the_aligned_allocator() {
+        // Every Vec buffer-producing shape the sweep found: the literal
+        // (malloc), the push grow, `reserve`, `insert`, and the STABILIZED
+        // push loop in `reduce.rs`, whose bulk reserve is a separate emission
+        // path from the ordinary push grow and was the last one found.
+        for (label, src) in [
+            (
+                "literal",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let v: Vec[Vector[i64, 4]] = [a, a];\n\
+                     let g = ref v[1];\n\
+                     println(g.reduce_sum());\n\
+                 }",
+            ),
+            (
+                "push-grow",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [a];\n\
+                     v.push(a);\n\
+                     v.push(a);\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "stabilized-push-loop",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [];\n\
+                     for i in 0..9 { v.push(a); }\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "reserve",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [];\n\
+                     v.reserve(16);\n\
+                     v.push(a);\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "insert",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [a];\n\
+                     v.insert(0, a);\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "struct-with-vector-field",
+                "struct H { v: Vector[i64, 4] }\n\
+                 fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut hs: Vec[H] = [];\n\
+                     for i in 0..9 { hs.push(H { v: a }); }\n\
+                     println(hs.len());\n\
+                 }",
+            ),
+        ] {
+            let ir = ir_for(src);
+            assert!(
+                ir.contains("karac_alloc_aligned_or_panic")
+                    || ir.contains("karac_realloc_aligned_or_panic"),
+                "case {label}: the element buffer for an over-aligned element \
+                 type is still allocated through the plain entry point, so it \
+                 carries only malloc's 16-byte guarantee while the element \
+                 accesses are emitted at the natural alignment:\n{ir}"
+            );
+        }
+
+        // Controls: an element type at or below malloc's 16-byte guarantee
+        // must NOT pay for the aligned path. `Vector[i64, 2]` is exactly 16 —
+        // the boundary, and the case that proves the predicate is `> 16` and
+        // not `>= 16`.
+        for (label, src) in [
+            (
+                "control-i64",
+                "fn main() {\n\
+                     let mut v: Vec[i64] = [];\n\
+                     for i in 0..9 { v.push(i); }\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "control-v128-boundary",
+                "fn main() {\n\
+                     let a: Vector[i64, 2] = Vector[i64, 2](3, 4);\n\
+                     let mut v: Vec[Vector[i64, 2]] = [];\n\
+                     for i in 0..9 { v.push(a); }\n\
+                     println(v.len());\n\
+                 }",
+            ),
+        ] {
+            let ir = ir_for(src);
+            assert!(
+                !ir.contains("_aligned_or_panic"),
+                "case {label}: an element type malloc already satisfies was \
+                 routed to the aligned allocator, which costs a `posix_memalign` \
+                 for nothing:\n{ir}"
+            );
+        }
+    }
+
+    /// B-2026-08-31-24's E2E twin — the interpreter is the oracle, because it
+    /// stores these elements in boxed `Value`s and never had the problem.
+    ///
+    /// **This test is a correctness oracle, not the crash guard — the IR test
+    /// above is the guard.** Whether a given buffer actually faults is
+    /// alignment-of-the-day: an under-aligned buffer only crashes when the
+    /// malloc result it happens to get is 16-but-not-32. Under `karac build`,
+    /// eight of these shapes SIGSEGV'd pre-fix (40/40 runs each) and two —
+    /// `literal-read`, `push-onto-literal` — ran clean (also 40/40), their
+    /// buffers having landed on 32 by luck. Inside THIS harness, which
+    /// compiles the same source without the concurrency analysis and so emits
+    /// a slightly different allocation sequence, ALL of them ran clean pre-fix,
+    /// `heap-offset-walk` included — and that one crashes 100% of the time
+    /// under `karac build`, which is why it is here even though this harness
+    /// cannot make it fire. Do not read a green run of this test as evidence
+    /// that the buffers are aligned; read the IR test for that.
+    #[test]
+    fn e2e_over_aligned_vec_elements_are_the_interpreter_oracle() {
+        for (label, src, want) in [
+            (
+                "literal-read",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let b: Vector[i64, 4] = Vector[i64, 4](5, 6, 7, 8);\n\
+                     let v: Vec[Vector[i64, 4]] = [a, b];\n\
+                     let g = ref v[0];\n\
+                     println(g.reduce_sum());\n\
+                     let h = ref v[1];\n\
+                     println(h.reduce_sum());\n\
+                 }",
+                "10\n26\n",
+            ),
+            (
+                "for-in",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let b: Vector[i64, 4] = Vector[i64, 4](5, 6, 7, 8);\n\
+                     let v: Vec[Vector[i64, 4]] = [a, b];\n\
+                     for e in v { println(e.reduce_sum()); }\n\
+                 }",
+                "10\n26\n",
+            ),
+            (
+                "push-growth",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [];\n\
+                     for i in 0..9 { v.push(a); }\n\
+                     println(v.len());\n\
+                     let g = ref v[8];\n\
+                     println(g.reduce_sum());\n\
+                 }",
+                "9\n10\n",
+            ),
+            (
+                "push-onto-literal",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let b: Vector[i64, 4] = Vector[i64, 4](5, 6, 7, 8);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [a];\n\
+                     v.push(b);\n\
+                     v.push(a);\n\
+                     let g = ref v[2];\n\
+                     println(g.reduce_sum());\n\
+                     println(v.len());\n\
+                 }",
+                "10\n3\n",
+            ),
+            (
+                "i32x8",
+                "fn main() {\n\
+                     let a: Vector[i32, 8] = Vector[i32, 8](1, 2, 3, 4, 5, 6, 7, 8);\n\
+                     let mut v: Vec[Vector[i32, 8]] = [];\n\
+                     for i in 0..5 { v.push(a); }\n\
+                     let g = ref v[4];\n\
+                     println(g.reduce_sum());\n\
+                 }",
+                "36\n",
+            ),
+            (
+                "f64x4",
+                "fn main() {\n\
+                     let a: Vector[f64, 4] = Vector[f64, 4](1.5, 2.5, 3.5, 4.5);\n\
+                     let mut v: Vec[Vector[f64, 4]] = [];\n\
+                     for i in 0..7 { v.push(a); }\n\
+                     let g = ref v[6];\n\
+                     println(g.reduce_sum());\n\
+                 }",
+                "12\n",
+            ),
+            (
+                "reserve",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [];\n\
+                     v.reserve(16);\n\
+                     v.push(a);\n\
+                     let g = ref v[0];\n\
+                     println(g.reduce_sum());\n\
+                 }",
+                "10\n",
+            ),
+            (
+                "insert",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let b: Vector[i64, 4] = Vector[i64, 4](5, 6, 7, 8);\n\
+                     let mut v: Vec[Vector[i64, 4]] = [a];\n\
+                     v.insert(0, b);\n\
+                     let g = ref v[0];\n\
+                     println(g.reduce_sum());\n\
+                     let h = ref v[1];\n\
+                     println(h.reduce_sum());\n\
+                 }",
+                "26\n10\n",
+            ),
+            (
+                "nested-vec",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut inner: Vec[Vector[i64, 4]] = [];\n\
+                     for i in 0..5 { inner.push(a); }\n\
+                     let g = ref inner[4];\n\
+                     println(g.reduce_sum());\n\
+                     println(inner.len());\n\
+                 }",
+                "10\n5\n",
+            ),
+            (
+                // The over-alignment travels through a STRUCT: `H`'s own ABI
+                // alignment is the vector field's, so the Vec-of-H buffer needs
+                // the same routing even though no element is itself a vector.
+                "struct-field",
+                "struct H { v: Vector[i64, 4] }\n\
+                 fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut hs: Vec[H] = [];\n\
+                     for i in 0..9 { hs.push(H { v: a }); }\n\
+                     println(hs.len());\n\
+                     let g = ref hs[8];\n\
+                     println(g.v.reduce_sum());\n\
+                 }",
+                "9\n10\n",
+            ),
+            // Controls — the two element shapes malloc already satisfies, and
+            // the two container shapes that never used this buffer at all.
+            (
+                "control-vec-i64",
+                "fn main() {\n\
+                     let mut v: Vec[i64] = [];\n\
+                     for i in 0..9 { v.push(i); }\n\
+                     println(v.len());\n\
+                     println(v[8]);\n\
+                 }",
+                "9\n8\n",
+            ),
+            (
+                "control-v128",
+                "fn main() {\n\
+                     let a: Vector[i64, 2] = Vector[i64, 2](3, 4);\n\
+                     let mut v: Vec[Vector[i64, 2]] = [];\n\
+                     for i in 0..9 { v.push(a); }\n\
+                     let g = ref v[8];\n\
+                     println(g.reduce_sum());\n\
+                 }",
+                "7\n",
+            ),
+            (
+                // A fixed-size `Array` is an alloca, which LLVM aligns to the
+                // element's natural alignment on its own — never affected.
+                "control-array",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let arr: Array[Vector[i64, 4], 3] = Array[a, a, a];\n\
+                     for e in arr { println(e.reduce_sum()); }\n\
+                 }",
+                "10\n10\n10\n",
+            ),
+            (
+                // Each iteration allocates a `Vec[i64]` of a different
+                // length just before the vector buffer, so the heap offset
+                // walks the residues mod 32 and some iteration necessarily
+                // lands on a 16-but-not-32 address. Under `karac build` that
+                // makes the pre-fix fault deterministic (rc=139 every run)
+                // where the natural shapes are a lottery; inside this harness
+                // it ran clean pre-fix like the rest. Kept because it is the
+                // shape that exercises the most distinct buffer offsets.
+                "heap-offset-walk",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut t: i64 = 0;\n\
+                     for k in 0..24 {\n\
+                         let mut pad: Vec[i64] = [];\n\
+                         for j in 0..k { pad.push(j); }\n\
+                         let mut v: Vec[Vector[i64, 4]] = [];\n\
+                         v.push(a);\n\
+                         let g = ref v[0];\n\
+                         t = t + g.reduce_sum() + pad.len();\n\
+                     }\n\
+                     println(t);\n\
+                 }",
+                "516\n",
+            ),
+            (
+                // Map values live in the runtime's own allocation, not this
+                // buffer; measured clean at 200 entries (many rehashes).
+                "control-map-value",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut m: Map[i64, Vector[i64, 4]] = Map.new();\n\
+                     for i in 0..9 { m.insert(i, a); }\n\
+                     println(m.len());\n\
+                     match m.get(7) {\n\
+                         Some(g) => { println(g.reduce_sum()); }\n\
+                         None => { println(-1); }\n\
+                     }\n\
+                 }",
+                "9\n10\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "case {label}");
+        }
+    }
+
     /// B-2026-08-31-12 — a `u64` FIELD read inside a generic `impl` printed as
     /// -1 on both compiled backends.
     ///

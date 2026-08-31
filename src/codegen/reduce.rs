@@ -3273,18 +3273,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_int_mul(need, i64_t.const_int(elem_size, false), "stab.bytes")
             .unwrap();
-        let realloc_fn = self.realloc_or_panic_fn_decl();
-        let new_data = self
-            .builder
-            .build_call(
-                realloc_fn,
-                &[data0.into(), new_bytes.into()],
-                "stab.new.data",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        // Over-aligned element types (e.g. `Vector[i64, 4]`, 32-byte ABI
+        // alignment) must not land on plain malloc memory, which guarantees
+        // only 16 — codegen emits the element stores as `vmovaps`, which
+        // faults. B-2026-08-31-24.
+        let new_data = self.emit_vec_buffer_grow_alloc(elem_ty, data0, new_bytes, "stab.new.data");
         self.builder.build_store(data_p, new_data).unwrap();
         self.builder.build_store(cap_p, need).unwrap();
         self.builder.build_unconditional_branch(ready_bb).unwrap();

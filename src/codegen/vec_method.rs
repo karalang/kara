@@ -180,6 +180,114 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(ok_bb);
     }
 
+    /// Get-or-declare the OVER-ALIGNED (re)allocation pair — the entry points
+    /// for a buffer whose ELEMENT type wants more alignment than `malloc`
+    /// guarantees (B-2026-08-31-24).
+    ///
+    /// `ptr karac_alloc_aligned_or_panic(i64 size, i64 align)` and
+    /// `ptr karac_realloc_aligned_or_panic(ptr, i64 old, i64 new, i64 align)`.
+    /// The runtime routes an alignment at or under `malloc`'s guarantee back to
+    /// the ordinary wrappers, so declaring these costs nothing on a program
+    /// that never reaches them.
+    pub(super) fn alloc_aligned_or_panic_fn_decl(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.module
+            .get_function("karac_alloc_aligned_or_panic")
+            .unwrap_or_else(|| {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let i64_t = self.context.i64_type();
+                let ty = ptr_ty.fn_type(&[i64_t.into(), i64_t.into()], false);
+                self.module.add_function(
+                    "karac_alloc_aligned_or_panic",
+                    ty,
+                    Some(Linkage::External),
+                )
+            })
+    }
+
+    pub(super) fn realloc_aligned_or_panic_fn_decl(&self) -> inkwell::values::FunctionValue<'ctx> {
+        self.module
+            .get_function("karac_realloc_aligned_or_panic")
+            .unwrap_or_else(|| {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let i64_t = self.context.i64_type();
+                let ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_t.into(), i64_t.into()], false);
+                self.module.add_function(
+                    "karac_realloc_aligned_or_panic",
+                    ty,
+                    Some(Linkage::External),
+                )
+            })
+    }
+
+    /// The element alignment a heap buffer must be given, or `None` when
+    /// `malloc`'s own guarantee already covers it (B-2026-08-31-24).
+    ///
+    /// `Some(a)` only for an element whose ABI alignment EXCEEDS 16 — in
+    /// practice a `Vector[T, N]` of 32 bytes or more. Every ordinary element
+    /// type answers `None` and keeps the plain allocator, so the recycling
+    /// buffer cache stays on the hot path for all of them.
+    pub(super) fn over_alignment_for_elem(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+    ) -> Option<u64> {
+        let td = self.ensure_target_data().ok()?;
+        let a = u64::from(td.get_abi_alignment(&elem_ty));
+        (a > 16).then_some(a)
+    }
+
+    /// Emit the grow-path (re)allocation for a Vec data buffer, routing an
+    /// OVER-ALIGNED element type to the aligned entry point
+    /// (B-2026-08-31-24).
+    ///
+    /// Codegen emits every element access at the element's natural alignment,
+    /// so an under-aligned buffer makes x86-64 select `vmovaps` against an
+    /// address it may fault on. Fixing that here — at the ~10 allocation sites
+    /// — rather than at the 229 element load/store sites is what keeps this one
+    /// change instead of a sweep, and it preserves the aligned-move selection
+    /// that is the point of a SIMD element type.
+    ///
+    /// The aligned entry takes only `(ptr, new_bytes, align)`: it reallocs
+    /// first — which preserves the contents without the caller having to know
+    /// the old size — and re-aligns only if the result lands misaligned. That
+    /// is what makes this a one-argument change at each call site.
+    pub(super) fn emit_vec_buffer_grow_alloc(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        data: inkwell::values::PointerValue<'ctx>,
+        new_bytes: inkwell::values::IntValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        match self.over_alignment_for_elem(elem_ty) {
+            Some(align) => {
+                let f = self.realloc_aligned_or_panic_fn_decl();
+                self.builder
+                    .build_call(
+                        f,
+                        &[
+                            data.into(),
+                            new_bytes.into(),
+                            i64_t.const_int(align, false).into(),
+                        ],
+                        name,
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value()
+            }
+            None => {
+                let f = self.realloc_or_panic_fn_decl();
+                self.builder
+                    .build_call(f, &[data.into(), new_bytes.into()], name)
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value()
+            }
+        }
+    }
+
     pub(super) fn realloc_or_panic_fn_decl(&self) -> inkwell::values::FunctionValue<'ctx> {
         let sym = crate::codegen::driver::c_realloc_or_panic_symbol();
         self.module.get_function(sym).unwrap_or_else(|| {
@@ -3085,14 +3193,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // transient old+new 2× peak). Vec data is always null (cap 0) or
                 // heap, and realloc(null, n) == malloc(n), so this is a clean
                 // drop-in — no static-buffer hazard (unlike String literals).
-                let realloc_fn = self.realloc_or_panic_fn_decl();
-                let new_data = self
-                    .builder
-                    .build_call(realloc_fn, &[data.into(), alloc_bytes.into()], "new_data")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
+                // B-2026-08-31-24 — routes an OVER-ALIGNED element type to the
+                // aligned grow path; ordinary elements keep plain `realloc`.
+                let new_data =
+                    self.emit_vec_buffer_grow_alloc(elem_ty, data, alloc_bytes, "new_data");
 
                 // Update vec fields.
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
@@ -3269,18 +3373,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_mul(new_cap, elem_size, "insert.alloc_bytes")
                     .unwrap();
-                let realloc_fn = self.realloc_or_panic_fn_decl();
-                let new_data = self
-                    .builder
-                    .build_call(
-                        realloc_fn,
-                        &[data.into(), alloc_bytes.into()],
-                        "insert.new_data",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
+                // B-2026-08-31-24 — over-aligned element types take the
+                // aligned grow path; everything else keeps plain `realloc`.
+                let new_data =
+                    self.emit_vec_buffer_grow_alloc(elem_ty, data, alloc_bytes, "insert.new_data");
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
                 self.builder.build_unconditional_branch(shift_bb).unwrap();
@@ -7539,14 +7635,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, data_ptr, "rsz.g.old")
                     .unwrap()
                     .into_pointer_value();
-                let realloc_fn = self.realloc_or_panic_fn_decl();
-                let new_data = self
-                    .builder
-                    .build_call(realloc_fn, &[old_data.into(), bytes.into()], "rsz.g.new")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
+                // B-2026-08-31-24 — see `emit_vec_buffer_grow_alloc`.
+                let new_data =
+                    self.emit_vec_buffer_grow_alloc(elem_ty, old_data, bytes, "rsz.g.new");
                 self.builder.build_store(data_ptr, new_data).unwrap();
                 self.builder.build_store(cap_p, new_cap).unwrap();
                 self.builder.build_unconditional_branch(filled_bb).unwrap();
@@ -7699,14 +7790,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, data_ptr, "app.old")
                     .unwrap()
                     .into_pointer_value();
-                let realloc_fn = self.realloc_or_panic_fn_decl();
-                let grown = self
-                    .builder
-                    .build_call(realloc_fn, &[old_data.into(), bytes.into()], "app.new")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
+                // B-2026-08-31-24 — see `emit_vec_buffer_grow_alloc`.
+                let grown = self.emit_vec_buffer_grow_alloc(elem_ty, old_data, bytes, "app.new");
                 self.builder.build_store(data_ptr, grown).unwrap();
                 self.builder.build_store(cap_p, new_cap).unwrap();
                 self.builder.build_unconditional_branch(copy_bb).unwrap();
@@ -7927,18 +8012,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, data_ptr, "rsv.old_data")
                     .unwrap()
                     .into_pointer_value();
-                let realloc_fn = self.realloc_or_panic_fn_decl();
-                let new_data = self
-                    .builder
-                    .build_call(
-                        realloc_fn,
-                        &[old_data.into(), alloc_bytes.into()],
-                        "rsv.new_data",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
+                // B-2026-08-31-24 — see `emit_vec_buffer_grow_alloc`.
+                let new_data =
+                    self.emit_vec_buffer_grow_alloc(elem_ty, old_data, alloc_bytes, "rsv.new_data");
                 self.builder.build_store(data_ptr, new_data).unwrap();
                 self.builder.build_store(cap_p, new_cap).unwrap();
                 self.builder.build_unconditional_branch(done_bb).unwrap();
