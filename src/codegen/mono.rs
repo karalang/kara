@@ -4051,6 +4051,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "u64"
                 | "usize"
                 | "isize"
+                // `i128` / `u128` are here for a THIRD instance of the same
+                // erasure, and the sharpest one: LLVM's `IntType` carries a
+                // width but no SIGNEDNESS, so `llvm_type_to_mangle_str` renders
+                // both as `i128` and structurally cannot separate them. Without
+                // the name channel a program instantiating a generic at both
+                // widths gave them one body, and whichever was emitted first
+                // decided the signedness for both — `show[T](x) { f"{x}" }`
+                // printed `u128::MAX` as `-1` beside a correct `i128 -7`, while
+                // the u128-ONLY program was correct. That asymmetry is what
+                // shows the 128-bit code generation itself is fine and only the
+                // symbol was shared (B-2026-08-30-45).
+                | "i128"
+                | "u128"
                 // f16 / bf16 are here for the same reason the narrow ints are:
                 // `llvm_type_to_mangle_str` cannot tell them apart from `f64`
                 // (it only special-cases `f32`), so without the NAME channel
