@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 338 | 4 |
-| run-vs-build | 275 | 23 |
+| run-vs-build | 277 | 24 |
 | leak | 241 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1314 | 38 |
-| interp | 296 | 23 |
+| codegen | 1315 | 38 |
+| interp | 298 | 25 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 1 |
 | other | 70 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1917 surfaced · 46 open · 1841 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1919 surfaced · 47 open · 1842 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (46)
+### Open (47)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-29-38 | 2026-08-29 | codegen | medium | A method's FRESH-TEMP argument whose value is handed back out runs its `Drop` body TWICE on both compiled backends against once in the interpreter -- the passthrough guard that would suppress the caller-side temp drop is gated on `ExprKind::Identifier`, which a temp never is | — |
 | B-2026-08-29-43 | 2026-08-29 | interp+codegen | medium | A MIXED STRUCT LITERAL over a struct with its OWN `impl Drop` still runs a param view's `Drop` body TWICE -- `let s = Sd3 { a: r, b: R { id: 2 } }` prints `dSd3 dR2 dR1 dR1` where `dSd3 dR2 dR1` is due; B-2026-08-29-24 fixed every other mixed wrap, and declined this one because such a struct's field bodies run inside the TYPE-LEVEL `karac_drop_<T>` wrapper, which can only be swapped for a variant that drops ALL of them | none |
 | B-2026-08-29-44 | 2026-08-29 | interp+codegen | medium | A WHOLE-VALUE REBIND AFTER A MIXED WRAP RE-ARMS THE WALK THE MASK JUST WITHHELD -- `let w = W2.Two(r, R { id: 2 }); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, because B-2026-08-29-24's per-slot mask is keyed on the BINDING and the destination registers afresh with no mask | none |
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
@@ -176,6 +175,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1917 surfaced
 | B-2026-08-31-42 | 2026-08-31 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a param or a return; the wasm ABI decomposes the struct into fields, so the `bfloat` field is promoted exactly as a bare param was, and B-2026-08-30-42's signature rewrite does not reach it. `ref self` builds (a pointer is not decomposed) and is a real workaround | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-44 | 2026-08-31 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE -- a discarded branch whose arm literal initializes a field from a LOCAL (`P { a: t.a, b: 1 }`, projected, or `P { a: s, b: 1 }`, moved in whole) still registers NO memory, because the guard that declines it was written against an aliasing double free that B-2026-08-31-34 has now fixed | — |
+| B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
+| B-2026-08-31-47 | 2026-08-31 | interp | medium | THE INTERPRETER LOSES A `Drop` BODY THAT BOTH COMPILED BACKENDS RUN, IN TWO METHOD-ARG SHAPES -- a fresh enum temp whose payload an arm BINDS but does not return (`t.keep(Box2.Full(mk(7)))` over `fn keep(..) -> i64 { match b { Box2.Full(r) => { return r.id; } .. } }`) prints nothing under `--interp` against one body compiled; and the BARE-STATEMENT discard of a method call returning `Option[R]` loses the body where the `let _ =` spelling of the same call keeps it | — |
 
 ### Relocated (2)
 
@@ -208,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1917 surfaced
 
 </details>
 
-### Fixed (1841)
+### Fixed (1842)
 
-<details><summary>1841 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1842 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1972,6 +1973,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1917 surfaced
 | B-2026-08-29-35 | codegen | high | THE THREE `let`-FORM LEGS NEVER RAN THE PROJECTION-PLACE PAYLOAD SUPPRESSOR, so `if let E.A(r) = s.e { let m = r; . | 9f3e2cb |
 | B-2026-08-29-36 | codegen | low | A TWO-HOP PROJECTION (`match w.s.e { . | 4843ffe7 |
 | B-2026-08-29-37 | codegen | medium | A `ref self` METHOD WHOSE MATCH MOVES `self.e`'s PAYLOAD OUT RUNS THE ENUM'S OWN `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `dR8 dE n8 dE dR8` vs… | fddafe3 |
+| B-2026-08-29-38 | codegen | medium | A method's FRESH-TEMP argument whose value is handed back out runs its `Drop` body TWICE on both compiled backends against once in the interpreter --… | fc379153 |
 | B-2026-08-29-39 | ownership | medium | A BINDING INITIALIZED TO `None` IS CLASSIFIED AS NON-RC FOR THE REST OF ITS LIFE, so reusing an `Option[shared T]` after passing it by value is repor… | c793ad0 |
 | B-2026-08-29-42 | codegen | high | A REDUCED-PRECISION RECEIVER (`f16` / `bf16`) CALLED THE DOUBLE-PRECISION libm SYMBOL and got silent garbage -- `x.tan()` returned `x`, `x.hypot(y)`… | e860b90 |
 | B-2026-08-29-40 | interp | medium | The INTERPRETER's `Vector[bf16, N]` unary math never rounds lanes back to the element width -- it computes every lane in f64 and keeps the excess pre… | 5f226ed |
