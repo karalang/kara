@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 330 | 4 |
+| miscompile | 330 | 3 |
 | run-vs-build | 264 | 18 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1284 | 35 |
+| codegen | 1284 | 34 |
 | interp | 282 | 20 |
 | typecheck | 281 | 2 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1877 surfaced · 43 open · 1805 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1877 surfaced · 42 open · 1806 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (43)
+### Open (42)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -162,7 +162,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1877 surfaced
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
 | B-2026-08-30-43 | 2026-08-30 | interp | medium | A METHOD ON A GENERIC `impl` COMPUTES AT f64 UNDER `--interp` AT EVERY NARROW FLOAT WIDTH — `impl[T: Add + Mul] Pair[T] { fn combine(...) -> T }` at f32 reads 0.13000000312924387 against both compiled backends' 0.12999999523162842. Only FREE-FUNCTION calls push a generic-substitution frame (`push_type_subs_for_call` has exactly one call site), so an impl's own `T` is never resolvable and the tree-walk's narrow-float rounding is skipped | — |
 | B-2026-08-30-44 | 2026-08-30 | interp | medium | AN UNSIGNED VALUE PRINTS AS `-1` FROM INSIDE A GENERIC BODY UNDER `--interp` — `fn show[T](x: T) -> String { f"{x}" }` renders `u64::MAX` and `u128::MAX` as `-1`, while the identical interpolation outside the generic prints them correctly and both compiled backends print them correctly at every call site | — |
-| B-2026-08-30-45 | 2026-08-30 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}" }` prints `u128::MAX` as `-1` in the COMPILED binary when an `i128` instantiation is also present, and correctly when it is not. Exactly the erasure B-2026-08-30-36 fixed for `f16`/`bf16`, one type family over, in the same two functions | — |
 | B-2026-08-30-48 | 2026-08-30 | interp | medium | AN INTEGER REACHING A FLOAT SLOT THROUGH AN AGGREGATE OR A VARIANT PAYLOAD IS STILL CONVERTED WRONG UNDER `--interp` -- a tuple / `Array` literal element converts with the AGGREGATE's signedness (so `u64::MAX` reads -1), and an `Option` payload / `Map` value / enum variant field is not converted AT ALL. B-2026-08-30-34 fixed ten direct sites | — |
 | B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- PARTIALLY FIXED (d22cf63): struct/tuple/nested/`if let`/`..` destructure now borrow. TWO REMAIN: an arm using TWO BOUND LEAVES in one expression (`v[0] + n` fails where `v[0] + 1` passes -- the consume classifier counts a SCALAR leaf's use as an escape), and an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`), where the outer binding's borrow-ness does not propagate into the nested pattern | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
@@ -205,9 +204,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1877 surfaced
 
 </details>
 
-### Fixed (1805)
+### Fixed (1806)
 
-<details><summary>1805 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1806 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2009,6 +2008,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1877 surfaced
 | B-2026-08-30-36 | typecheck | medium | `f16` AND `bf16` IMPLEMENT NONE OF THE SIX ARITHMETIC OPERATOR TRAITS (`Add`/`Sub`/`Mul`/`Div`/`Rem`/`Neg`), so neither can satisfy a generic `T: Add… | ea9d378 |
 | B-2026-08-30-37 | effect | medium | TWO MORE EFFECT WALKERS TREAT AN f-STRING AS A LEAF, and `ae33af9` fixed only the third -- `modbind_synth::walk_expr` loses a module-binding read wri… | 7366410 |
 | B-2026-08-30-38 | interp+codegen | medium | AN ARGUMENT THAT IS A CONTROL-FLOW OR BLOCK EXPRESSION LOSES ITS `Drop` BODY ENTIRELY -- `one(if c { mk(1) } else { mk(2) })`, the `match` spelling a… | 0d34440b |
+| B-2026-08-30-45 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}"… | da21408 |
 | B-2026-08-30-46 | interp | medium | `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERS A `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE under `--interp`, while `f"{s}"` on the SAME… | 0d25859 |
 | B-2026-08-30-47 | codegen | high | A READ-ONLY `match` ARM OVER AN `Option`/`Result` WHOSE PAYLOAD IS A HEAP-OWNING NON-STRUCT STILL TAKES THE PAYLOAD -- six shapes, three failure mode… | 29fd6f1 |
 | B-2026-08-30-49 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 --… | b554da2 |
