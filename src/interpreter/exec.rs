@@ -92,6 +92,21 @@ pub(crate) enum CleanupAction {
     /// without disturbing program-order LIFO position.
     #[allow(dead_code)]
     Drop { name: String },
+    /// B-2026-08-30-51 — a binding SHADOWED by a later `let` of the same name
+    /// in the same scope, carrying its own value.
+    ///
+    /// Every other slot is name-keyed and resolves through the env when it
+    /// fires, which is exactly what shadowing breaks: two `let`s of one name
+    /// push two slots with the same key, and by drain time the env holds only
+    /// the survivor, so both fired on it -- the shadowed value's body never ran
+    /// and the survivor's ran twice. Freezing the value into the slot at the
+    /// shadowing `let` is what makes the two distinguishable, and it is sound
+    /// precisely because nothing can reach the shadowed value again: the name
+    /// that addressed it is gone.
+    DropShadowed {
+        name: String,
+        value: super::value::Value,
+    },
 }
 
 /// One entry in a block's `errdefer` stack (phase-1 cleanup, error
@@ -560,16 +575,35 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
     }
     // Bindings introduced but never read: NLL says they die
     // immediately after the let — last_use = the let's own index.
+    //
+    // B-2026-08-30-51 — for a SHADOWED name with no read anywhere, the LAST
+    // such `let` wins, not the first. This map is name-keyed, so every
+    // generation of a shadowed name shares one endpoint; pinning it to the
+    // FIRST `let` puts that endpoint before the surviving binding's slot even
+    // exists, so the survivor never fires by NLL and drained at scope exit
+    // instead -- measured as `let b = E.V(mk(3)); let b = E.V(mk(4));` running
+    // the second body at the end of `main` while both compiled backends ran it
+    // at the shadowing `let`. Only a name filled by THIS fallback may be
+    // overwritten: a real read recorded above still wins, which is what
+    // `or_insert` was protecting.
+    let mut filled_here: HashSet<String> = HashSet::new();
+    let mut note_unread = |n: String, idx: usize, last_use: &mut HashMap<String, usize>| {
+        if last_use.contains_key(&n) && !filled_here.contains(&n) {
+            return;
+        }
+        filled_here.insert(n.clone());
+        last_use.insert(n, idx);
+    };
     for stmt_idx in 0..block.stmts.len() {
         let stmt = &block.stmts[stmt_idx];
         match &stmt.kind {
             StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
                 for n in pattern.binding_names() {
-                    last_use.entry(n).or_insert(stmt_idx);
+                    note_unread(n, stmt_idx, &mut last_use);
                 }
             }
             StmtKind::LetUninit { name, .. } => {
-                last_use.entry(name.clone()).or_insert(stmt_idx);
+                note_unread(name.clone(), stmt_idx, &mut last_use);
             }
             _ => {}
         }
@@ -637,6 +671,17 @@ impl Env {
 
     pub(crate) fn pop_scope(&mut self) {
         self.scopes.pop();
+    }
+
+    /// B-2026-08-30-51 — the value bound to `name` in the INNERMOST scope only,
+    /// ignoring every enclosing one.
+    ///
+    /// Shadowing within one scope and shadowing an OUTER binding are different
+    /// events: the outer binding keeps its own slot in its own block's cleanup
+    /// and is still live after this block ends, so it must not be frozen here.
+    /// `get` cannot tell them apart -- it searches outward.
+    pub(crate) fn get_in_current_scope(&self, name: &str) -> Option<Value> {
+        self.scopes.last().and_then(|s| s.get(name)).cloned()
     }
 
     /// B-2026-08-28-43 — `true` when `name` is bound in the OUTERMOST scope and

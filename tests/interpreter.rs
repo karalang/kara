@@ -35106,6 +35106,155 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
 /// walked the argument list forward, so `take(R { id: 1 }, R { id: 2 })` printed
 /// `dR1 dR2` under `--interp` against `dR2 dR1` under `karac build`.
 ///
+/// B-2026-08-30-51 — a SHADOWED binding drops its own value, exactly once, at
+/// the shadowed name's NLL endpoint.
+///
+/// The interpreter's cleanup slots are NAME-KEYED and resolve through the env
+/// when they fire. Two `let`s of one name pushed two slots with the same key,
+/// and by drain time the env held only the survivor, so both fired on it: the
+/// shadowed value's body never ran and the survivor's ran TWICE. A `Drop` body
+/// is a user-visible effect, so the second half is a resource released twice,
+/// not untidiness. The compiled backends key on the SLOT and were already
+/// correct, which is what made this a run-vs-build divergence.
+///
+/// Every expectation here is the measured output of `karac run` and `karac
+/// build` on the same program, so this is a parity pin as much as a behaviour
+/// one. `move-rebind` is the guard rail: `let z = z;` is ONE object, and a
+/// shadow slot must not resurrect the source's body after the move-suppression
+/// helpers retracted it.
+#[test]
+fn test_shadowed_binding_drops_its_own_value() {
+    const HDR: &str = "struct R { id: i64 }\n\
+                       impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                       fn mk(n: i64) -> R { R { id: n } }\n";
+    for (label, src, want) in [
+        (
+            "shadow-unread-first",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let t = mk(1);\n\
+                 \x20   let t = mk(2);\n\
+                 \x20   println(f\"t={{t.id}}\");\n\
+                 }}\n"
+            ),
+            // Both generations share the name's endpoint and drain LIFO there:
+            // newest first. Pre-fix this was `dR2 dR2`.
+            "t=2\ndR2\ndR1\n",
+        ),
+        (
+            "shadow-first-read-before-shadow",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let u = mk(3);\n\
+                 \x20   println(f\"u={{u.id}}\");\n\
+                 \x20   let u = mk(4);\n\
+                 \x20   println(f\"u={{u.id}}\");\n\
+                 }}\n"
+            ),
+            // The shadowed value is NOT dropped at its own last read: the
+            // endpoint is the name's, so it waits for the survivor's and drains
+            // after it. Measured identical on both compiled backends.
+            "u=3\nu=4\ndR4\ndR3\n",
+        ),
+        (
+            "shadow-three-deep",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let w = mk(5);\n\
+                 \x20   let w = mk(6);\n\
+                 \x20   let w = mk(7);\n\
+                 \x20   println(f\"w={{w.id}}\");\n\
+                 }}\n"
+            ),
+            "w=7\ndR7\ndR6\ndR5\n",
+        ),
+        (
+            "shadow-neither-generation-read",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let b = mk(8);\n\
+                 \x20   let b = mk(9);\n\
+                 \x20   println(\"mid\");\n\
+                 }}\n"
+            ),
+            // With no read anywhere the endpoint comes from the fallback, and
+            // it must be the LAST `let`: pinning it to the first put the
+            // endpoint before the survivor's slot existed, so that slot missed
+            // it and drained at scope exit instead.
+            "dR9\ndR8\nmid\n",
+        ),
+        (
+            "shadow-inside-nested-block",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let x = {{ let y = mk(10); let y = mk(11); y.id }};\n\
+                 \x20   println(f\"x={{x}}\");\n\
+                 }}\n"
+            ),
+            "dR11\ndR10\nx=11\n",
+        ),
+        (
+            "shadow-move-rebind-is-one-object",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   let z = mk(12);\n\
+                 \x20   let z = z;\n\
+                 \x20   println(f\"z={{z.id}}\");\n\
+                 }}\n"
+            ),
+            // GUARD RAIL. One object, one body: the move-suppression helpers
+            // retract the source's slot before the shadow pass runs, so there
+            // is nothing left to freeze. A pass that ran earlier would print
+            // `dR12` twice.
+            "z=12\ndR12\n",
+        ),
+        (
+            "shadow-struct-with-drop-field",
+            format!(
+                "{HDR}struct W {{ r: R, n: i64 }}\n\
+                 fn main() {{\n\
+                 \x20   let a = W {{ r: mk(13), n: 1 }};\n\
+                 \x20   let a = W {{ r: mk(14), n: 2 }};\n\
+                 \x20   println(f\"a={{a.n}}\");\n\
+                 }}\n"
+            ),
+            // The frozen value carries its fields, so the field walk reaches
+            // the shadowed generation's `r` too.
+            "a=2\ndR14\ndR13\n",
+        ),
+        (
+            "shadow-in-a-loop-body",
+            format!(
+                "{HDR}fn main() {{\n\
+                 \x20   for i in 0..2 {{\n\
+                 \x20       let h = mk(20 + i);\n\
+                 \x20       let h = mk(30 + i);\n\
+                 \x20       println(f\"h={{h.id}}\");\n\
+                 \x20   }}\n\
+                 }}\n"
+            ),
+            // Each iteration is its own scope, so the freeze must not leak
+            // across them.
+            "h=30\ndR30\ndR20\nh=31\ndR31\ndR21\n",
+        ),
+        (
+            "shadow-a-param",
+            format!(
+                "{HDR}fn f(r: R) -> i64 {{ let r = mk(99); r.id }}\n\
+                 fn main() {{\n\
+                 \x20   let d = f(mk(15));\n\
+                 \x20   println(f\"d={{d}}\");\n\
+                 }}\n"
+            ),
+            // A param shadowed inside its own frame. The caller still owns the
+            // argument under caller-retains, so its body runs there.
+            "dR99\ndR15\nd=99\n",
+        ),
+    ] {
+        assert_eq!(run(&src), want, "case {label}");
+    }
+}
+
 /// The codegen twin is `e2e_owned_param_temps_drop_in_reverse_argument_order`
 /// and asserts the SAME expected output for every case here, which is the whole
 /// point: the counts always agreed, so nothing but an absolute expectation on
@@ -35530,8 +35679,13 @@ fn test_owned_param_temps_drop_in_reverse_argument_order() {
             ),
             // The LAST binding produces the tail; taking the first would
             // classify on an RHS that no longer yields the handed-out value.
-            // (`mk(90)`'s own body is a separate shadowing gap, not this row.)
-            "in-one\ndR91\nv=91\n",
+            //
+            // `mk(90)`'s body was LOST here when B-2026-08-30-38 landed, noted
+            // then as "a separate shadowing gap". B-2026-08-30-51 closed it on
+            // THIS backend, so the shadowed value now dies inside the block,
+            // before the call. The compiled twin still loses it — see the
+            // deliberate divergence recorded there.
+            "dR90\nin-one\ndR91\nv=91\n",
         ),
         (
             "wrapper-arg-passthrough-callee-still-defers",

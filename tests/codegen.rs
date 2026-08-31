@@ -40507,6 +40507,129 @@ fn main() {
     /// walk. These cases exist so a future change to the frame — reordering the
     /// drain, or moving argument cleanup to a different registration point —
     /// cannot silently re-open the divergence from this end.
+    /// B-2026-08-30-51, codegen twin — the compiled backends were already
+    /// correct here, and this pins that so the interpreter's fix stays honest.
+    ///
+    /// Every expectation is byte-identical to
+    /// `test_shadowed_binding_drops_its_own_value` in `tests/interpreter.rs`.
+    /// That is the point: the interpreter's slots are name-keyed and resolved
+    /// through the env at drain time, so shadowing collapsed two generations
+    /// onto one value — the shadowed body never ran and the survivor's ran
+    /// twice — while these backends key on the SLOT. Only an absolute
+    /// expectation on both sides holds the two together.
+    #[test]
+    fn e2e_shadowed_binding_drops_its_own_value() {
+        let hdr = "struct R { id: i64 }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mk(n: i64) -> R { R { id: n } }\n";
+        for (label, src, want) in [
+            (
+                "shadow-unread-first",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let t = mk(1);\n\
+                     \x20   let t = mk(2);\n\
+                     \x20   println(f\"t={{t.id}}\");\n\
+                     }}"
+                ),
+                "t=2\ndR2\ndR1\n",
+            ),
+            (
+                "shadow-first-read-before-shadow",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let u = mk(3);\n\
+                     \x20   println(f\"u={{u.id}}\");\n\
+                     \x20   let u = mk(4);\n\
+                     \x20   println(f\"u={{u.id}}\");\n\
+                     }}"
+                ),
+                "u=3\nu=4\ndR4\ndR3\n",
+            ),
+            (
+                "shadow-three-deep",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let w = mk(5);\n\
+                     \x20   let w = mk(6);\n\
+                     \x20   let w = mk(7);\n\
+                     \x20   println(f\"w={{w.id}}\");\n\
+                     }}"
+                ),
+                "w=7\ndR7\ndR6\ndR5\n",
+            ),
+            (
+                "shadow-neither-generation-read",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let b = mk(8);\n\
+                     \x20   let b = mk(9);\n\
+                     \x20   println(\"mid\");\n\
+                     }}"
+                ),
+                "dR9\ndR8\nmid\n",
+            ),
+            (
+                "shadow-inside-nested-block",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let x = {{ let y = mk(10); let y = mk(11); y.id }};\n\
+                     \x20   println(f\"x={{x}}\");\n\
+                     }}"
+                ),
+                "dR11\ndR10\nx=11\n",
+            ),
+            (
+                "shadow-move-rebind-is-one-object",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   let z = mk(12);\n\
+                     \x20   let z = z;\n\
+                     \x20   println(f\"z={{z.id}}\");\n\
+                     }}"
+                ),
+                "z=12\ndR12\n",
+            ),
+            (
+                "shadow-struct-with-drop-field",
+                format!(
+                    "{hdr}struct W {{ r: R, n: i64 }}\n\
+                     fn main() {{\n\
+                     \x20   let a = W {{ r: mk(13), n: 1 }};\n\
+                     \x20   let a = W {{ r: mk(14), n: 2 }};\n\
+                     \x20   println(f\"a={{a.n}}\");\n\
+                     }}"
+                ),
+                "a=2\ndR14\ndR13\n",
+            ),
+            (
+                "shadow-in-a-loop-body",
+                format!(
+                    "{hdr}fn main() {{\n\
+                     \x20   for i in 0..2 {{\n\
+                     \x20       let h = mk(20 + i);\n\
+                     \x20       let h = mk(30 + i);\n\
+                     \x20       println(f\"h={{h.id}}\");\n\
+                     \x20   }}\n\
+                     }}"
+                ),
+                "h=30\ndR30\ndR20\nh=31\ndR31\ndR21\n",
+            ),
+            (
+                "shadow-a-param",
+                format!(
+                    "{hdr}fn f(r: R) -> i64 {{ let r = mk(99); r.id }}\n\
+                     fn main() {{\n\
+                     \x20   let d = f(mk(15));\n\
+                     \x20   println(f\"d={{d}}\");\n\
+                     }}"
+                ),
+                "dR99\ndR15\nd=99\n",
+            ),
+        ] {
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+    }
     #[test]
     fn e2e_owned_param_temps_drop_in_reverse_argument_order() {
         let hdr = "struct R { id: i64 }\n\
@@ -40911,7 +41034,15 @@ fn main() {
                 ),
                 // The LAST binding produces the tail; taking the first would
                 // classify on an RHS that no longer yields the handed-out value.
-                // (`mk(90)`'s own body is a separate shadowing gap, not this row.)
+                //
+                // PINNED AT A DEFECT for `mk(90)`, and DELIBERATELY DIFFERENT
+                // from the interpreter twin, which expects `dR90` first. The
+                // shadowed binding's body is LOST on all three compiled
+                // surfaces; B-2026-08-30-51 fixed the interpreter's shadowing
+                // and this side still needs its own. Filed separately rather
+                // than papered over by relaxing either expectation — an
+                // agreeing pair here would be a false statement about the
+                // compiler.
                 "in-one\ndR91\nv=91\n",
             ),
             (

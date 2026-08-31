@@ -230,6 +230,10 @@ impl<'a> super::Interpreter<'a> {
                     self.record_container_bodies_move_sources(inner);
                 }
             }
+            // B-2026-08-30-51 — snapshot any same-scope binding this statement
+            // is about to shadow. It has to happen here: evaluating the `let`
+            // overwrites the slot, and the old value is then unreachable.
+            let shadowed_before = self.snapshot_shadowed_bindings(stmt);
             let stmt_result = self.eval_stmt_cf(stmt);
             let cf_opt = match stmt_result {
                 Ok(_) => self.pending_cf.take(),
@@ -295,6 +299,17 @@ impl<'a> super::Interpreter<'a> {
             // (its NLL / fresh-arg fire reads the original), and codegen
             // already fires caller-side only. Registering slots here
             // double-fired the bound fields' bodies under `karac run`.
+            // B-2026-08-30-51 — freeze the value of any binding this `let`
+            // SHADOWS, before the fresh slot below claims the same name.
+            //
+            // Ordering is the whole correctness argument, in both directions.
+            // AFTER every move-suppression helper above: `let z = z;` moves the
+            // old value into the new binding, and `suppress_let_rebind_user_drop`
+            // has by now retracted the source's slot, so there is nothing left
+            // to freeze and the one object keeps its single owner. BEFORE
+            // `push_drops_for_stmt`: once that runs, a slot with this name is
+            // ambiguous between the old binding and the new one.
+            self.freeze_shadowed_drop_slots(stmt, &mut cleanup, &shadowed_before);
             if !self.let_destructures_owned_param(stmt) {
                 push_drops_for_stmt(stmt, &mut cleanup);
             }
@@ -830,11 +845,85 @@ impl<'a> super::Interpreter<'a> {
                     self.invoke_user_drop_if_applicable(name);
                     self.drop_trace.push(name.clone());
                 }
+                // B-2026-08-30-51 — a shadowed binding drops its OWN frozen
+                // value rather than resolving its name, which by now addresses
+                // the survivor. Value-based because the name is the thing that
+                // stopped identifying it; `run_discarded_value_user_drops` is
+                // the same walk `let _ = …` uses, and a shadowed value is
+                // discarded in exactly that sense. The trace keeps the SOURCE
+                // name, so existing drop-order assertions read unchanged.
+                CleanupAction::DropShadowed { name, value } => {
+                    self.run_discarded_value_user_drops(value.clone());
+                    self.drop_trace.push(name.clone());
+                }
             }
         }
     }
 
-    /// Fire any `Drop` slot whose binding's last use was the just-
+    /// B-2026-08-30-51 — the values of the same-scope bindings a `let` is about
+    /// to shadow, captured before it runs.
+    ///
+    /// INNERMOST SCOPE ONLY. Shadowing an OUTER binding is a different event:
+    /// that binding keeps its own slot in its own block's cleanup and is live
+    /// again once this block ends, so freezing it here would fire its body
+    /// early and then again at its real owner.
+    ///
+    /// A name the pattern binds more than once cannot happen (the resolver
+    /// rejects it), so one entry per name is enough.
+    fn snapshot_shadowed_bindings(&self, stmt: &Stmt) -> Vec<(String, Value)> {
+        let pattern = match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => pattern,
+            _ => return Vec::new(),
+        };
+        pattern
+            .binding_names()
+            .into_iter()
+            .filter_map(|n| self.env.get_in_current_scope(&n).map(|v| (n, v)))
+            .collect()
+    }
+
+    /// B-2026-08-30-51 — convert each shadowed binding's live `Drop` slot into a
+    /// [`CleanupAction::DropShadowed`] carrying the value it actually owns.
+    ///
+    /// Only a slot that is STILL PRESENT is converted, and that is what keeps
+    /// `let z = z;` at one body: the move-suppression helpers run first and have
+    /// already retracted the source's slot for a rebind, so there is nothing
+    /// here to freeze and the single object keeps its single owner. The same
+    /// holds for every other retraction upstream — `forget(x)`, an assign move,
+    /// a moved-out field — each of which means "this binding no longer owns a
+    /// body", and none of which should be resurrected by this pass.
+    ///
+    /// The LAST matching slot is converted, not the first. Slots for one name
+    /// accumulate in program order under repeated shadowing (`let w` three
+    /// times), so the newest is the one this `let` displaces; taking the first
+    /// would re-freeze an already-frozen generation's slot.
+    fn freeze_shadowed_drop_slots(
+        &mut self,
+        stmt: &Stmt,
+        cleanup: &mut [CleanupAction],
+        shadowed: &[(String, Value)],
+    ) {
+        if shadowed.is_empty() {
+            return;
+        }
+        if !matches!(&stmt.kind, StmtKind::Let { .. } | StmtKind::LetElse { .. }) {
+            return;
+        }
+        for (name, value) in shadowed {
+            let Some(idx) = cleanup
+                .iter()
+                .rposition(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
+            else {
+                continue;
+            };
+            cleanup[idx] = CleanupAction::DropShadowed {
+                name: name.clone(),
+                value: value.clone(),
+            };
+        }
+    }
+
+    /// Fire any `Drop` slot whose binding's last use was the just-    /// Fire any `Drop` slot whose binding's last use was the just-
     /// finished statement, and remove it from `cleanup` so it does
     /// not fire again at scope exit. NLL placement per design.md §
     /// Drop ordering within a branch (sub-step 3). `Defer` slots
@@ -861,17 +950,37 @@ impl<'a> super::Interpreter<'a> {
             i -= 1;
             let should_fire = match &cleanup[i] {
                 CleanupAction::Drop { name } => last_use.get(name).copied() == Some(stmt_idx),
+                // B-2026-08-30-51 — a shadowed slot fires at the NAME's endpoint,
+                // the same one the survivor uses, which is what the compiled
+                // backends do: their `last_use` is name-keyed too, so every
+                // generation of a shadowed name shares one endpoint and they
+                // drain there LIFO -- `dR2 dR1`, newest first. Holding the
+                // shadowed value to scope exit instead ran the right bodies in
+                // the wrong place, measured as all of them landing after the
+                // last statement of `main` rather than beside the survivor's.
+                CleanupAction::DropShadowed { name, .. } => {
+                    last_use.get(name).copied() == Some(stmt_idx)
+                }
                 CleanupAction::Defer(_) => false,
             };
             if should_fire {
                 let action = cleanup.remove(i);
-                if let CleanupAction::Drop { name } = action {
-                    // Phase 7 user-`impl Drop` dispatch Prereq.4 — fire
-                    // the user body at NLL endpoint before pushing the
-                    // trace record, mirroring the scope-exit drain
-                    // arm in `run_cleanup`.
-                    self.invoke_user_drop_if_applicable(&name);
-                    self.drop_trace.push(name);
+                match action {
+                    CleanupAction::Drop { name } => {
+                        // Phase 7 user-`impl Drop` dispatch Prereq.4 — fire
+                        // the user body at NLL endpoint before pushing the
+                        // trace record, mirroring the scope-exit drain
+                        // arm in `run_cleanup`.
+                        self.invoke_user_drop_if_applicable(&name);
+                        self.drop_trace.push(name);
+                    }
+                    // B-2026-08-30-51 — value-based, for the reason the variant
+                    // exists: this slot's name now addresses the survivor.
+                    CleanupAction::DropShadowed { name, value } => {
+                        self.run_discarded_value_user_drops(value);
+                        self.drop_trace.push(name);
+                    }
+                    CleanupAction::Defer(_) => {}
                 }
             }
         }
