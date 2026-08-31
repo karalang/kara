@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 275 | 25 |
 | leak | 240 | 7 |
 | missing-feature | 191 | 1 |
-| double-free | 161 | 1 |
+| double-free | 161 | 0 |
 | codegen-gap | 157 | 2 |
 | diagnostics | 114 | 2 |
 | false-positive | 101 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1311 | 40 |
-| interp | 295 | 24 |
+| codegen | 1311 | 39 |
+| interp | 295 | 23 |
 | typecheck | 283 | 0 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced · 48 open · 1835 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced · 47 open · 1836 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (48)
+### Open (47)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -171,7 +171,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced
 | B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | — |
 | B-2026-08-31-32 | 2026-08-31 | interp | medium | THE INTERPRETER RUNS NO `Drop` BODY AT ALL FOR A FRESH-TEMP STRUCT SCRUTINEE THAT AN ARM DESTRUCTURES -- `match H { .. } { H { r, .. } => .. }`; both compiled backends run it once | — |
 | B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | — |
-| B-2026-08-31-34 | 2026-08-31 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b: 1 };` where `mkv` returns a `V` carrying a `Vec[i64]` aborts with `free(): double free detected in tcache 2` under `karac build` and prints normally under `--interp`; the `String` twin (`let w = P { a: mkp(1).a, b: 1 };`) behaves identically | — |
 | B-2026-08-31-35 | 2026-08-31 | interp+codegen | medium | A DISCARDED BRANCH WHOSE ARM LITERAL CONSUMES A LOCAL RUNS THAT LOCAL'S `Drop` BODY TWICE ON ALL THREE BACKENDS -- `let t = mkd(7); let _ = if n == 0 { W { r: t, b: 1 } } else { .. };` prints `dD7` twice, once at the discard and once at the local's own scope end; the projected spelling (`W { r: t.r, .. }` over a local `W`) doubles identically | — |
 | B-2026-08-31-36 | 2026-08-31 | interp | medium | THE INTERPRETER BINDS THE WHOLE CONTAINER, NOT THE ELEMENT, FOR `let g = ref c[i]` WHEN `c` IS A `Slice` OR A `Map` -- codegen and the typechecker both say `i64`, the interpreter says `Slice` | — |
 | B-2026-08-31-37 | 2026-08-31 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly reachable | — |
@@ -210,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced
 
 </details>
 
-### Fixed (1835)
+### Fixed (1836)
 
-<details><summary>1835 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1836 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2051,6 +2050,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced
 | B-2026-08-31-27 | interp | medium | THE INTERPRETER NEVER RUNS A FIELD'S `Drop` BODY WHEN A SINGLE-LEVEL `match` ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD AND MOVES THE FIELD OUT --… | 6673f7d |
 | B-2026-08-31-29 | codegen | medium | `let g = ref arr[i]` ON AN `Array[Vector[T, N], M]` PANICS THE COMPILER -- the ref binding is loaded as the LANE type (`i64`) instead of the vector,… | 73e6e86 |
 | B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
+| B-2026-08-31-34 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b:… | 2b3b966 |
 
 </details>
 
