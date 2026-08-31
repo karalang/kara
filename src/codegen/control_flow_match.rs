@@ -2150,22 +2150,30 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         arms: &[MatchArm],
     ) -> bool {
-        if !self.scrutinee_is_inline_optres_local(scrutinee) {
+        let optres_te = self.scrutinee_optres_type_expr(scrutinee);
+        let destructures = arms
+            .iter()
+            .any(|a| self.pattern_destructures_heap_payload(optres_te.as_ref(), &a.pattern));
+        if !self.scrutinee_is_inline_optres_local(scrutinee)
+            && !(destructures && self.scrutinee_is_boxed_optres_local(scrutinee))
+        {
             return false;
         }
         if !arms
             .iter()
             .any(|a| self.pattern_binds_direct_inline_heap_payload(&a.pattern))
+            && !destructures
         {
             return false;
         }
-        // Every payload-consuming arm must be the direct-heap shape or a
-        // payload that owns nothing — a mixed match must keep today's behavior
-        // wholesale, since the flag is set once for the whole `match`.
-        let optres_te = self.scrutinee_optres_type_expr(scrutinee);
+        // Every payload-consuming arm must be the direct-heap shape, the
+        // destructured-heap shape, or a payload that owns nothing — a mixed
+        // match must keep today's behavior wholesale, since the flag is set
+        // once for the whole `match`.
         if !arms.iter().all(|a| {
             !Self::pattern_consumes_variant_payload(&a.pattern)
                 || self.pattern_binds_direct_inline_heap_payload(&a.pattern)
+                || self.pattern_destructures_heap_payload(optres_te.as_ref(), &a.pattern)
                 || optres_te
                     .as_ref()
                     .is_some_and(|te| Self::pattern_binds_scalar_variant_payload(te, &a.pattern))
@@ -2226,6 +2234,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 .contains(name)
     }
 
+    /// The HEAP-BOXED payload channel (`boxed_enum_payload_vars`), held apart
+    /// from [`Self::scrutinee_is_inline_optres_local`] deliberately.
+    ///
+    /// B-2026-08-30-52 — a wide payload (a multi-field struct, a tuple, a user
+    /// enum) does not fit the payload words and is boxed, so it is the channel
+    /// most of the destructuring shapes actually ride. But a box is a different
+    /// ownership regime from an inline payload, and admitting it to the
+    /// read-only classification wholesale is NOT safe: measured, it broke five
+    /// tests, every one of them a boxed payload bound WHOLE and then moved on
+    /// or field-moved-out (`e2e_named_optres_boxed_payload_arm_runs_user_drop_
+    /// body`, `test_e2e_user_drop_scrutinee_option_field_move_out_runs`, and
+    /// three ASAN cases including `asan_consuming_arm_boxed_payload_handed_on_
+    /// is_freed_once`).
+    ///
+    /// So it is admitted only together with a DESTRUCTURING pattern, which is
+    /// the shape this row is about and the one where the leaves' owners are
+    /// what would double-free. A whole-payload binding over a boxed local keeps
+    /// the path it takes today.
+    fn scrutinee_is_boxed_optres_local(&self, scrutinee: &Expr) -> bool {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return false;
+        };
+        let name: &str = self
+            .payload_vars
+            .passthrough_owner_alias
+            .get(name.as_str())
+            .map_or(name.as_str(), |s| s.as_str());
+        self.payload_vars.boxed_enum_payload_vars.contains(name)
+    }
+
     /// Does `pattern` bind a `Some`/`Ok`/`Err` payload out at all? (Shape only —
     /// says nothing about what the payload is.)
     fn pattern_consumes_variant_payload(pattern: &Pattern) -> bool {
@@ -2236,6 +2274,80 @@ impl<'ctx> super::Codegen<'ctx> {
             path.last().map(|s| s.as_str()),
             Some("Some") | Some("Ok") | Some("Err")
         ) && patterns.iter().any(pattern_consumes_field)
+    }
+
+    /// B-2026-08-30-52 — the payload bound by a DESTRUCTURING pattern
+    /// (`Some(S { s })`, `Some((s, n))`) rather than whole.
+    ///
+    /// [`Self::pattern_binds_direct_inline_heap_payload`] requires every
+    /// payload-consuming sub-pattern to be a plain `Binding`, so a
+    /// destructuring pattern fails it BY CONSTRUCTION, the arm is never
+    /// classified a borrow, and the transfer path runs: the destructured leaf
+    /// registers as an owner and frees at arm exit while the source's drop is
+    /// still armed. Measured on `main`: `Option[S { s: String }]` read back
+    /// garbage and `Option[(String, i64)]` aborted with a double free, on every
+    /// compiled surface, with `--interp` correct.
+    ///
+    /// JUDGED FROM THE SCRUTINEE'S INSTANTIATION, not from the leaves. A
+    /// shorthand struct field (`S { s }`) carries NO sub-`Pattern` at all — the
+    /// field name IS the binding — so there is no span to look up in
+    /// `pattern_binding_types` and no per-leaf type to read. The payload's own
+    /// `TypeExpr` is a positive witness that needs neither.
+    ///
+    /// Requiring the payload to OWN HEAP keeps this confined to the shapes that
+    /// are broken: a payload that owns nothing already takes its path
+    /// correctly, and classifying it as a borrow would move it for no reason.
+    /// `field_te_owns_heap` answers `false` for a `shared` payload, so the RC
+    /// regime stays out exactly as it does for the whole-binding classifier.
+    ///
+    /// This does NOT relax the whole-binding test — a `Binding` sub-pattern is
+    /// rejected here and left to that classifier. The distinction matters:
+    /// admitting a WHOLE-bound tuple payload as a borrow is what emptied
+    /// `e2e_optres_tuple_payload_is_owned_exactly_once` in B-2026-08-08-25 and
+    /// again in B-2026-08-30-47's first attempt. What is admitted here is the
+    /// destructured spelling, whose leaves skip their own `track_vec_var` under
+    /// `pattern_binding_is_borrow` — `bind_pattern_values` gates every owner
+    /// registration on that flag and recurses, so the leaves come out borrowed
+    /// without a second mechanism.
+    fn pattern_destructures_heap_payload(
+        &self,
+        optres_te: Option<&TypeExpr>,
+        pattern: &Pattern,
+    ) -> bool {
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return false;
+        };
+        let arg_idx = match path.last().map(|s| s.as_str()) {
+            Some("Some") | Some("Ok") => 0,
+            Some("Err") => 1,
+            _ => return false,
+        };
+        if patterns.len() != 1 {
+            return false;
+        }
+        let sub = &patterns[0];
+        if !pattern_consumes_field(sub) {
+            return false;
+        }
+        // A whole-payload binding belongs to the sibling classifier; only the
+        // DESTRUCTURING spellings are this one's business.
+        if !matches!(
+            &sub.kind,
+            PatternKind::Struct { .. } | PatternKind::Tuple(_)
+        ) {
+            return false;
+        }
+        let Some(te) = optres_te else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let Some(GenericArg::Type(arg)) = p.generic_args.as_ref().and_then(|a| a.get(arg_idx))
+        else {
+            return false;
+        };
+        self.field_te_owns_heap(arg, 8)
     }
 
     /// B-2026-08-08-25 — restricts the caller-retains classifiers to the DIRECT
@@ -2557,10 +2669,21 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         block: &crate::ast::Block,
     ) -> bool {
-        if !self.scrutinee_is_inline_optres_local(scrutinee) {
+        let destructures = self.pattern_destructures_heap_payload(
+            self.scrutinee_optres_type_expr(scrutinee).as_ref(),
+            pattern,
+        );
+        if !self.scrutinee_is_inline_optres_local(scrutinee)
+            && !(destructures && self.scrutinee_is_boxed_optres_local(scrutinee))
+        {
             return false;
         }
-        if !self.pattern_binds_direct_inline_heap_payload(pattern) {
+        // B-2026-08-30-52 — the `if let` copy of the `match` path's second
+        // disjunct. Without it `if let Some(S { s }) = a { … }` stayed on the
+        // transfer path while the identical `match` spelling was a borrow, so
+        // the same program read back garbage through one keyword and printed
+        // correctly through the other.
+        if !self.pattern_binds_direct_inline_heap_payload(pattern) && !destructures {
             return false;
         }
         !self.pattern_bindings_escape_in_block(pattern, block)

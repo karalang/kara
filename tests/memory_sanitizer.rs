@@ -63262,6 +63262,65 @@ fn main() {
         );
     }
 
+    /// B-2026-08-30-52 under ASAN/LSan — the memory half of the
+    /// destructuring-arm borrow fix, and the half that actually proves it.
+    ///
+    /// The output assertion in `e2e_optres_destructuring_read_only_arm_does_
+    /// not_take_the_payload` only fails a use-after-free when the freed block
+    /// happens to have been reused between the two reads; ASAN fails on the
+    /// read itself. Two of these shapes aborted outright before the fix
+    /// (`double free detected in tcache 2`) and two read back garbage.
+    ///
+    /// LSan matters here too, in the opposite direction: classifying an arm as
+    /// a borrow REMOVES an owner, so the way this fix can be wrong is a LEAK
+    /// rather than a double free, and only the Linux LSan leg sees that.
+    #[test]
+    fn asan_optres_destructuring_read_only_arm_is_a_borrow() {
+        assert_clean_asan_run(
+            r#"
+struct S1 { s: String }
+struct S2 { s: String, t: String }
+struct Inner { s: String }
+struct Outer { i: Inner }
+struct Sint { n: i64 }
+fn main() {
+    let a: Option[S1] = Some(S1 { s: f"alpha" });
+    match a { Some(S1 { s }) => { println(s); } None => {} }
+    match a { Some(S1 { s }) => println(s), None => println("no-a") }
+
+    let b: Option[S2] = Some(S2 { s: f"bee", t: f"tee" });
+    match b { Some(S2 { s, t }) => { println(s); } None => {} }
+    match b { Some(S2 { s, t }) => println(t), None => println("no-b") }
+
+    let c: Option[(String, i64)] = Some((f"tup", 1));
+    match c { Some((s, n)) => { println(s); } None => {} }
+    match c { Some((s, n)) => println(s), None => println("no-c") }
+
+    let d: Option[Outer] = Some(Outer { i: Inner { s: f"deep" } });
+    match d { Some(Outer { i }) => { println(i.s); } None => {} }
+    match d { Some(Outer { i }) => println(i.s), None => println("no-d") }
+
+    let e: Result[S1, i64] = Ok(S1 { s: f"okr" });
+    match e { Ok(S1 { s }) => { println(s); } Err(_) => {} }
+    match e { Ok(S1 { s }) => println(s), Err(_) => println("no-e") }
+
+    let g: Option[S1] = Some(S1 { s: f"iflet" });
+    if let Some(S1 { s }) = g { println(s); }
+    if let Some(S1 { s }) = g { println(s); } else { println("no-g"); }
+
+    let h: Option[Sint] = Some(Sint { n: 7 });
+    match h { Some(Sint { n }) => { println(n); } None => {} }
+    match h { Some(Sint { n }) => println(n), None => println("no-h") }
+}
+"#,
+            &[
+                "alpha", "alpha", "bee", "tee", "tup", "tup", "deep", "deep", "okr", "okr",
+                "iflet", "iflet", "7", "7",
+            ],
+            "optres destructuring read-only arm is a borrow",
+        );
+    }
+
     /// B-2026-08-29-66 under ASAN/LSan — the memory half of the auto-par
     /// branch-publish handshake, which the ordering assertions in
     /// `tests/par_codegen.rs` can only see indirectly (a garbage id printed

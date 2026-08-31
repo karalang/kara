@@ -119365,6 +119365,170 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-52, PARTIAL — a read-only `match` / `if let` arm that
+    /// DESTRUCTURES the `Option`/`Result` payload rather than binding it whole.
+    ///
+    /// `pattern_binds_direct_inline_heap_payload` requires every
+    /// payload-consuming sub-pattern to be a plain `Binding`, so a
+    /// destructuring pattern failed the read-only classifier BY CONSTRUCTION,
+    /// the arm was never a borrow, and the transfer path ran: the destructured
+    /// leaf registered as an owner and freed at arm exit while the source's own
+    /// drop stayed armed. `Option[S { s: String }]` read back garbage;
+    /// `Option[(String, i64)]` aborted with a double free.
+    ///
+    /// TWO INDEPENDENT HALVES, and each is needed for a different row below.
+    /// `pattern_destructures_heap_payload` admits the pattern, judged from the
+    /// scrutinee's instantiation rather than the leaves — a shorthand field
+    /// (`S { s }`) carries no sub-`Pattern`, so there is no span to look up.
+    /// And the payload channel: a payload wider than the payload words is
+    /// heap-BOXED, which is the channel most of these ride, so
+    /// `scrutinee_is_boxed_optres_local` admits it — but ONLY together with a
+    /// destructuring pattern. Admitting the boxed channel wholesale broke five
+    /// tests, every one a boxed payload bound WHOLE and then moved on or
+    /// field-moved-out, three of them under ASAN.
+    ///
+    /// STILL BROKEN, deliberately not asserted here, both filed on the row:
+    /// an arm that uses TWO bound leaves in one expression
+    /// (`println(v[0] + n)` where the pattern is `S { v, n }`) — the consume
+    /// classifier counts the scalar leaf's use as an escape, so the arm is not
+    /// read-only; and an inner `match` over a whole-bound payload
+    /// (`Some(p) => match p { A { s } => … }`), where the outer binding's
+    /// borrow-ness does not propagate into the nested pattern.
+    ///
+    /// ASAN twin: `asan_optres_destructuring_read_only_arm_is_a_borrow` — the
+    /// output assertion here only fails a use-after-free when the freed block
+    /// happens to have been reused.
+    #[test]
+    fn e2e_optres_destructuring_read_only_arm_does_not_take_the_payload() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "single-field struct destructure",
+                "struct S { s: String }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { s: f\"sd\" });\n\
+                     match a { Some(S { s }) => { println(s); } None => {} }\n\
+                     match a { Some(S { s }) => println(s), None => println(\"none\") }\n\
+                 }\n",
+                "sd\nsd\n",
+            ),
+            (
+                "multi-field struct destructure — the BOXED channel",
+                "struct S { s: String, t: String }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { s: f\"aa\", t: f\"bb\" });\n\
+                     match a { Some(S { s, t }) => { println(s); } None => {} }\n\
+                     match a { Some(S { s, t }) => println(t), None => println(\"none\") }\n\
+                 }\n",
+                "aa\nbb\n",
+            ),
+            (
+                "`..` rest pattern",
+                "struct S { s: String, n: i64 }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { s: f\"sn\", n: 5 });\n\
+                     match a { Some(S { s, .. }) => { println(s); } None => {} }\n\
+                     match a { Some(S { s, .. }) => println(s), None => println(\"none\") }\n\
+                 }\n",
+                "sn\nsn\n",
+            ),
+            (
+                "tuple payload destructure — double-freed before",
+                "fn main() {\n\
+                     let a: Option[(String, i64)] = Some((f\"td\", 1));\n\
+                     match a { Some((s, n)) => { println(s); } None => {} }\n\
+                     match a { Some((s, n)) => println(s), None => println(\"none\") }\n\
+                 }\n",
+                "td\ntd\n",
+            ),
+            (
+                "nested struct destructure, one hop down",
+                "struct Inner { s: String }\n\
+                 struct Outer { i: Inner }\n\
+                 fn main() {\n\
+                     let a: Option[Outer] = Some(Outer { i: Inner { s: f\"deep\" } });\n\
+                     match a { Some(Outer { i }) => { println(i.s); } None => {} }\n\
+                     match a { Some(Outer { i }) => println(i.s), None => println(\"none\") }\n\
+                 }\n",
+                "deep\ndeep\n",
+            ),
+            (
+                "Result Ok-destructure",
+                "struct S { s: String }\n\
+                 fn main() {\n\
+                     let a: Result[S, i64] = Ok(S { s: f\"res\" });\n\
+                     match a { Ok(S { s }) => { println(s); } Err(_) => {} }\n\
+                     match a { Ok(S { s }) => println(s), Err(_) => println(\"err\") }\n\
+                 }\n",
+                "res\nres\n",
+            ),
+            (
+                "`if let` destructure — its own classifier",
+                "struct S { s: String }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { s: f\"il\" });\n\
+                     if let Some(S { s }) = a { println(s); }\n\
+                     if let Some(S { s }) = a { println(s); } else { println(\"none\"); }\n\
+                 }\n",
+                "il\nil\n",
+            ),
+            (
+                "Vec-typed leaf",
+                "struct S { v: Vec[i64] }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { v: [11, 22] });\n\
+                     match a { Some(S { v }) => { println(v[0]); } None => {} }\n\
+                     match a { Some(S { v }) => println(v[1]), None => println(\"none\") }\n\
+                 }\n",
+                "11\n22\n",
+            ),
+            // CONTROL: a payload that owns nothing stays OFF the borrow path —
+            // `field_te_owns_heap` says so — because it already takes its path
+            // correctly and moving it would be a change for no reason.
+            (
+                "control: heap-free struct payload",
+                "struct S { n: i64 }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { n: 3 });\n\
+                     match a { Some(S { n }) => { println(n); } None => {} }\n\
+                     match a { Some(S { n }) => println(n), None => println(\"none\") }\n\
+                 }\n",
+                "3\n3\n",
+            ),
+            // CONTROL: the WHOLE-payload binding this row does not touch. It is
+            // the sibling classifier's, and admitting it here is what broke
+            // `e2e_optres_tuple_payload_is_owned_exactly_once` twice.
+            (
+                "control: whole-payload binding still works",
+                "struct S { s: String }\n\
+                 fn main() {\n\
+                     let a: Option[S] = Some(S { s: f\"ctrl\" });\n\
+                     match a { Some(p) => { println(p.s); } None => {} }\n\
+                     match a { Some(q) => println(q.s), None => println(\"none\") }\n\
+                 }\n",
+                "ctrl\nctrl\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter is the reference for this text"
+            );
+            if let Some(aot) = run_program(src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backend must keep the source's payload \
+                     across a read-only DESTRUCTURING arm"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-30-26 — AN INTEGER <-> `bf16` CONVERSION WAS REFUSED BY BOTH
     /// COMPILED BACKENDS, IN EVERY DIRECTION, WHILE THE INTERPRETER PERFORMED IT.
     ///
