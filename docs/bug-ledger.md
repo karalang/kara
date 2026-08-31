@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 154 | 3 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
-| soundness | 91 | 4 |
+| soundness | 91 | 3 |
 | perf | 87 | 1 |
 | other | 65 | 1 |
 | crash | 63 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 1290 | 37 |
 | interp | 285 | 21 |
-| typecheck | 281 | 2 |
+| typecheck | 281 | 1 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
 | cli | 67 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1884 surfaced · 45 open · 1810 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1884 surfaced · 44 open · 1811 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (45)
+### Open (44)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -155,7 +155,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1884 surfaced
 | B-2026-08-30-21 | 2026-08-30 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolve field 'id' on this receiver`) and the result binding's own `Drop` body is silently LOST -- both vanish the moment the struct gains one heap field, and the free-function spelling is correct throughout | none |
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
-| B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
 | B-2026-08-30-40 | 2026-08-30 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a type, not a function", while the same call at `f32` RESOLVES and fails (or succeeds) on its own merits. Two hardcoded width lists in `method_identifier_receiver.rs` omit the reduced-precision widths, so the leading segment is never recognized as a type receiver and the path falls through to the identifier-in-value-position diagnostic | — |
 | B-2026-08-30-41 | 2026-08-30 | interp+codegen | medium | A `T: PartialOrd` BOUND MAKES `a < b` UNRUNNABLE ON BOTH BACKENDS, FOR EVERY TYPE — the tree-walk aborts with "method 'partial_cmp' not found" and `karac build` fails with "no handler for method 'is_lt' on non-identifier receiver". `type_param_comparator` routes the comparison through `partial_cmp`, which its own concrete-type sibling `ordering_dispatch_comparator` documents as having no backend; the identical body under a `T: Ord` bound works on both | — |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
@@ -207,9 +206,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1884 surfaced
 
 </details>
 
-### Fixed (1810)
+### Fixed (1811)
 
-<details><summary>1810 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1811 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1998,6 +1997,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1884 surfaced
 | B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
 | B-2026-08-30-19 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still… | 4f02313 |
 | B-2026-08-30-24 | codegen | medium | NO `f16` PROGRAM LINKS FOR A WASM TARGET: LLVM lowers `half` to the `__extendhfsf2` / `__truncsfhf2` compiler-rt builtins and the wasm link line has… | 240919c |
+| B-2026-08-30-25 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_b… | d4cda14 |
 | B-2026-08-30-26 | codegen | medium | An integer <-> `bf16` conversion is refused by BOTH compiled backends in every direction (`internal error: codegen emitted a native bfloat SIToFP/UIT… | 532549e |
 | B-2026-08-30-27 | codegen | low | A loop-invariant DIRECT-LIBM float method (`cosh`/`sinh`/`tan`/`asin`/...) is not hoisted out of a loop, while the INTRINSIC-family ones (`log10`/`ex… | 9b5fce2 |
 | B-2026-08-30-28 | interp+codegen | medium | A CONDITIONAL store of an owned param into a `mut ref` param -- `if c { sink.push(r); }` -- LOSES the payload's `Drop` body on the path where the sto… | fd205752 |
