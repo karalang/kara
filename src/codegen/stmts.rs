@@ -809,7 +809,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the taken arm named.
                 if !arm_value_discarded {
                     self.suppress_block_tail_cleanup(tail);
-                } else if self.expr_yields_fresh_owned_temp(tail) {
+                } else if let (Some(owned_tail), Some(v)) =
+                    (self.discarded_arm_owned_aggregate_tail(tail), result)
+                {
                     // B-2026-08-29-5, second mechanism. A tail that MINTS its
                     // value has no source to leave armed, so declining to
                     // suppress buys nothing — nothing ever owned it. Give it
@@ -818,15 +820,54 @@ impl<'ctx> super::Codegen<'ctx> {
                     // else { mk(n + 1) };` in statement position leaked
                     // whichever call the taken arm made.
                     //
-                    // Same freshness predicate the discarded-`match` STATEMENT
-                    // site (`discarded_match_value_tail`) gates on, and needed
-                    // here rather than there because a no-`else` branch never
-                    // yields its arm's value to the statement at all — the
-                    // merge hands back a placeholder, so the buffer is already
+                    // Needed here rather than at the discarded-`match`
+                    // STATEMENT site because a no-`else` branch never yields
+                    // its arm's value to the statement at all — the merge
+                    // hands back a placeholder, so the buffer is already
                     // unreachable by the time that site sees it.
-                    if let Some(v) = result {
-                        self.materialize_owned_temp(v, (tail.span.offset, tail.span.length));
+                    //
+                    // B-2026-08-29-30 — TWO legs, chosen by what the tail
+                    // mints rather than by one predicate. They own DISJOINT
+                    // kinds — `materialize_owned_temp` claims a Vec/String
+                    // struct type, a Map/Set handle or an RC box, and the
+                    // aggregate registrar returns immediately for all three —
+                    // so a value is never claimed twice; see
+                    // `discarded_arm_owned_aggregate_tail`.
+                    //
+                    // The freshness predicate is asked AGAIN here rather than
+                    // inherited from the admission gate, which is narrower
+                    // than it needs to be for the RC leg and deliberately so.
+                    // A `shared` literal arm (`if n == 1 { S { .. } };`) is a
+                    // fresh RC box and this leg could own it — measured: the
+                    // 41 B leak goes to clean and `dS` starts printing on both
+                    // compiled backends. The interpreter cannot follow.
+                    // `run_discarded_value_user_drops` has no shared arm at
+                    // all, which is not a gap specific to branches: the DIRECT
+                    // spellings `let _ = S { .. };` and `S { .. };` are silent
+                    // and leak 41 B on all three backends today. Widening here
+                    // alone would trade that agreed gap for a run-vs-build
+                    // divergence in one more shape — the trade this row's
+                    // no-`else` half was itself held back to avoid. Filed
+                    // separately; it needs the interpreter side, and a shared
+                    // value can be aliased, so "run the body at the discard"
+                    // is a question that deserves its own measurement.
+                    if self.expr_yields_fresh_owned_temp(owned_tail) {
+                        self.materialize_owned_temp(
+                            v,
+                            (owned_tail.span.offset, owned_tail.span.length),
+                        );
                     }
+                    // The AGGREGATE leg. `materialize_owned_temp` owns a
+                    // Vec/String buffer, a Map/Set handle and an RC box — a
+                    // plain user struct or enum is none of the three, and has
+                    // no `owned_temp_drops` entry either (`lowering.rs` seeds
+                    // that table from container and shared types only), so it
+                    // registered NOTHING: `if n == 1 { R { .. } };` ran no
+                    // user `Drop` body on any backend and leaked its `String`
+                    // field once per evaluation. The registrar is the same
+                    // arg-position one the wildcard-let discard site uses, so
+                    // the two spellings cannot answer differently.
+                    self.track_discarded_arm_owned_aggregate(owned_tail, v);
                 }
                 // B-2026-08-26-12 — the `Option[shared T]` sibling of the
                 // plain-`shared` retain `suppress_block_tail_cleanup` reaches
@@ -16403,6 +16444,94 @@ impl<'ctx> super::Codegen<'ctx> {
                     && !self.type_decls.shared_types.contains_key(tn.as_str())
                     && self.type_runs_user_drop(tn.as_str(), &mut Vec::new())
             })
+    }
+
+    /// B-2026-08-29-30 — the tail of a DISCARDED branch arm that MINTS a
+    /// fresh owned value, for the arm-level owner B-2026-08-29-5 added.
+    ///
+    /// That owner was gated on `expr_yields_fresh_owned_temp` alone, which
+    /// admits `Call` / `MethodCall` and nothing else, so a struct-LITERAL arm
+    /// (`if n == 1 { R { .. } };`) never reached it. Widened here rather than
+    /// in that predicate, whose many other consumers ask a different freshness
+    /// question (entry-copy depth, RC transfer) — the same call
+    /// `discard_arm_tail_qualifies` made for the statement site.
+    ///
+    /// Admits exactly three shapes, all of them ones the arg-position
+    /// aggregate registrar can claim as a fresh temp:
+    ///
+    ///   * a `Call` / `MethodCall` the freshness predicate already admits;
+    ///   * a struct / tuple literal `discarded_owned_literal_tail` admits —
+    ///     the ALL-FRESH-fields form. A field naming a live binding is
+    ///     declined there and must stay declined: the binding keeps its own
+    ///     drop, so a second owner here would double-free rather than supply
+    ///     a missing body;
+    ///   * a unit variant, either spelling, via `discarded_unit_variant_tail`.
+    ///
+    /// Everything else is declined — a tail NAMING a binding above all, which
+    /// is the population B-2026-08-29-5's other half ("leave the source
+    /// armed") is in charge of.
+    ///
+    /// Block wrappers are peeled by the two `&self` siblings, so the returned
+    /// tail may be nested inside `tail`; the arm's value is the same either
+    /// way, since a single-tail wrapper hands its inner value straight out.
+    fn discarded_arm_owned_aggregate_tail<'e>(&self, tail: &'e Expr) -> Option<&'e Expr> {
+        if self.expr_yields_fresh_owned_temp(tail) {
+            return Some(tail);
+        }
+        // A NESTED branch construct at the arm's tail
+        // (`let _ = if c { if d { mk(1) } else { mk(2) } };`). Admitted
+        // through the same all-tails-mint predicate the argument position
+        // uses, and handed to the registrar WHOLE: its own head redirects a
+        // construct to a representative tail (B-2026-08-30-38), so passing
+        // the construct is what reaches that redirect. Doing this by
+        // recursing here instead would pick a tail whose SPAN is not the one
+        // the merged value carries.
+        //
+        // Needed for parity rather than for coverage: the interpreter reaches
+        // a nested branch tail through `arm_tail_expr`'s recursion, so
+        // declining it here would leave the two backends disagreeing on a
+        // shape that has a correct answer — the exact trade this row's
+        // no-`else` half was held back to avoid.
+        if self.fresh_owned_branch_tail_repr(tail).is_some() {
+            return Some(tail);
+        }
+        self.discarded_owned_literal_tail(tail)
+            .or_else(|| self.discarded_unit_variant_tail(tail))
+    }
+
+    /// B-2026-08-29-30 — the AGGREGATE leg of the discarded-arm owner: give a
+    /// fresh user struct / enum temp minted at a discarded arm's tail the
+    /// caller-side drop a let-bound value of the same type would get.
+    ///
+    /// `materialize_owned_temp` (the leg beside this one) owns three kinds and
+    /// only three: a Vec/String buffer, which is LLVM-type detectable on its
+    /// own, and a Map/Set handle or an RC box, both of which it recovers from
+    /// `owned_temp_drops`. A plain user struct or enum is none of them and has
+    /// no entry in that table either, so it registered nothing at all.
+    ///
+    /// The two legs are DISJOINT by construction, which is what makes running
+    /// both safe: the registrar early-returns on a non-struct LLVM type (an RC
+    /// box and a Map handle are bare pointers) and on the Vec/String struct
+    /// type, so every kind `materialize_owned_temp` claims is one this
+    /// declines, and vice versa.
+    ///
+    /// `Option` / `Result` are excluded for the reason the wildcard-let
+    /// discard site excludes them: their payload cleanup belongs to the
+    /// Option/Result trackers and the payload-bodies walk, and routing them
+    /// through the enum arm here would register a second owner for the same
+    /// payload.
+    ///
+    /// `arg_escapes_frame: false` is the honest answer at this site — the arm's
+    /// value is discarded, so nothing downstream consumes it and no callee
+    /// entry-copy is in play.
+    fn track_discarded_arm_owned_aggregate(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+        let optres_ctor = self
+            .enum_name_of_expr(tail)
+            .is_some_and(|en| en == "Option" || en == "Result");
+        if optres_ctor {
+            return;
+        }
+        self.track_inline_owned_aggregate_arg(val, tail, false);
     }
 
     pub(super) fn discarded_owned_literal_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {

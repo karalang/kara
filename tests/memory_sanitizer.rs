@@ -13164,6 +13164,188 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-30 (remaining half) — the LEAK leg of
+    /// `e2e_no_else_if_arm_owns_the_value_it_mints`.
+    ///
+    /// A no-`else` `if` whose taken arm MINTS an owned value stranded one
+    /// allocation per evaluation: `compile_if`'s merge yields a const-0
+    /// placeholder with no `else`, so the statement discard site never sees
+    /// the value, and B-2026-08-29-5's arm-level owner declined it because
+    /// `materialize_owned_temp` owns a Vec/String buffer, a Map/Set handle and
+    /// an RC box — never a plain user struct.
+    ///
+    /// WHAT THIS FIXTURE GATES AT EACH OPT LEVEL, stated plainly because the
+    /// two answers differ and the difference is not a weakness in the test:
+    ///
+    ///   * At `KARAC_OPT_LEVEL=0` it is a LEAK gate. Measured on a
+    ///     20-iteration loop of the `let _ =` spelling against the pre-fix
+    ///     compiler: 770 B definitely lost in 20 blocks, and 0 after.
+    ///   * At the DEFAULT `-O2` — the level this harness builds at, and the
+    ///     one CI runs — the pre-fix program does not leak AT ALL, and that is
+    ///     a true fact about it rather than a hidden failure: the discarded
+    ///     allocation is dead, so LLVM deletes the whole chain. The same
+    ///     20-iteration loop measures 0 bytes in 0 blocks BEFORE and after. So
+    ///     at `-O2` these rows gate the OTHER direction — that the owner this
+    ///     fix adds does not DOUBLE FREE or use-after-free — which is what the
+    ///     control rows are for, and is exactly the hazard a new owner brings.
+    ///
+    /// The observable half of the defect at `-O2` is the missing `Drop` BODY,
+    /// and that is gated at CI's level by
+    /// `codegen::e2e_no_else_if_arm_owns_the_value_it_mints`. Do not try to
+    /// rescue the leak claim here with an allocation floor: the audit reads
+    /// 22–23 allocations either way, because the surviving `println` and
+    /// f-string machinery dwarfs the one allocation at issue.
+    ///
+    /// In `go()` rather than `main` for the reason the sibling above records:
+    /// LSan scans the live stack conservatively, so a stale `{ptr,len,cap}`
+    /// still sitting in `main`'s frame reads as reachable and is not reported.
+    ///
+    /// The CONTROLS are the half that matters most: each was CLEAN before the
+    /// fix and is a shape where the new owner, if it over-reached, would be a
+    /// DOUBLE FREE rather than a leak — a tail naming a live local, an `if`
+    /// WITH an `else` (owned by the statement site), and a struct literal
+    /// whose field names a live local.
+    #[test]
+    fn asan_no_else_if_arm_owns_the_value_it_mints() {
+        const H: &str = "struct D { s: String }\n\
+             struct R { id: i64, s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn slen(s: String) -> i64 { if s.contains(\"payload\") { s.len() } else { 0 } }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str, &[&str])] = &[
+            (
+                "no-drop-impl-still-frees-its-heap",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { D { s: payload() } };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "wildcard-let-struct-literal",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { R { id: 7, s: payload() } };\n\
+                 \x20  1 }\n",
+                &["dR7", "1"],
+            ),
+            (
+                "wildcard-let-call",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { mk(7) };\n\
+                 \x20  1 }\n",
+                &["dR7", "1"],
+            ),
+            (
+                "bare-statement-struct-literal",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  if n == 1 { R { id: 7, s: payload() } };\n\
+                 \x20  1 }\n",
+                &["dR7", "1"],
+            ),
+            (
+                "bare-statement-call",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  if n == 1 { mk(7) };\n\
+                 \x20  1 }\n",
+                &["dR7", "1"],
+            ),
+            // A heap-bearing struct with NO `impl Drop`: nothing observable
+            // fires, so this row is a memory assertion and nothing else — the
+            // half a body-count fixture structurally cannot see. At `-O0` it
+            // is this fixture's cleanest leak signal; at `-O2` it holds that
+            // the widened admission gate did not start double-freeing a
+            // struct that has no user drop to make the mistake visible.
+            (
+                "block-wrapped-rhs",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = { if n == 1 { mk(19) } };\n\
+                 \x20  1 }\n",
+                &["dR19", "1"],
+            ),
+            (
+                "nested-branch-tail",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { if n == 1 { mk(6) } else { mk(7) } };\n\
+                 \x20  1 }\n",
+                &["dR6", "1"],
+            ),
+            (
+                "tuple-literal-tail",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { (mk(12), 20) };\n\
+                 \x20  1 }\n",
+                &["dR12", "1"],
+            ),
+            // Once per iteration, so a per-evaluation leak compounds rather
+            // than costing one allocation.
+            (
+                "loop-body-per-iteration",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  for i in 0..3 { if n == 1 { mk(i) }; }\n\
+                 \x20  1 }\n",
+                &["dR0", "dR1", "dR2", "1"],
+            ),
+            // The `-O0` LEAK SIGNAL of this fixture, and the row whose numbers
+            // the doc quotes: 20 discarded allocations, so a per-evaluation
+            // leak compounds to 770 B / 20 blocks instead of hiding as one.
+            // `D` rather than `R` so stdout stays a single line and the row is
+            // purely a memory claim.
+            (
+                "twenty-iteration-loop-compounds-the-leak",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let mut i = 0;\n\
+                 \x20  while i < 20 {\n\
+                 \x20    let _ = if n == 1 { D { s: payload() } };\n\
+                 \x20    i = i + 1;\n\
+                 \x20  }\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            // ── controls: CLEAN before the fix; a double free if over-eager ──
+            (
+                "control: place-tail-bare",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(1);\n\
+                 \x20  if n == 1 { r };\n\
+                 \x20  1 }\n",
+                &["dR1", "1"],
+            ),
+            (
+                "control: else-in-both-arms",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 1 { mk(4) } else { mk(5) };\n\
+                 \x20  1 }\n",
+                &["dR4", "1"],
+            ),
+            (
+                "control: field-is-a-place",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let s = payload();\n\
+                 \x20  let _ = if n == 1 { D { s: s } };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "control: branch-not-taken",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = if n == 99 { mk(9) };\n\
+                 \x20  1 }\n",
+                &["1"],
+            ),
+            (
+                "control: bound-value-still-owns-itself",
+                "fn go() -> i64 { let d = D { s: payload() };\n\
+                 \x20  slen(d.s) }\n",
+                &["38"],
+            ),
+        ];
+        for (label, body, want) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), want, label);
+        }
+    }
+
     /// B-2026-08-29-5 — a branch construct whose VALUE IS DISCARDED strands
     /// whatever its taken arm hands out.
     ///

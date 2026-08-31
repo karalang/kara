@@ -49404,27 +49404,36 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
         );
         assert_eq!(run(&src).trim(), expected, "[{label} — {stmt}]");
     }
-    // PINNED AT THE DEFECT on both backends, and both are deliberate
-    // declines rather than oversights.
-    //
-    //   * an `if` with no `else` has no phi, so freeing its branch value
-    //     needs a CONDITIONAL registration, not a wider gate;
-    //   * `let _ = { r }` moves a local through a wrapper, and no rebind hook
-    //     retracts the local's own slot through one — firing here would
-    //     double it, and compiled is silent too, so declining keeps the pair
-    //     agreed instead of trading a shared defect for a divergence.
-    for (body, label) in [
-        (
-            "let n = 1;\nlet _ = if n == 1 { R { id: 7 } };",
-            "`if` with no `else`",
-        ),
-        (
-            "let r = R { id: 41 };\nlet _ = { r };",
-            "moved local through a wrapper",
-        ),
-    ] {
-        let src = format!("{hdr}fn main() {{\n{body}\nprintln(\"end\");\n}}\n");
-        assert_eq!(run(&src).trim(), "end", "[pinned UNFIXED: {label}]");
+    // FIXED (B-2026-08-29-30): an `if` with no `else` has no phi, so freeing
+    // its branch value needed a registration inside the ARM rather than a
+    // wider gate at the statement — this line pinned the shared silence until
+    // codegen had one.
+    {
+        let src = format!(
+            "{hdr}fn main() {{\n\
+             let n = 1;\n\
+             let _ = if n == 1 {{ R {{ id: 7 }} }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(run(&src).trim(), "dR7\nend", "[FIXED: `if` with no `else`]");
+    }
+    // STILL PINNED AT THE DEFECT, and a deliberate decline rather than an
+    // oversight: `let _ = { r }` moves a local through a wrapper, and no
+    // rebind hook retracts the local's own slot through one — firing here
+    // would double it, and compiled is silent too, so declining keeps the
+    // pair agreed instead of trading a shared defect for a divergence.
+    {
+        let src = format!(
+            "{hdr}fn main() {{\n\
+             let r = R {{ id: 41 }};\n\
+             let _ = {{ r }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(
+            run(&src).trim(),
+            "end",
+            "[pinned UNFIXED: moved local through a wrapper]"
+        );
     }
 }
 
@@ -49437,13 +49446,15 @@ fn test_discarded_if_and_block_wrapped_rhs_run_their_drop_body_once() {
 /// admitting the tuple without retracting doubles a body rather than supplying
 /// one — which is what the two controls hold.
 ///
-/// The no-`else` half: row 3 is a REGRESSION GUARD, not a wish. fd4e80f's statement-site `If`
+/// The no-`else` half: row 3 was a REGRESSION GUARD, not a wish. fd4e80f's statement-site `If`
 /// arm gated on liveness alone, and a no-`else` `if` hands out no live binding,
 /// so this backend fired a body both compiled surfaces cannot emit — the
-/// divergence that commit's own message warns against, one arm over. It is
-/// declined here until codegen can own the value from inside the arm
-/// (B-2026-08-29-30); an agreed gap beats a divergence, the same call this file
-/// makes for `v.remove(i);`.
+/// divergence that commit's own message warns against, one arm over. It was
+/// declined here until codegen could own the value from inside the arm; that
+/// owner landed with B-2026-08-29-30's remaining half, so row 3 now pins the
+/// BODY, fired by all three backends together. The liveness gate it kept is
+/// what still declines a tail NAMING an enclosing local — the population whose
+/// body belongs to its own binding.
 #[test]
 fn test_discarded_literal_statement_and_no_else_if() {
     let hdr = "struct R { id: i64 }\n\
@@ -49461,8 +49472,8 @@ fn test_discarded_literal_statement_and_no_else_if() {
         ),
         (
             "let n = 1;\nif n == 1 { R { id: 7 } };\nprintln(\"end\");",
-            "end",
-            "AGREED-SILENT (remainder): a no-`else` `if` hands this site no value",
+            "dR7\nend",
+            "FIXED: a no-`else` `if`, owned from inside the arm",
         ),
     ];
     for (body, expected, label) in rows {
@@ -49481,6 +49492,137 @@ fn test_discarded_literal_statement_and_no_else_if() {
     ] {
         let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
         assert_eq!(run(&src).trim(), "dR1\nend", "[{label}]");
+    }
+}
+
+/// B-2026-08-29-30 (remaining half) — the INTERPRETER twin of
+/// `e2e_no_else_if_arm_owns_the_value_it_mints`, landed in the same commit.
+/// Both tables are the SAME shapes in the same order, so the two backends
+/// cannot be fixed to different answers.
+///
+/// Four spellings of one program — `let _ =` and bare, each over a struct
+/// literal and a call — were silent on all three backends and leaked one
+/// allocation per evaluation. Agreed silence is invisible to every A/B parity
+/// gate, which is why this needed a row rather than showing up as a failure.
+///
+/// The CONTROLS carry the fix's whole safety argument, and each one is a shape
+/// where an over-eager owner is a DOUBLE body rather than a missing one:
+///
+///   * a tail that NAMES a live local keeps its own scope-exit body and must
+///     stay declined (`place-tail-*`);
+///   * an `if` WITH an `else` is owned by the STATEMENT site and must not gain
+///     a second owner in its arms (`else-*`);
+///   * a struct literal whose FIELD names a live local is declined by the
+///     all-fresh gate — the binding still owns that field's heap
+///     (`field-is-a-place`);
+///   * the branch NOT taken mints nothing, so nothing may fire
+///     (`branch-not-taken`).
+#[test]
+fn test_no_else_if_arm_owns_the_value_it_mints() {
+    let hdr = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               struct H { s: String }\n\
+               enum E { A(R), B }\n\
+               impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n";
+    for (label, body, want) in [
+        // ── the row's four spellings ──────────────────────────────────
+        (
+            "wildcard-let-struct-literal",
+            "let _ = if n == 1 { R { id: 7, name: f\"h\" } };",
+            "dR7\nend",
+        ),
+        (
+            "wildcard-let-call",
+            "let _ = if n == 1 { mk(7) };",
+            "dR7\nend",
+        ),
+        (
+            "bare-statement-struct-literal",
+            "if n == 1 { R { id: 7, name: f\"h\" } };",
+            "dR7\nend",
+        ),
+        ("bare-statement-call", "if n == 1 { mk(7) };", "dR7\nend"),
+        // ── shapes the widened admission gate brings with it ──────────
+        (
+            "block-wrapped-rhs",
+            "let _ = { if n == 1 { mk(19) } };",
+            "dR19\nend",
+        ),
+        (
+            "nested-branch-tail",
+            "let d = 1;\nlet _ = if n == 1 { if d == 1 { mk(6) } else { mk(7) } };",
+            "dR6\nend",
+        ),
+        (
+            "nested-match-tail",
+            "let d = 1;\nlet _ = if n == 1 { match d { 1 => mk(6), _ => mk(7) } };",
+            "dR6\nend",
+        ),
+        (
+            "tuple-literal-tail",
+            "let _ = if n == 1 { (mk(12), 20) };",
+            "dR12\nend",
+        ),
+        // An own-`Drop` enum runs its OWN body and its PAYLOAD's, which is
+        // what the direct `let _ = E.A(..)` spelling already did on every
+        // backend — the peel that makes the two agree is
+        // `discard_producer_expr`.
+        (
+            "inline-enum-ctor-tail",
+            "let _ = if n == 1 { E.A(mk(8)) };",
+            "dE\ndR8\nend",
+        ),
+        ("unit-variant-tail", "let _ = if n == 1 { E.B };", "dE\nend"),
+        (
+            "loop-body-fires-per-iteration",
+            "for i in 0..3 { if n == 1 { mk(i) }; }",
+            "dR0\ndR1\ndR2\nend",
+        ),
+        // ── controls: an over-eager owner here is a DOUBLE body ───────
+        (
+            "control: place-tail-bare",
+            "let r = mk(1);\nif n == 1 { r };",
+            "dR1\nend",
+        ),
+        (
+            "control: place-tail-wildcard-let",
+            "let r = mk(1);\nlet _ = if n == 1 { r };",
+            "end",
+        ),
+        (
+            "control: else-struct-literal",
+            "let _ = if n == 1 { R { id: 2, name: f\"a\" } } else { R { id: 3, name: f\"b\" } };",
+            "dR2\nend",
+        ),
+        (
+            "control: else-call",
+            "let _ = if n == 1 { mk(4) } else { mk(5) };",
+            "dR4\nend",
+        ),
+        (
+            "control: else-if-chain",
+            "let _ = if n == 0 { mk(20) } else if n == 1 { mk(21) } else { mk(22) };",
+            "dR21\nend",
+        ),
+        (
+            "control: field-is-a-place",
+            "let s = f\"live\";\nlet _ = if n == 1 { H { s: s } };\nprintln(\"kept\");",
+            "kept\nend",
+        ),
+        (
+            "control: branch-not-taken",
+            "let _ = if n == 2 { mk(9) };",
+            "end",
+        ),
+        (
+            "control: branch-not-taken-place-tail",
+            "let r = mk(18);\nlet _ = if n == 2 { r };\nprintln(\"still\");",
+            "dR18\nstill\nend",
+        ),
+    ] {
+        let src = format!("{hdr}fn main() {{\nlet n = 1;\n{body}\nprintln(\"end\");\n}}\n");
+        assert_eq!(run(&src).trim(), want, "[{label}]");
     }
 }
 

@@ -22090,13 +22090,12 @@ fn main() {
                 "[{label} — {stmt}]"
             );
         }
-        // PINNED AT THE DEFECT, not asserted as correct. An `if` with no
-        // `else` still constructs an `R` on the taken path and runs no body
-        // on any backend. It is declined deliberately: with no else there is
-        // no phi, so freeing it needs a CONDITIONAL registration rather than
-        // a wider gate — a different mechanism, filed rather than guessed at.
-        // Agreed across all three backends, so no parity gate can see it;
-        // this row is the only signal, and it flips when that is fixed.
+        // FIXED (B-2026-08-29-30). These two were pinned at the DEFECT here —
+        // `"end\n"`, no body on any backend — because with no `else` there is
+        // no phi for the statement site to own, so freeing the arm's value
+        // needed a registration INSIDE the arm rather than a wider gate at the
+        // statement. It has one now (`discarded_arm_owned_aggregate_tail`), so
+        // the pin flips to the body that was always due.
         for stmt in [
             "let _ = if n == 1 { R { id: 7 } };",
             "let _ = if n == 1 { mk(7) };",
@@ -22104,8 +22103,8 @@ fn main() {
             let src = format!("{hdr}fn main() {{\nlet n = 1;\n{stmt}\nprintln(\"end\");\n}}\n");
             assert_eq!(
                 run_program(&src).as_deref(),
-                Some("end\n"),
-                "[pinned UNFIXED: `if` with no `else` — {stmt}]"
+                Some("dR7\nend\n"),
+                "[FIXED: `if` with no `else` — {stmt}]"
             );
         }
         // PINNED: a moved local reached through a wrapper. `let _ = r` is
@@ -22142,8 +22141,9 @@ fn main() {
     ///     interpreter's statement-site arm gated on liveness alone, which such
     ///     an `if` passes, so it fired a body both compiled backends cannot.
     ///     `compile_if`'s merge yields a placeholder with no `else`, so the
-    ///     value never reaches this site; row 3 pins the agreed silence that
-    ///     restores, and B-2026-08-29-30 owns making it fire on all three.
+    ///     value never reaches this site. Row 3 pinned the agreed silence that
+    ///     restored; it now pins the BODY, because B-2026-08-29-30's remaining
+    ///     half landed the arm-level owner that lets all three fire together.
     #[test]
     fn e2e_discarded_literal_statement_and_no_else_if() {
         let hdr = "struct R { id: i64 }\n\
@@ -22161,8 +22161,8 @@ fn main() {
             ),
             (
                 "let n = 1;\nif n == 1 { R { id: 7 } };\nprintln(\"end\");",
-                "end\n",
-                "AGREED-SILENT (remainder): a no-`else` `if` hands this site no value",
+                "dR7\nend\n",
+                "FIXED: a no-`else` `if`, owned from inside the arm",
             ),
         ];
         for (body, expected, label) in rows {
@@ -22189,6 +22189,140 @@ fn main() {
                 Some("dR1\nend\n"),
                 "[{label}]"
             );
+        }
+    }
+
+    /// B-2026-08-29-30 (remaining half) — a no-`else` `if` whose taken arm
+    /// MINTS an owned value now owns it, on both compiled backends.
+    ///
+    /// The value was reachable from neither discard site. `compile_if`'s merge
+    /// yields a const-0 placeholder when there is no `else`, so the STATEMENT
+    /// site never sees the arm's value at all — which is why no widening of
+    /// `discarded_match_value_tail` could have reached it, and why the fix is a
+    /// registration inside the arm's own frame instead. B-2026-08-29-5 put one
+    /// there and gated it on `expr_yields_fresh_owned_temp` (Call / MethodCall);
+    /// that leg owns a Vec/String buffer, a Map/Set handle and an RC box, and a
+    /// plain user struct is none of the three, so even the CALL spelling
+    /// registered nothing.
+    ///
+    /// All four spellings were silent on all three backends and leaked one
+    /// allocation per evaluation — agreed, so invisible to every A/B parity
+    /// gate. Twin: `test_no_else_if_arm_owns_the_value_it_mints`, whose table
+    /// is these shapes in this order. Leak leg:
+    /// `asan_no_else_if_arm_owns_the_value_it_mints`.
+    ///
+    /// The CONTROLS are the fix's safety argument, each a shape where an
+    /// over-eager owner is a DOUBLE free rather than a missing body: a tail
+    /// naming a live local, an `if` WITH an `else` (owned by the statement
+    /// site), a struct literal whose field names a live local, and the branch
+    /// not taken.
+    #[test]
+    fn e2e_no_else_if_arm_owns_the_value_it_mints() {
+        let hdr = "struct R { id: i64, name: String }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   struct H { s: String }\n\
+                   enum E { A(R), B }\n\
+                   impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+                   fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n";
+        for (label, body, want) in [
+            // ── the row's four spellings ──────────────────────────────
+            (
+                "wildcard-let-struct-literal",
+                "let _ = if n == 1 { R { id: 7, name: f\"h\" } };",
+                "dR7\nend\n",
+            ),
+            (
+                "wildcard-let-call",
+                "let _ = if n == 1 { mk(7) };",
+                "dR7\nend\n",
+            ),
+            (
+                "bare-statement-struct-literal",
+                "if n == 1 { R { id: 7, name: f\"h\" } };",
+                "dR7\nend\n",
+            ),
+            ("bare-statement-call", "if n == 1 { mk(7) };", "dR7\nend\n"),
+            // ── shapes the widened admission gate brings with it ──────
+            (
+                "block-wrapped-rhs",
+                "let _ = { if n == 1 { mk(19) } };",
+                "dR19\nend\n",
+            ),
+            (
+                "nested-branch-tail",
+                "let d = 1;\nlet _ = if n == 1 { if d == 1 { mk(6) } else { mk(7) } };",
+                "dR6\nend\n",
+            ),
+            (
+                "nested-match-tail",
+                "let d = 1;\nlet _ = if n == 1 { match d { 1 => mk(6), _ => mk(7) } };",
+                "dR6\nend\n",
+            ),
+            (
+                "tuple-literal-tail",
+                "let _ = if n == 1 { (mk(12), 20) };",
+                "dR12\nend\n",
+            ),
+            (
+                "inline-enum-ctor-tail",
+                "let _ = if n == 1 { E.A(mk(8)) };",
+                "dE\ndR8\nend\n",
+            ),
+            (
+                "unit-variant-tail",
+                "let _ = if n == 1 { E.B };",
+                "dE\nend\n",
+            ),
+            (
+                "loop-body-fires-per-iteration",
+                "for i in 0..3 { if n == 1 { mk(i) }; }",
+                "dR0\ndR1\ndR2\nend\n",
+            ),
+            // ── controls: an over-eager owner here is a DOUBLE free ───
+            (
+                "control: place-tail-bare",
+                "let r = mk(1);\nif n == 1 { r };",
+                "dR1\nend\n",
+            ),
+            (
+                "control: place-tail-wildcard-let",
+                "let r = mk(1);\nlet _ = if n == 1 { r };",
+                "end\n",
+            ),
+            (
+                "control: else-struct-literal",
+                "let _ = if n == 1 { R { id: 2, name: f\"a\" } } else { R { id: 3, name: f\"b\" } };",
+                "dR2\nend\n",
+            ),
+            (
+                "control: else-call",
+                "let _ = if n == 1 { mk(4) } else { mk(5) };",
+                "dR4\nend\n",
+            ),
+            (
+                "control: else-if-chain",
+                "let _ = if n == 0 { mk(20) } else if n == 1 { mk(21) } else { mk(22) };",
+                "dR21\nend\n",
+            ),
+            (
+                "control: field-is-a-place",
+                "let s = f\"live\";\nlet _ = if n == 1 { H { s: s } };\nprintln(\"kept\");",
+                "kept\nend\n",
+            ),
+            (
+                "control: branch-not-taken",
+                "let _ = if n == 2 { mk(9) };",
+                "end\n",
+            ),
+            (
+                "control: branch-not-taken-place-tail",
+                "let r = mk(18);\nlet _ = if n == 2 { r };\nprintln(\"still\");",
+                "dR18\nstill\nend\n",
+            ),
+        ] {
+            let src =
+                format!("{hdr}fn main() {{\nlet n = 1;\n{body}\nprintln(\"end\");\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
         }
     }
 

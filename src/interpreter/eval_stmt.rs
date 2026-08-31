@@ -3245,6 +3245,42 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-29-30 — the expression that actually PRODUCED a discarded
+    /// value, for the shape questions asked after a wildcard `let` has
+    /// evaluated its RHS.
+    ///
+    /// Peels block wrappers, and then a no-`else` `if` down to its then-tail:
+    /// that arm is the only thing that can have minted the value, since the
+    /// merge yields unit on the other path. `let _ = if n == 1 { E.A(R { .. })
+    /// };` therefore answers "an inline variant construction", the same as the
+    /// direct `let _ = E.A(R { .. })` spelling.
+    ///
+    /// A two-tail `if` and a `match` are deliberately NOT peeled, and the
+    /// asymmetry is measured rather than cautious: on the compiled side those
+    /// yield their merged value to the STATEMENT discard site, whose enum leg
+    /// resolves `enum_name_of_expr` on the construct itself and so registers no
+    /// payload walk. Peeling them here would move this backend from agreeing
+    /// with compiled at one body to disagreeing at two. The no-`else` `if` is
+    /// the one shape compiled owns INSIDE the arm, through the registrar that
+    /// does register that walk.
+    fn discard_producer_expr(expr: &Expr) -> &Expr {
+        match &expr.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
+                .final_expr
+                .as_deref()
+                .map_or(expr, Self::discard_producer_expr),
+            ExprKind::If {
+                then_block,
+                else_branch: None,
+                ..
+            } => then_block
+                .final_expr
+                .as_deref()
+                .map_or(expr, Self::discard_producer_expr),
+            _ => expr,
+        }
+    }
+
     /// B-2026-08-29-25 — the expression whose SHAPE decides a bare-statement
     /// discard (`{ mk(7) };`, `{ match n { … } };`). The value has already
     /// been evaluated from the whole statement; only the shape dispatch needs
@@ -3368,9 +3404,29 @@ impl<'a> super::Interpreter<'a> {
             // (a branch handing out a live enclosing local owns its own
             // scope-exit body; firing here would double it).
             //
-            // No `else`, or a chosen block with no tail expression, yields
-            // unit: there is no owned value for this discard to be responsible
-            // for, and the twin declines those for the same reason.
+            // A chosen block with no tail expression yields unit: there is no
+            // owned value for this discard to be responsible for, and the twin
+            // declines that for the same reason.
+            //
+            // B-2026-08-29-30 — an `if` with NO `else` is admitted, on the
+            // then-tail alone. It was declined here (and by the twin) because
+            // `compile_if`'s merge yields a const-0 placeholder when there is
+            // no `else`, so no STATEMENT-site gate on either backend could
+            // reach the arm's value — and firing on this backend alone would
+            // have traded an agreed gap for a run-vs-build divergence. Codegen
+            // now owns that value inside the ARM instead
+            // (`discarded_arm_owned_aggregate_tail`), so the two backends can
+            // fire together, which is what this admission is.
+            //
+            // The `Identifier` exclusion carries over verbatim and is doing
+            // MORE work here than in the two-tail case: a no-`else` `if` whose
+            // tail names a live enclosing local hands out a binding that owns
+            // its own scope-exit body, and codegen's arm-level owner declines
+            // that shape for exactly the same reason.
+            //
+            // When the branch is NOT taken the RHS evaluates to unit and the
+            // walker this gate guards is value-driven, so a false positive
+            // here costs nothing on that path.
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -3383,6 +3439,11 @@ impl<'a> super::Interpreter<'a> {
                         !matches!(tail.kind, ExprKind::Identifier(_))
                             && self.discard_rhs_produces_owned_value(tail, val)
                     }),
+                (Some(then_tail), None) => {
+                    let tail = Self::arm_tail_expr(then_tail);
+                    !matches!(tail.kind, ExprKind::Identifier(_))
+                        && self.discard_rhs_produces_owned_value(tail, val)
+                }
                 _ => false,
             },
             // B-2026-08-29-25 — a BLOCK-WRAPPED RHS (`let _ = { match .. }`,
@@ -4605,7 +4666,24 @@ impl<'a> super::Interpreter<'a> {
                     // 2/1/1 — so this matches the spelling compiled actually
                     // walks, and the call spelling stays where both backends
                     // already agree.
-                    let inline_ctor = match &value.kind {
+                    //
+                    // B-2026-08-29-30 — asked of the DISCARD PRODUCER, not of
+                    // the RHS node, so a construction reached through a
+                    // no-`else` `if` (`let _ = if n == 1 { E.A(R { .. }) };`)
+                    // answers the same as the direct spelling. Without the
+                    // peel this site ran the enum's own body alone while both
+                    // compiled backends ran the payload's too — the divergence
+                    // this row's fix would otherwise have introduced, in the
+                    // one shape it newly admits.
+                    //
+                    // ONLY the no-`else` `if` is peeled, for the reason
+                    // `discard_producer_expr` gives: a two-tail `if` or a
+                    // `match` yields its value to the STATEMENT site on the
+                    // compiled side, which registers no payload walk for an
+                    // enum ctor arm — peeling those would move this backend
+                    // from agreeing at one body to disagreeing at two.
+                    let producer = Self::discard_producer_expr(value);
+                    let inline_ctor = match &producer.kind {
                         ExprKind::Call { callee, .. } => match &callee.kind {
                             ExprKind::Path { .. } => true,
                             // The bare spelling of the same construction.
@@ -5243,23 +5321,24 @@ impl<'a> super::Interpreter<'a> {
                         else_branch,
                         ..
                     } => {
-                        // B-2026-08-29-30 (no-`else` half) — an `if` WITHOUT an `else` must be
-                        // declined here, and this arm's liveness gate does not
-                        // decline it: `if n == 1 { R { .. } };` hands out no
-                        // live binding, so it fired on this backend while BOTH
-                        // compiled surfaces stayed silent — a run-vs-build
-                        // divergence, and the exact trade
-                        // `discarded_match_value_tail`'s `If` leg avoids by
-                        // requiring both tails.
+                        // B-2026-08-29-30 (no-`else` half) — an `if` WITHOUT an
+                        // `else` is admitted on its then-tail alone, and this
+                        // arm's liveness gate is what makes that safe: a tail
+                        // naming a live enclosing local is declined, so the
+                        // only values admitted are ones the arm itself minted.
                         //
-                        // Codegen cannot follow: `compile_if`'s merge yields a
-                        // const-0 placeholder when there is no `else`, so the
-                        // value the arm built never reaches its discard site
-                        // at all. Making it FIRE needs a registration INSIDE
-                        // the arm (B-2026-08-29-5's second mechanism), which is
-                        // the half of this row still open. Until then an agreed
-                        // gap beats a divergence — the same call this file's
-                        // `bare_removal` note makes for `v.remove(i);`.
+                        // It was declined outright until codegen could follow.
+                        // `compile_if`'s merge yields a const-0 placeholder
+                        // when there is no `else`, so the value the arm built
+                        // never reached its discard SITE at all, and firing
+                        // here alone made the shape a run-vs-build divergence
+                        // rather than an agreed gap — the trade this file's
+                        // `bare_removal` note refuses for `v.remove(i);`.
+                        // Codegen now registers the owner INSIDE the arm
+                        // (B-2026-08-29-5's second mechanism, widened past
+                        // `Call`/`MethodCall` by
+                        // `discarded_arm_owned_aggregate_tail`), so both
+                        // backends fire together.
                         let owns = match (then_block.final_expr.as_deref(), else_branch.as_deref())
                         {
                             (Some(then_tail), Some(else_tail)) => [then_tail, else_tail]
@@ -5269,6 +5348,11 @@ impl<'a> super::Interpreter<'a> {
                                     !matches!(&tail.kind,
                                         ExprKind::Identifier(n) if self.env.get(n).is_some())
                                 }),
+                            (Some(then_tail), None) => {
+                                let tail = Self::arm_tail_expr(then_tail);
+                                !matches!(&tail.kind,
+                                    ExprKind::Identifier(n) if self.env.get(n).is_some())
+                            }
                             _ => false,
                         };
                         if owns {
