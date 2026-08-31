@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 329 | 5 |
+| miscompile | 330 | 5 |
 | run-vs-build | 261 | 16 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1278 | 33 |
+| codegen | 1279 | 33 |
 | typecheck | 281 | 2 |
 | interp | 279 | 18 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1870 surfaced · 41 open · 1800 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1871 surfaced · 41 open · 1801 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-30). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (41)
 
@@ -165,12 +165,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1870 surfaced
 | B-2026-08-30-44 | 2026-08-30 | interp | medium | AN UNSIGNED VALUE PRINTS AS `-1` FROM INSIDE A GENERIC BODY UNDER `--interp` — `fn show[T](x: T) -> String { f"{x}" }` renders `u64::MAX` and `u128::MAX` as `-1`, while the identical interpolation outside the generic prints them correctly and both compiled backends print them correctly at every call site | — |
 | B-2026-08-30-45 | 2026-08-30 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}" }` prints `u128::MAX` as `-1` in the COMPILED binary when an `i128` instantiation is also present, and correctly when it is not. Exactly the erasure B-2026-08-30-36 fixed for `f16`/`bf16`, one type family over, in the same two functions | — |
 | B-2026-08-30-48 | 2026-08-30 | interp | medium | AN INTEGER REACHING A FLOAT SLOT THROUGH AN AGGREGATE OR A VARIANT PAYLOAD IS STILL CONVERTED WRONG UNDER `--interp` -- a tuple / `Array` literal element converts with the AGGREGATE's signedness (so `u64::MAX` reads -1), and an `Option` payload / `Map` value / enum variant field is not converted AT ALL. B-2026-08-30-34 fixed ten direct sites | — |
-| B-2026-08-30-49 | 2026-08-30 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 -- `let a: f64 = if true { n } else { 0.0 }` with `n: i64 = 7` prints 0 on JIT and AOT and 7 under `--interp`. The `let a: f64 = n` control is correct on every surface | — |
 | B-2026-08-30-51 | 2026-08-30 | interp | high | INTERPRETER: A SHADOWED BINDING'S `Drop` BODY NEVER RUNS AND THE SHADOWING VALUE'S RUNS TWICE -- `let t = mk(1); let t = mk(2);` prints `dR2 dR2` under `--interp` against `dR2 dR1` on every compiled backend, so one resource is released twice and another never | none |
 | B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY `match`/`if let` ARM THAT DESTRUCTURES THE PAYLOAD RATHER THAN BINDING IT WHOLE STILL TAKES ITS HEAP, ON EVERY PAYLOAD REPRESENTATION -- `Some(S { s })` reads back garbage, `Some((s, n))` and an inner `match` over a bound enum payload abort with a double free, and `Result[E]` prints empty, while the SAME payloads bound WHOLE and read without destructuring are correct | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
 | B-2026-08-30-55 | 2026-08-30 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter (neither the enum's own nor its payload's) against two compiled, and a NAMED one runs one too MANY. The free-fn twin and the struct-param twin are both correct, which localizes it to the intersection B-2026-08-28-70 did not reach | — |
+| B-2026-08-30-56 | 2026-08-30 | codegen | high | BOTH COMPILED BACKENDS BITCAST AN INTEGER INTO AN `Option` / `Result` PAYLOAD AND AN ENUM STRUCT-VARIANT FLOAT FIELD, so `let o: Option[f64] = Some(m)` reads back 4.45e-309 -- the raw integer bit pattern as a double. The user enum TUPLE-variant twin `T.W(m)` converts correctly, which is what localizes it | — |
 
 ### Relocated (2)
 
@@ -203,9 +203,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1870 surfaced
 
 </details>
 
-### Fixed (1800)
+### Fixed (1801)
 
-<details><summary>1800 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1801 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2008,6 +2008,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1870 surfaced
 | B-2026-08-30-38 | interp+codegen | medium | AN ARGUMENT THAT IS A CONTROL-FLOW OR BLOCK EXPRESSION LOSES ITS `Drop` BODY ENTIRELY -- `one(if c { mk(1) } else { mk(2) })`, the `match` spelling a… | 0d34440b |
 | B-2026-08-30-46 | interp | medium | `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERS A `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE under `--interp`, while `f"{s}"` on the SAME… | 0d25859 |
 | B-2026-08-30-47 | codegen | high | A READ-ONLY `match` ARM OVER AN `Option`/`Result` WHOSE PAYLOAD IS A HEAP-OWNING NON-STRUCT STILL TAKES THE PAYLOAD -- six shapes, three failure mode… | 29fd6f1 |
+| B-2026-08-30-49 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 --… | b554da2 |
 | B-2026-08-30-50 | interp+codegen | medium | A MIXED CONTROL-FLOW ARGUMENT LOSES THE FRESH BRANCH'S `Drop` BODY when that branch is the one taken -- `one(if false { k } else { mk(31) })` runs `k… | 76677be1 |
 
 </details>
