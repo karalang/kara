@@ -84,12 +84,49 @@ impl<'a> super::Interpreter<'a> {
                 // Gated on the scrutinee being an owned param, so a LOCAL or
                 // fresh-temp scrutinee — where the arm binding really is the
                 // only owner — is untouched and keeps registering its slot.
-                if scrutinee_place.is_some_and(|sp| {
+                //
+                // B-2026-08-31-1 — and the PROJECTION spelling of the same
+                // scrutinee, `match s.e { E.A(r) => { let m = r; … } }` inside
+                // `fn take(s: S)`. `s.e` binds out of the SAME entry copy a bare
+                // `match s` would, so the payload is a view on identical terms;
+                // matching only a bare `Identifier` here left `r` out of the
+                // view set, `let m = r` registered a slot, and the interpreter
+                // ran the body the caller was already running. Measured
+                // `b1 dR1 dE dR1` against both compiled backends' `b1 dE dR1`,
+                // on a user enum, an `Option` field, a `Result` field, a
+                // two-hop `w.s.e` chain and a struct-variant pattern alike.
+                //
+                // This is exactly the widening codegen's twin predicate already
+                // has — `scrutinee_is_owned_param_binding` walks field and
+                // tuple-index hops to the root (B-2026-08-03-3 leg B, with the
+                // same "binds out of the same entry copy" reasoning) — so the
+                // two sides now answer the same question, which is what keeps
+                // them agreeing by construction rather than by coincidence.
+                //
+                // RESTRICTED TO VARIANT PATTERNS, and that is load-bearing:
+                // codegen inserts into `param_view_locals` only for bindings in
+                // `current_variant_payload_bindings`, so a plain TUPLE pattern
+                // over an owned param's tuple field (`match s.t { (r, k) => … }`)
+                // keeps its slot there. Both backends run two bodies for that
+                // shape today; withholding here would turn an agreed answer
+                // into a fresh divergence, which is the worse of the two. The
+                // bare-Identifier branch above deliberately keeps its wider
+                // pattern reach — that is its long-standing behaviour, and
+                // narrowing it is a separate question with its own measurements
+                // (it over-suppresses a tuple param today, filed separately).
+                let scrutinee_is_owned_param_name = scrutinee_place.is_some_and(|sp| {
                     matches!(&sp.kind, ExprKind::Identifier(n)
                         if self.owned_param_names_stack
                             .last()
                             .is_some_and(|params| params.contains(n.as_str())))
-                }) {
+                });
+                let scrutinee_projects_owned_param = !scrutinee_is_owned_param_name
+                    && matches!(
+                        arm.pattern.kind,
+                        PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+                    )
+                    && scrutinee_place.is_some_and(|sp| self.place_root_is_owned_param(sp));
+                if scrutinee_is_owned_param_name || scrutinee_projects_owned_param {
                     for bound in arm.pattern.binding_names() {
                         if let Some(top) = self.owned_param_names_stack.last_mut() {
                             top.insert(bound);
@@ -511,6 +548,37 @@ impl<'a> super::Interpreter<'a> {
     /// `pattern_binding_scrutinee_is_owned_param` memory-only gate. Firing
     /// here doubled the payload body against the caller's fire (identifier
     /// args) and orphaned the ownership story for fresh ctor args.
+    /// B-2026-08-31-1 — is `e` a PLACE whose root names an owned (by-value)
+    /// parameter, or a local that inherited view-ness from one?
+    ///
+    /// The interpreter twin of codegen's `scrutinee_is_owned_param_binding`,
+    /// with the identical walk: field and tuple-index hops only, stopping at an
+    /// identifier. An `Index` or a call anywhere in the chain is not a plain
+    /// view of the entry copy, so it stops the walk — the same restriction
+    /// codegen states as "field / tuple-index chains are the only widening".
+    ///
+    /// One set does the work of codegen's two: `owned_param_names_stack` holds
+    /// the by-value parameter names AND every local that inherited view-ness
+    /// from one, where codegen splits those across `current_fn_param_names` and
+    /// `param_view_locals`. So a single containment test answers both halves.
+    fn place_root_is_owned_param(&self, e: &Expr) -> bool {
+        let mut cur = e;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object
+                }
+                ExprKind::Identifier(n) => {
+                    return self
+                        .owned_param_names_stack
+                        .last()
+                        .is_some_and(|params| params.contains(n.as_str()));
+                }
+                _ => return false,
+            }
+        }
+    }
+
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
         // B-2026-08-29-10 — a method frame's owned-param scrutinee is NOT
         // consuming, and this is the RETRACTION of 57bfb26, which made it so on

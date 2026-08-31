@@ -11425,6 +11425,141 @@ end
         );
     }
 
+    /// B-2026-08-31-1 — A PAYLOAD BOUND OUT OF A *PROJECTION* OF AN OWNED PARAM IS
+    /// A VIEW, AND THE VIEW-NESS MUST PROPAGATE THROUGH A REBIND.
+    ///
+    /// Under caller-retains (B-2026-08-01-13), a payload destructured from an owned
+    /// by-value param belongs to the CALLER's fire, so the arm binding registers no
+    /// Drop slot of its own. B-2026-08-29-17 made that view-ness propagate through
+    /// `let m = r`, but keyed the propagation on the scrutinee being a bare
+    /// `Identifier` — so `match s.e { E.A(r) => { let m = r; ... } }` inside
+    /// `fn take(s: S)` left `r` out of the view set, `m` took a slot, and this
+    /// backend ran the body the caller was already running.
+    ///
+    /// Codegen never had the hole: its twin predicate walks field and tuple-index
+    /// hops to the root (B-2026-08-03-3 leg B), so the two sides now ask the same
+    /// question. Pre-fix this program printed FIVE extra `dR` lines against both
+    /// compiled backends — one each for `enum`, `opt`, `res`, `two` and `sv`.
+    ///
+    /// THE FIVE CONTROLS ARE THE POINT, because the fix withholds a body and the
+    /// failure mode of over-reaching is a body that never runs at all:
+    /// - `tup` — a plain TUPLE pattern over an owned param's tuple field. Both
+    ///   backends run two bodies here and the fix deliberately does not touch it
+    ///   (codegen only view-marks VARIANT payload bindings); withholding would turn
+    ///   an agreed answer into a new divergence.
+    /// - `ref` — a `ref` param, not owned, so no caller-retains: the arm keeps its slot.
+    /// - `local` — an owned LOCAL projection, where the arm binding really is the owner.
+    /// - `fresh` — a fresh-temp scrutinee, likewise.
+    /// - `norebind` — the same owned-param projection WITHOUT the rebind, which was
+    ///   already correct and must stay so.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_owned_param_projection_payload_rebind_is_a_view`, pinned to the same
+    /// string. The compiled backends were already correct here; this side exists
+    /// so a future codegen change cannot drift away from the oracle unnoticed.
+    #[test]
+    fn e2e_owned_param_projection_payload_rebind_is_a_view() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+
+struct S { e: E }
+struct Ob { o: Option[R] }
+struct Rb { r: Result[R, i64] }
+struct Tb { t: (R, i64) }
+struct W2 { s: S }
+struct Hs { v: Sv }
+
+fn mk(n: i64) -> E { return E.A(R { id: n }) }
+
+fn f_enum(s: S)  { match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_opt(s: Ob)  { match s.o { Option.Some(r) => { let m = r; println(f"  b{m.id}"); } Option.None => { } } }
+fn f_res(s: Rb)  { match s.r { Result.Ok(r) => { let m = r; println(f"  b{m.id}"); } Result.Err(e) => { } } }
+fn f_two(w: W2)  { match w.s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_sv(h: Hs)   { match h.v { Sv.Hold { inner } => { let m = inner; println(f"  b{m.id}"); } Sv.Nil => { } } }
+fn f_tup(s: Tb)  { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn f_ref(s: ref S) { match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_norebind(s: S) { match s.e { E.A(r) => { println(f"  b{r.id}"); } E.B => { } } }
+fn f_local() { let s = S { e: mk(8) }; match s.e { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+fn f_fresh() { match mk(9) { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => { } } }
+
+fn main() {
+    println("enum");     f_enum(S { e: mk(1) });                              println("enum end");
+    println("opt");      f_opt(Ob { o: Option.Some(R { id: 2 }) });           println("opt end");
+    println("res");      f_res(Rb { r: Result.Ok(R { id: 3 }) });             println("res end");
+    println("two");      f_two(W2 { s: S { e: mk(4) } });                     println("two end");
+    println("sv");       f_sv(Hs { v: Sv.Hold { inner: R { id: 5 } } });      println("sv end");
+    println("tup");      f_tup(Tb { t: (R { id: 6 }, 0) });                   println("tup end");
+    println("ref");      let a = S { e: mk(7) }; f_ref(a);                    println("ref end");
+    println("local");    f_local();                                           println("local end");
+    println("fresh");    f_fresh();                                           println("fresh end");
+    println("norebind"); f_norebind(S { e: mk(10) });                         println("norebind end");
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"enum
+  b1
+dE
+dR1
+enum end
+opt
+  b2
+dR2
+opt end
+res
+  b3
+dR3
+res end
+two
+  b4
+dE
+dR4
+two end
+sv
+  b5
+dSv
+dR5
+sv end
+tup
+  b6
+dR6
+dR6
+tup end
+ref
+  b7
+dR7
+dE
+dR7
+ref end
+local
+  b8
+dR8
+dE
+local end
+fresh
+  b9
+dR9
+dE
+fresh end
+norebind
+  b10
+dE
+dR10
+norebind end
+done
+"#
+        );
+    }
+
     /// B-2026-07-31-38 (enum sibling) — a plain value enum whose walker
     /// action was retracted by a move (whole-value `let c = b;`, or a match
     /// arm's payload move-out) gets it RE-ARMED on reassign, so the fresh
