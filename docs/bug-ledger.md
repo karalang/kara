@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 331 | 2 |
-| run-vs-build | 268 | 20 |
+| run-vs-build | 268 | 19 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
 | double-free | 158 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1290 | 36 |
-| interp | 285 | 19 |
+| interp | 285 | 18 |
 | typecheck | 282 | 2 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 43 open · 1813 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 42 open · 1814 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (43)
+### Open (42)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -157,7 +157,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-40 | 2026-08-30 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a type, not a function", while the same call at `f32` RESOLVES and fails (or succeeds) on its own merits. Two hardcoded width lists in `method_identifier_receiver.rs` omit the reduced-precision widths, so the leading segment is never recognized as a type receiver and the path falls through to the identifier-in-value-position diagnostic | — |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
-| B-2026-08-30-48 | 2026-08-30 | interp | medium | AN INTEGER REACHING A FLOAT SLOT THROUGH AN AGGREGATE OR A VARIANT PAYLOAD IS STILL CONVERTED WRONG UNDER `--interp` -- a tuple / `Array` literal element converts with the AGGREGATE's signedness (so `u64::MAX` reads -1), and an `Option` payload / `Map` value / enum variant field is not converted AT ALL. B-2026-08-30-34 fixed ten direct sites | — |
 | B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- PARTIALLY FIXED (d22cf63): struct/tuple/nested/`if let`/`..` destructure now borrow. TWO REMAIN: an arm using TWO BOUND LEAVES in one expression (`v[0] + n` fails where `v[0] + 1` passes -- the consume classifier counts a SCALAR leaf's use as an escape), and an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`), where the outer binding's borrow-ness does not propagate into the nested pattern | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
@@ -205,9 +204,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 
 </details>
 
-### Fixed (1813)
+### Fixed (1814)
 
-<details><summary>1813 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1814 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2017,6 +2016,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-45 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}"… | da21408 |
 | B-2026-08-30-46 | interp | medium | `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERS A `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE under `--interp`, while `f"{s}"` on the SAME… | 0d25859 |
 | B-2026-08-30-47 | codegen | high | A READ-ONLY `match` ARM OVER AN `Option`/`Result` WHOSE PAYLOAD IS A HEAP-OWNING NON-STRUCT STILL TAKES THE PAYLOAD -- six shapes, three failure mode… | 29fd6f1 |
+| B-2026-08-30-48 | interp | medium | AN INTEGER REACHING A FLOAT SLOT THROUGH AN AGGREGATE OR A VARIANT PAYLOAD IS STILL CONVERTED WRONG UNDER `--interp` -- a tuple / `Array` literal ele… | 42112cb |
 | B-2026-08-30-49 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 --… | b554da2 |
 | B-2026-08-30-50 | interp+codegen | medium | A MIXED CONTROL-FLOW ARGUMENT LOSES THE FRESH BRANCH'S `Drop` BODY when that branch is the one taken -- `one(if false { k } else { mk(31) })` runs `k… | 76677be1 |
 | B-2026-08-30-51 | interp | high | INTERPRETER: A SHADOWED BINDING'S `Drop` BODY NEVER RUNS AND THE SHADOWING VALUE'S RUNS TWICE -- `let t = mk(1); let t = mk(2);` prints `dR2 dR2` und… | 07dc9e76 |
