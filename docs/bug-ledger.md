@@ -97,20 +97,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
 | double-free | 158 | 0 |
-| codegen-gap | 152 | 1 |
+| codegen-gap | 154 | 3 |
 | diagnostics | 112 | 0 |
 | false-positive | 101 | 0 |
 | soundness | 91 | 4 |
 | perf | 87 | 1 |
 | other | 65 | 1 |
-| crash | 63 | 2 |
+| crash | 63 | 1 |
 | use-after-free | 26 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1286 | 34 |
+| codegen | 1288 | 35 |
 | interp | 284 | 21 |
 | typecheck | 281 | 2 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1880 surfaced · 43 open · 1808 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1882 surfaced · 44 open · 1809 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (43)
+### Open (44)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -156,7 +156,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1880 surfaced
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-25 | 2026-08-30 | typecheck | medium | THE TYPECHECKER ACCEPTS ANY METHOD NAME ON AN `f16` / `bf16` RECEIVER -- `karac check` prints "All checks passed." on `let s: String = a.completely_bogus();`, because `method_callee_type_name` has arms for F32 and F64 only and the `_ => None` fallthrough silently skips the existence check. The poisoned `Type::Error` then unifies with any use site, and the program dies in the backend with a message blaming the COMPILER | — |
-| B-2026-08-30-39 | 2026-08-30 | codegen | medium | `dbg` OF A `Vector`, AND ANY CONTAINER-NESTED `Vector` IN AN F-STRING, PANIC THE COMPILER -- `emit_display_fn_for_type: type_name 'Vector_u64_2' not yet supported` aborts `karac build` with no span, while depth-0 `println(v)` / `f"{v}"` are fine and the interpreter renders all of them | — |
 | B-2026-08-30-40 | 2026-08-30 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a type, not a function", while the same call at `f32` RESOLVES and fails (or succeeds) on its own merits. Two hardcoded width lists in `method_identifier_receiver.rs` omit the reduced-precision widths, so the leading segment is never recognized as a type receiver and the path falls through to the identifier-in-value-position diagnostic | — |
 | B-2026-08-30-41 | 2026-08-30 | interp+codegen | medium | A `T: PartialOrd` BOUND MAKES `a < b` UNRUNNABLE ON BOTH BACKENDS, FOR EVERY TYPE — the tree-walk aborts with "method 'partial_cmp' not found" and `karac build` fails with "no handler for method 'is_lt' on non-identifier receiver". `type_param_comparator` routes the comparison through `partial_cmp`, which its own concrete-type sibling `ordering_dispatch_comparator` documents as having no backend; the identical body under a `T: Ord` bound works on both | — |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
@@ -173,6 +172,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1880 surfaced
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
+| B-2026-08-31-9 | 2026-08-31 | codegen | medium | A STRUCT FIELD OF `Vector[T, N]` TYPE HAS NO DERIVED-Display ARM UNDER `karac build`, AND THE REFUSAL DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr -- spans and all -- INTO THE USER-FACING ERROR; the same vector renders correctly at depth 0, in a `Vec`, in a tuple, as a `Map` value and under `dbg`, so the struct emitter is the one container that did not gain the recursion | — |
+| B-2026-08-31-10 | 2026-08-31 | codegen | medium | AN `Option` WHOSE PAYLOAD LOWERS TO A MULTI-WORD STRUCT CANNOT BE INTERPOLATED IN AN F-STRING UNDER `karac build`, AND THE ERROR MISDESCRIBES ITS OWN CAUSE -- `Option[Vec[i64]]` is refused with "bind a struct literal or call result to a `let` first" when the expression is already a `let`-bound variable, while `Option[i64]` and `Result[i64, i64]` interpolate fine | — |
 
 ### Relocated (2)
 
@@ -205,9 +206,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1880 surfaced
 
 </details>
 
-### Fixed (1808)
+### Fixed (1809)
 
-<details><summary>1808 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1809 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2009,6 +2010,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1880 surfaced
 | B-2026-08-30-36 | typecheck | medium | `f16` AND `bf16` IMPLEMENT NONE OF THE SIX ARITHMETIC OPERATOR TRAITS (`Add`/`Sub`/`Mul`/`Div`/`Rem`/`Neg`), so neither can satisfy a generic `T: Add… | ea9d378 |
 | B-2026-08-30-37 | effect | medium | TWO MORE EFFECT WALKERS TREAT AN f-STRING AS A LEAF, and `ae33af9` fixed only the third -- `modbind_synth::walk_expr` loses a module-binding read wri… | 7366410 |
 | B-2026-08-30-38 | interp+codegen | medium | AN ARGUMENT THAT IS A CONTROL-FLOW OR BLOCK EXPRESSION LOSES ITS `Drop` BODY ENTIRELY -- `one(if c { mk(1) } else { mk(2) })`, the `match` spelling a… | 0d34440b |
+| B-2026-08-30-39 | codegen | medium | `dbg` OF A `Vector`, AND ANY CONTAINER-NESTED `Vector` IN AN F-STRING, PANIC THE COMPILER -- `emit_display_fn_for_type: type_name 'Vector_u64_2' not… | 57327e8 |
 | B-2026-08-30-45 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}"… | da21408 |
 | B-2026-08-30-46 | interp | medium | `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERS A `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE under `--interp`, while `f"{s}"` on the SAME… | 0d25859 |
 | B-2026-08-30-47 | codegen | high | A READ-ONLY `match` ARM OVER AN `Option`/`Result` WHOSE PAYLOAD IS A HEAP-OWNING NON-STRUCT STILL TAKES THE PAYLOAD -- six shapes, three failure mode… | 29fd6f1 |
