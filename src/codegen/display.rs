@@ -68,6 +68,12 @@ pub(crate) struct Display<'ctx> {
     /// element — or, for an `Array[String, N]`, that element's data pointer
     /// (B-2026-08-31-19).
     pub(crate) display_array_types: HashMap<(usize, usize), TypeExpr>,
+    /// The `Slice[T]` sibling of `display_array_types`, carrying the ELEMENT
+    /// type (a slice's length is a runtime field). Populated from
+    /// `Program.display_slice_types`; lets a depth-0 `f"{s}"` / `println(s)`
+    /// render a slice through the same by-pointer renderer a nested one uses,
+    /// instead of refusing the build outright (B-2026-08-31-25).
+    pub(crate) display_slice_types: HashMap<(usize, usize), TypeExpr>,
     /// B-2026-08-14-31 — key/value types of every `Map`/`SortedMap` expression
     /// and element types of every `Set`/`SortedSet` one, keyed by span
     /// (`Program.display_map_types` / `display_set_types`). The Map/Set

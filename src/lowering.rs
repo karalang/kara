@@ -499,6 +499,23 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // B-2026-08-31-25 — the slice sibling. At depth 0 a slice did not misprint
+    // like an array; it FAILED THE BUILD ("Display of this value is not yet
+    // supported"), while every nested spelling panicked the compiler. The
+    // ELEMENT type is forwarded rather than the whole type, matching the Vec
+    // table and unlike the array one: a slice's length is a runtime field, so
+    // there is no extent to carry. `mutable` is ignored — a `mut Slice[T]`
+    // renders identically and shares the same renderer.
+    program.display_slice_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Slice { element, .. } => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(element)))
+            }
+            _ => None,
+        })
+        .collect();
     // B-2026-08-14-31 — the Map/Set siblings of the table above, for exactly
     // the same reason and with the same failure when absent. A non-identifier
     // Map/Set fell through to codegen's value-kind arms, where its single

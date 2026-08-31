@@ -22,7 +22,7 @@
 use crate::ast::*;
 
 use inkwell::module::Linkage;
-use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue,
 };
@@ -504,17 +504,26 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Caller is expected to have positioned the builder at the entry block
     /// of `display_fn` and to emit the trailing `ret void` after this returns.
+    /// `header_ty` is the struct the `{data, len}` prefix is read out of. It
+    /// is a PARAMETER rather than `vec_struct_type()` because `Slice[T]` shares
+    /// this body verbatim (B-2026-08-31-25) and differs only in carrying a
+    /// 2-word `{ptr, len}` header where a `Vec` carries `{ptr, len, cap}`. The
+    /// two field offsets happen to coincide, so this could have read the Vec
+    /// type for both — passing the real one keeps the code honest about which
+    /// layout it is walking, and would catch a future reordering instead of
+    /// silently mis-GEPing.
     pub(super) fn emit_vec_display_body(
         &mut self,
         display_fn: FunctionValue<'ctx>,
         val_ptr: PointerValue<'ctx>,
         acc: PointerValue<'ctx>,
         elem_te: &TypeExpr,
+        header_ty: StructType<'ctx>,
     ) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i8_t = self.context.i8_type();
         let i64_t = self.context.i64_type();
-        let vec_ty = self.vec_struct_type();
+        let vec_ty = header_ty;
         let elem_ty = self.llvm_type_for_type_expr(elem_te);
 
         // Materialize (or fetch) the element Display fn first — the recursive
@@ -784,6 +793,74 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
         self.disp_append_lit(acc, "]");
+    }
+
+    /// B-2026-08-31-25 — the `Slice[T]` twin of [`Self::emit_vec_display_fn_te`].
+    ///
+    /// Codegen had no slice Display AT ANY DEPTH, and like the array sibling
+    /// the two halves failed differently. Nested (a tuple field, a `Vec`
+    /// element, a `Map` value, a `dbg` argument, a `derive(Display)` enum
+    /// payload) it fell through `emit_display_fn_for_type_expr` to the by-name
+    /// catch-all and PANICKED the compiler with `type_name 'Slice_i64' not yet
+    /// supported`. At depth 0 it FAILED CLOSED with the "not yet supported"
+    /// refusal — better than the array shape, which printed the first element,
+    /// and better than `Vector`, which at one point printed a stack address.
+    /// The interpreter renders every one of them `[1, 2]`.
+    ///
+    /// Shares `emit_vec_display_body` outright — same text, same loop, same
+    /// per-element dispatch — with the 2-word `{ptr, len}` header in place of
+    /// the `Vec`'s `{ptr, len, cap}`. A slice prints exactly like the `Vec` it
+    /// borrows from and the two must not drift.
+    ///
+    /// Unlike the array temp path there is NOTHING TO DROP here: a slice
+    /// BORROWS its elements, so the buffer belongs to the `Vec` (or array) it
+    /// was taken from and Display only ever appends a copy of the bytes.
+    /// Mutability is not part of the rendering — a `mut Slice[T]` renders
+    /// identically and shares this body.
+    pub(super) fn emit_slice_display_fn(
+        &mut self,
+        elem_te: &TypeExpr,
+        slice_te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(slice_te);
+        if let Some(f) = self.disp_cache_get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.disp_cache_put(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.disp_cache_put(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        let slice_ty = self.slice_struct_type();
+        self.emit_vec_display_body(display_fn, val_ptr, acc, elem_te, slice_ty);
+
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
     }
 
     /// Emit (or reuse) a Display function for `Map[K, V]`. Typed entry point —
@@ -1592,9 +1669,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(seg, "Vector" | "Array") {
                     return true;
                 }
-                // `Slice[T]` stays out: it has no Display under codegen at ANY
-                // depth — a bare `f"{s}"` on a slice is a hard error too, so
-                // there is nothing to reconstruct INTO yet.
+                // `Slice[T]` STAYS OUT, and the reason has changed — read this
+                // before flipping it. The original reason was that codegen had
+                // no slice Display at any depth, so there was nothing to
+                // reconstruct INTO; B-2026-08-31-25 fixed that, and ordinary
+                // interpolation of an `Option[Slice[i64]]` renders correctly
+                // through this predicate when it is admitted (measured:
+                // `Some([1, 2])`, `None`, `Ok(...)`, and `Option[Slice[String]]`
+                // → `Some([ab, cd])`, all matching the interpreter).
+                //
+                // It is held out by a DIFFERENT consumer. This one predicate
+                // also gates `main`'s error type, and that path hands the
+                // renderer a slice one indirection off: admitting `Slice` here
+                // turned `main() -> Result[(), Option[Slice[i64]]]` from a
+                // clean build error into a binary printing
+                // `Error: Some([93867340896349])` — the slice's own data
+                // pointer rendered as its first element — where the interpreter
+                // prints `Error: Some([1])`. Trading a refusal for a silent
+                // miscompile is the wrong direction, so the admission waits on
+                // B-2026-08-31-40. That row is the one to fix; then delete this
+                // arm and pin `Option[Slice]` on both paths.
                 if matches!(seg, "Slice") {
                     return false;
                 }
@@ -1643,15 +1737,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// ever differed in.
     ///
     /// The declined-payload arm deliberately prescribes NO source-level
-    /// rewrite. The obvious one — destructure with `match`/`if let` and format
-    /// the binding — does not help for the shape that still reaches it: a
-    /// `Slice[T]` payload bound by a match arm hits the same refusal, because
-    /// codegen has no slice Display at any depth. When `Vector`/`Array` were
-    /// the declined shapes (before B-2026-08-31-18 and -19) the advice was
-    /// worse than useless — destructuring them bound `Some(0)` / `Some(1)`
-    /// against the interpreter's real values — so it would have traded a clean
-    /// compile error for silently wrong output. The one honest escape is the
-    /// backend that does render it.
+    /// rewrite, and the reason has now outlived three different declined
+    /// shapes — which is the point worth keeping. The obvious rewrite is to
+    /// destructure with `match`/`if let` and format the binding, and for every
+    /// shape that has actually reached here it was WORSE than the clean error:
+    ///
+    ///   * `Vector`/`Array`, declined before B-2026-08-31-18 and -19:
+    ///     destructuring bound `Some(0)` / `Some(1)` against the interpreter's
+    ///     real values.
+    ///   * `Slice[T]`, the shape that still reaches here. Until
+    ///     B-2026-08-31-25 a match-arm binding hit the same refusal one level
+    ///     down, because codegen had no slice Display at any depth. It RENDERS
+    ///     now — `f"{s}"` on a slice is correct at every depth — so
+    ///     destructuring would work, and the advice is withheld for the other
+    ///     reason instead: the payload is declined by
+    ///     `is_reconstructable_display_payload` on account of `main`'s error
+    ///     path (B-2026-08-31-40), not because the shape is unrenderable, and
+    ///     that admission is the real fix rather than a source rewrite.
+    ///   * An unsubstituted generic `T` — an `Option[T]` inside
+    ///     `fn f[T: Display](x: Option[T])`, B-2026-08-31-39 — also reaches
+    ///     here. Destructuring THAT is a silent miscompile: measured,
+    ///     `T = Array[i64, 2]` prints `1` for the interpreter's `[1, 2]` and
+    ///     `T = Vec[i64]` prints nothing at all.
+    ///
+    /// So the advice would trade a clean compile error for silently wrong
+    /// output in every case on record. The one honest escape is the backend
+    /// that does render it.
     pub(super) fn deferred_display_error(&self, e: &Expr, arg: bool) -> String {
         let key = (e.span.offset, e.span.length);
         if let Some(te) = self.display.display_option_result_types.get(&key) {
@@ -1802,6 +1913,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {
                         return self.emit_vec_display_fn_te(&elem_te);
+                    }
+                }
+                // B-2026-08-31-25 — `Slice[T]`. Unlike `Array[T, N]`, which needed
+                // TWO arms because a source-written `Array[i64, 3]` and a
+                // synthesized `Type::Array` reach here as different
+                // `TypeKind`s, every spelling of a slice arrives as this ONE
+                // Path form — measured across the tuple, `Vec` element, `Map`
+                // value, `dbg` and enum-payload positions, all of which
+                // produced `Path(["Slice"], [T])` and differed only in whether
+                // the spans were real or synthesized.
+                if head == Some("Slice") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        return self.emit_slice_display_fn(&elem_te, te);
                     }
                 }
                 if head == Some("Map") {
@@ -2044,7 +2170,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
         let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
 
-        self.emit_vec_display_body(display_fn, val_ptr, acc, elem_te);
+        let vec_ty = self.vec_struct_type();
+        self.emit_vec_display_body(display_fn, val_ptr, acc, elem_te, vec_ty);
 
         self.builder.build_return(None).unwrap();
 
@@ -2415,11 +2542,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // field-parts path refused the struct outright with a Rust
                     // `{:?}` of the field's `TypeExpr`, while the same struct
                     // nested one level down rendered fine.
+                    // `Slice[T]` joins them for the same reason
+                    // (B-2026-08-31-25) — it has only the one path spelling, so
+                    // it needs no `TypeKind` arm of its own.
                     matches!(&te.kind, crate::ast::TypeKind::Array { .. })
                         || matches!(&te.kind, crate::ast::TypeKind::Path(p)
                         if matches!(
                             p.segments.last().map(|s| s.as_str()),
-                            Some("Vector") | Some("Array")
+                            Some("Vector") | Some("Array") | Some("Slice")
                         ))
                 })
             })
@@ -4209,6 +4339,59 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(Some(rendered))
+    }
+
+    /// B-2026-08-31-25 — the DEPTH-0 slice renderer, sibling of
+    /// [`Self::try_compile_vec_display`] and `try_compile_array_display`.
+    ///
+    /// A slice reaching the f-string / `println` paths had no arm, and unlike
+    /// the array sibling it FAILED CLOSED: `f"{s}"` and `println(s)` were hard
+    /// build errors ("Display of this value is not yet supported"), where the
+    /// interpreter prints `[1, 2]`. Keys off the span-addressed
+    /// `display_slice_types`, so a bound slice, a `v.as_slice()` call result
+    /// and a `mut v[0..2]` sub-range all take the same route.
+    ///
+    /// NOTHING IS REGISTERED FOR CLEANUP HERE, and that is the one substantive
+    /// difference from the Vec sibling. A slice BORROWS: its `{ptr, len}` names
+    /// a buffer the `Vec` (or array) it came from still owns, so tracking the
+    /// temporary slot would schedule a free on memory with a live owner —
+    /// precisely the double free B-2026-08-14-30 fixed on the Vec path. The
+    /// array sibling reaches the same conclusion by the other route (its
+    /// elements are inline, so there is no buffer at all).
+    pub(super) fn try_compile_slice_display(
+        &mut self,
+        e: &Expr,
+    ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        let key = (e.span.offset, e.span.length);
+        let Some(elem_te) = self.display.display_slice_types.get(&key).cloned() else {
+            return Ok(None);
+        };
+        let slice_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Slice".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem_te.clone())]),
+                span: e.span,
+            }),
+            span: e.span,
+        };
+        let disp = self.emit_slice_display_fn(&elem_te, &slice_te);
+        // A bound slice already has a slot; render through it rather than
+        // copying the two-word header onto the stack again.
+        if let ExprKind::Identifier(n) = &e.kind {
+            if let Some(slot) = self.variables.get(n.as_str()).copied() {
+                return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            }
+        }
+        let val = self.compile_expr(e)?;
+        // Guard on the 2-word shape the renderer walks — anything else (an
+        // array aggregate, a 3-word Vec) belongs to another path.
+        if !val.is_struct_value() || val.into_struct_value().get_type().count_fields() != 2 {
+            return Ok(None);
+        }
+        let fn_val = self.current_fn.unwrap();
+        let slot = self.create_entry_alloca(fn_val, "slice.disp.tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        Ok(Some(self.render_via_display_fn(disp, slot)))
     }
 
     pub(super) fn try_compile_vec_display(

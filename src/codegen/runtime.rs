@@ -13504,6 +13504,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             return Ok((data, len));
         }
+        // B-2026-08-31-25 — the slice sibling of the arm above. A slice at
+        // depth 0 FAILED the build rather than misprinting, so this arm turns a
+        // refusal into the `[1, 2]` the interpreter renders. Like the array
+        // arm, nothing is registered for the slice itself — it BORROWS its
+        // buffer — only the accumulator.
+        if let Some((acc, sval)) = self.try_compile_slice_display(e)? {
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.sl.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.sl.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         if let Some((acc, sval)) = self.try_compile_vec_display(e)? {
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));

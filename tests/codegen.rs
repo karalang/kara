@@ -4800,6 +4800,132 @@ fn main() { println(build2().v); }
         }
     }
 
+    /// B-2026-08-31-25 — `Slice[T]` renders under codegen at EVERY depth, and
+    /// identically to the interpreter.
+    ///
+    /// Before this, a slice had no codegen Display anywhere, and the two halves
+    /// failed differently — the nested positions PANICKED the compiler
+    /// (`emit_display_fn_for_type: type_name 'Slice_i64' not yet supported`)
+    /// while depth 0 refused the build. The compiler-abort half is the loud one
+    /// and the plain interpolation the quiet one, which reads backwards; both
+    /// are covered here.
+    ///
+    /// The interpreter is the ORACLE, not a second opinion: every expectation
+    /// below is what `karac run --interp` prints today, and it was already
+    /// correct for all of these.
+    ///
+    /// `mut Slice[i64]` is included because the row could not produce the
+    /// spelling (`Vec` has no `as_mut_slice`) and left it unmeasured — a
+    /// mut-marked sub-range argument reaches it, and mutability is not part of
+    /// the rendering, so it shares the immutable renderer.
+    #[test]
+    fn e2e_slice_display_matches_the_interpreter_at_every_depth() {
+        let cases: &[(&str, &str, &str)] = &[
+            ("depth0 f-string", "println(f\"{s}\");", "[1, 2]\n"),
+            ("depth0 println", "println(s);", "[1, 2]\n"),
+            (
+                "inline call result",
+                "println(f\"{v.as_slice()}\");",
+                "[1, 2]\n",
+            ),
+            (
+                "tuple field",
+                "let t: (Slice[i64], i64) = (s, 9);\n    println(f\"{t}\");",
+                "([1, 2], 9)\n",
+            ),
+            (
+                "Vec element",
+                "let mut w: Vec[Slice[i64]] = Vec.new();\n    w.push(s);\n    println(f\"{w}\");",
+                "[[1, 2]]\n",
+            ),
+            (
+                "Map value",
+                "let mut m: Map[i64, Slice[i64]] = Map.new();\n    m.insert(1, s);\n    println(f\"{m}\");",
+                "{1: [1, 2]}\n",
+            ),
+            ("empty slice", "println(f\"{e}\");", "[]\n"),
+        ];
+        for (label, stmts, want) in cases {
+            let src = format!(
+                "fn main() {{\n    \
+                 let n = env.args().len() as i64;\n    \
+                 let mut v: Vec[i64] = Vec.new();\n    \
+                 v.push(n);\n    v.push(n + 1);\n    \
+                 let s: Slice[i64] = v.as_slice();\n    \
+                 let ev: Vec[i64] = Vec.new();\n    \
+                 let e: Slice[i64] = ev.as_slice();\n    \
+                 {stmts}\n}}\n"
+            );
+            let Some(out) = run_program(&src) else { return };
+            assert_eq!(out, *want, "{label}");
+        }
+
+        // `dbg` is a separate lowering path and was one of the ICE positions.
+        let Some(out) = run_program(
+            "fn main() {\n\
+                 let n = env.args().len() as i64;\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(n);\n                 let s: Slice[i64] = v.as_slice();\n\
+                 dbg(s);\n             }\n",
+        ) else {
+            return;
+        };
+        // `dbg` writes to STDERR, which `run_program` does not capture, so the
+        // assertion is that the program BUILT AND RAN at all: the defect here
+        // was a compile-time panic (`type_name 'Slice_i64' not yet supported`),
+        // so reaching a running binary is the whole property. The rendered text
+        // is pinned by the interpreter's own dbg tests.
+        assert_eq!(out, "", "dbg writes to stderr; stdout must be empty");
+
+        // A `derive(Display)` STRUCT FIELD and ENUM PAYLOAD: the field-parts
+        // path refused the struct with a Rust `{:?}` dump of the field's
+        // `TypeExpr`, the enum payload reached the by-name catch-all and ICEd.
+        let Some(out) = run_program(
+            "#[derive(Display)]\n\
+             struct W { s: Slice[i64], n: i64 }\n\
+             #[derive(Display)]\n\
+             enum E { A(Slice[i64]), B }\n\
+             fn main() {\n\
+                 let k = env.args().len() as i64;\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(k);\n                 v.push(k + 1);\n\
+                 let s: Slice[i64] = v.as_slice();\n\
+                 let w = W { s: s, n: 7 };\n\
+                 println(f\"{w}\");\n\
+                 let e = E.A(s);\n\
+                 println(f\"{e}\");\n             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "W { s: [1, 2], n: 7 }\nA([1, 2])\n");
+
+        // An element type that OWNS HEAP — the slice borrows, so Display only
+        // ever appends a copy of the bytes and nothing is freed here.
+        let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"ab\");\n                 v.push(\"cd\");\n\
+                 let s: Slice[String] = v.as_slice();\n\
+                 println(f\"{s}\");\n             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "[ab, cd]\n");
+
+        // `mut Slice[T]`, via a mut-marked sub-range argument.
+        let Some(out) = run_program(
+            "fn show(t: mut Slice[i64]) { println(f\"{t}\"); }\n\
+             fn main() {\n\
+                 let n = env.args().len() as i64;\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(n);\n                 v.push(n + 1);\n                 v.push(n + 2);\n\
+                 show(mut v[0..2]);\n             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "[1, 2]\n");
+    }
+
     #[test]
     fn e2e_borrowed_string_slice_map_key_counts() {
         // A counter over length-2 windows of `s`, keyed on `s[i..i+2]` slices.
@@ -12493,9 +12619,16 @@ none   None
     /// an Option/Result PLACE EXPRESSION whose payload the synthesizer declines
     /// — already `let`-bound, so the advice was false as well as unhelpful.
     ///
-    /// The message also prescribes no rewrite, deliberately: destructuring the
-    /// declined payload and formatting the binding hits the same refusal,
-    /// because `Slice[T]` has no codegen Display at any depth either.
+    /// The message also prescribes no rewrite, deliberately — but the REASON
+    /// changed under it and the old one is no longer true. It used to be that
+    /// destructuring the payload hit the same refusal one level down, because
+    /// codegen had no slice Display at any depth. Since B-2026-08-31-25 it has
+    /// one: `f"{s}"` on a slice is correct everywhere, and a match-arm binding
+    /// renders. `Option[Slice[i64]]` stays declined for a different reason —
+    /// `is_reconstructable_display_payload` holds it out on account of `main`'s
+    /// error path, where admitting it printed the slice's data POINTER as its
+    /// first element (B-2026-08-31-40). So the honest advice is still "no
+    /// rewrite": the fix is the admission, not a change to the program.
     ///
     /// The declined shape was `Option[Vector[i64, 4]]` when this was written;
     /// B-2026-08-31-18 and -19 taught codegen both vectors and arrays, so the

@@ -495,6 +495,13 @@ pub type DisplayVecTypesTable = std::collections::HashMap<(usize, usize), TypeEx
 /// element's raw data POINTER. The nested spellings panicked the compiler
 /// instead, which is the loud half of the same gap (B-2026-08-31-19).
 pub type DisplayArrayTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// The `Slice[T]` sibling of [`DisplayVecTypesTable`], carrying the ELEMENT
+/// type — a slice's length is a runtime field, so unlike the array table there
+/// is no extent to forward. Lets a depth-0 `f"{s}"` / `println(s)` render a
+/// slice instead of refusing (B-2026-08-31-25). Mutability is not recorded:
+/// `Slice[T]` and `mut Slice[T]` render identically.
+pub type DisplaySliceTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 /// B-2026-08-14-31 — the `(key, value)` `TypeExpr`s of every `Map`-family
 /// expression, keyed by span, so a non-identifier Map renders like a bound one
 /// instead of falling through to the value-kind arms and printing its control
@@ -1005,6 +1012,10 @@ pub struct Program {
     /// span, so a direct `println(a)` / `f"{a}"` renders like a nested one. See
     /// [`DisplayArrayTypesTable`].
     pub display_array_types: DisplayArrayTypesTable,
+    /// Element type of every `Slice[T]`-typed expression, keyed by span, so a
+    /// direct `println(s)` / `f"{s}"` renders like a nested one instead of
+    /// failing the build. See [`DisplaySliceTypesTable`].
+    pub display_slice_types: DisplaySliceTypesTable,
     /// Key/value types of every `Map`/`SortedMap`-typed expression, keyed by
     /// span, so a non-identifier Map renders like a bound one. See
     /// [`DisplayMapTypesTable`] (B-2026-08-14-31).

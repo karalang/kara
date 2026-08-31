@@ -1912,6 +1912,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
+        // B-2026-08-31-25 — the slice sibling. `println(s)` on a `Slice[i64]`
+        // was a hard BUILD ERROR before this (the array shape misprinted; a
+        // slice refused), where the interpreter prints `[1, 2]`.
+        if let Some((_acc, sval)) = self.try_compile_slice_display(&args[0].value)? {
+            self.emit_write_and_free_string(sval, nl, to_stderr);
+            return Ok(zero.into());
+        }
         if let Some((_acc, sval)) = self.try_compile_vec_display(&args[0].value)? {
             self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());

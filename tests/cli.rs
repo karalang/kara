@@ -34481,11 +34481,19 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
 ///
 /// `Option[Slice[i64]]` is the live example. It passes
 /// `E_MAIN_ERR_NOT_DISPLAY`, the interpreter renders it `Some([1])`, and
-/// codegen has no slice Display at any depth — so before the fail-closed
-/// change `karac build` succeeded and the program printed `Error: ` and
-/// exited 1. The same operand in an ordinary `f"{o}"` was already a hard
-/// codegen error, so the fallback was also making the entry point disagree
-/// with the rest of the language.
+/// codegen declines it — so before the fail-closed change `karac build`
+/// succeeded and the program printed `Error: ` and exited 1.
+///
+/// WHY IT IS STILL DECLINED CHANGED, and the distinction matters if you are
+/// tempted to admit it. Originally codegen had no slice Display at any depth,
+/// so an ordinary `f"{o}"` on this type was a hard error too. B-2026-08-31-25
+/// fixed that — slices now render at every ordinary depth, and admitting the
+/// payload makes plain interpolation of an `Option[Slice[i64]]` correct. It is
+/// held out by THIS path alone: with the admission, `main` here builds and
+/// prints `Error: Some([93867340896349])`, the slice's own data pointer
+/// rendered as its first element, against the interpreter's `Error: Some([1])`
+/// (B-2026-08-31-40). A refusal is the right answer until that is fixed, which
+/// is exactly what this fixture exists to hold.
 ///
 /// THE EXAMPLE HAS BEEN RETIRED TWICE, and each retirement stays as a row.
 /// `Option[(i64, i64)]` was the original; B-2026-08-31-10 taught the renderer

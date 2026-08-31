@@ -3643,6 +3643,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     ("Vec", 1) => {
                         self.display.display_vec_types.insert(key, args[0].clone());
                     }
+                    // NO `Slice` ARM — deliberately, and it must stay absent
+                    // until B-2026-08-31-40 is fixed. Seeding one makes
+                    // `main() -> Result[(), Slice[i64]]` BUILD, and it then
+                    // prints `Error: [94664940209587]` where the interpreter
+                    // prints `Error: [1]`: the entry point hands the renderer a
+                    // value one indirection off, so the slice's own data
+                    // pointer is read as its first ELEMENT. Declining is a
+                    // clean build error; seeding is a silent miscompile.
                     ("Map", 2) | ("SortedMap", 2) => {
                         self.display
                             .display_map_types
