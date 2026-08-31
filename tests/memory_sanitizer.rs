@@ -265,6 +265,116 @@ fn main() {
     ///
     /// Measured pre-fix on this exact fixture: 378 B in 14 blocks at `-O2`
     /// (555 B in 20 at `-O0`), with byte-identical stdout — a leak-only class.
+    /// B-2026-08-29-51 — a self-assignment whose RHS is a BLOCK ending in a
+    /// passthrough call frees the value it overwrites.
+    ///
+    /// `assign_rhs_is_owned_user_call` matched only a bare `Call` at the RHS
+    /// root, so `e = { let z = 1; pass(e) };` arrived as an `ExprKind::Block`
+    /// and answered false. That made `roundtrip_frees_old` false, and with
+    /// `rhs_mentions_lhs` true the caller's whole overwrite-cleanup branch was
+    /// skipped: the old value's field heap was never freed. The unwrapped
+    /// `e = pass(e);` was clean, which is what localizes it to the wrapper
+    /// rather than to the roundtrip.
+    ///
+    /// INVISIBLE TO THE A/B GATE TWICE OVER, which is why it needs a leak test
+    /// specifically: both backends agree, AND the printed output is correct on
+    /// both — one `Drop` body for one object. Only the heap is wrong.
+    ///
+    /// The four shapes are the ones measured to leak pre-fix under
+    /// `valgrind --leak-check=full` at `KARAC_OPT_LEVEL=0`, and they pin
+    /// different halves of the fix:
+    ///
+    ///   `one`    one `String` field       13 allocs / 12 frees, 2 B lost
+    ///   `two`    two `String` fields      14 / 12, 2 blocks — one PER FIELD
+    ///   `en`     enum `String` payload    10 / 9
+    ///   `nod`    no `impl Drop` at all    11 / 10 — not limited to Drop types
+    ///
+    /// `nest` and `uns` cover the peel being recursive and reaching the other
+    /// two value-position block spellings; a plain `Seq`/`Unsafe` tail is the
+    /// same shape to the assignment.
+    ///
+    /// COVERAGE, stated because it is weaker than the assertion looks: this
+    /// leak is OPTIMIZATION-DEPENDENT. Measured on the pre-fix compiler, the
+    /// fixture loses 7 blocks at `KARAC_OPT_LEVEL=0` (36 allocs / 29 frees) and
+    /// is CLEAN at the default `-O2` (22 / 22), where LLVM deletes the
+    /// redundant allocation outright. So the MEMORY half of this fixture is
+    /// carried by the `-O0` leg (`scripts/asan-o0-leg.sh`, B-2026-08-04-17),
+    /// which is what that leg exists for; verified red there pre-fix with
+    /// `ERROR: LeakSanitizer: detected memory leaks` and green after. What the
+    /// default `-O2` leg still asserts is the OUTPUT — a leak traded for a lost
+    /// or doubled `Drop` body fails here at either level.
+    ///
+    /// That dependence is also why the row could call this low severity and why
+    /// it survived so long: a release build never showed it.
+    ///
+    /// NOT covered here, deliberately: an `if` / `match` RHS
+    /// (`e = if c { pass(e) } else { pass(e) }`) leaks identically and is NOT
+    /// fixed — measured at 12 allocs / 11 frees both before and after this
+    /// change, so it is untouched rather than regressed. Those have several
+    /// tails that need not agree, which is a different question; filed
+    /// separately.
+    #[test]
+    fn asan_self_assign_block_tail_frees_the_overwritten_value() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id}") } }
+
+struct W { id: i64, a: String, b: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dropW {self.id}") } }
+
+struct P { id: i64, name: String }
+
+enum E { A(String), B }
+impl Drop for E { fn drop(mut ref self) { println("dropE") } }
+
+fn pass(r: R) -> R { return r; }
+fn passw(w: W) -> W { return w; }
+fn passp(p: P) -> P { return p; }
+fn passe(x: E) -> E { return x; }
+
+fn main() {
+    let n: i64 = env.args().len();
+
+    let mut one = R { id: 1, name: f"one-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    one = { let z: i64 = n; pass(one) };
+    println(f"one {one.id}");
+
+    let mut two = W { id: 2, a: f"a-aaaaaaaaaaaaaaaaaaaaaaaa", b: f"b-bbbbbbbbbbbbbbbbbbbbbbbb" };
+    two = { let z: i64 = n; passw(two) };
+    println(f"two {two.id}");
+
+    let mut en: E = E.A(f"en-aaaaaaaaaaaaaaaaaaaaaaaa");
+    en = { let z: i64 = n; passe(en) };
+    println("en done");
+
+    let mut nod = P { id: 4, name: f"nod-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    nod = { let z: i64 = n; passp(nod) };
+    println(f"nod {nod.id}");
+
+    let mut nest = R { id: 5, name: f"nest-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    nest = { let z: i64 = n; { pass(nest) } };
+    println(f"nest {nest.id}");
+
+    let mut uns = R { id: 6, name: f"uns-aaaaaaaaaaaaaaaaaaaaaaaa" };
+    // Safety: no unsafe operation here — the block spelling is the point.
+    uns = unsafe { pass(uns) };
+    println(f"uns {uns.id}");
+}
+"#,
+            // Each body fires at its binding's LAST USE, not at scope exit, so
+            // the drops interleave with the printlns. Both backends produce
+            // this sequence identically — checked, since the fix moves where a
+            // free happens and an order change would be the interesting kind
+            // of regression.
+            &[
+                "one 1", "drop 1", "two 2", "dropW 2", "dropE", "en done", "nod 4", "nest 5",
+                "drop 5", "uns 6", "drop 6",
+            ],
+            "asan_self_assign_block_tail_frees_the_overwritten_value",
+        );
+    }
+
     #[test]
     fn asan_branch_tail_owned_temp_frees_once() {
         assert_clean_asan_run(

@@ -16211,7 +16211,39 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Peel value-position block wrappers to the expression that actually
+    /// produces the assignment's value (B-2026-08-29-51).
+    ///
+    /// `{ let z = 1; println(..); pass(e) }` yields exactly what `pass(e)`
+    /// yields; the statements before the tail change nothing about the
+    /// assignment's ownership. Recursive, because a tail can itself be a block.
+    /// A block with no tail expression produces no value and is returned
+    /// unchanged, so the `Call` match below simply fails on it.
+    ///
+    /// Deliberately NOT peeling `If` / `Match`: those have SEVERAL tails that
+    /// need not agree (`e = if c { pass(e) } else { mk() }`), so admitting them
+    /// means deciding what to do when the arms disagree. That is a different
+    /// question from this one and is measured in the row rather than guessed
+    /// at here.
+    fn assign_rhs_value_tail(value: &Expr) -> &Expr {
+        match &value.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => match &b.final_expr {
+                Some(tail) => Self::assign_rhs_value_tail(tail),
+                None => value,
+            },
+            _ => value,
+        }
+    }
+
     fn assign_rhs_is_owned_user_call(&self, value: &Expr) -> bool {
+        // B-2026-08-29-51 — match the RHS's VALUE-PRODUCING tail, not just a
+        // bare `Call` at the root. `e = { let z = 1; pass(e) };` reached here as
+        // an `ExprKind::Block` and answered false, so `roundtrip_frees_old` was
+        // false; with `rhs_mentions_lhs` true, the caller's whole
+        // overwrite-cleanup branch was skipped and the old value's field heap
+        // was never freed. The unwrapped `e = pass(e);` was clean, which is
+        // what localized it to the wrapper rather than to the roundtrip.
+        let value = Self::assign_rhs_value_tail(value);
         let ExprKind::Call { callee, .. } = &value.kind else {
             return false;
         };
