@@ -24508,6 +24508,126 @@ false
     }
 
     #[test]
+    fn e2e_mixed_int_float_branch_arms_convert_rather_than_zero() {
+        // B-2026-08-30-49 — an integer arm beside a float arm made the merge's
+        // all-same-type check fail, so the WHOLE construct fell through to the
+        // const-`i64 0` placeholder and evaluated to `0` on both compiled
+        // backends, silently, at every float width and for any value, while
+        // `--interp` was correct throughout.
+        //
+        // The direct sibling of `test_e2e_float_wrapper_value_field_from_enum_
+        // payload` above (B-2026-07-23-2): that one reconciled two float arms
+        // of different WIDTHS, this one reconciles arms of different KINDS.
+        // Both land in the same placeholder when unhandled.
+        //
+        // The three `control-` cases were measured GREEN before the fix and are
+        // here to keep the assertion honest — the shape space is "arms disagree
+        // at the LLVM level", and a change that made every branch convert would
+        // pass the first fourteen while breaking these. The other fourteen were
+        // each measured RED (`0`, or `0\n0` for the two return-position cases)
+        // on the pre-fix compiler, so none of them can pass vacuously.
+        //
+        // `unsigned-above-i64max` is the case that pins SIGNEDNESS rather than
+        // mere conversion: `uitofp` gives 18446744073709552000 where `sitofp`
+        // on the same bits gives -1. It is why the conversion consults the arm
+        // TAIL expression (peeled through any block wrapper) instead of
+        // defaulting to signed.
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "if-int-then",
+                "fn main() { let n: i64 = 7; let a: f64 = if true { n } else { 0.0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "if-int-else",
+                "fn main() { let n: i64 = 7; let a: f64 = if false { 0.0 } else { n }; println(a); }",
+                "7\n",
+            ),
+            (
+                "match-int-arm",
+                "fn main() { let n: i64 = 7; let a: f64 = match 1 { 1 => n, _ => 0.0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "match-float-first",
+                "fn main() { let n: i64 = 7; let a: f64 = match 1 { 0 => 0.0, _ => n }; println(a); }",
+                "7\n",
+            ),
+            (
+                "f32-annotation",
+                "fn main() { let n: i64 = 7; let a: f32 = if true { n } else { 0.0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "unsigned-above-i64max",
+                "fn main() { let u: u64 = 18446744073709551615u64; let a: f64 = if true { u } else { 0.0 }; println(a); }",
+                "18446744073709552000\n",
+            ),
+            (
+                "negative-int-arm",
+                "fn main() { let n: i64 = -3; let a: f64 = if true { n } else { 0.0 }; println(a); }",
+                "-3\n",
+            ),
+            (
+                "if-let-payload",
+                "fn opt() -> Option[i64] { Some(7) }\n\
+                 fn main() { let a: f64 = if let Some(v) = opt() { v } else { 0.0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "return-position-if",
+                "fn f(c: bool, n: i64) -> f64 { if c { n } else { 0.5 } }\n\
+                 fn main() { println(f(true, 7)); println(f(false, 7)); }",
+                "7\n0.5\n",
+            ),
+            (
+                "return-position-match",
+                "fn f(k: i64, n: i64) -> f64 { match k { 0 => n, _ => 2.5 } }\n\
+                 fn main() { println(f(0, 7)); println(f(1, 7)); }",
+                "7\n2.5\n",
+            ),
+            (
+                "nested-branch",
+                "fn main() { let n: i64 = 7; let a: f64 = if true { if true { n } else { 1.0 } } else { 2.0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "multi-int-arms",
+                "fn main() { let n: i64 = 7; let a: f64 = match 2 { 0 => 1, 1 => 2, 2 => n, _ => 0.0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "block-bodied-arm",
+                "fn main() { let a: f64 = if true { let z: i64 = 4; z } else { 0.0 }; println(a); }",
+                "4\n",
+            ),
+            (
+                "narrow-u8-arm",
+                "fn main() { let b: u8 = 200; let a: f64 = if true { b } else { 0.0 }; println(a); }",
+                "200\n",
+            ),
+            (
+                "control-all-float",
+                "fn main() { let a: f64 = if true { 1.5 } else { 0.0 }; println(a); }",
+                "1.5\n",
+            ),
+            (
+                "control-all-int",
+                "fn main() { let n: i64 = 7; let a: i64 = if true { n } else { 0 }; println(a); }",
+                "7\n",
+            ),
+            (
+                "control-plain-let",
+                "fn main() { let n: i64 = 7; let a: f64 = n; println(a); }",
+                "7\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            assert_eq!(run_program(src).as_deref(), Some(*want), "{label}");
+        }
+    }
+
+    #[test]
     fn test_e2e_map_set_method_dispatch_from_enum_payload() {
         // B-2026-07-23-3 — a `Map`/`Set`-family collection bound out of a
         // USER-ENUM variant payload kept its container type for codegen method

@@ -592,6 +592,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let (Some(tv), Some(ev)) = (then_val, else_val) {
                     // Same narrow-int width reconciliation as `compile_if`.
                     let (tv, ev) = self.unify_int_branch_widths(tv, then_end, ev, else_end);
+                    // B-2026-08-30-49 — and the same mixed int/float pair:
+                    // `let a: f64 = if let Some(v) = o { v } else { 0.0 }` fell
+                    // to the placeholder exactly as the plain `if` did.
+                    let (tv, ev) = self.unify_int_float_branch_values(
+                        tv,
+                        self.branch_tail_is_unsigned_int(then_block.final_expr.as_deref()),
+                        then_end,
+                        ev,
+                        self.branch_tail_is_unsigned_int(else_tail),
+                        else_end,
+                    );
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifletval").unwrap();
                         phi.add_incoming(&[(&tv, then_end), (&ev, else_end)]);
@@ -2340,6 +2351,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let (Some(tv), Some(ev)) = (then_val, else_val) {
                     let (tv, ev) = self.unify_int_branch_widths(tv, then_end_bb, ev, else_end_bb);
                     let (tv, ev) = self.unify_float_branch_widths(tv, then_end_bb, ev, else_end_bb);
+                    // B-2026-08-30-49 — the MIXED pair the two above both pass
+                    // through. Runs last: they settle widths within a kind,
+                    // this one crosses kinds, so it sees each side already at
+                    // the width it will keep.
+                    let (tv, ev) = self.unify_int_float_branch_values(
+                        tv,
+                        self.branch_tail_is_unsigned_int(then_block.final_expr.as_deref()),
+                        then_end_bb,
+                        ev,
+                        self.branch_tail_is_unsigned_int(else_tail),
+                        else_end_bb,
+                    );
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
                         phi.add_incoming(&[(&tv, then_end_bb), (&ev, else_end_bb)]);
@@ -2593,6 +2616,125 @@ impl<'ctx> super::Codegen<'ctx> {
             None => self.builder.position_at_end(pred),
         }
         let t = self.build_float_cast_bf16_safe(v, target, "mfw.fcast");
+        if let Some(bb) = resume {
+            self.builder.position_at_end(bb);
+        }
+        t.into()
+    }
+
+    /// Peel a branch / arm tail down to the expression that actually produces
+    /// the value, so a signedness probe sees `u` rather than the block wrapping
+    /// it — `if c { { u } } else { 0.0 }` and a block-bodied `match` arm both
+    /// arrive here as `ExprKind::Block`.
+    fn branch_tail_value_expr(e: &Expr) -> &Expr {
+        match &e.kind {
+            ExprKind::Block(b) => match b.final_expr.as_deref() {
+                Some(inner) => Self::branch_tail_value_expr(inner),
+                None => e,
+            },
+            _ => e,
+        }
+    }
+
+    /// Signedness of a branch / arm tail, for the int→float conversions below:
+    /// `uitofp` on a `u64` above `i64::MAX` and `sitofp` on the same bits give
+    /// different answers, and only the source expression knows which is meant.
+    /// Absent a tail expression the signed reading is the safe default — it is
+    /// what every other int→float site in codegen falls back to.
+    pub(super) fn branch_tail_is_unsigned_int(&self, e: Option<&Expr>) -> bool {
+        e.is_some_and(|e| self.expr_is_unsigned_int(Self::branch_tail_value_expr(e)))
+    }
+
+    /// Reconcile a MIXED int/float `if` / `if let` arm pair before the phi —
+    /// the cross-KIND sibling of [`unify_int_branch_widths`] and
+    /// [`unify_float_branch_widths`], which each reconcile WIDTHS within one
+    /// kind and pass a mixed pair straight through. Nothing used to close that
+    /// gap, so `let a: f64 = if c { n } else { 0.0 }` with `n: i64` reached the
+    /// all-same-type check as `i64` beside `double`, failed it, and fell
+    /// through to the const-`i64 0` placeholder: the whole construct evaluated
+    /// to `0` on both compiled backends, at every float width, for any value,
+    /// with no diagnostic — while `--interp` and the `let d: f64 = n` control
+    /// were both correct (B-2026-08-30-49).
+    ///
+    /// The direction is forced, not chosen. A mixed pair can only arrive here
+    /// having ALREADY been unified by the typechecker to one Kāra type, and an
+    /// integer arm beside a float arm unifies to the FLOAT — Kāra widens
+    /// int→float at an annotation boundary and never narrows float→int
+    /// implicitly. So the int side is the one that converts, and converting it
+    /// is value-preserving in exactly the sense the sibling helpers rely on.
+    ///
+    /// Emitted in the int arm's own predecessor (like every helper here) so the
+    /// result dominates the phi's incoming edge, and routed through
+    /// `build_int_to_float_bf16_safe` so a `bf16` target never emits an
+    /// aarch64-unselectable `sitofp … to bfloat`.
+    fn unify_int_float_branch_values(
+        &self,
+        a: BasicValueEnum<'ctx>,
+        a_unsigned: bool,
+        a_pred: BasicBlock<'ctx>,
+        b: BasicValueEnum<'ctx>,
+        b_unsigned: bool,
+        b_pred: BasicBlock<'ctx>,
+    ) -> (BasicValueEnum<'ctx>, BasicValueEnum<'ctx>) {
+        match (a, b) {
+            (BasicValueEnum::IntValue(av), BasicValueEnum::FloatValue(bv)) => (
+                self.int_to_float_branch_value_in_pred(av, bv.get_type(), a_unsigned, a_pred),
+                b,
+            ),
+            (BasicValueEnum::FloatValue(av), BasicValueEnum::IntValue(bv)) => (
+                a,
+                self.int_to_float_branch_value_in_pred(bv, av.get_type(), b_unsigned, b_pred),
+            ),
+            _ => (a, b),
+        }
+    }
+
+    /// N-arm analog of [`unify_int_float_branch_values`] for `match`. Runs
+    /// AFTER [`unify_float_match_arm_widths`] has settled the float arms on one
+    /// width, so the target here is simply whatever float type the arms now
+    /// share; every integer arm converts to it, each in its own predecessor.
+    /// A `match` with no float arm at all returns early and is untouched, which
+    /// is what keeps an all-integer `match` on its existing path.
+    pub(super) fn unify_int_float_match_arm_values(
+        &self,
+        arms: &mut [(BasicValueEnum<'ctx>, BasicBlock<'ctx>)],
+        arm_unsigned: &[bool],
+    ) {
+        let target = arms.iter().find_map(|(v, _)| match v {
+            BasicValueEnum::FloatValue(fv) => Some(fv.get_type()),
+            _ => None,
+        });
+        let Some(target) = target else {
+            return;
+        };
+        for (i, (v, bb)) in arms.iter_mut().enumerate() {
+            if let BasicValueEnum::IntValue(iv) = v {
+                let unsigned = arm_unsigned.get(i).copied().unwrap_or(false);
+                *v = self.int_to_float_branch_value_in_pred(*iv, target, unsigned, *bb);
+            }
+        }
+    }
+
+    /// Int→float sibling of [`truncate_branch_value_in_pred`] /
+    /// [`floatcast_branch_value_in_pred`]: convert a phi-bound integer branch
+    /// value to `target` at the END of its predecessor block (before that
+    /// block's terminating branch to the merge), so the result dominates the
+    /// phi's incoming edge — the conversion emitted in the merge block itself
+    /// would not. The builder's insert position is saved and restored, so the
+    /// caller, positioned at the merge, sees no change.
+    fn int_to_float_branch_value_in_pred(
+        &self,
+        v: IntValue<'ctx>,
+        target: inkwell::types::FloatType<'ctx>,
+        src_unsigned: bool,
+        pred: BasicBlock<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let resume = self.builder.get_insert_block();
+        match pred.get_terminator() {
+            Some(term) => self.builder.position_before(&term),
+            None => self.builder.position_at_end(pred),
+        }
+        let t = self.build_int_to_float_bf16_safe(v, target, src_unsigned, "bfw.itof");
         if let Some(bb) = resume {
             self.builder.position_at_end(bb);
         }

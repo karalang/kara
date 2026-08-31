@@ -454,6 +454,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
         let mut arm_results: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        // B-2026-08-30-49 — signedness of each arm's tail, captured HERE
+        // because `arm.body` is in scope at the push site and gone by the
+        // merge. Parallel to `arm_results` and pushed with it (one push site).
+        let mut arm_unsigned: Vec<bool> = Vec::new();
 
         // String-literal dispatch (#1 codegen lever — selfhost-lexer-profile.md):
         // a `match s { "kw" => .., …, _ => .. }` over ≥4 string literals
@@ -1206,6 +1210,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // fails with "PHI node entries do not match predecessors".
                 let merge_pred = self.builder.get_insert_block().unwrap();
                 arm_results.push((arm_val, merge_pred));
+                arm_unsigned.push(self.branch_tail_is_unsigned_int(Some(&arm.body)));
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
             } else {
                 // Early-return / terminator inside arm body: the return
@@ -1283,6 +1288,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // match falls to the `i64 0` placeholder (B-2026-07-23-2). See
         // `unify_float_match_arm_widths` for the widen-not-truncate rationale.
         self.unify_float_match_arm_widths(&mut arm_results);
+        // B-2026-08-30-49 — the MIXED case neither width pass covers: an
+        // integer arm beside a float one (`match n { 1 => i, _ => 0.0 }`)
+        // failed the all-same-type check below and took the whole `match` to
+        // the const-`i64 0` placeholder. Runs last, so the float arms have
+        // already settled on the width the integer arms convert into.
+        self.unify_int_float_match_arm_values(&mut arm_results, &arm_unsigned);
 
         // Build phi if all (live) arms produce a value of the same type. A
         // single live arm (the rest diverging) yields a one-incoming phi,

@@ -48785,3 +48785,112 @@ fn test_discarded_match_controls_keep_their_single_body() {
     );
     assert_eq!(run(&read).trim(), "saw1\ndR1\ndropped", "[read-only arm]");
 }
+
+#[test]
+fn interp_mixed_int_float_branch_arms_are_the_codegen_oracle() {
+    // B-2026-08-30-49 — the oracle half. The defect was codegen-only: every
+    // one of these was ALREADY correct under `--interp`, which is what made
+    // the interpreter the reference the compiled backends were fixed against.
+    //
+    // So this test could not fail before the fix and is not a regression test
+    // for it. It exists because the fix's correctness argument rests entirely
+    // on "the interpreter is right here" — if that ever stops being true, the
+    // codegen twin in `tests/codegen.rs`
+    // (`e2e_mixed_int_float_branch_arms_convert_rather_than_zero`) would be
+    // asserting agreement with a moved reference and would not notice. The
+    // case table below is COPIED FROM that twin verbatim, so the two cannot
+    // disagree about which shapes or which expected strings are at issue.
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "if-int-then",
+            "fn main() { let n: i64 = 7; let a: f64 = if true { n } else { 0.0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "if-int-else",
+            "fn main() { let n: i64 = 7; let a: f64 = if false { 0.0 } else { n }; println(a); }",
+            "7\n",
+        ),
+        (
+            "match-int-arm",
+            "fn main() { let n: i64 = 7; let a: f64 = match 1 { 1 => n, _ => 0.0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "match-float-first",
+            "fn main() { let n: i64 = 7; let a: f64 = match 1 { 0 => 0.0, _ => n }; println(a); }",
+            "7\n",
+        ),
+        (
+            "f32-annotation",
+            "fn main() { let n: i64 = 7; let a: f32 = if true { n } else { 0.0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "unsigned-above-i64max",
+            "fn main() { let u: u64 = 18446744073709551615u64; let a: f64 = if true { u } else { 0.0 }; println(a); }",
+            "18446744073709552000\n",
+        ),
+        (
+            "negative-int-arm",
+            "fn main() { let n: i64 = -3; let a: f64 = if true { n } else { 0.0 }; println(a); }",
+            "-3\n",
+        ),
+        (
+            "if-let-payload",
+            "fn opt() -> Option[i64] { Some(7) }\n\
+             fn main() { let a: f64 = if let Some(v) = opt() { v } else { 0.0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "return-position-if",
+            "fn f(c: bool, n: i64) -> f64 { if c { n } else { 0.5 } }\n\
+             fn main() { println(f(true, 7)); println(f(false, 7)); }",
+            "7\n0.5\n",
+        ),
+        (
+            "return-position-match",
+            "fn f(k: i64, n: i64) -> f64 { match k { 0 => n, _ => 2.5 } }\n\
+             fn main() { println(f(0, 7)); println(f(1, 7)); }",
+            "7\n2.5\n",
+        ),
+        (
+            "nested-branch",
+            "fn main() { let n: i64 = 7; let a: f64 = if true { if true { n } else { 1.0 } } else { 2.0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "multi-int-arms",
+            "fn main() { let n: i64 = 7; let a: f64 = match 2 { 0 => 1, 1 => 2, 2 => n, _ => 0.0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "block-bodied-arm",
+            "fn main() { let a: f64 = if true { let z: i64 = 4; z } else { 0.0 }; println(a); }",
+            "4\n",
+        ),
+        (
+            "narrow-u8-arm",
+            "fn main() { let b: u8 = 200; let a: f64 = if true { b } else { 0.0 }; println(a); }",
+            "200\n",
+        ),
+        (
+            "control-all-float",
+            "fn main() { let a: f64 = if true { 1.5 } else { 0.0 }; println(a); }",
+            "1.5\n",
+        ),
+        (
+            "control-all-int",
+            "fn main() { let n: i64 = 7; let a: i64 = if true { n } else { 0 }; println(a); }",
+            "7\n",
+        ),
+        (
+            "control-plain-let",
+            "fn main() { let n: i64 = 7; let a: f64 = n; println(a); }",
+            "7\n",
+        ),
+    ];
+    for (label, src, want) in cases {
+        assert_eq!(run(src), *want, "{label}");
+    }
+}
