@@ -35900,13 +35900,12 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
     }
     // PINNED AT THE DEFECT, each agreed with both compiled backends.
     for (label, src, want) in [
-        // A MIXED literal of a struct with its OWN `impl Drop`: codegen can only
-        // swap that wrapper for one that drops ALL field bodies, so masking one
-        // slot there would cost the fresh field's body. This backend COULD mask
-        // it per field — and declines deliberately, because doing so alone
-        // turns an agreed defect into a run-vs-build divergence, the trade
-        // B-2026-08-29-19 already had to back out once for `Option`.
-        // UNFIXED (B-2026-08-29-43).
+        // FIXED (B-2026-08-29-43). This backend always COULD mask a mixed
+        // literal per field; what it lacked was a codegen counterpart, so it
+        // declined on purpose rather than open a run-vs-build divergence.
+        // Codegen has one now (`emit_user_drop_wrapper_skipping`, masking the
+        // body step only), and the bail came out on both backends in a single
+        // commit — so this flips to the one body that was always due.
         (
             "pin-owndrop-mixed",
             format!(
@@ -35915,7 +35914,7 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
                  fn take(r: R) -> i64 {{ let s = Sd3 {{ a: r, b: R {{ id: 2 }} }}; 7 }}\n\
                  fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
             ),
-            "dSd3\ndR2\ndR1\ndR1\nv=7\n",
+            "dSd3\ndR2\ndR1\nv=7\n",
         ),
         // A whole-value rebind after a MIXED wrap re-arms the full walk — the
         // mask is keyed on the binding and the destination registers afresh.
@@ -50301,6 +50300,108 @@ fn test_method_fresh_temp_arg_handed_back_runs_one_body() {
         "n7\n",
         "[pinned DIVERGENCE (b): compiled runs the body the interpreter loses]"
     );
+}
+
+/// B-2026-08-29-43 — interpreter twin of
+/// `codegen::e2e_mixed_owndrop_literal_masks_only_the_view_body`, same 10
+/// shapes in the same order. Both backends dropped their bail in ONE commit,
+/// so this file is what proves they moved together.
+///
+/// A MIXED struct literal over a struct with its OWN
+/// `impl Drop`: some Drop-bearing fields moved in from a param VIEW, some
+/// minted fresh.
+///
+/// The view's body belongs to the caller under caller-retains, so this
+/// binding must not run it; the fresh field's body belongs to nobody else,
+/// so it must. Before the fix the whole literal kept its walk and the view
+/// doubled — agreed across all three backends, which is why no A/B gate
+/// caught it.
+///
+/// The danger in fixing it is the OPPOSITE failure: the only wrapper
+/// surgery available for an own-`Drop` struct used to be all-or-nothing,
+/// and applying that here would have silenced the fresh field too. So every
+/// row below pins BOTH halves — the view fires once, the fresh field fires
+/// once — and the boundary rows (all-views, all-fresh, no-own-`Drop`) pin
+/// that the neighbouring paths did not move.
+#[test]
+fn test_mixed_owndrop_literal_masks_only_the_view_body() {
+    let hdr = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n\
+               struct Sd3 { a: R, b: R }\n\
+               impl Drop for Sd3 { fn drop(mut ref self) { println(\"dSd3\") } }\n\
+               struct Sd { r: R }\n\
+               impl Drop for Sd { fn drop(mut ref self) { println(\"dSd\") } }\n\
+               struct Plain3 { a: R, b: R }\n\
+               struct Sd4 { a: R, b: R, c: R }\n\
+               impl Drop for Sd4 { fn drop(mut ref self) { println(\"dSd4\") } }\n\
+               struct Mix { a: R, n: i64 }\n\
+               impl Drop for Mix { fn drop(mut ref self) { println(\"dMix\") } }\n";
+    for (label, fns, main, want) in [
+        (
+            "the row: view + fresh",
+            "fn take(r: R) -> i64 { let s = Sd3 { a: r, b: mk(2) }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dSd3\ndR2\ndR1\nv=7\n",
+        ),
+        (
+            "order reversed: fresh + view",
+            "fn take(r: R) -> i64 { let s = Sd3 { a: mk(2), b: r }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dSd3\ndR2\ndR1\nv=7\n",
+        ),
+        (
+            "boundary: ALL views (the shape already fixed)",
+            "fn take(r: R) -> i64 { let s = Sd { r: r }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dSd\ndR1\nv=7\n",
+        ),
+        (
+            "boundary: ALL fresh — nothing masked",
+            "fn take(r: R) -> i64 { let s = Sd3 { a: mk(1), b: mk(2) }; return 7; }",
+            "let v = take(mk(9)); println(f\"v={v}\");",
+            "dSd3\ndR2\ndR1\ndR9\nv=7\n",
+        ),
+        (
+            "boundary: MIXED with NO own Drop — the per-field path, untouched",
+            "fn take(r: R) -> i64 { let s = Plain3 { a: r, b: mk(2) }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "three fields, ONE view: both fresh bodies survive",
+            "fn take(r: R) -> i64 { let s = Sd4 { a: r, b: mk(2), c: mk(3) }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dSd4\ndR3\ndR2\ndR1\nv=7\n",
+        ),
+        (
+            "three fields, TWO views: the fresh body survives",
+            "fn take(p: R, q: R) -> i64 { let s = Sd4 { a: p, b: q, c: mk(3) }; return 7; }",
+            "let v = take(mk(1), mk(2)); println(f\"v={v}\");",
+            "dSd4\ndR3\ndR2\ndR1\nv=7\n",
+        ),
+        (
+            "view beside a NON-Drop field",
+            "fn take(r: R) -> i64 { let s = Mix { a: r, n: 5 }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dMix\ndR1\nv=7\n",
+        ),
+        (
+            "the masked binding is still readable",
+            "fn take(r: R) -> i64 { let s = Sd3 { a: r, b: mk(2) }; println(f\"rd{s.b.id}\"); return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "rd2\ndSd3\ndR2\ndR1\nv=7\n",
+        ),
+        (
+            "two mixed literals in one frame keep separate masks",
+            "fn take(p: R, q: R) -> i64 { let s = Sd3 { a: p, b: mk(2) }; let t = Sd3 { a: q, b: mk(4) }; return 7; }",
+            "let v = take(mk(1), mk(3)); println(f\"v={v}\");",
+            "dSd3\ndR2\ndSd3\ndR4\ndR3\ndR1\nv=7\n",
+        ),
+    ] {
+        let src = format!("{hdr}{fns}\nfn main() {{ {main} }}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
 }
 
 #[test]

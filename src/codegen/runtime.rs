@@ -6854,6 +6854,25 @@ impl<'ctx> super::Codegen<'ctx> {
             .program_snapshot
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(&struct_name));
+        if owns_body && !all_views {
+            // B-2026-08-29-43 — the MIXED literal over an own-`Drop` struct.
+            // The comment above described the whole-wrapper swap as the only
+            // surgery available; `emit_user_drop_wrapper_skipping` is the
+            // per-field one, and it masks ONLY the body step, so the fresh
+            // field keeps its body and every field keeps its memory. Landed
+            // together with the interpreter's matching bail removal — masking
+            // on one backend alone would trade an agreed defect for a
+            // divergence.
+            let Some(slot) = self.variables.get(var_name).copied() else {
+                return;
+            };
+            let skip = super::synth_drop::FieldSkipTree {
+                here: views.iter().copied().collect(),
+                ..Default::default()
+            };
+            self.disarm_user_drop_field_bodies_masked(slot.ptr, &struct_name, &skip);
+            return;
+        }
         if owns_body {
             let Some(first_view) = all_views.then(|| views.first().copied()).flatten() else {
                 return;

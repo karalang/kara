@@ -7077,6 +7077,46 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Matching on `binding_ptr` rather than a binding name is what makes this
     /// work from a move site that only has the source slot in hand.
+    /// B-2026-08-29-43 — swap an own-`Drop` binding's wrapper for one whose
+    /// FIELD-BODY step is masked per field, leaving the parent's own body and
+    /// every field's MEMORY exactly where they were.
+    ///
+    /// The partial-mask sibling of
+    /// [`Self::disarm_user_drop_fields_for_moved_field`], which can only swap
+    /// in `karac_dropnf_<T>` — the all-or-nothing variant that drops EVERY
+    /// field body. That is right when every Drop-bearing field was moved in
+    /// from a param view and wrong the moment one was minted fresh: the fresh
+    /// field's body would go missing, which is the same severity as the
+    /// doubled body it set out to remove. `emit_user_drop_wrapper_skipping`
+    /// (B-2026-08-28-21) is the per-field variant that did not exist when the
+    /// mixed shape was first declined; this is that machinery applied to the
+    /// let-path binding rather than to a caller-side temp.
+    pub(super) fn disarm_user_drop_field_bodies_masked(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        skip: &FieldSkipTree,
+    ) {
+        let Some(replacement) = self.emit_user_drop_wrapper_skipping(struct_name, skip) else {
+            return;
+        };
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::UserDrop {
+                    binding_ptr,
+                    drop_fn,
+                    type_name,
+                    ..
+                } = action
+                {
+                    if *binding_ptr == base_ptr && type_name == struct_name {
+                        *drop_fn = replacement;
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn disarm_user_drop_fields_for_moved_field(
         &mut self,
         base_ptr: PointerValue<'ctx>,

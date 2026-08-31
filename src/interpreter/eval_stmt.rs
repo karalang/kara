@@ -1619,18 +1619,15 @@ impl<'a> super::Interpreter<'a> {
             return;
         }
         let all_views = views.len() == visited;
-        // A struct with its own `impl Drop` has no per-binding field walker on
-        // codegen's side — those bodies run inside the type-level
-        // `karac_drop_<T>` wrapper, which can only be swapped for a variant
-        // that drops ALL of them. That swap is sound only when every visited
-        // field was a view, so a MIXED literal over a Drop-bearing struct stays
-        // at its double there. Decline it here too: this backend could mask it
-        // per field, and doing so alone would turn an agreed defect into a
-        // run-vs-build divergence — the worse of the two, and the trade
-        // B-2026-08-29-19 already had to back out once for `Option`.
-        if !all_views && self.program.drop_method_keys.contains_key(&sname) {
-            return;
-        }
+        // B-2026-08-29-43 — the MIXED-literal bail that used to sit here is
+        // gone, and it is gone on BOTH backends in one commit. It existed
+        // because codegen's only surgery on an own-`Drop` struct was the
+        // all-or-nothing `karac_dropnf_<T>` swap, so masking per field here
+        // alone would have turned an agreed defect into a run-vs-build
+        // divergence. `emit_user_drop_wrapper_skipping` gives codegen the
+        // per-field variant, so both backends now mask the view's body and
+        // keep the fresh field's — which is what the mask below already did
+        // for a struct with no `impl Drop` of its own.
         let bname = bname.clone();
         for f in views {
             self.moved_out_struct_field_bodies
