@@ -3862,6 +3862,35 @@ mod codegen_tests {
         }
     }
 
+    /// The emitted IR for a program, from the FULL pipeline (ownership
+    /// included) — the `Ok` sibling of [`codegen_error`], and the reason
+    /// `ir_for` will not do: that one passes `ownership: None`, so every
+    /// ownership-derived emission decision differs from what `karac build`
+    /// produces (see `ir_probe_from_env`'s note).
+    fn ir_for_full(src: &str, auto_par: bool) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        // The auto-par leg is not optional decoration: the analyzer's
+        // tabulate lowering emits its own element store, which is one of the
+        // sites B-2026-08-31-24 had to relax and which the `None` leg never
+        // reaches.
+        let concurrency = auto_par.then(|| {
+            let effects = karac::effectcheck(&parsed.program);
+            karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed))
+        });
+        compile_to_ir(&parsed.program, Some(&ownership), concurrency.as_ref())
+            .expect("codegen failed")
+    }
+
     /// The error text codegen declines a program with. Runs the FULL pipeline
     /// (ownership included) so the span-keyed display tables the diagnostic
     /// reads are populated exactly as `karac build` populates them.
@@ -11973,6 +12002,194 @@ nest  [WithVec { v: Vector(1, -2, 3, -4), n: 1 }]
 float WithVec { v: Vector(9, 8, 7, 6), n: 1 }
 narrow WithNarrow { a: 2.5, b: 3.5, c: 4.5 }
 plain Plain { n: 1, s: s, w: 340282366920938463463374607431768211455 }
+"#
+        );
+    }
+
+    /// The source both B-2026-08-31-24 tests share: the IR-invariant one
+    /// below and the value-equality E2E beside it. One fixture, so a shape
+    /// added to widen the alignment sweep also widens the output check.
+    const HEAP_ALIGN_SRC: &str = r#"#[derive(Display)]
+struct Holder { v: Vector[i64, 4], n: i64 }
+#[derive(Display)]
+enum E { V(Vector[i64, 4]), N }
+
+fn mk(n: i64) -> Vec[Vector[i64, 4]] {
+    let mut v: Vec[Vector[i64, 4]] = Vec.new();
+    v.push(Vector[i64, 4](n, n + 1, n + 2, n + 3));
+    return v
+}
+
+fn main() {
+    let n = env.args().len() as i64;
+    let vv: Vector[i64, 4] = Vector[i64, 4](n, n + 1, n + 2, n + 3);
+    let ww: Vector[i64, 4] = Vector[i64, 4](n + 4, n + 5, n + 6, n + 7);
+    let v8: Vector[i64, 8] = Vector[i64, 8](n, n+1, n+2, n+3, n+4, n+5, n+6, n+7);
+
+    let lit: Vec[Vector[i64, 4]] = [vv, ww];
+    println(f"lit  {lit}");
+    println(f"idx  {lit[0]}");
+
+    let mut p: Vec[Vector[i64, 4]] = Vec.new();
+    p.push(vv);
+    p.push(ww);
+    p.push(vv);
+    println(f"push {p}");
+    for x in p { println(f"for  {x}"); }
+    p[1] = ww;
+    println(f"set  {p}");
+    match p.pop() { Some(w) => { println(f"pop  {w}"); } None => {} }
+    p.insert(0, ww);
+    println(f"ins  {p}");
+    println(f"rem  {p.remove(0)}");
+
+    println(f"ret  {mk(n)}");
+
+    let mut wide: Vec[Vector[i64, 8]] = Vec.new();
+    wide.push(v8);
+    println(f"w8   {wide}");
+
+    let mut hs: Vec[Holder] = Vec.new();
+    hs.push(Holder { v: vv, n: n });
+    println(f"hs   {hs}");
+
+    let mut es: Vec[E] = Vec.new();
+    es.push(E.V(vv));
+    println(f"es   {es}");
+
+    let mut m: Map[String, Vector[i64, 4]] = Map.new();
+    m.insert(f"k", vv);
+    println(f"map  {m}");
+
+    let mut os: Vec[Option[Vector[i64, 4]]] = Vec.new();
+    os.push(Some(vv));
+    println(f"os   {os}");
+
+    let arr: Array[Vector[i64, 4], 2] = [vv, ww];
+    let mut av: Vec[Array[Vector[i64, 4], 2]] = Vec.new();
+    av.push(arr);
+    println(f"av   {av}");
+
+    let mut big: Vec[Vector[i64, 4]] = Vec.new();
+    let mut i = 0;
+    while i < 40 {
+        big.push(Vector[i64, 4](i + n, i + n + 1, i + n + 2, i + n + 3));
+        i = i + 1;
+    }
+    let mut s: i64 = 0;
+    for x in big { s = s + x.reduce_sum(); }
+    println(f"sum  {s}");
+}
+"#;
+
+    /// B-2026-08-31-24 — no heap access is emitted at an alignment `malloc` does
+    /// not guarantee.
+    ///
+    /// `malloc` / `karac_realloc_or_panic` guarantee 16 bytes. LLVM gives every load
+    /// and store the TYPE's natural alignment unless told otherwise, and an LLVM
+    /// vector wants more — a `<4 x i64>` wants 32 — so x86-64 lowered every access to
+    /// a `Vec[Vector[T, N]]` element buffer to `vmovaps`, which faults on a
+    /// merely-16-aligned address.
+    ///
+    /// THIS IS AN IR-INVARIANT TEST RATHER THAN A RUNTIME ONE, and deliberately.
+    /// Whether a given `malloc` returns a 32-aligned chunk depends on the heap's
+    /// history, so the same statement faults in one program and not in another: the
+    /// reduction that found this had six statement groups and removing ANY ONE of
+    /// them made it pass, while each group alone was clean. ASAN masks it outright by
+    /// changing the allocator and the stack layout, so the memory_sanitizer suite runs
+    /// the crashing program green. An assertion over the emitted IR is the only form
+    /// that fails deterministically — and it also catches a NEW access site added
+    /// later, which a fixture pinned to today's set never would.
+    ///
+    /// The `auto_par` leg is not a duplicate: the analyzer's tabulate lowering emits
+    /// its own element store (`stab.slot`, `reduce.rs`), which the sequential leg
+    /// never reaches. It was the LAST site found, after every direct element access
+    /// had already been relaxed, and it only surfaced under `karac run` — whose IR
+    /// carries the concurrency analysis that `ir_for`-style probes pass as `None`.
+    ///
+    /// The fixture spans the placements an over-aligned element can occupy, because
+    /// the predicate has to be STRUCTURAL: an aggregate inherits its most-aligned
+    /// member, so `Vec[Array[Vector[i64, 4], 2]]` and `Vec[Holder]` (a struct with a
+    /// vector field) want 32-byte alignment just as much as the bare `Vec[Vector]`
+    /// does. A first cut that only recognized `VectorType` fixed the direct cases and
+    /// left those two still faulting.
+    #[test]
+    fn codegen_heap_accesses_are_never_over_aligned() {
+        // `%name = alloca` — LLVM aligns these correctly, and a function IS
+        // allowed to realign its own frame, so they are the one exempt class.
+        let alloca_re = regex::Regex::new(r"(%[\w.]+) = alloca ").unwrap();
+        // A load/store whose VALUE TYPE mentions a vector, through some `ptr`,
+        // at an explicit alignment.
+        let access_re = regex::Regex::new(
+            r"(?m)^\s*(?:%[\w.]+ = )?(load|store) ([^,]*<\d+ x [^,>]+>[^,]*),[^\n]*?ptr (%[\w.@]+)[^\n]*?align (\d+)",
+        )
+        .unwrap();
+
+        for auto_par in [false, true] {
+            let ir = ir_for_full(HEAP_ALIGN_SRC, auto_par);
+            let allocas: std::collections::HashSet<&str> = alloca_re
+                .captures_iter(&ir)
+                .map(|c| c.get(1).unwrap().as_str())
+                .collect();
+            let offenders: Vec<String> = access_re
+                .captures_iter(&ir)
+                .filter(|c| {
+                    let ptr = c.get(3).unwrap().as_str();
+                    let align: u32 = c.get(4).unwrap().as_str().parse().unwrap_or(0);
+                    !allocas.contains(ptr) && align > 16
+                })
+                .map(|c| c.get(0).unwrap().as_str().trim().to_string())
+                .collect();
+            assert!(
+                offenders.is_empty(),
+                "auto_par={auto_par}: {} heap access(es) emitted above malloc's \
+                 16-byte guarantee — each lowers to a faulting `vmovaps`:\n{}",
+                offenders.len(),
+                offenders.join("\n")
+            );
+        }
+    }
+
+    /// B-2026-08-31-24 (value half) — the same fixture, run.
+    ///
+    /// The IR-invariant twin above is what fails deterministically; this asserts
+    /// the program the relaxation produces still computes the right thing.
+    ///
+    /// IT DOES NOT GO RED ON THE UNPATCHED TREE, and that is the point rather
+    /// than a gap: the crash is heap-state dependent, so whether a given build
+    /// faults is luck. `karac build` on this source segfaulted; this harness's
+    /// build of the same source did not, on the same machine, in the same
+    /// minute. A value-equality fixture can never be the regression test for
+    /// this bug — the IR assertion is, and this one guards the OTHER direction,
+    /// that relaxing the alignment did not change what the program computes.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_vec_of_vector_operations_round_trip`,
+    /// pinned to the same string.
+    #[test]
+    fn e2e_vec_of_vector_operations_round_trip() {
+        let Some(out) = run_program(HEAP_ALIGN_SRC) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"lit  [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]
+idx  Vector(1, 2, 3, 4)
+push [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8), Vector(1, 2, 3, 4)]
+for  Vector(1, 2, 3, 4)
+for  Vector(5, 6, 7, 8)
+for  Vector(1, 2, 3, 4)
+set  [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8), Vector(1, 2, 3, 4)]
+pop  Vector(1, 2, 3, 4)
+ins  [Vector(5, 6, 7, 8), Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]
+rem  Vector(5, 6, 7, 8)
+ret  [Vector(1, 2, 3, 4)]
+w8   [Vector(1, 2, 3, 4, 5, 6, 7, 8)]
+hs   [Holder { v: Vector(1, 2, 3, 4), n: 1 }]
+es   [V(Vector(1, 2, 3, 4))]
+map  {k: Vector(1, 2, 3, 4)}
+os   [Some(Vector(1, 2, 3, 4))]
+av   [[Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]]
+sum  3520
 "#
         );
     }

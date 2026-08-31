@@ -32925,6 +32925,118 @@ bool true
     );
 }
 
+/// B-2026-08-31-24 (oracle half) — what a `Vec[Vector[T, N]]` and its
+/// over-aligned relatives print.
+///
+/// The bug was an ALIGNMENT one, invisible to this backend: the interpreter has no
+/// `vmovaps` and no malloc'd element buffer to under-align, so it rendered all of
+/// this correctly throughout. It is here as the oracle the compiled side is
+/// asserted against, and because the fixture doubles as the alignment sweep's
+/// source — a shape added there to widen the IR check widens this too.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_vec_of_vector_operations_round_trip`, pinned
+/// to the same string.
+///
+/// The seed is the literal 1 rather than `env.args().len()`: an IN-PROCESS
+/// interpreter test sees the TEST binary's argv, which is 1 only when the suite
+/// runs unfiltered.
+#[test]
+fn test_vec_of_vector_operations_round_trip() {
+    assert_eq!(
+        run(r#"#[derive(Display)]
+struct Holder { v: Vector[i64, 4], n: i64 }
+#[derive(Display)]
+enum E { V(Vector[i64, 4]), N }
+
+fn mk(n: i64) -> Vec[Vector[i64, 4]] {
+    let mut v: Vec[Vector[i64, 4]] = Vec.new();
+    v.push(Vector[i64, 4](n, n + 1, n + 2, n + 3));
+    return v
+}
+
+fn main() {
+    let n: i64 = 1;
+    let vv: Vector[i64, 4] = Vector[i64, 4](n, n + 1, n + 2, n + 3);
+    let ww: Vector[i64, 4] = Vector[i64, 4](n + 4, n + 5, n + 6, n + 7);
+    let v8: Vector[i64, 8] = Vector[i64, 8](n, n+1, n+2, n+3, n+4, n+5, n+6, n+7);
+
+    let lit: Vec[Vector[i64, 4]] = [vv, ww];
+    println(f"lit  {lit}");
+    println(f"idx  {lit[0]}");
+
+    let mut p: Vec[Vector[i64, 4]] = Vec.new();
+    p.push(vv);
+    p.push(ww);
+    p.push(vv);
+    println(f"push {p}");
+    for x in p { println(f"for  {x}"); }
+    p[1] = ww;
+    println(f"set  {p}");
+    match p.pop() { Some(w) => { println(f"pop  {w}"); } None => {} }
+    p.insert(0, ww);
+    println(f"ins  {p}");
+    println(f"rem  {p.remove(0)}");
+
+    println(f"ret  {mk(n)}");
+
+    let mut wide: Vec[Vector[i64, 8]] = Vec.new();
+    wide.push(v8);
+    println(f"w8   {wide}");
+
+    let mut hs: Vec[Holder] = Vec.new();
+    hs.push(Holder { v: vv, n: n });
+    println(f"hs   {hs}");
+
+    let mut es: Vec[E] = Vec.new();
+    es.push(E.V(vv));
+    println(f"es   {es}");
+
+    let mut m: Map[String, Vector[i64, 4]] = Map.new();
+    m.insert(f"k", vv);
+    println(f"map  {m}");
+
+    let mut os: Vec[Option[Vector[i64, 4]]] = Vec.new();
+    os.push(Some(vv));
+    println(f"os   {os}");
+
+    let arr: Array[Vector[i64, 4], 2] = [vv, ww];
+    let mut av: Vec[Array[Vector[i64, 4], 2]] = Vec.new();
+    av.push(arr);
+    println(f"av   {av}");
+
+    let mut big: Vec[Vector[i64, 4]] = Vec.new();
+    let mut i = 0;
+    while i < 40 {
+        big.push(Vector[i64, 4](i + n, i + n + 1, i + n + 2, i + n + 3));
+        i = i + 1;
+    }
+    let mut s: i64 = 0;
+    for x in big { s = s + x.reduce_sum(); }
+    println(f"sum  {s}");
+}
+"#),
+        r#"lit  [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]
+idx  Vector(1, 2, 3, 4)
+push [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8), Vector(1, 2, 3, 4)]
+for  Vector(1, 2, 3, 4)
+for  Vector(5, 6, 7, 8)
+for  Vector(1, 2, 3, 4)
+set  [Vector(1, 2, 3, 4), Vector(5, 6, 7, 8), Vector(1, 2, 3, 4)]
+pop  Vector(1, 2, 3, 4)
+ins  [Vector(5, 6, 7, 8), Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]
+rem  Vector(5, 6, 7, 8)
+ret  [Vector(1, 2, 3, 4)]
+w8   [Vector(1, 2, 3, 4, 5, 6, 7, 8)]
+hs   [Holder { v: Vector(1, 2, 3, 4), n: 1 }]
+es   [V(Vector(1, 2, 3, 4))]
+map  {k: Vector(1, 2, 3, 4)}
+os   [Some(Vector(1, 2, 3, 4))]
+av   [[Vector(1, 2, 3, 4), Vector(5, 6, 7, 8)]]
+sum  3520
+"#
+    );
+}
+
 /// B-2026-08-31-19 — `Array[T, N]` renders under codegen, at every depth, the
 /// way the interpreter renders it.
 ///

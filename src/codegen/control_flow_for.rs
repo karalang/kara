@@ -13,7 +13,7 @@
 use crate::ast::*;
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicValue, BasicValueEnum, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -2243,6 +2243,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, elem_ptr, "for.v.elem")
             .unwrap();
+        // Heap buffer — malloc's guarantee (B-2026-08-31-24).
+        self.relax_heap_elem_align(elem_val.as_instruction_value(), elem_ty);
         self.bind_pattern(pattern, elem_val)?;
         self.register_for_loop_bindings(pattern, var_name);
         self.bind_enumerate_index(cur)?;

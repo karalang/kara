@@ -1710,7 +1710,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_gep(elem_ty, buf, &[idx], &format!("vec.lit.elem.{}.ptr", i))
                     .unwrap()
             };
-            self.builder.build_store(elem_ptr, *val).unwrap();
+            let st = self.builder.build_store(elem_ptr, *val).unwrap();
+            // The buffer is malloc'd, so it carries malloc's 16-byte
+            // guarantee, not an over-aligned element's natural one
+            // (B-2026-08-31-24).
+            self.relax_heap_elem_align(Some(st), elem_ty);
         }
 
         // Build {data=buf, len=n, cap=n} aggregate. Cap equals len so
@@ -4982,6 +4986,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem_ty, elem_ptr, "v.elem")
             .unwrap();
+        // Heap buffer — malloc's guarantee, not the element's natural
+        // alignment (B-2026-08-31-24).
+        self.relax_heap_elem_align(val.as_instruction_value(), elem_ty);
         // Sequential-tabulate alias scopes (reduce.rs): inside an active
         // tabulate loop, an element load through a distinct owned Vec
         // local is asserted disjoint from the tabulate output store —
@@ -6306,7 +6313,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Source-aware so an unsigned narrow RHS zero-extends into a wider
         // element (B-2026-08-13-15); the narrowing leg is unchanged.
         let val = self.coerce_scalar_to_type_src(val, elem_ty, rhs_src);
-        self.builder.build_store(elem_ptr, val).unwrap();
+        let st = self.builder.build_store(elem_ptr, val).unwrap();
+        // Heap buffer — malloc's 16-byte guarantee, not an over-aligned
+        // element's natural alignment (B-2026-08-31-24).
+        self.relax_heap_elem_align(Some(st), elem_ty);
         Ok(())
     }
 

@@ -14,7 +14,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
 use inkwell::AddressSpace;
 
@@ -3250,7 +3250,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
-                self.builder.build_store(elem_ptr, elem_val).unwrap();
+                let st = self.builder.build_store(elem_ptr, elem_val).unwrap();
+                // The buffer came from `karac_realloc_or_panic`, which carries
+                // malloc's 16-byte guarantee — an over-aligned element's
+                // natural alignment lowers to a faulting `vmovaps`
+                // (B-2026-08-31-24).
+                self.relax_heap_elem_align(Some(st), elem_ty);
                 // A for-loop struct-element binding aliases the SOURCE
                 // container's slot — deep-copy the stored fields so the two
                 // containers own independent heap (B-2026-08-01-24).
@@ -3422,7 +3427,9 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                 };
                 let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[1].value);
-                self.builder.build_store(slot, elem_val).unwrap();
+                let st = self.builder.build_store(slot, elem_val).unwrap();
+                // Heap buffer — malloc's guarantee (B-2026-08-31-24).
+                self.relax_heap_elem_align(Some(st), elem_ty);
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
                 self.deep_copy_pushed_for_loop_agg_element(&args[1].value, slot);
@@ -4259,7 +4266,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 // Narrow to element width — see the `push` store note.
                 let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
-                self.builder.build_store(elem_ptr, elem_val).unwrap();
+                let st = self.builder.build_store(elem_ptr, elem_val).unwrap();
+                // The buffer came from `karac_realloc_or_panic`, which carries
+                // malloc's 16-byte guarantee — an over-aligned element's
+                // natural alignment lowers to a faulting `vmovaps`
+                // (B-2026-08-31-24).
+                self.relax_heap_elem_align(Some(st), elem_ty);
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
                 self.deep_copy_pushed_for_loop_agg_element(&args[0].value, elem_ptr);
@@ -4447,7 +4459,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_memmove(shifted_dst, 8, cur_data, 8, shift_bytes)
                     .unwrap();
                 let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
-                self.builder.build_store(cur_data, elem_val).unwrap();
+                let st = self.builder.build_store(cur_data, elem_val).unwrap();
+                // Heap buffer — malloc's guarantee (B-2026-08-31-24).
+                self.relax_heap_elem_align(Some(st), elem_ty);
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
                 self.deep_copy_pushed_for_loop_agg_element(&args[0].value, cur_data);
@@ -4626,7 +4640,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_memmove(shifted_dst, 8, cur_data, 8, shift_bytes)
                     .unwrap();
                 let elem_val = self.coerce_scalar_to_type_from(elem_val, elem_ty, &args[0].value);
-                self.builder.build_store(cur_data, elem_val).unwrap();
+                let st = self.builder.build_store(cur_data, elem_val).unwrap();
+                // Heap buffer — malloc's guarantee (B-2026-08-31-24).
+                self.relax_heap_elem_align(Some(st), elem_ty);
                 // For-loop struct-element source: copy-depth == drop-depth
                 // (B-2026-08-01-24, same as the push arm).
                 self.deep_copy_pushed_for_loop_agg_element(&args[0].value, cur_data);
@@ -4695,6 +4711,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(elem_ty, elem_ptr, "remove.elem")
                     .unwrap();
+                // Heap buffer — malloc's guarantee (B-2026-08-31-24).
+                self.relax_heap_elem_align(elem_val.as_instruction_value(), elem_ty);
 
                 // memmove(data + idx, data + idx + 1, (len - 1 - idx) * sizeof(elem))
                 let new_len = self
@@ -4894,6 +4912,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(elem_ty, elem_ptr, "pop.elem")
                     .unwrap();
+                // Heap buffer — malloc's guarantee (B-2026-08-31-24).
+                self.relax_heap_elem_align(elem_val.as_instruction_value(), elem_ty);
                 if let (Some(head_slot), Some(head)) = (head_slot, head_val) {
                     // Head-index deque (B-2026-07-30-5). `len` is the END
                     // index here, so popping the front just advances `head`:

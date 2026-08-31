@@ -3092,6 +3092,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let v = self.coerce_scalar_to_type_from(v, elem_ty, src);
         let st = self.builder.build_store(slot, v).unwrap();
+        // `base` is the output Vec's malloc'd buffer, so this store carries
+        // malloc's 16-byte guarantee rather than an over-aligned element's
+        // natural one — a `Vector`-bearing element would lower to a faulting
+        // `vmovaps` (B-2026-08-31-24).
+        self.relax_heap_elem_align(Some(st), elem_ty);
         if let Some((out_list, noalias_list)) = store_alias_md {
             let _ = st.set_metadata(*out_list, self.context.get_kind_id("alias.scope"));
             let _ = st.set_metadata(*noalias_list, self.context.get_kind_id("noalias"));
