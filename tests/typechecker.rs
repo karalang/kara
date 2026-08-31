@@ -47544,8 +47544,11 @@ fn partial_cmp_value_receiver_typechecks_while_float_cmp_stays_rejected() {
 
     // The return type is really checked, not poisoned: a wrong annotation must
     // be REJECTED. Without this the test would pass on a `Type::Error` result,
-    // which is universally assignable — the exact shape `cmp` on a primitive
-    // still has (see the note in `method_user_impl.rs`, filed separately).
+    // which is universally assignable — the shape `cmp` and the six
+    // operator-named methods still had on a primitive receiver when this test
+    // was written, filed as B-2026-08-31-15 and since fixed;
+    // `comparison_methods_on_a_primitive_receiver_are_typed_not_poisoned`
+    // below is its assertion.
     let errs = typecheck_errors(
         "fn main() { let n: i64 = 3; let m: i64 = 4; let s: String = n.partial_cmp(m); }",
     );
@@ -47564,5 +47567,107 @@ fn partial_cmp_value_receiver_typechecks_while_float_cmp_stays_rejected() {
     assert!(
         !errs.is_empty(),
         "`f64.cmp` has no baked `Ord` impl and must stay rejected"
+    );
+}
+
+#[test]
+fn comparison_methods_on_a_primitive_receiver_are_typed_not_poisoned() {
+    // B-2026-08-31-15. `PRIMITIVE_VALUE_METHODS` in `method_user_impl.rs`
+    // exempted `cmp`/`eq`/`ne`/`lt`/`le`/`gt`/`ge` on a non-float scalar
+    // receiver from impl-table dispatch, routing them into a branch that
+    // type-checked the ARGUMENTS and returned `Type::Error`. That poison is
+    // universally assignable, so `let s: String = n.cmp(m)` type-checked and
+    // printed `Less` into a String slot while the identical call on a String
+    // receiver was correctly rejected.
+    //
+    // THE REJECTION IS THE ASSERTION, and it has to be: this is invisible to
+    // an A/B kata. The compiled backend refuses the poisoned program outright
+    // (it cannot interpolate an `Ordering` into a `String`), so the two
+    // backends never disagree on a VALUE — only a test that asserts the
+    // rejection can see it at all.
+    //
+    // 28 cells: 7 methods x 4 primitive receiver classes (signed int, unsigned
+    // int, bool, char). Every one accepted `String` before the fix.
+    let decls = [
+        ("i64", "let a: i64 = 3; let b: i64 = 4;"),
+        ("u32", "let a: u32 = 3u32; let b: u32 = 4u32;"),
+        ("bool", "let a: bool = false; let b: bool = true;"),
+        ("char", "let a: char = 'x'; let b: char = 'y';"),
+        // Not a primitive receiver and never exempted — it is the CONTROL that
+        // showed what the correct behaviour looked like all along, so it must
+        // keep behaving identically.
+        ("String", "let a: String = \"x\"; let b: String = \"y\";"),
+    ];
+    for (recv, decl) in decls {
+        for (method, want) in [
+            ("cmp", "Ordering"),
+            ("eq", "bool"),
+            ("ne", "bool"),
+            ("lt", "bool"),
+            ("le", "bool"),
+            ("gt", "bool"),
+            ("ge", "bool"),
+        ] {
+            let src = format!("fn main() {{ {decl} let s: String = a.{method}(b); println(s); }}");
+            let errs = typecheck_errors(&src);
+            assert!(
+                errs.iter()
+                    .any(|e| e.message.contains(want) && e.message.contains("String")),
+                "{recv}.{method}: expected a String-vs-{want} mismatch, got {errs:?}"
+            );
+        }
+    }
+
+    // The methods still RESOLVE — the fix types them, it does not reject them.
+    for (recv, decl) in decls {
+        for (method, ann) in [
+            ("cmp", "Ordering"),
+            ("eq", "bool"),
+            ("ne", "bool"),
+            ("lt", "bool"),
+            ("le", "bool"),
+            ("gt", "bool"),
+            ("ge", "bool"),
+        ] {
+            let src = format!("fn main() {{ {decl} let r: {ann} = a.{method}(b); }}");
+            let _ = typecheck_ok(&src);
+            let _ = recv;
+        }
+    }
+
+    // THE FLOAT CARVE-OUT, which is the half most easily broken while doing
+    // this. `env_build.rs` deliberately skips `f32`/`f64` in `eq_ord_targets`
+    // (IEEE NaN breaks a total order), so all seven must reach `no method '…'
+    // on type 'f64'` rather than the impl table — B-2026-08-11-9 closed
+    // exactly that. The first attempt at this fix kept a float arm of the old
+    // exemption predicate and INVERTED its meaning, re-poisoning all seven
+    // float cells in one line; that is why the assertion here is the specific
+    // "no method" wording and not merely "some error".
+    for method in ["cmp", "eq", "ne", "lt", "le", "gt", "ge"] {
+        let src = format!(
+            "fn main() {{ let x: f64 = 1.5; let y: f64 = 2.5; let s: String = x.{method}(y); }}"
+        );
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter().any(|e| e
+                .message
+                .contains(&format!("no method '{method}' on type 'f64'"))),
+            "f64.{method} must stay rejected as a missing method, got {errs:?}"
+        );
+    }
+
+    // …and `partial_cmp` is the spelling that DOES serve floats, so removing
+    // the exemption must not have disturbed it.
+    let _ = typecheck_ok(
+        "fn main() { let x: f64 = 1.5; let y: f64 = 2.5;\n\
+         let p: Option[Ordering] = x.partial_cmp(y); }",
+    );
+
+    // A user `impl` owning one of these names still wins over the baked one —
+    // the impl-table route the exemption used to skip is what makes this work,
+    // so it is the change's own consequence, not an unrelated control.
+    let _ = typecheck_ok(
+        "impl i64 { fn lt(self, other: i64) -> String { \"user\" } }\n\
+         fn main() { let a: i64 = 1; let b: i64 = 2; let s: String = a.lt(b); println(s); }",
     );
 }

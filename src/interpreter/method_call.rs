@@ -3463,6 +3463,38 @@ impl<'a> super::Interpreter<'a> {
             };
         }
 
+        // B-2026-08-31-15 — A USER IMPL OWNING ONE OF THESE NAMES WINS, and
+        // the builtin block below is skipped for it. This mirrors
+        // `slice_routes_to_user_impl` above and the `user_owns_cmp` guard on
+        // codegen's twin arm; without it the two backends disagree outright.
+        //
+        // Measured: with `impl i64 { fn lt(self, other: i64) -> String }` in
+        // scope, `a.lt(b)` printed `user` on the compiled backend (whose arm
+        // consults `user_impl_method_exists`) and `true` under `--interp`,
+        // which ran the builtin. That divergence became VISIBLE only when the
+        // codegen arm landed — before it the compiled side simply failed to
+        // build — but the interpreter's precedence was already wrong, and the
+        // typechecker now resolves such a call to the user's signature, so
+        // running the builtin would be a check-green wrong answer.
+        //
+        // The gate reads the TYPECHECKER'S OWN DECISION rather than looking the
+        // name up in the env, and that difference is the whole of its
+        // correctness. `value_type_name` reads a type-erased `Value::Int`,
+        // which answers `i64` for a receiver that is statically `u32` — so the
+        // first version of this gate, an env lookup on that name, applied an
+        // `impl i64` method to a `u32` receiver: `c.lt(d)` on `u32` printed
+        // `user` here and `false` compiled, and the compiled side matched
+        // check, which types it `bool`. `method_impl_dispatch` is populated at
+        // the one point that knows (`method_user_impl.rs`'s `method_pick`), so
+        // an entry means CHECK resolved this call site to a user impl and the
+        // builtin must stand aside; no entry means it did not.
+        let primitive_routes_to_user_impl =
+            matches!(method, "cmp" | "eq" | "ne" | "lt" | "le" | "gt" | "ge")
+                && self.typecheck_result.method_impl_dispatch.contains_key(&(
+                    crate::resolver::SpanKey::from_span(span),
+                    method.to_string(),
+                ));
+
         // Primitive value-receiver dispatch for the builtin Eq/Ord methods.
         // The typechecker registers `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`cmp` for
         // every integer width, bool, char, String, and the F32/F64 total-
@@ -3474,17 +3506,19 @@ impl<'a> super::Interpreter<'a> {
         // form `i64.cmp(a, b)` already routes through `dispatch_lowered_op`;
         // this mirrors that path for the value-receiver form (one arg
         // instead of two) so `xs.sort_by(|a, b| b.cmp(a))` works.
-        if matches!(
-            &obj,
-            Value::Int(_)
-                | Value::Char(_)
-                | Value::Bool(_)
-                | Value::String(_)
-                | Value::TotalFloat32(_)
-                | Value::TotalFloat64(_)
-                | Value::TotalFloat16(_)
-                | Value::TotalBFloat16(_)
-        ) {
+        if !primitive_routes_to_user_impl
+            && matches!(
+                &obj,
+                Value::Int(_)
+                    | Value::Char(_)
+                    | Value::Bool(_)
+                    | Value::String(_)
+                    | Value::TotalFloat32(_)
+                    | Value::TotalFloat64(_)
+                    | Value::TotalFloat16(_)
+                    | Value::TotalBFloat16(_)
+            )
+        {
             if method == "cmp" && args.len() == 1 {
                 let other = self.eval_expr_inner(&args[0].value);
                 // `.cmp` has to recover operand signedness from the receiver

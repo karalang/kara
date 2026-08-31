@@ -254,69 +254,81 @@ impl<'a> super::TypeChecker<'a> {
                 // second win: a `impl char { fn shout(self) -> String }` call
                 // used to poison to `Type::Error` too, so `let n: i64 =
                 // c.shout()` passed; now its return type is checked.
-                const PRIMITIVE_VALUE_METHODS: &[&str] =
-                    &["cmp", "eq", "ne", "lt", "le", "gt", "ge"];
-                // The exemption is keyed on the BAKED IMPL, not on the name
-                // alone (B-2026-08-11-9). `env_build.rs`'s `eq_ord_targets`
-                // registers `Eq`/`Ord` for the integers, `bool`, `char`, `String`
-                // and the F32/F64 wrapper types, and DELIBERATELY skips `f32`/
-                // `f64` — "IEEE NaN breaks Eq/Ord", which is correct and matches
-                // Rust (`f64: PartialOrd` but not `Ord`). Keying on the name
-                // alone shielded the float receivers just as strongly as the
-                // integer ones that actually have the impl, so `f.cmp(g)` was
-                // check-green on all three paths and then failed: `--interp`
-                // reported "no interpreter dispatch arm", and `build` failed with
-                // the "this is a codegen bug — add a dispatcher arm" text, which
-                // blames the compiler for user error (the B-2026-08-11-2 defect
-                // class). Floats have no baked candidate, so dropping the
-                // exemption for them needs no new code — `find_methods_with_args`
-                // comes back empty and the existing error branch says `no method
-                // 'cmp' on type 'f64'`. There is no mis-count risk either: the
-                // `(self, other)` arity confusion the exemption exists to avoid
-                // only arises when a baked impl IS found.
+                // B-2026-08-31-15 — the name-keyed exemption that used to sit
+                // here (`PRIMITIVE_VALUE_METHODS = ["cmp", "eq", "ne", "lt",
+                // "le", "gt", "ge"]`) is GONE. It shielded those seven names on
+                // a non-float scalar receiver from the impl-table dispatch
+                // below, and what it did was route them into the branch that
+                // type-checks the ARGUMENTS and returns `Type::Error`. That
+                // poison is universally assignable, so `let s: String =
+                // n.cmp(m)` type-checked and printed `Less` into a String slot,
+                // and `let v: Vec[i64] = n.cmp(m)` type-checked too — the same
+                // silent-poison class this function's comments above record
+                // closing for `char`/`bool` (B-2026-08-11-2) and for the float
+                // receivers (B-2026-08-11-9). It survived those because it
+                // predates them and read as an arity workaround rather than as
+                // a resolution bypass.
                 //
-                // The OPERATORS `==` / `<` / `>` on floats are a separate
-                // lowering and are untouched; so is a `partial_cmp`/`total_cmp`
-                // surface, if one is ever added. Rejecting the spelling that does
-                // not work is right either way.
+                // It was kept once, deliberately, on a trade that MEASUREMENT
+                // later refuted. The reasoning was: routing the six
+                // operator-named methods through the impl table makes them
+                // type-check and then fail `karac build` with "no handler for
+                // method 'eq'", and turning a silently-poisoned call into a
+                // check-green build-red one is the worse trade. The premise was
+                // false — that divergence was ALREADY the state of `main`,
+                // exemption or not. Measured across the receiver classes that
+                // accept them, `eq`/`ne`/`lt`/`le`/`gt`/`ge` were check-green,
+                // interp-working and build-failing in 36 cells. `String` is the
+                // independent proof: it is not in the exempted receiver gate at
+                // all, typed correctly as `bool` through this very table, and
+                // still failed to build — with a different message ("Vec/String
+                // method 'eq' is not yet supported in codegen"), which is what
+                // shows the gap was codegen's and never the exemption's. The
+                // value-receiver arms landed in `compile_method_call` alongside
+                // this change, so all 36 now build and agree with the
+                // interpreter, and dropping the exemption costs nothing.
                 //
-                // B-2026-08-31-13 — `partial_cmp` is deliberately NOT in the
-                // list above, even though B-2026-08-30-41 registered it beside
-                // `cmp` with an identical `(self, other)` shape. It does not
-                // need to be: the value-receiver arity is now computed
-                // STRUCTURALLY, by dropping a leading `self` param in this
-                // function's pick branch below, so `partial_cmp` resolves
-                // through the impl table and types as `Option[Ordering]` on
-                // every receiver that has the impl — floats included, which is
-                // the population `PartialOrd` exists for and which `cmp`
-                // cannot serve.
+                // What the impl table now gives these seven: `cmp` types as
+                // `Ordering` and the six as `bool`, so `let s: String =
+                // n.cmp(m)` fails exactly as it already did on a String
+                // receiver. The `(self, other)` arity mis-count that was the
+                // exemption's ORIGINAL justification is gone too —
+                // B-2026-08-31-13 made the value-receiver arity structural by
+                // dropping a leading `self` param in this function's pick
+                // branch below, which is also why `partial_cmp` never needed to
+                // be on the list.
                 //
-                // The list stays for the OTHER seven, and removing it was tried
-                // and MEASURED WRONG. Routing `eq`/`ne`/`lt`/`le`/`gt`/`ge`
-                // through the impl table makes them type-check and run under
-                // `--interp` while `karac build` fails with "no handler for
-                // method 'eq' on variable 'n'" — codegen has no dispatcher arm
-                // for the value-receiver spelling of those. Turning a
-                // silently-poisoned call into a check-green build-red one is
-                // the worse trade, so the exemption stays until those arms
-                // exist. The `cmp` poison it also shields — `let s: String =
-                // n.cmp(m)` type-checks and prints `Less` into a `String` slot,
-                // where the same call on a String receiver is correctly
-                // rejected — is filed separately rather than fixed here, for
-                // the same reason.
-                let receiver_has_baked_cmp_impl = !matches!(receiver_for_lookup, Type::Float(_));
-                let is_exempt_builtin =
-                    receiver_has_baked_cmp_impl && PRIMITIVE_VALUE_METHODS.contains(&method);
+                // FLOATS ARE STILL CARVED OUT, and the carve-out needs NO
+                // PREDICATE — which is the part worth reading before touching
+                // this. `env_build.rs`'s
+                // `eq_ord_targets` registers `Eq`/`Ord` for the integers,
+                // `bool`, `char`, `String` and the F32/F64 wrapper types, and
+                // DELIBERATELY skips `f32`/`f64` — "IEEE NaN breaks Eq/Ord",
+                // which matches Rust (`f64: PartialOrd` but not `Ord`). A bare
+                // float has no baked candidate, so `find_methods_with_args`
+                // comes back empty and the existing error branch says `no
+                // method 'cmp' on type 'f64'` — the right answer, and the one
+                // B-2026-08-11-9 closed. So the correct amount of float-specific
+                // code here is NONE, and writing any is how it breaks: the first
+                // attempt at this change kept a float arm of the old predicate,
+                // which INVERTED its meaning (the flag means "skip the table AND
+                // skip the error, return poison" — floats had been outside it,
+                // which is what produced the error) and re-poisoned all seven
+                // float cells in one line. Measured on the probe, not reasoned
+                // about, which is the only reason it was caught.
+                // `partial_cmp` is the spelling that serves them, and it
+                // resolves through the table on every receiver including
+                // floats. The `==` / `<` / `>` OPERATORS on floats are a
+                // separate lowering and are untouched.
                 if matches!(
                     receiver_for_lookup,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
                 ) {
                     if let Some(prim) = method_callee_type_name(receiver_for_lookup) {
-                        if !is_exempt_builtin
-                            && !self
-                                .env
-                                .find_methods_with_args(&prim, &[], method)
-                                .is_empty()
+                        if !self
+                            .env
+                            .find_methods_with_args(&prim, &[], method)
+                            .is_empty()
                         {
                             // Route to impl-table dispatch (arg inference /
                             // label validation / Self resolution happen there).
@@ -337,7 +349,7 @@ impl<'a> super::TypeChecker<'a> {
                             for arg in args {
                                 self.infer_expr(&arg.value);
                             }
-                            if !is_exempt_builtin {
+                            {
                                 let mut msg = format!("no method '{}' on type '{}'", method, prim);
                                 // `char` has no numeric-value method — the route
                                 // is the cast. This is the exact spelling the
@@ -521,6 +533,48 @@ impl<'a> super::TypeChecker<'a> {
                             qualified.clone(),
                         );
                     }
+                }
+                // B-2026-08-31-15 — the SECOND population of this table, for a
+                // second resolution neither runtime can redo, and for exactly
+                // the reason above. A user `impl i64 { fn lt(self, other: i64)
+                // -> String }` now wins over the baked `Ord` for `a.lt(b)`
+                // (removing `PRIMITIVE_VALUE_METHODS` is what made the impl
+                // reachable at all), and both backends have to agree with that.
+                //
+                // Codegen can: its arm consults `user_impl_method_exists`,
+                // which reads the same static receiver type the typechecker
+                // did. The INTERPRETER cannot — `value_type_name` reads a
+                // type-erased `Value::Int`, which says `i64` for a receiver
+                // that is statically `u32`, so a bare env lookup applied the
+                // `impl i64` method to a `u32` receiver. Measured: with that
+                // lookup, `c.lt(d)` on `u32` answered `user` under `--interp`
+                // and `false` compiled, where the typechecker types it `bool`
+                // — the compiled side was right. Recording the winner here is
+                // what lets the interpreter ask "did CHECK pick a user impl
+                // for this call site?" instead of guessing from the value.
+                //
+                // Inert for codegen, like the Array insert above:
+                // `impl_dispatch_segment_at`'s fallback is the bare head name,
+                // which for an `i64` receiver is already `i64`.
+                //
+                // `target_span.is_some()` is the USER-vs-BAKED discriminator,
+                // and it is load-bearing: `register_builtin_impl` puts the
+                // baked `Ord`/`Eq` in this same table, reaching this same
+                // `method_pick` branch with `target_type == "i64"`. Recording
+                // those too made the interpreter's gate fire for EVERY
+                // primitive comparison and stand the builtin aside with nothing
+                // behind it — 40 of 41 cells went from agreeing to "method 'lt'
+                // not found on type 'i64' (no interpreter dispatch arm)". A
+                // synthesized impl has no source target to point at; a written
+                // one does.
+                if imp.target_span.is_some()
+                    && matches!(method, "cmp" | "eq" | "ne" | "lt" | "le" | "gt" | "ge")
+                    && crate::prelude::PRELUDE_PRIMITIVES.contains(&imp.target_type.as_str())
+                {
+                    self.method_impl_dispatch.insert(
+                        (SpanKey::from_span(span), method.to_string()),
+                        imp.target_type.clone(),
+                    );
                 }
                 // Validate labels against method parameter names
                 self.validate_labels(args, &sig.param_names, span);

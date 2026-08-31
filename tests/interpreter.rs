@@ -51111,3 +51111,76 @@ fn interp_a_destructuring_arm_runs_each_payload_drop_body_once() {
         assert_eq!(run(&src), *want, "{label}");
     }
 }
+
+/// B-2026-08-31-15 — the INTERPRETER oracle for the value-receiver comparison
+/// methods, and specifically for the one thing the compiled tests cannot pin
+/// from their own side: which of the builtin and a user `impl` wins.
+///
+/// The interpreter's `value_type_name` reads a type-ERASED `Value::Int`, so it
+/// cannot tell an `i64` receiver from a `u32` one — both answer `i64`. A gate
+/// keyed on that lookup therefore applied an `impl i64 { fn lt }` to a `u32`
+/// receiver, printing `user` where the typechecker types the call `bool` and
+/// the compiled backend printed `false`. The gate reads the typechecker's
+/// `method_impl_dispatch` record instead, which is decided at the one point
+/// that knows the static receiver type.
+///
+/// `target_span.is_some()` is what makes that record mean "a USER impl won":
+/// `register_builtin_impl` puts the baked `Ord`/`Eq` through the same pick
+/// branch, and recording those too made this gate fire for EVERY primitive
+/// comparison and stand the builtin aside with nothing behind it — every case
+/// below became "method 'lt' not found on type 'i64'".
+#[test]
+fn value_receiver_comparison_prefers_a_user_impl_over_the_builtin() {
+    // No user impl in scope: the builtin answers, on every receiver class.
+    for (recv, decl) in [
+        ("i64", "let a: i64 = 3; let b: i64 = 4;"),
+        ("u32", "let a: u32 = 3u32; let b: u32 = 4u32;"),
+        ("bool", "let a: bool = false; let b: bool = true;"),
+        ("char", "let a: char = 'x'; let b: char = 'y';"),
+        ("String", "let a: String = \"x\"; let b: String = \"y\";"),
+    ] {
+        for (method, want) in [
+            ("eq", "false\n"),
+            ("ne", "true\n"),
+            ("lt", "true\n"),
+            ("le", "true\n"),
+            ("gt", "false\n"),
+            ("ge", "false\n"),
+        ] {
+            let src = format!("fn main() {{ {decl} println(a.{method}(b)); }}");
+            assert_eq!(run(&src), want, "{recv}.{method}");
+        }
+    }
+
+    // A user impl on the receiver's own type wins…
+    assert_eq!(
+        run(
+            "impl i64 { fn lt(self, other: i64) -> String { \"user\" } }\n\
+             fn main() { let a: i64 = 1; let b: i64 = 2; println(a.lt(b)); }"
+        ),
+        "user\n",
+        "a user `impl i64` defining `lt` must beat the baked Ord for an i64 receiver"
+    );
+
+    // …and does NOT leak onto a different primitive. This is the erasure
+    // control: `value_type_name` says `i64` for both receivers, so only a gate
+    // that consults the typechecker can get this line right.
+    assert_eq!(
+        run(
+            "impl i64 { fn lt(self, other: i64) -> String { \"user\" } }\n\
+             fn main() { let c: u32 = 5u32; let d: u32 = 2u32; println(c.lt(d)); }"
+        ),
+        "false\n",
+        "an `impl i64` must not answer for a u32 receiver — check types this `bool`"
+    );
+
+    // A user impl on a NON-comparison name was always reachable and must be
+    // unaffected: it is the control that shows this change touched only the
+    // seven names it meant to.
+    assert_eq!(
+        run("impl i64 { fn shout(self) -> String { \"hi\" } }\n\
+             fn main() { let a: i64 = 1; println(a.shout()); }"),
+        "hi\n",
+        "control: a non-comparison user impl on a primitive"
+    );
+}

@@ -25989,6 +25989,144 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-15 — the VALUE-receiver spelling of the six
+    /// operator-named comparisons had no codegen arm at all, so every one of
+    /// them was check-green, correct under `--interp`, and a hard `karac build`
+    /// failure: "no handler for method 'lt' on variable 'a'". 36 cells — six
+    /// methods across every receiver class that accepts them.
+    ///
+    /// The TYPE half of this row (the `Type::Error` poison that let `let s:
+    /// String = n.cmp(m)` through) is asserted in tests/typechecker.rs by
+    /// `comparison_methods_on_a_primitive_receiver_are_typed_not_poisoned`;
+    /// this is the run-vs-build half, and the interpreter is the oracle.
+    #[test]
+    fn e2e_value_receiver_comparison_methods_match_the_interpreter() {
+        let decls = [
+            ("i64", "let a: i64 = 3; let b: i64 = 4;"),
+            ("u32", "let a: u32 = 3u32; let b: u32 = 4u32;"),
+            ("i8", "let a: i8 = 3i8; let b: i8 = 4i8;"),
+            ("bool", "let a: bool = false; let b: bool = true;"),
+            ("char", "let a: char = 'x'; let b: char = 'y';"),
+            ("String", "let a: String = \"x\"; let b: String = \"y\";"),
+        ];
+        // a < b holds for every pair above, so the expected answers are the
+        // same across the receiver classes — which is itself the point: these
+        // six must not depend on the receiver's shape.
+        for (recv, decl) in decls {
+            for (method, want) in [
+                ("eq", "false\n"),
+                ("ne", "true\n"),
+                ("lt", "true\n"),
+                ("le", "true\n"),
+                ("gt", "false\n"),
+                ("ge", "false\n"),
+            ] {
+                let src = format!("fn main() {{ {decl} println(a.{method}(b)); }}");
+                assert_eq!(run_program(&src).as_deref(), Some(want), "{recv}.{method}");
+            }
+        }
+
+        // SIGNEDNESS, which is the half that goes wrong quietly. B-2026-08-28-5
+        // is the record: `.cmp` was hardcoded signed while its `<` sibling was
+        // not, so `(200u8).cmp(100u8)` answered `Less`. The new arms derive the
+        // flag from `expr_is_unsigned_int`, the same helper `.cmp` uses, so the
+        // two spellings cannot drift apart again — and these cases are where
+        // that would show.
+        assert_eq!(
+            run_program(
+                "fn main() { let a: u8 = 200u8; let b: u8 = 100u8;\n\
+                 println(f\"{a.lt(b)} {a.gt(b)} {a.le(b)} {a.ge(b)}\"); }"
+            )
+            .as_deref(),
+            Some("false true false true\n"),
+            "u8 with the top bit set must compare UNSIGNED"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let a: u32 = 4000000000u32; let b: u32 = 1u32;\n\
+                 println(f\"{a.lt(b)} {a.gt(b)}\"); }"
+            )
+            .as_deref(),
+            Some("false true\n"),
+            "u32 above i32::MAX must compare UNSIGNED"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let a: bool = false; let b: bool = true;\n\
+                 println(f\"{a.lt(b)} {a.gt(b)} {b.lt(a)}\"); }"
+            )
+            .as_deref(),
+            Some("true false false\n"),
+            "`false < true`: a bool is i1 and must NOT read as signed"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() { let a: i64 = -5; let b: i64 = 3;\n\
+                 println(f\"{a.lt(b)} {a.gt(b)}\"); }"
+            )
+            .as_deref(),
+            Some("true false\n"),
+            "a signed receiver must still compare SIGNED"
+        );
+
+        // THE OPERATOR AND THE METHOD ARE ONE QUESTION, so they must give one
+        // answer. This is the assertion that would catch a future drift
+        // between the two lowerings even if both were individually plausible.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a: u8 = 200u8; let b: u8 = 100u8;\n\
+                     println(f\"{a < b} {a.lt(b)} {a > b} {a.gt(b)}\");\n\
+                     let c: bool = false; let d: bool = true;\n\
+                     println(f\"{c < d} {c.lt(d)}\");\n\
+                     let s: String = \"abc\"; let t: String = \"abd\";\n\
+                     println(f\"{s < t} {s.lt(t)} {s == t} {s.eq(t)}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("false false true true\ntrue true\ntrue true false false\n"),
+            "the operator and method spellings must agree pair-for-pair"
+        );
+
+        // A USER IMPL OWNING ONE OF THESE NAMES WINS. Removing the typechecker
+        // exemption is what made such an impl reachable at all, and both
+        // backends have to honour it: codegen's arm consults
+        // `user_impl_method_exists`, and the interpreter reads the
+        // typechecker's `method_impl_dispatch` record.
+        //
+        // The `u32` line is the CONTROL, and it is the one that pins the
+        // interpreter's mechanism: the impl is on `i64`, so a `u32` receiver
+        // must still get the builtin. A gate keyed on the interpreter's own
+        // `value_type_name` cannot tell them apart — it answers `i64` for both,
+        // because a `Value::Int` is type-erased — and answered `user` here
+        // while the compiled side (and check, which types it `bool`) said
+        // `false`.
+        assert_eq!(
+            run_program(
+                "impl i64 { fn lt(self, other: i64) -> String { \"user\" } }\n\
+                 fn main() {\n\
+                     let a: i64 = 1; let b: i64 = 2; println(a.lt(b));\n\
+                     let c: u32 = 5u32; let d: u32 = 2u32; println(c.lt(d));\n\
+                 }"
+            )
+            .as_deref(),
+            Some("user\nfalse\n"),
+            "a user `impl i64` must win for an i64 receiver and NOT for a u32 one"
+        );
+
+        // `.cmp` was never build-broken (it has had an arm since before this
+        // row) and must stay working, since the fix moves its typing.
+        for (recv, decl) in decls {
+            let src = format!(
+                "fn main() {{ {decl} let r: Ordering = a.cmp(b);\n\
+                 match r {{ Ordering.Less => {{ println(\"Less\"); }}\n\
+                 Ordering.Equal => {{ println(\"Equal\"); }}\n\
+                 Ordering.Greater => {{ println(\"Greater\"); }} }} }}"
+            );
+            assert_eq!(run_program(&src).as_deref(), Some("Less\n"), "{recv}.cmp");
+        }
+    }
+
     /// B-2026-08-31-24 — a `Vec` whose element type is OVER-ALIGNED (a
     /// `Vector[T, N]` wider than 16 bytes) put its element buffer on plain
     /// malloc memory, which guarantees only 16-byte alignment, and then read

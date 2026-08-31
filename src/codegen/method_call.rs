@@ -5396,6 +5396,143 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-08-31-15 — the VALUE-receiver spelling of the six
+        // operator-named comparisons. `a < b` has always lowered (the
+        // lowering pass rewrites it to the `i64.lt(a, b)` TYPE-receiver assoc
+        // call, which `compile_assoc_call`'s primitive arm computes), but
+        // `a.lt(b)` reaches method dispatch as an ordinary `MethodCall` and
+        // had no arm at all — so all six were check-green, ran correctly under
+        // `--interp`, and failed `karac build` with "no handler for method
+        // 'lt' on variable 'a'". Measured across the receiver classes that
+        // accept them (i64, u32, i8, bool, char, String): 36 cells, every one
+        // a live run-vs-build divergence.
+        //
+        // This sits beside the `cmp` arm below and shares its two operand
+        // shapes and its signedness rule deliberately. `.cmp` and `.lt` answer
+        // the same question about the same pair, and B-2026-08-28-5 is the
+        // record of what it costs when they derive signedness differently:
+        // `.cmp` was hardcoded SIGNED while `<` was not, so `false.cmp(true)`
+        // said `Greater` and `(200u8).cmp(100u8)` said `Less`. Deriving both
+        // from `expr_is_unsigned_int` here is what keeps the two spellings
+        // from drifting apart again.
+        //
+        // Guarded on a user impl exactly as `cmp` is: an `impl P { fn lt(...) }`
+        // owns the name and must reach its own function, not this builtin.
+        const VALUE_CMP_OPS: &[&str] = &["eq", "ne", "lt", "le", "gt", "ge"];
+        if VALUE_CMP_OPS.contains(&method)
+            && args.len() == 1
+            && !self
+                .type_name_of_expr(object)
+                .is_some_and(|t| self.user_impl_method_exists(call_span, &t, method))
+        {
+            let lhs = self.compile_expr(object)?;
+            let rhs = self.compile_expr(&args[0].value)?;
+            // Integer receivers (i8..i128, u8..usize, `bool` as i1, `char` as
+            // its scalar) — the same population the `cmp` arm's IntValue pair
+            // covers.
+            if let (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) = (lhs, rhs) {
+                let unsigned =
+                    self.expr_is_unsigned_int(object) || self.expr_is_unsigned_int(&args[0].value);
+                let pred = match (method, unsigned) {
+                    ("eq", _) => IntPredicate::EQ,
+                    ("ne", _) => IntPredicate::NE,
+                    ("lt", true) => IntPredicate::ULT,
+                    ("lt", false) => IntPredicate::SLT,
+                    ("le", true) => IntPredicate::ULE,
+                    ("le", false) => IntPredicate::SLE,
+                    ("gt", true) => IntPredicate::UGT,
+                    ("gt", false) => IntPredicate::SGT,
+                    ("ge", true) => IntPredicate::UGE,
+                    ("ge", false) => IntPredicate::SGE,
+                    _ => unreachable!("VALUE_CMP_OPS covers exactly these six"),
+                };
+                let out = self
+                    .builder
+                    .build_int_compare(pred, l, r, &format!("{method}.op"))
+                    .unwrap();
+                return Ok(out.into());
+            }
+            // String receivers, via the same `karac_string_cmp` the `.cmp` arm
+            // and the `<`/`>` operators use — a byte-lexicographic -1/0/+1
+            // that the predicate then reads against zero. These were NOT
+            // poisoned at typecheck (String is not in the exempted receiver
+            // gate, so the impl table types them `bool` correctly) and still
+            // failed to build, with a different message: "Vec/String method
+            // 'eq' is not yet supported in codegen". That is the independent
+            // proof this gap is codegen's and not the exemption's.
+            if let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs) {
+                if l.get_type() == self.vec_struct_type() && r.get_type() == self.vec_struct_type()
+                {
+                    let i64_t = self.context.i64_type();
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let l_ptr = self
+                        .builder
+                        .build_extract_value(l, 0, "scmp.l.ptr")
+                        .unwrap()
+                        .into_pointer_value();
+                    let l_len = self
+                        .builder
+                        .build_extract_value(l, 1, "scmp.l.len")
+                        .unwrap()
+                        .into_int_value();
+                    let r_ptr = self
+                        .builder
+                        .build_extract_value(r, 0, "scmp.r.ptr")
+                        .unwrap()
+                        .into_pointer_value();
+                    let r_len = self
+                        .builder
+                        .build_extract_value(r, 1, "scmp.r.len")
+                        .unwrap()
+                        .into_int_value();
+                    let cmp_fn =
+                        self.module
+                            .get_function("karac_string_cmp")
+                            .unwrap_or_else(|| {
+                                let fn_ty = i64_t.fn_type(
+                                    &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                                    false,
+                                );
+                                self.module.add_function(
+                                    "karac_string_cmp",
+                                    fn_ty,
+                                    Some(inkwell::module::Linkage::External),
+                                )
+                            });
+                    let raw = self
+                        .builder
+                        .build_call(
+                            cmp_fn,
+                            &[l_ptr.into(), l_len.into(), r_ptr.into(), r_len.into()],
+                            "scmp.raw",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    // `karac_string_cmp` returns a SIGNED -1/0/+1, so the
+                    // predicate against zero is signed regardless of what the
+                    // operands were.
+                    let pred = match method {
+                        "eq" => IntPredicate::EQ,
+                        "ne" => IntPredicate::NE,
+                        "lt" => IntPredicate::SLT,
+                        "le" => IntPredicate::SLE,
+                        "gt" => IntPredicate::SGT,
+                        "ge" => IntPredicate::SGE,
+                        _ => unreachable!("VALUE_CMP_OPS covers exactly these six"),
+                    };
+                    let out = self
+                        .builder
+                        .build_int_compare(pred, raw, i64_t.const_zero(), &format!("{method}.sop"))
+                        .unwrap();
+                    return Ok(out.into());
+                }
+            }
+            // Any other operand shape falls through to the existing dispatch
+            // rather than guessing — an unhandled pair reaches the same
+            // "no handler" error it does today, which is the honest outcome.
+        }
         let user_owns_cmp = method == "cmp"
             && args.len() == 1
             && self
