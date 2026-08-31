@@ -47314,3 +47314,115 @@ fn shadowing_a_prelude_type_name_warns_and_is_suppressible() {
         "#[allow(prelude_shadow)] must suppress the warning"
     );
 }
+
+/// B-2026-08-30-25 — EVERY primitive receiver must reject an invented method
+/// name. A SWEEP, not a case, and that is the point of it.
+///
+/// The defect this pins has now recurred three times, each found only by
+/// tripping over it, because a missing arm in `method_callee_type_name` is
+/// invisible to the compiler — the `_ => None` fallthrough makes the
+/// `if let Some(prim)` guard in `method_user_impl.rs` skip the whole existence
+/// check, and the call silently returns `Type::Error`. That type is universally
+/// assignable, so `let s: String = x.bogus()` typechecks clean and the same
+/// invented call also unifies with `Vec[i64]` at the next use site; the program
+/// then dies in the backend with a message telling the author they have found a
+/// COMPILER bug and should add a dispatcher arm.
+///
+///   - B-2026-08-11-2 — `char` and `bool`, via the sibling guard.
+///   - B-2026-08-19-19 — `i128` / `u128`, in this same function.
+///   - B-2026-08-30-25 — `f16` / `bf16`.
+///
+/// Each fix added the arms it needed and left the next instance to be
+/// discovered the same way. This test is the measure that ends that: a new
+/// primitive width added without an arm fails here immediately, and the failure
+/// names the width.
+///
+/// It asserts the TYPE NAME in the message too, not merely that some error
+/// fired. An arm that returns the wrong name would still reject the call while
+/// telling the author about a type they did not write — which is the shape of
+/// the interpreter's "method not found on type 'f64'" for an `f16` receiver
+/// that this row also reports.
+#[test]
+fn every_primitive_receiver_rejects_an_invented_method() {
+    // `env.args().len()` launders each initializer past constant folding so the
+    // receiver is a genuine value of the declared type rather than a literal
+    // the checker might treat differently.
+    let cases: &[(&str, &str)] = &[
+        ("i8", "let a: i8 = (env.args().len() as i8) + 1;"),
+        ("i16", "let a: i16 = (env.args().len() as i16) + 1;"),
+        ("i32", "let a: i32 = (env.args().len() as i32) + 1;"),
+        ("i64", "let a: i64 = (env.args().len() as i64) + 1;"),
+        ("i128", "let a: i128 = (env.args().len() as i128) + 1;"),
+        ("isize", "let a: isize = (env.args().len() as isize) + 1;"),
+        ("u8", "let a: u8 = (env.args().len() as u8) + 1;"),
+        ("u16", "let a: u16 = (env.args().len() as u16) + 1;"),
+        ("u32", "let a: u32 = (env.args().len() as u32) + 1;"),
+        ("u64", "let a: u64 = (env.args().len() as u64) + 1;"),
+        ("u128", "let a: u128 = (env.args().len() as u128) + 1;"),
+        ("usize", "let a: usize = (env.args().len() as usize) + 1;"),
+        (
+            "f16",
+            "let a: f16 = ((env.args().len() as f32) + 1.0f32) as f16;",
+        ),
+        (
+            "bf16",
+            "let a: bf16 = ((env.args().len() as f32) + 1.0f32) as bf16;",
+        ),
+        ("f32", "let a: f32 = (env.args().len() as f32) + 1.0;"),
+        ("f64", "let a: f64 = (env.args().len() as f64) + 1.0;"),
+        ("bool", "let a: bool = env.args().len() > 0;"),
+        ("char", "let a: char = 'x';"),
+    ];
+    for (ty, init) in cases {
+        let src =
+            format!("fn main() {{\n    {init}\n    let _b = a.definitely_not_a_method();\n}}\n");
+        let errs = typecheck_errors(&src);
+        let want = format!("no method 'definitely_not_a_method' on type '{ty}'");
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(&want)),
+            "{ty}: an invented method must be rejected, naming the receiver's \
+             type — a missing `method_callee_type_name` arm silently poisons \
+             this to `Type::Error` instead. Wanted {want:?}, got: {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// B-2026-08-30-25 — the other half of the same fix: the real float methods
+/// must keep working at the narrow widths.
+///
+/// Turning the existence check ON for `f16` / `bf16` is only safe because
+/// `sqrt` / `floor` / `abs` and the rest are intercepted structurally on
+/// `Type::Float(_)` in `method_numeric.rs`, well before the name lookup. If
+/// that interception ever moves behind the lookup, every one of these becomes
+/// `no method 'sqrt' on type 'f16'` — a capability regression the sweep above
+/// cannot see, because it only asserts that a BOGUS name is rejected.
+#[test]
+fn narrow_float_receivers_keep_their_real_methods() {
+    for ty in ["f16", "bf16"] {
+        for method in [
+            "abs",
+            "sqrt",
+            "floor",
+            "ceil",
+            "round",
+            "ln",
+            "exp",
+            "sin",
+            "cos",
+            "trunc",
+            "signum",
+            "to_string",
+        ] {
+            let src = format!(
+                "fn main() {{\n    \
+                 let a: {ty} = ((env.args().len() as f32) + 1.0f32) as {ty};\n    \
+                 let _b = a.{method}();\n}}\n"
+            );
+            // `typecheck_ok` panics on ANY error, which is the assertion:
+            // the point is that these programs are clean, and a message
+            // naming the method would be the failure this guards.
+            typecheck_ok(&src);
+        }
+    }
+}

@@ -1113,6 +1113,24 @@ pub(super) fn method_callee_type_name(ty: &Type) -> Option<String> {
         Type::UInt(UIntSize::U128) => Some("u128".to_string()),
         Type::UInt(UIntSize::Usize) => Some("usize".to_string()),
         Type::Int(IntSize::Isize) => Some("isize".to_string()),
+        // B-2026-08-30-25: the NARROW float arms were missing, the third
+        // instance of the omission the `i128`/`u128` comment above records and
+        // the second with this exact consequence. `f16`/`bf16` fell to
+        // `_ => None`, the `if let Some(prim)` guard in `method_user_impl.rs`
+        // skipped the whole existence check, and the receiver dropped onto the
+        // silent-poison fall-through — so `karac check` printed "All checks
+        // passed." for `let s: String = a.completely_bogus();` on an `f16`,
+        // then the program died in the backend with a message telling the
+        // author they had found a COMPILER bug. `Type::Error` is universally
+        // assignable, so the same invented call also unified with `String` at
+        // one use site and `Vec[i64]` at the next.
+        //
+        // The real float methods are unaffected: `sqrt`/`floor`/`abs`/… are
+        // intercepted structurally on `Type::Float(_)` in `method_numeric.rs`
+        // well before this lookup, so the name that reaches here is one nothing
+        // recognises — which is exactly what should be rejected.
+        Type::Float(FloatSize::F16) => Some("f16".to_string()),
+        Type::Float(FloatSize::BF16) => Some("bf16".to_string()),
         Type::Float(FloatSize::F32) => Some("f32".to_string()),
         Type::Float(FloatSize::F64) => Some("f64".to_string()),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
