@@ -40882,7 +40882,33 @@ fn main() {
                      \x20   println(\"mid\");\n\
                      }}"
                 ),
-                "dR9\ndR8\nmid\n",
+                // PINNED AT A DEFECT, and DELIBERATELY DIFFERENT from the
+                // interpreter twin, which expects `dR9 dR8 mid`. With NEITHER
+                // generation read, the endpoint comes from
+                // `compute_block_last_use`'s never-read fallback, and codegen
+                // reads the variant that pins it to the FIRST `let` — so the
+                // first generation fires before the shadowing `let` and the
+                // second, whose slot did not exist at that index, drains at
+                // scope exit.
+                //
+                // The shadow-aware fallback the interpreter uses puts both at
+                // the last `let` and produces `dR9 dR8 mid` here too. Feeding
+                // it to codegen was tried, landed in B-2026-08-30-51, and
+                // REGRESSED auto-par programs (B-2026-08-31-5): an outlined
+                // `__par_branch_*` region leaves the insert block terminated
+                // across the statements it spans, so an endpoint moved INTO
+                // that span never fires and the body lands at function exit.
+                //
+                // NOTE THIS HARNESS COMPILES SEQUENTIALLY, so the expectation
+                // above is the no-outlining one and this pin CANNOT see that
+                // regression. Through `karac build`, where auto-par is on by
+                // default, the same program prints `dR3 dR4 mid c=0` — both
+                // bodies ahead of the statement, better than what is pinned
+                // here. The full four-way measurement (sequential vs auto-par,
+                // each fallback) is on B-2026-08-31-5's successor row; neither
+                // fallback is right in both, which is why this is pinned at a
+                // defect rather than fixed.
+                "dR8\nmid\ndR9\n",
             ),
             (
                 "shadow-inside-nested-block",

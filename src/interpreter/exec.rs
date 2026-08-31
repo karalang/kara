@@ -470,7 +470,52 @@ pub(crate) fn cancelled_sentinel() -> Value {
 /// The walker is intentionally conservative — it only fires NLL
 /// drops when it can prove the binding is dead. Cross-block
 /// liveness (CFG dataflow) is out of scope for this round.
+/// NLL last-use indices with the pre-B-2026-08-30-51 never-read fallback: the
+/// FIRST `let` of a name wins. CODEGEN reads this, and must keep reading it.
+///
+/// B-2026-08-31-5. B-2026-08-30-51 moved that fallback to the LAST `let`, which
+/// the interpreter needs, and fed it to both backends because they share this
+/// function. On codegen it REGRESSED auto-par programs: `emit_par_run` outlines
+/// a statement range into a `__par_branch_*` worker, and while that region is
+/// emitted the insert block is terminated, so `fire_due_user_drops` early-returns
+/// for exactly the statement indices the region spans. Moving a never-read
+/// shadowed binding's endpoint from the first `let` (before the region) to the
+/// last (inside it) therefore moved its body from the shadowing `let` to
+/// FUNCTION EXIT. Measured: `KARAC_AUTO_PAR=0` at COMPILE time makes the same
+/// program correct, which is what localizes it to the outlining rather than to
+/// the endpoint.
+///
+/// So the two callers want different answers until codegen's outlining and its
+/// NLL placement are reconciled, and they say so here rather than sharing one
+/// and hoping. Codegen's own never-read shadowed ORDERING is imperfect under
+/// this fallback — it fires the first generation before the shadowing `let` and
+/// the second at scope exit — but that is what it did before B-2026-08-30-51 and
+/// is tracked as its own defect rather than traded for a worse one.
+///
+/// `allow(dead_code)` on the DEFAULT leg, not a `cfg`: every caller lives in
+/// `src/codegen`, which is behind `--features llvm`, so without this the
+/// function is unused there and `cargo clippy --all --all-targets -- -D
+/// warnings` — the leg CI runs — fails. Keeping the body compiled on both legs
+/// rather than `cfg`-ing it out keeps this doc comment's contrast with the
+/// shadow-aware sibling meaningful wherever someone reads it.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
 pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
+    compute_block_last_use_inner(block, false)
+}
+
+/// B-2026-08-30-51 — [`compute_block_last_use`] with a SHADOWED name's
+/// never-read endpoint at its LAST `let` rather than its first.
+///
+/// The interpreter needs this because its shadow slots are created AT the
+/// shadowing `let`: an endpoint pinned to the first `let` precedes the surviving
+/// slot's existence, so that slot never fires by NLL and drains at scope exit
+/// instead. It has no outlining, so the hazard that keeps codegen on the other
+/// variant cannot arise here.
+pub(crate) fn compute_block_last_use_shadow_aware(block: &Block) -> HashMap<String, usize> {
+    compute_block_last_use_inner(block, true)
+}
+
+fn compute_block_last_use_inner(block: &Block, shadow_aware: bool) -> HashMap<String, usize> {
     // Collect every binding the block introduces.
     let mut owned: HashSet<String> = HashSet::new();
     for stmt in &block.stmts {
@@ -588,8 +633,14 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
     // `or_insert` was protecting.
     let mut filled_here: HashSet<String> = HashSet::new();
     let mut note_unread = |n: String, idx: usize, last_use: &mut HashMap<String, usize>| {
-        if last_use.contains_key(&n) && !filled_here.contains(&n) {
-            return;
+        if last_use.contains_key(&n) {
+            // Only the SHADOW-AWARE caller lets a later `let` of a name this
+            // loop already filled move the endpoint forward; the plain one
+            // keeps the first, which is what `or_insert` did before
+            // B-2026-08-30-51. See the two entry points for why they differ.
+            if !shadow_aware || !filled_here.contains(&n) {
+                return;
+            }
         }
         filled_here.insert(n.clone());
         last_use.insert(n, idx);
