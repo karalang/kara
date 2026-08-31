@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 337 | 3 |
-| run-vs-build | 275 | 25 |
-| leak | 240 | 7 |
+| miscompile | 338 | 4 |
+| run-vs-build | 275 | 24 |
+| leak | 241 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 157 | 2 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1312 | 38 |
-| interp | 295 | 23 |
+| codegen | 1314 | 39 |
+| interp | 296 | 24 |
 | typecheck | 283 | 0 |
 | other | 70 | 0 |
 | ownership | 70 | 2 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1914 surfaced · 47 open · 1837 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1916 surfaced · 48 open · 1838 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (47)
+### Open (48)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-29-36 | 2026-08-29 | codegen | low | A TWO-HOP PROJECTION (`match w.s.e { .. }`) STILL RUNS A MATERIALIZING ARM'S PAYLOAD BODY ON THE ZEROED SLOT -- compiled `m8 dR8 dE dR0` vs interp `m8 dR8 dE dR8`, where the ONE-hop spelling now gives `m8 dR8 dE` on both | — |
 | B-2026-08-29-38 | 2026-08-29 | codegen | medium | A method's FRESH-TEMP argument whose value is handed back out runs its `Drop` body TWICE on both compiled backends against once in the interpreter -- the passthrough guard that would suppress the caller-side temp drop is gated on `ExprKind::Identifier`, which a temp never is | — |
 | B-2026-08-29-43 | 2026-08-29 | interp+codegen | medium | A MIXED STRUCT LITERAL over a struct with its OWN `impl Drop` still runs a param view's `Drop` body TWICE -- `let s = Sd3 { a: r, b: R { id: 2 } }` prints `dSd3 dR2 dR1 dR1` where `dSd3 dR2 dR1` is due; B-2026-08-29-24 fixed every other mixed wrap, and declined this one because such a struct's field bodies run inside the TYPE-LEVEL `karac_drop_<T>` wrapper, which can only be swapped for a variant that drops ALL of them | none |
 | B-2026-08-29-44 | 2026-08-29 | interp+codegen | medium | A WHOLE-VALUE REBIND AFTER A MIXED WRAP RE-ARMS THE WALK THE MASK JUST WITHHELD -- `let w = W2.Two(r, R { id: 2 }); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, because B-2026-08-29-24's per-slot mask is keyed on the BINDING and the destination registers afresh with no mask | none |
@@ -177,6 +176,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1914 surfaced
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-41 | 2026-08-31 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[i64] { let mut v = Vec.new(); ...; return v.as_slice() }`, and the compiled program then READS FREED MEMORY while the interpreter prints the live values, so it also reads as a run-vs-build divergence | — |
 | B-2026-08-31-42 | 2026-08-31 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a param or a return; the wasm ABI decomposes the struct into fields, so the `bfloat` field is promoted exactly as a bare param was, and B-2026-08-30-42's signature rewrite does not reach it. `ref self` builds (a pointer is not decomposed) and is a real workaround | — |
+| B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
+| B-2026-08-31-44 | 2026-08-31 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE -- a discarded branch whose arm literal initializes a field from a LOCAL (`P { a: t.a, b: 1 }`, projected, or `P { a: s, b: 1 }`, moved in whole) still registers NO memory, because the guard that declines it was written against an aliasing double free that B-2026-08-31-34 has now fixed | — |
 
 ### Relocated (2)
 
@@ -209,9 +210,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1914 surfaced
 
 </details>
 
-### Fixed (1837)
+### Fixed (1838)
 
-<details><summary>1837 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1838 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1971,6 +1972,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1914 surfaced
 | B-2026-08-29-33 | interp+codegen | medium | A MATERIALIZING ARM OVER A PROJECTION-PLACE ENUM SCRUTINEE RUNS THE PAYLOAD'S `Drop` BODY TWICE ON EVERY BACKEND -- `match s.e { E.A(r) => { let m =… | 9f3e2cb |
 | B-2026-08-29-34 | codegen | medium | A `Vector[bf16, N]` LANE OP ABORTS ISel ON arm64 AND wasm32 -- the vector legalizer SCALARIZES `<4 x bfloat> fadd` back into the unselectable scalar… | e860b90 |
 | B-2026-08-29-35 | codegen | high | THE THREE `let`-FORM LEGS NEVER RAN THE PROJECTION-PLACE PAYLOAD SUPPRESSOR, so `if let E.A(r) = s.e { let m = r; . | 9f3e2cb |
+| B-2026-08-29-36 | codegen | low | A TWO-HOP PROJECTION (`match w.s.e { . | 4843ffe7 |
 | B-2026-08-29-37 | codegen | medium | A `ref self` METHOD WHOSE MATCH MOVES `self.e`'s PAYLOAD OUT RUNS THE ENUM'S OWN `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `dR8 dE n8 dE dR8` vs… | fddafe3 |
 | B-2026-08-29-39 | ownership | medium | A BINDING INITIALIZED TO `None` IS CLASSIFIED AS NON-RC FOR THE REST OF ITS LIFE, so reusing an `Option[shared T]` after passing it by value is repor… | c793ad0 |
 | B-2026-08-29-42 | codegen | high | A REDUCED-PRECISION RECEIVER (`f16` / `bf16`) CALLED THE DOUBLE-PRECISION libm SYMBOL and got silent garbage -- `x.tan()` returned `x`, `x.hypot(y)`… | e860b90 |
