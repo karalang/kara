@@ -4094,6 +4094,36 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 Some("Ordering".to_string())
             }
+            // B-2026-08-30-41 — the `partial_cmp` sibling of the arm above, and
+            // needed for the same reason: the builtin arm materializes an
+            // `Option[Ordering]` aggregate inline with no declaration anywhere,
+            // so nothing else can name it and `a.partial_cmp(b).is_lt()` failed
+            // to build with "no handler for method 'is_lt' on non-identifier
+            // receiver" — a message naming the follow-on predicate rather than
+            // the comparator that had no type.
+            //
+            // That chain is not a spelling a user is likely to write by hand; it
+            // is what lowering emits for `a < b` under a `T: PartialOrd` bound,
+            // which is why the bound was unrunnable for EVERY type.
+            //
+            // `"Option"` rather than `"Option[Ordering]"` matches how the
+            // `Stats.argmin` arm below names its result: the impl-table lookup
+            // is args-aware and routes `Option[Ordering].is_lt()` to
+            // `ordering.kara`'s block while leaving `Option[T].is_lt()`
+            // undefined for other `T`.
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "partial_cmp"
+                && args.len() == 1
+                && !self
+                    .type_name_of_expr(object)
+                    .is_some_and(|t| self.user_impl_method_exists(&expr.span, &t, method)) =>
+            {
+                Some("Option".to_string())
+            }
             // `Stats.min`/`max` → `Option[f64]`, `Stats.argmin`/`argmax` →
             // `Option[i64]` (intercepted in `try_compile_stats_call`). A direct
             // `match Stats.argmin(v) { … }` needs the scrutinee's enum resolved

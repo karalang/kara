@@ -5196,6 +5196,213 @@ impl<'ctx> super::Codegen<'ctx> {
         // integer primitives are unaffected — no `String.cmp` / `i64.cmp`
         // symbol is declared for `user_impl_method_exists` to find, verified by
         // `e2e_string_and_primitive_cmp_still_use_the_builtin_comparator`.
+        // B-2026-08-30-41 — `partial_cmp` on a PRIMITIVE receiver, the codegen
+        // half of what makes a `T: PartialOrd` bound runnable. Lowering turns
+        // `a < b` under that bound into `T.partial_cmp(a, b).is_lt()`; with no
+        // arm here the call fell through to user-impl dispatch, found nothing,
+        // and the build died on the FOLLOW-ON `is_lt` with "no handler for
+        // method 'is_lt' on non-identifier receiver" — a message that named the
+        // wrong method and blamed the compiler.
+        //
+        // Returns `Option[Ordering]`, laid out as every seeded Option is:
+        // `{ i64 tag, i64 w0, … }` with tag 0 = None, 1 = Some, which is
+        // exactly what `build_option_some_via_phis` assembles on the branching
+        // paths. No branch is needed here — `select` covers the one case that
+        // can answer `None`.
+        //
+        // THE FLOATS ARE THE POINT of the trait: they are `PartialOrd` and
+        // deliberately not `Ord` (IEEE NaN), so `cmp` does not exist for them
+        // and a `T: Ord` bound rejects them outright. `ORD` is LLVM's "neither
+        // operand is NaN" predicate, so it is precisely the `Some` condition,
+        // and `OLT`/`OGT` are false for a NaN pair — meaning the ordering tag is
+        // well-defined garbage there rather than a trap, and the select
+        // discards it.
+        let user_owns_partial_cmp = method == "partial_cmp"
+            && args.len() == 1
+            && self
+                .type_name_of_expr(object)
+                .is_some_and(|t| self.user_impl_method_exists(call_span, &t, method));
+        if method == "partial_cmp" && args.len() == 1 && !user_owns_partial_cmp {
+            let lhs = self.compile_expr(object)?;
+            let rhs = self.compile_expr(&args[0].value)?;
+            let i64_t = self.context.i64_type();
+            let bool_t = self.context.bool_type();
+            let zero = i64_t.const_zero();
+            let one = i64_t.const_int(1, false);
+            let two = i64_t.const_int(2, false);
+            // (ordering tag, "the operands are comparable")
+            let parts: Option<(inkwell::values::IntValue, inkwell::values::IntValue)> =
+                match (lhs, rhs) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        // Signedness recovered exactly as the `cmp` arm does
+                        // (B-2026-08-28-5) — the two must not disagree about
+                        // the same pair.
+                        let unsigned = self.expr_is_unsigned_int(object)
+                            || self.expr_is_unsigned_int(&args[0].value);
+                        let (lt_pred, gt_pred) = if unsigned {
+                            (IntPredicate::ULT, IntPredicate::UGT)
+                        } else {
+                            (IntPredicate::SLT, IntPredicate::SGT)
+                        };
+                        let lt = self
+                            .builder
+                            .build_int_compare(lt_pred, l, r, "pcmp.lt")
+                            .unwrap();
+                        let gt = self
+                            .builder
+                            .build_int_compare(gt_pred, l, r, "pcmp.gt")
+                            .unwrap();
+                        let tag_gt = self
+                            .builder
+                            .build_select(gt, two, one, "pcmp.tag.gt")
+                            .unwrap()
+                            .into_int_value();
+                        let tag = self
+                            .builder
+                            .build_select(lt, zero, tag_gt, "pcmp.tag")
+                            .unwrap()
+                            .into_int_value();
+                        Some((tag, bool_t.const_int(1, false)))
+                    }
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        let lt = self
+                            .builder
+                            .build_float_compare(inkwell::FloatPredicate::OLT, l, r, "pcmp.f.lt")
+                            .unwrap();
+                        let gt = self
+                            .builder
+                            .build_float_compare(inkwell::FloatPredicate::OGT, l, r, "pcmp.f.gt")
+                            .unwrap();
+                        let ordered = self
+                            .builder
+                            .build_float_compare(inkwell::FloatPredicate::ORD, l, r, "pcmp.f.ord")
+                            .unwrap();
+                        let tag_gt = self
+                            .builder
+                            .build_select(gt, two, one, "pcmp.f.tag.gt")
+                            .unwrap()
+                            .into_int_value();
+                        let tag = self
+                            .builder
+                            .build_select(lt, zero, tag_gt, "pcmp.f.tag")
+                            .unwrap()
+                            .into_int_value();
+                        Some((tag, ordered))
+                    }
+                    (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r))
+                        if l.get_type() == self.vec_struct_type() =>
+                    {
+                        // String — the same byte-lexicographic `karac_string_cmp`
+                        // the `cmp` arm below uses, with its -1/0/+1 mapped onto
+                        // the Less=0 / Equal=1 / Greater=2 tags by `+ 1`.
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        let l_ptr = self
+                            .builder
+                            .build_extract_value(l, 0, "pcmp.l.ptr")
+                            .unwrap()
+                            .into_pointer_value();
+                        let l_len = self
+                            .builder
+                            .build_extract_value(l, 1, "pcmp.l.len")
+                            .unwrap()
+                            .into_int_value();
+                        let r_ptr = self
+                            .builder
+                            .build_extract_value(r, 0, "pcmp.r.ptr")
+                            .unwrap()
+                            .into_pointer_value();
+                        let r_len = self
+                            .builder
+                            .build_extract_value(r, 1, "pcmp.r.len")
+                            .unwrap()
+                            .into_int_value();
+                        let cmp_fn =
+                            self.module
+                                .get_function("karac_string_cmp")
+                                .unwrap_or_else(|| {
+                                    let fn_ty = i64_t.fn_type(
+                                        &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                                        false,
+                                    );
+                                    self.module.add_function(
+                                        "karac_string_cmp",
+                                        fn_ty,
+                                        Some(inkwell::module::Linkage::External),
+                                    )
+                                });
+                        let raw = self
+                            .builder
+                            .build_call(
+                                cmp_fn,
+                                &[l_ptr.into(), l_len.into(), r_ptr.into(), r_len.into()],
+                                "pcmp.scmp",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_int_value();
+                        let tag = self.builder.build_int_add(raw, one, "pcmp.s.tag").unwrap();
+                        Some((tag, bool_t.const_int(1, false)))
+                    }
+                    // A user struct / enum that derives `PartialOrd` (or
+                    // `Ord`) satisfies the bound too, and its aggregate
+                    // comparator is the same lexicographic one the `<` operator
+                    // uses. `compile_user_cmp_to_ordering` declines unless the
+                    // type is in `ord_orderable_types`, so a name that is not an
+                    // orderable aggregate still falls through to the "no
+                    // handler" error rather than being mis-compared.
+                    //
+                    // Receiver resolution tries the narrow `inferred_receiver_type`
+                    // first and falls back to `type_name_of_expr`, exactly as the
+                    // `cmp` arm below does after B-2026-08-27-47 — a struct
+                    // LITERAL or a call result has no binding to name.
+                    (l, r) => {
+                        let name = self
+                            .inferred_receiver_type(object)
+                            .or_else(|| self.type_name_of_expr(object));
+                        match name {
+                            Some(tn) => match self.compile_user_cmp_to_ordering(&tn, l, r)? {
+                                Some(BasicValueEnum::StructValue(ord)) => {
+                                    let tag = self
+                                        .builder
+                                        .build_extract_value(ord, 0, "pcmp.u.tag")
+                                        .unwrap()
+                                        .into_int_value();
+                                    Some((tag, bool_t.const_int(1, false)))
+                                }
+                                _ => None,
+                            },
+                            None => None,
+                        }
+                    }
+                };
+            if let Some((ord_tag, comparable)) = parts {
+                if let Some(layout) = self.type_decls.enum_layouts.get("Option") {
+                    let option_ty = layout.llvm_type;
+                    let opt_tag = self
+                        .builder
+                        .build_select(comparable, one, zero, "pcmp.opt.tag")
+                        .unwrap();
+                    // Zero the payload on the `None` side so two `None`s
+                    // compare equal word-for-word, matching every other
+                    // Option this backend builds.
+                    let payload = self
+                        .builder
+                        .build_select(comparable, ord_tag, zero, "pcmp.opt.w0")
+                        .unwrap();
+                    let agg = option_ty.const_zero();
+                    let agg = self
+                        .builder
+                        .build_insert_value(agg, opt_tag, 0, "pcmp.opt.t")
+                        .unwrap();
+                    let agg = self
+                        .builder
+                        .build_insert_value(agg, payload, 1, "pcmp.opt.p")
+                        .unwrap();
+                    return Ok(agg.into_struct_value().into());
+                }
+            }
+        }
         let user_owns_cmp = method == "cmp"
             && args.len() == 1
             && self

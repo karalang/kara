@@ -1638,6 +1638,23 @@ impl<'a> super::TypeChecker<'a> {
             where_clause: None,
         };
 
+        // B-2026-08-30-41 — `partial_cmp`'s signature: an `Option[Ordering]`,
+        // the total-order answer plus the "incomparable" case bare floats need
+        // for NaN.
+        let partial_ord_sig = |ty: &Type| FunctionSig {
+            generic_params: vec![],
+            param_names: vec![Some("self".into()), Some("other".into())],
+            params: vec![ty.clone(), ty.clone()],
+            return_type: Type::Named {
+                name: "Option".into(),
+                args: vec![Type::Named {
+                    name: "Ordering".into(),
+                    args: vec![],
+                }],
+            },
+            where_clause: None,
+        };
+
         let signed_ints: &[(&str, Type)] = &[
             ("i8", Type::Int(IntSize::I8)),
             ("i16", Type::Int(IntSize::I16)),
@@ -1781,6 +1798,13 @@ impl<'a> super::TypeChecker<'a> {
         };
         // Eq + Ord on integers, bool, char, String, F32/F64 wrappers.
         // Floats (f32/f64) deliberately excluded — IEEE NaN breaks Eq/Ord.
+        // The four bare float widths — `PartialOrd` but deliberately not `Ord`.
+        let bare_floats: &[(&str, Type)] = &[
+            ("f16", Type::Float(FloatSize::F16)),
+            ("bf16", Type::Float(FloatSize::BF16)),
+            ("f32", Type::Float(FloatSize::F32)),
+            ("f64", Type::Float(FloatSize::F64)),
+        ];
         let eq_ord_targets: Vec<(&str, Type)> = all_ints
             .iter()
             .cloned()
@@ -1818,6 +1842,48 @@ impl<'a> super::TypeChecker<'a> {
                 ],
             );
         }
+        // B-2026-08-30-41 — `PartialOrd::partial_cmp` for every scalar, which
+        // is what makes a `T: PartialOrd` bound RUNNABLE.
+        //
+        // The bound was already SATISFIABLE by every scalar (`builtin_satisfied`
+        // in `env.rs` answers structurally, with no impl behind it), so
+        // `fn g[T: PartialOrd](a: T, b: T) -> bool { a < b }` type-checked
+        // clean — and then failed on both backends, because lowering turns that
+        // `<` into `T.partial_cmp(a, b).is_lt()` and no primitive had the
+        // method. The tree-walk aborted with "method 'partial_cmp' not found on
+        // type 'i64'" and `karac build` with "no handler for method 'is_lt'".
+        //
+        // `cmp` IS NOT AN ALTERNATIVE HERE, and that is forced rather than
+        // preferred: supertrait methods do not re-export through the requiring
+        // trait (design.md § "Constraints and method resolution"), so a
+        // `T: PartialOrd` bound cannot call `cmp` — `type_param_comparator`'s
+        // own doc says so. And routing to `cmp` would in any case fail for
+        // exactly the population the bound exists to serve: the bare floats,
+        // which are `PartialOrd` and deliberately NOT `Ord`.
+        //
+        // So this list is `eq_ord_targets` PLUS the bare floats. The floats are
+        // the whole reason `PartialOrd` is a separate trait, and leaving them
+        // out would fix the bound for the types that could already have used
+        // `T: Ord` and leave the motivating case broken.
+        //
+        // Registering a method on a primitive does NOT reroute concrete
+        // operators: the `ordering_dispatch_comparator` path in `lowering.rs`
+        // is gated on `Type::Named | Type::Shared`, so `a < b` on two `i64`s
+        // keeps taking the direct comparison it always did. Only the
+        // type-param path, which has no direct form, changes.
+        let partial_ord_targets: Vec<(&str, Type)> = eq_ord_targets
+            .iter()
+            .cloned()
+            .chain(bare_floats.iter().cloned())
+            .collect();
+        for (target, ty) in &partial_ord_targets {
+            self.register_builtin_impl(
+                "PartialOrd",
+                target,
+                vec![("partial_cmp", partial_ord_sig(ty))],
+            );
+        }
+
         // Add for String — heap concatenation. Effect tracking (allocates(Heap))
         // wired in Step 6 when operator lowering routes through this impl.
         //

@@ -32801,6 +32801,77 @@ done
     );
 }
 
+/// B-2026-08-30-41 — A `T: PartialOrd` BOUND MUST BE RUNNABLE, FOR EVERY TYPE.
+///
+/// The bound was SATISFIABLE by every scalar (a structural rule in `env.rs`,
+/// with no impl behind it) and runnable by none: lowering turns `a < b` under
+/// it into `T.partial_cmp(a, b).is_lt()`, and no primitive had `partial_cmp`.
+/// The tree-walk aborted with "method 'partial_cmp' not found on type 'i64'"
+/// and `karac build` failed on the FOLLOW-ON predicate with "no handler for
+/// method 'is_lt'". The identical body under a `T: Ord` bound worked on both,
+/// which is the contrast that makes this a bound defect rather than a
+/// comparison one.
+///
+/// `cmp` IS NOT AN ALTERNATIVE, and that is forced rather than preferred:
+/// supertrait methods do not re-export through the requiring trait, so a
+/// `T: PartialOrd` bound cannot call `cmp` at all — and routing to it would
+/// fail for exactly the population the trait exists to serve, the bare floats,
+/// which are `PartialOrd` and deliberately not `Ord`.
+///
+/// EVERY ROW IS A DIFFERENT DISPATCH PATH, not a restatement:
+/// - `ord` — the `T: Ord` control, which worked before and must keep working.
+/// - `i64` — all four operators, so a fix that wired only `is_lt` is caught.
+/// - `u64` — an unsigned value above `i64::MAX` riding a signed carrier.
+///   `partial_cmp` recovers signedness through the same span-hint path `cmp`
+///   uses (B-2026-08-28-5); without it `u64::MAX < 1` answers `true`.
+/// - `f64` — the motivating case: `PartialOrd` and NOT `Ord`, so `T: Ord`
+///   rejects it outright and this is the only bound that admits it.
+/// - `str` — a heap receiver, through `karac_string_cmp`.
+/// - `user` — a struct deriving `PartialOrd`, through the aggregate comparator.
+/// - `nan` — the reason the trait returns an `Option` at all. All four
+///   predicates are `false` for an incomparable pair, per design.md
+///   § Comparison Traits and IEEE-754.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_partial_ord_bound_is_runnable`, pinned to
+/// the same string.
+#[test]
+fn test_partial_ord_bound_is_runnable() {
+    assert_eq!(
+        run(r#"#[derive(PartialEq, PartialOrd)]
+struct Po { v: i64 }
+
+fn lt_ord[T: Ord](a: T, b: T) -> bool { return a < b }
+fn lt_po[T: PartialOrd](a: T, b: T) -> bool { return a < b }
+fn le_po[T: PartialOrd](a: T, b: T) -> bool { return a <= b }
+fn gt_po[T: PartialOrd](a: T, b: T) -> bool { return a > b }
+fn ge_po[T: PartialOrd](a: T, b: T) -> bool { return a >= b }
+
+fn main() {
+    let n = env.args().len() as i64;
+    println(f"ord  {lt_ord(n, n + 1)} {lt_ord(f"a", f"b")}");
+    println(f"i64  {lt_po(n, n + 1)} {le_po(n, n)} {gt_po(n + 1, n)} {ge_po(n, n + 1)}");
+    let u: u64 = 18446744073709551615u64;
+    println(f"u64  {lt_po(u, 1u64)} {gt_po(u, 1u64)}");
+    let f: f64 = (n as f64) + 1.0;
+    println(f"f64  {lt_po(f, f + 1.0)} {ge_po(f, f)}");
+    println(f"str  {lt_po(f"a", f"b")} {gt_po(f"a", f"b")}");
+    println(f"user {lt_po(Po { v: n }, Po { v: n + 1 })} {ge_po(Po { v: n }, Po { v: n })}");
+    let z: f64 = (n as f64) - 1.0;
+    let nan: f64 = z / z;
+    println(f"nan  {lt_po(nan, f)} {le_po(nan, nan)} {gt_po(f, nan)} {ge_po(nan, nan)}");
+}
+"#),
+        r#"ord  true true
+i64  true true true false
+u64  false true
+f64  true true
+str  true false
+user true true
+nan  false false false false
+"#
+    );
+}
+
 /// B-2026-08-01-4 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_arg_temp_drop_fires_at_statement_end`, same source and
 /// expected string. The interpreter is the semantics oracle here (fresh

@@ -1961,6 +1961,46 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-08-30-41 — the total-order answer for two PRIMITIVE operands,
+    /// shared by the `cmp` and `partial_cmp` value-receiver arms so the two can
+    /// never disagree about the same pair.
+    ///
+    /// The unsigned-hint path is the load-bearing part and the reason this is
+    /// not simply `value_compare`: a `u64` / `usize` / `u128` value rides a
+    /// signed two's-complement carrier, so `u64::MAX.cmp(1u64)` answered `Less`
+    /// until B-2026-08-28-5 recovered the operand signedness from the receiver
+    /// span. Routing through `eval_binary` rather than reimplementing the
+    /// comparison is what keeps `.cmp` and `<` on one implementation.
+    fn primitive_ordering(
+        &mut self,
+        obj: &Value,
+        other: &Value,
+        object_span: &crate::token::Span,
+        arg_span: &crate::token::Span,
+        span: &crate::token::Span,
+    ) -> std::cmp::Ordering {
+        let unsigned_hint = self
+            .span_unsigned_int_width(object_span)
+            .or_else(|| self.span_unsigned_int_width(arg_span));
+        match unsigned_hint {
+            Some(_) => {
+                let is_lt =
+                    self.eval_binary(&BinOp::Lt, obj.clone(), other.clone(), span, unsigned_hint);
+                let is_eq =
+                    self.eval_binary(&BinOp::Eq, obj.clone(), other.clone(), span, unsigned_hint);
+                match (is_lt, is_eq) {
+                    (Value::Bool(true), _) => std::cmp::Ordering::Less,
+                    (_, Value::Bool(true)) => std::cmp::Ordering::Equal,
+                    (Value::Bool(false), Value::Bool(false)) => std::cmp::Ordering::Greater,
+                    // Neither comparison produced a bool — not a shape the hint
+                    // applies to; fall back rather than guess.
+                    _ => value_compare(obj, other),
+                }
+            }
+            None => value_compare(obj, other),
+        }
+    }
+
     fn eval_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Value {
         if args.len() < 2 {
             return self.record_runtime_error(
@@ -3333,7 +3373,20 @@ impl<'a> super::Interpreter<'a> {
         // `te_is_totally_ordered`. Answering here for a shape the compiled
         // backends refuse would manufacture a run-vs-build split out of a fix
         // whose whole point is closing one.
-        if method == "cmp"
+        // B-2026-08-30-41 — `partial_cmp` joins `cmp` here, on the same receiver
+        // set and through the same `value_compare`. A user type that derives
+        // `PartialOrd` (and not `Ord`) satisfies a `T: PartialOrd` bound, whose
+        // lowering calls `partial_cmp` — so without this the aggregate case
+        // aborted with "method 'partial_cmp' not found on type 'Po'" while every
+        // primitive instantiation of the same generic worked.
+        //
+        // Always `Some`: `value_compare` is total over the shapes admitted here,
+        // and the one leaf that can be incomparable — a bare float — is what
+        // `value_is_totally_ordered` excludes from the `Tuple` case. A struct
+        // FIELD of float type is not reached by that guard, which is the
+        // pre-existing looseness of this arm rather than something this widens;
+        // `cmp` has answered for those since it was written.
+        if matches!(method, "cmp" | "partial_cmp")
             && args.len() == 1
             && match &obj {
                 Value::Struct { .. } | Value::SharedStruct(_) | Value::EnumVariant { .. } => true,
@@ -3343,7 +3396,7 @@ impl<'a> super::Interpreter<'a> {
         {
             let other = self.eval_expr_inner(&args[0].value);
             let ord = value_compare(&obj, &other);
-            return Value::EnumVariant {
+            let ordering = Value::EnumVariant {
                 enum_name: "Ordering".to_string(),
                 variant: match ord {
                     std::cmp::Ordering::Less => "Less".to_string(),
@@ -3351,6 +3404,71 @@ impl<'a> super::Interpreter<'a> {
                     std::cmp::Ordering::Greater => "Greater".to_string(),
                 },
                 data: EnumData::Unit,
+            };
+            if method == "partial_cmp" {
+                return Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "Some".to_string(),
+                    data: EnumData::Tuple(vec![ordering]),
+                };
+            }
+            return ordering;
+        }
+
+        // B-2026-08-30-41 — `partial_cmp` on a PRIMITIVE receiver, which is what
+        // makes a `T: PartialOrd` bound runnable. Lowering turns `a < b` under
+        // that bound into `T.partial_cmp(a, b).is_lt()`, and no primitive had
+        // the method: this backend aborted with "method 'partial_cmp' not found
+        // on type 'i64'" for EVERY instantiation, the identical body under a
+        // `T: Ord` bound working fine.
+        //
+        // Its own block rather than a case in the Eq/Ord one below, because the
+        // receiver set differs by exactly the types that matter: bare floats are
+        // `PartialOrd` and deliberately NOT `Ord` (IEEE NaN), so they are
+        // excluded there and must be included here. They are also the only
+        // receivers that can answer `None`.
+        if method == "partial_cmp"
+            && args.len() == 1
+            && matches!(
+                &obj,
+                Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Char(_)
+                    | Value::Bool(_)
+                    | Value::String(_)
+                    | Value::TotalFloat32(_)
+                    | Value::TotalFloat64(_)
+                    | Value::TotalFloat16(_)
+                    | Value::TotalBFloat16(_)
+            )
+        {
+            let other = self.eval_expr_inner(&args[0].value);
+            // NaN is incomparable with everything, itself included — the whole
+            // reason `PartialOrd` returns an `Option`. `value_compare` orders
+            // floats by `total_cmp` (NaN last), which is right for a sort key
+            // and wrong for `<`, so the check has to happen before it.
+            let is_nan = |v: &Value| matches!(v, Value::Float(f) if f.is_nan());
+            if is_nan(&obj) || is_nan(&other) {
+                return Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "None".to_string(),
+                    data: EnumData::Unit,
+                };
+            }
+            let ord =
+                self.primitive_ordering(&obj, &other, &object.span, &args[0].value.span, span);
+            return Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                data: EnumData::Tuple(vec![Value::EnumVariant {
+                    enum_name: "Ordering".to_string(),
+                    variant: match ord {
+                        std::cmp::Ordering::Less => "Less".to_string(),
+                        std::cmp::Ordering::Equal => "Equal".to_string(),
+                        std::cmp::Ordering::Greater => "Greater".to_string(),
+                    },
+                    data: EnumData::Unit,
+                }]),
             };
         }
 
@@ -3395,36 +3513,8 @@ impl<'a> super::Interpreter<'a> {
                 // implementation and cannot drift apart again. Gated on a hint
                 // being present, so every other operand shape (String, floats,
                 // signed ints, bool) keeps `value_compare` unchanged.
-                let unsigned_hint = self
-                    .span_unsigned_int_width(&object.span)
-                    .or_else(|| self.span_unsigned_int_width(&args[0].value.span));
-                let ord = match unsigned_hint {
-                    Some(_) => {
-                        let is_lt = self.eval_binary(
-                            &BinOp::Lt,
-                            obj.clone(),
-                            other.clone(),
-                            span,
-                            unsigned_hint,
-                        );
-                        let is_eq = self.eval_binary(
-                            &BinOp::Eq,
-                            obj.clone(),
-                            other.clone(),
-                            span,
-                            unsigned_hint,
-                        );
-                        match (is_lt, is_eq) {
-                            (Value::Bool(true), _) => std::cmp::Ordering::Less,
-                            (_, Value::Bool(true)) => std::cmp::Ordering::Equal,
-                            (Value::Bool(false), Value::Bool(false)) => std::cmp::Ordering::Greater,
-                            // Neither comparison produced a bool — not a shape
-                            // the hint applies to; fall back rather than guess.
-                            _ => value_compare(&obj, &other),
-                        }
-                    }
-                    None => value_compare(&obj, &other),
-                };
+                let ord =
+                    self.primitive_ordering(&obj, &other, &object.span, &args[0].value.span, span);
                 return Value::EnumVariant {
                     enum_name: "Ordering".to_string(),
                     variant: match ord {
