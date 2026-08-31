@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 337 | 4 |
+| miscompile | 337 | 3 |
 | run-vs-build | 275 | 25 |
 | leak | 240 | 7 |
 | missing-feature | 191 | 1 |
@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 157 | 2 |
 | diagnostics | 114 | 2 |
 | false-positive | 101 | 0 |
-| soundness | 92 | 3 |
+| soundness | 93 | 4 |
 | perf | 87 | 1 |
 | crash | 66 | 1 |
 | other | 65 | 1 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1311 | 39 |
+| codegen | 1311 | 38 |
 | interp | 295 | 23 |
 | typecheck | 283 | 0 |
 | other | 70 | 0 |
-| ownership | 69 | 1 |
+| ownership | 70 | 2 |
 | cli | 67 | 1 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced · 47 open · 1836 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1913 surfaced · 47 open · 1836 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (47)
 
@@ -176,7 +176,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1912 surfaced
 | B-2026-08-31-37 | 2026-08-31 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly reachable | — |
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
-| B-2026-08-31-40 | 2026-08-31 | codegen | medium | `main`'s ERROR PATH HANDS THE DISPLAY RENDERER A SLICE ONE INDIRECTION OFF -- the slice's own data POINTER is rendered as its first element (`Error: Some([93867340896349])` vs the interpreter's `Error: Some([1])`), which is why `Slice[T]` must stay out of `is_reconstructable_display_payload` even though ordinary interpolation now renders it correctly | — |
+| B-2026-08-31-41 | 2026-08-31 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[i64] { let mut v = Vec.new(); ...; return v.as_slice() }`, and the compiled program then READS FREED MEMORY while the interpreter prints the live values, so it also reads as a run-vs-build divergence | — |
 
 ### Relocated (2)
 
