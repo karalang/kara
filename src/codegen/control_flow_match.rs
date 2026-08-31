@@ -11190,7 +11190,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // (which only recognizes fresh-temp calls / bare heap Vec-index) does
         // not apply — drop-track the clone regardless of the scrutinee Expr.
         let heap_index = self.expr_is_heap_vec_index(scrutinee);
-        if !force && !self.expr_yields_fresh_owned_temp(scrutinee) && !heap_index {
+        // Hoisted out of the gate below because the user-drop registration at
+        // the bottom needs the same answer: only a GENUINE fresh temp is a
+        // value of its own. See the B-2026-08-29-37 note there.
+        let is_fresh_owned_temp = self.expr_yields_fresh_owned_temp(scrutinee);
+        if !force && !is_fresh_owned_temp && !heap_index {
             return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {
@@ -11239,7 +11243,40 @@ impl<'ctx> super::Codegen<'ctx> {
         if has_droppable {
             self.track_enum_var(&enum_name, alloca);
         }
-        if has_user_drop {
+        // B-2026-08-29-37 — the enum's OWN `impl Drop` body belongs to the value
+        // the SOURCE PROGRAM named, and a defensive copy is not one of those.
+        //
+        // Two disjoint populations reach the alloca above, and only the first is
+        // a value in the source language:
+        //
+        // - A GENUINE FRESH TEMP (`match mk() { … }`) — nobody else owns it, so
+        //   its body must run here or nowhere. That is B-2026-07-11-26, and it
+        //   is why the registration exists at all.
+        //
+        // - A DEFENSIVE COPY of a place the source still owns — every `force`
+        //   leg (ref-chain `<refparam>.f`, loop element, live local, borrowed
+        //   index-field) plus the `heap_index` leg. These clones are emitted so
+        //   a consuming arm's binding gets an INDEPENDENT buffer; the original
+        //   is untouched and runs its own body at its own death. Running the
+        //   clone's body too makes the count depend on a codegen internal:
+        //   `fn grab(ref self) { match self.e { E.A(r) => … } }` printed `dE`
+        //   inside the callee AND again at the caller's walk, where the
+        //   interpreter — which never copies — printed one.
+        //
+        // The MEMORY half above stays registered for both: the clone really does
+        // own duplicated buffers, and `__karac_drop_<E>` frees them without
+        // running any user body (it recurses into `__karac_drop_struct_*`, which
+        // only calls `karac_free_buf`). So the two halves separate exactly along
+        // the line that matters — the copy is freed, the copy is not mourned.
+        //
+        // This is the ENUM-level twin of the rule `enum_payload_clone_is_faithful`
+        // already enforces one level down for a `NestedStruct` PAYLOAD's body
+        // (B-2026-08-09-9: "a clone is a compiler-internal artifact the source
+        // language never asked for"). That guard refuses to clone; this one
+        // cannot, because declining here would re-open the double-frees the clone
+        // legs exist to fix (B-2026-07-21-5/-6, B-2026-07-14-1) — so it keeps the
+        // clone and withholds the body instead.
+        if has_user_drop && is_fresh_owned_temp {
             self.track_user_drop_var(&enum_name, "__freshtemp_enum_scrut", alloca);
         }
         Some((alloca, enum_name))

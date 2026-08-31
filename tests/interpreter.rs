@@ -32566,6 +32566,105 @@ fn test_enum_walker_rearm_after_move_reassign() {
     );
 }
 
+/// B-2026-08-29-37 (interpreter twin / ORACLE) — the interpreter never copies a
+/// match scrutinee, so every `Drop` body here fires exactly as often as the
+/// source program says. That is what makes it the oracle for
+/// `tests/codegen.rs`'s
+/// `e2e_defensive_scrutinee_copy_does_not_rerun_the_enum_own_drop_body`, which
+/// is pinned to this same string.
+///
+/// The compiled backends stage the scrutinee into a defensive copy for four
+/// distinct shapes and used to run the enum's own body on that copy as well as
+/// on the source, so `refchain` / `loop` / `index` each carried an extra `dE`.
+/// Recording the expectation on BOTH sides means a future change that alters
+/// the interpreter's count has to argue with a test rather than silently
+/// re-baseline the codegen twin.
+#[test]
+fn test_scrutinee_clone_does_not_rerun_the_enum_own_drop_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct S { e: E }
+
+fn mk(n: i64) -> E {
+    let mut v = Vec.new();
+    v.push(n);
+    return E.A(R { id: n, v: v })
+}
+
+fn via_ref(s: ref S) -> i64 {
+    match s.e { E.A(r) => { let m = r; return m.id + m.v.len() } E.B => { return 0 } }
+}
+
+fn leg_refchain() {
+    println("refchain");
+    let s = S { e: mk(1) };
+    println(f"got {via_ref(s)}");
+    println("refchain end");
+}
+
+fn leg_loop_elem() {
+    println("loop");
+    let mut v = Vec.new();
+    v.push(mk(2));
+    for p in v {
+        match p { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    }
+    println("loop end");
+}
+
+fn leg_vec_index() {
+    println("index");
+    let mut v = Vec.new();
+    v.push(mk(3));
+    match v[0] { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    println("index end");
+}
+
+fn leg_fresh_temp() {
+    println("fresh");
+    match mk(4) { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    println("fresh end");
+}
+
+fn main() {
+    leg_refchain();
+    leg_loop_elem();
+    leg_vec_index();
+    leg_fresh_temp();
+    println("end");
+}
+"#),
+        r#"refchain
+dR1
+got 2
+dE
+dR1
+refchain end
+loop
+got 3
+dR2
+dE
+dR2
+loop end
+index
+got 4
+dR3
+dE
+dR3
+index end
+fresh
+got 5
+dR4
+dE
+fresh end
+end
+"#
+    );
+}
+
 /// B-2026-08-01-4 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_arg_temp_drop_fires_at_statement_end`, same source and
 /// expected string. The interpreter is the semantics oracle here (fresh

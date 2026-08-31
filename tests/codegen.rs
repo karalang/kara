@@ -11225,6 +11225,206 @@ fn main() {
         );
     }
 
+    /// The B-2026-08-29-37 fixture, shared by the E2E and its IR guard so the
+    /// two can never drift onto different programs. See
+    /// `e2e_defensive_scrutinee_copy_does_not_rerun_the_enum_own_drop_body`.
+    const SCRUTINEE_CLONE_DROP_BODY_SRC: &str = r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct S { e: E }
+
+fn mk(n: i64) -> E {
+    let mut v = Vec.new();
+    v.push(n);
+    return E.A(R { id: n, v: v })
+}
+
+fn via_ref(s: ref S) -> i64 {
+    match s.e { E.A(r) => { let m = r; return m.id + m.v.len() } E.B => { return 0 } }
+}
+
+fn leg_refchain() {
+    println("refchain");
+    let s = S { e: mk(1) };
+    println(f"got {via_ref(s)}");
+    println("refchain end");
+}
+
+fn leg_loop_elem() {
+    println("loop");
+    let mut v = Vec.new();
+    v.push(mk(2));
+    for p in v {
+        match p { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    }
+    println("loop end");
+}
+
+fn leg_vec_index() {
+    println("index");
+    let mut v = Vec.new();
+    v.push(mk(3));
+    match v[0] { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    println("index end");
+}
+
+fn leg_fresh_temp() {
+    println("fresh");
+    match mk(4) { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    println("fresh end");
+}
+
+fn main() {
+    leg_refchain();
+    leg_loop_elem();
+    leg_vec_index();
+    leg_fresh_temp();
+    println("end");
+}
+"#;
+
+    /// The interpreter's answer, which is the oracle here: it never copies a
+    /// scrutinee, so each `Drop` body fires exactly as often as the source
+    /// program says.
+    const SCRUTINEE_CLONE_DROP_BODY_EXPECTED: &str = r#"refchain
+dR1
+got 2
+dE
+dR1
+refchain end
+loop
+got 3
+dR2
+dE
+dR2
+loop end
+index
+got 4
+dR3
+dE
+dR3
+index end
+fresh
+got 5
+dR4
+dE
+fresh end
+end
+"#;
+
+    /// B-2026-08-29-37 — A DEFENSIVE COPY OF THE MATCH SCRUTINEE MUST NOT RUN
+    /// THE ENUM'S OWN `Drop` BODY. Twin of `tests/interpreter.rs`'s
+    /// `test_scrutinee_clone_does_not_rerun_the_enum_own_drop_body`, pinned to
+    /// the same string.
+    ///
+    /// `materialize_freshtemp_enum_scrutinee` stages the scrutinee into
+    /// `__freshtemp_enum_scrut` and used to register BOTH halves of the enum's
+    /// drop on it — the memory glue AND `karac_drop_<E>`, the user body. That is
+    /// right for the one population the registration was written for (a genuine
+    /// fresh temp, B-2026-07-11-26: nobody else owns it, so its body runs here
+    /// or nowhere). It is wrong for the four DEFENSIVE-COPY legs that reach the
+    /// same code through `force`/`heap_index`, where the source still owns an
+    /// equal value and runs the body itself — so the body fired twice, and the
+    /// second one was an artifact of a copy the source program never asked for.
+    ///
+    /// Pre-fix, measured on `f29da14`: `refchain` printed `dR1 dE got 2` — the
+    /// `dE` INSIDE the callee, on a struct it only borrows — and `loop` / `index`
+    /// each printed a doubled `dE dE`. The interpreter, which never copies,
+    /// printed one `dE` per leg on every one of them.
+    ///
+    /// FOUR LEGS PLUS THE CONTROL, because the fix keys on the one distinction
+    /// that separates them (`expr_yields_fresh_owned_temp`) rather than on the
+    /// reported shape:
+    ///   - `refchain` — `match <refparam>.field` (B-2026-07-21-5/-6's clone),
+    ///     the shape the row reported, here through a `ref self` method's
+    ///     free-function twin.
+    ///   - `loop` — a `for`-loop element (B-2026-07-14-1's clone).
+    ///   - `index` — `match v[0]` over a heap element (`heap_index`, the leg
+    ///     that reaches materialization without `force` at all).
+    ///   - `fresh` — THE CONTROL. `match mk(4)` is a real owned temp with no
+    ///     other owner, so its `dE` MUST still fire; if the fix over-reached and
+    ///     silenced this one, B-2026-07-11-26 regresses and this leg catches it.
+    ///
+    /// The arms all use `let m = r` rather than a consuming call on purpose: a
+    /// consuming `eat(r)` makes the INTERPRETER skip the payload's own body on
+    /// the `index` leg (one `dR3` where the compiled backends run two), which is
+    /// a separate divergence this fixture must not be sensitive to.
+    #[test]
+    fn e2e_defensive_scrutinee_copy_does_not_rerun_the_enum_own_drop_body() {
+        let Some(out) = run_program(SCRUTINEE_CLONE_DROP_BODY_SRC) else {
+            return;
+        };
+        assert_eq!(out, SCRUTINEE_CLONE_DROP_BODY_EXPECTED);
+    }
+
+    /// The ANTI-VACUITY GUARD for the E2E above, and the reason the fix is
+    /// "withhold the body" rather than "stop cloning".
+    ///
+    /// The E2E asserts an absence, so it also passes if the defensive clone
+    /// simply stops being emitted — which would be a silent regression of the
+    /// double-frees those clone legs exist to fix (B-2026-07-21-5/-6,
+    /// B-2026-07-14-1), invisible to any output comparison. So assert the two
+    /// halves separately against `via_ref`'s IR: the clone IS still emitted and
+    /// the memory glue IS still registered on it, while the user body is NOT.
+    ///
+    /// `leg_fresh_temp` is the paired positive: the same enum, the same
+    /// `match`, a genuine fresh temp — `karac_drop_E` present. Without it "no
+    /// `karac_drop_E` anywhere" would pass on a build that lost the call
+    /// entirely.
+    #[test]
+    fn ir_defensive_scrutinee_copy_keeps_memory_cleanup_and_drops_the_user_body() {
+        let ir = ir_for(SCRUTINEE_CLONE_DROP_BODY_SRC);
+        // Slice one `define` block out of the module.
+        let body_of = |sym: &str| -> String {
+            let mut out = String::new();
+            let mut inside = false;
+            for l in ir.lines() {
+                if !inside && l.starts_with("define") && l.contains(sym) {
+                    inside = true;
+                }
+                if inside {
+                    out.push_str(l);
+                    out.push('\n');
+                    if l == "}" {
+                        break;
+                    }
+                }
+            }
+            assert!(!out.is_empty(), "no define block for {sym}\n{ir}");
+            out
+        };
+
+        let via_ref = body_of("@via_ref(");
+        // The defensive clone still happens — this is what keeps the consuming
+        // arm's binding off the caller's buffer.
+        assert!(
+            via_ref.contains("refchain.enum.clone"),
+            "the borrowed ref-chain clone stopped being emitted, so the E2E \
+             twin is now vacuous — it would pass with no clone at all:\n{via_ref}"
+        );
+        // …and the clone's own heap is still freed.
+        assert!(
+            via_ref.contains("call void @__karac_drop_E("),
+            "the clone's memory cleanup was dropped along with its body — the \
+             duplicated payload now leaks:\n{via_ref}"
+        );
+        // …but the enum's user `Drop` body is NOT run on it.
+        assert!(
+            !via_ref.contains("call void @karac_drop_E("),
+            "B-2026-08-29-37: the enum's own Drop body runs on a defensive copy \
+             of a place the caller still owns:\n{via_ref}"
+        );
+
+        // The control: a genuine fresh temp keeps its body (B-2026-07-11-26).
+        let fresh = body_of("@leg_fresh_temp(");
+        assert!(
+            fresh.contains("call void @karac_drop_E("),
+            "a fresh owned temp lost its user Drop body — B-2026-07-11-26 \
+             regressed:\n{fresh}"
+        );
+    }
+
     /// B-2026-07-31-38 (enum sibling) — a plain value enum whose walker
     /// action was retracted by a move (whole-value `let c = b;`, or a match
     /// arm's payload move-out) gets it RE-ARMED on reassign, so the fresh

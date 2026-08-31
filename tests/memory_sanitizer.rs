@@ -729,6 +729,65 @@ fn main() {
         }
     }
 
+    /// B-2026-08-29-37 — the memory half of "withhold the body, keep the copy".
+    ///
+    /// The fix stops `materialize_freshtemp_enum_scrutinee` from registering the
+    /// enum's user `Drop` body on a defensive copy of a borrowed place. It
+    /// deliberately leaves the MEMORY registration alone, because the copy really
+    /// does own duplicated buffers — so the failure mode it could have introduced
+    /// is a leak of exactly those buffers, which LSan sees and no output
+    /// comparison does.
+    ///
+    /// `take` is called three times over the same borrowed `S`, so the ref-chain
+    /// clone is emitted and consumed three times while the caller keeps owning
+    /// the original. A `Vec[String]` payload puts a real element buffer behind
+    /// each clone: a lost memory registration leaks three of them, and a
+    /// double-registration frees the caller's buffer out from under it.
+    #[test]
+    fn asan_ref_chain_enum_scrutinee_clone_frees_once() {
+        let Some((out, status)) = run_under_asan(
+            r#"struct S { e: E }
+enum E { A(Vec[String]), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+fn mkv(n: i64) -> Vec[String] {
+    let mut v = Vec.new();
+    v.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    v.push(f"tag{n}");
+    return v
+}
+
+fn take(s: ref S) -> String {
+    match s.e { E.A(v) => { let m = v; return m[1] } E.B => { return "none" } }
+}
+
+fn main() {
+    let s = S { e: E.A(mkv(7)) };
+    println(take(s));
+    println(take(s));
+    println(take(s));
+    println("end");
+}
+"#,
+            "asan_ref_chain_enum_scrutinee_clone_frees_once",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        // One `dE` — the caller's, at its own scope exit. Three would be the
+        // pre-fix count (one per clone) and would mean the body registration
+        // came back.
+        assert_eq!(
+            out.matches("dE").count(),
+            1,
+            "unexpected Drop body count:\n{out}"
+        );
+        assert!(
+            out.contains("tag7"),
+            "the clone did not carry a live payload:\n{out}"
+        );
+    }
+
     /// Masking a returned field's `Drop` BODY out of an own-`Drop` parent's
     /// wrapper does not mask its MEMORY (B-2026-08-28-21).
     ///
