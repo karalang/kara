@@ -107,6 +107,24 @@ pub(crate) struct PayloadVars<'ctx> {
     /// keeps the leaf drop from racing an arm that already owns the value. Only
     /// populated when a leaf drop was actually registered, so an absent entry
     /// means there is nothing to retract.
+    /// B-2026-08-31-23 — a match arm's WHOLE-payload binding over a BOXED
+    /// payload, mapped to the source variable it aliases and that source's
+    /// container (`Option` / `Result`).
+    ///
+    /// `match a { Some(p) => match p { E.A { s } => <MOVE s> } }` binds `p` as
+    /// a BIT COPY of the box interior, so the inner match's own cap-zeroing
+    /// disarms `p`'s stack slot and leaves the box — the storage that actually
+    /// owns the buffer — still armed. Both then free it. The two sibling
+    /// disarmers cannot cover this: the destructuring one needs a payload
+    /// PATTERN (here the outer pattern is a bare binding), and the
+    /// whole-binding one (B-2026-08-28-66) fires only when the payload LEAVES
+    /// the arm as its value, which is a different shape from a field being
+    /// moved out one level down.
+    ///
+    /// Recording the source lets `suppress_destructured_enum_payload_cleanup`
+    /// re-derive the box pointer and disarm THERE as well. Scoped per arm, for
+    /// the reason B-2026-08-31-14 records about name-keyed registries.
+    pub(crate) boxed_payload_alias: std::collections::HashMap<String, (String, String)>,
     pub(crate) boxed_leaf_owning_depth: std::collections::HashMap<String, usize>,
     pub(crate) boxed_struct_payload_vars: std::collections::HashSet<String>,
     /// B-2026-08-06-32 — bindings carrying a `NestedBoxedEnumDrop`, i.e. a box

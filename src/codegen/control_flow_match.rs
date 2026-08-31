@@ -498,9 +498,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm that made it.
         let saved_borrowed_agg_payload_vars =
             self.borrow_vars.borrowed_agg_payload_struct_vars.clone();
+        // B-2026-08-31-23 — same per-arm scoping, same reason (B-2026-08-31-14):
+        // the map is keyed by BINDING NAME, so an alias recorded by one arm
+        // must not be inherited by a later one that reuses the name.
+        let saved_boxed_payload_alias = self.payload_vars.boxed_payload_alias.clone();
         for (i, arm) in arms.iter().enumerate() {
             self.borrow_vars.borrowed_agg_payload_struct_vars =
                 saved_borrowed_agg_payload_vars.clone();
+            self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias.clone();
             let arm_bb = next_bb;
             // Always create a fresh fail_bb — never reuse merge_bb directly.
             // If the last pattern condition is false (non-exhaustive match or
@@ -684,6 +689,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // ptr-bind and value-bind routes.
                 if self.pattern_state.pattern_binding_is_borrow {
                     self.register_borrowed_agg_payload_struct_bindings(&arm.pattern);
+                } else {
+                    // B-2026-08-31-23 — on the TRANSFER path, a whole-payload
+                    // binding over a boxed payload is a bit-copy ALIAS of the
+                    // box interior. Record what it aliases so a nested match
+                    // that moves a field out of it can disarm the box, not
+                    // just the copy. Borrow-path arms are excluded: there the
+                    // source keeps the payload and nothing needs disarming.
+                    self.register_boxed_payload_alias(scrutinee, &arm.pattern);
                 }
             }
 
@@ -1245,6 +1258,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.restore_var_env(arm_snap);
         }
         self.borrow_vars.borrowed_agg_payload_struct_vars = saved_borrowed_agg_payload_vars;
+        self.payload_vars.boxed_payload_alias = saved_boxed_payload_alias;
 
         // Wire the entry block. With a qualifying string-dispatch plan, branch
         // `entry_bb` through the switch tree straight into the arm bodies;
@@ -1795,6 +1809,117 @@ impl<'ctx> super::Codegen<'ctx> {
             return false;
         }
         self.no_arm_payload_escapes(arms)
+    }
+
+    /// B-2026-08-31-23 — record that this arm's WHOLE-payload binding aliases
+    /// the box interior of `scrutinee`, so a nested `match` that moves a field
+    /// out of the binding can disarm the BOX rather than only the bit copy.
+    ///
+    /// Deliberately narrow. The alias is recorded only for a bare-identifier
+    /// scrutinee that is a live boxed payload owner, a `Some`/`Ok`/`Err`
+    /// pattern with exactly one sub-pattern, and that sub-pattern a plain
+    /// `Binding` — a destructure is the other disarmer's job and a wildcard
+    /// binds nothing, so in both of those the box must keep owning its fields.
+    fn register_boxed_payload_alias(&mut self, scrutinee: &Expr, pattern: &Pattern) {
+        let ExprKind::Identifier(src) = &scrutinee.kind else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .boxed_enum_payload_vars
+            .contains(src.as_str())
+        {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let container = match path.last().map(|s| s.as_str()) {
+            Some("Some") => "Option",
+            Some("Ok") | Some("Err") => "Result",
+            _ => return,
+        };
+        let [sub] = patterns.as_slice() else {
+            return;
+        };
+        let PatternKind::Binding(bound) = &sub.kind else {
+            return;
+        };
+        self.payload_vars
+            .boxed_payload_alias
+            .insert(bound.clone(), (src.clone(), container.to_string()));
+    }
+
+    /// The box-interior half of [`Self::suppress_destructured_enum_payload_cleanup`]
+    /// for a scrutinee that is a whole-payload ALIAS (B-2026-08-31-23).
+    ///
+    /// Re-derives the box pointer from the SOURCE variable's slot rather than
+    /// caching a `PointerValue` at the bind site, so there is no dominance
+    /// question about where the value was produced.
+    fn suppress_aliased_boxed_payload_cleanup(&mut self, scrut_name: &str, pattern: &Pattern) {
+        let Some((src, container)) = self
+            .payload_vars
+            .boxed_payload_alias
+            .get(scrut_name)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(enum_name) = self.var_types.var_type_names.get(scrut_name).cloned() else {
+            return;
+        };
+        let Some(layout) = self
+            .type_decls
+            .enum_layouts
+            .get(container.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(slot) = self.variables.get(src.as_str()).map(|s| s.ptr) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(w0_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot, 1, "boxalias.suppress.w0")
+        else {
+            return;
+        };
+        let w0 = self
+            .builder
+            .build_load(self.context.i64_type(), w0_ptr, "boxalias.suppress.w0v")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "boxalias.suppress.box")
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                box_ptr,
+                ptr_ty.const_null(),
+                "boxalias.suppress.isnull",
+            )
+            .unwrap();
+        let do_bb = self
+            .context
+            .append_basic_block(fn_val, "boxalias.suppress.do");
+        let join_bb = self
+            .context
+            .append_basic_block(fn_val, "boxalias.suppress.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        self.suppress_destructured_enum_payload_cleanup_at(box_ptr, &enum_name, pattern);
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
     }
 
     /// Register the STRUCT payload binding(s) of a match arm's pattern into
@@ -7957,6 +8082,11 @@ impl<'ctx> super::Codegen<'ctx> {
             None => return,
         };
         self.suppress_destructured_enum_payload_cleanup_at(slot.ptr, &enum_name, pattern);
+        // B-2026-08-31-23 — when the scrutinee is a whole-payload binding over
+        // a BOXED payload, the line above disarmed a BIT COPY. The box still
+        // owns the same buffer, so disarm there too or the arm's move and the
+        // box's drop both free it. No-op for every other scrutinee.
+        self.suppress_aliased_boxed_payload_cleanup(scrut_name, pattern);
         // B-2026-07-30-11 (enum leg) — the BODIES channel's half of the same
         // move-out. The cap-zeroing above disarms the source's MEMORY drop; the
         // payload's user `impl Drop` body rides the separate NLL `UserDrop`
@@ -11189,16 +11319,52 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(struct_name) = spath.last().cloned() else {
             return;
         };
-        let Some(&st) = self.type_decls.struct_types.get(struct_name.as_str()) else {
+        // B-2026-08-31-23 — the payload may be a user ENUM VARIANT
+        // (`Some(E.A { s })`), not only a struct (`Some(S { s })`). This
+        // resolved the pattern's last path segment against `struct_types`
+        // ONLY, so `E.A` looked up "A", found nothing, and returned before
+        // anything was disarmed: the box's interior drop stayed armed while
+        // the arm's binding owned the same buffer, and both freed it. The
+        // struct payload was always clean, which is the axis — not the
+        // nesting depth of the match, and not the payload's width.
+        let payload = if self
+            .type_decls
+            .struct_types
+            .contains_key(struct_name.as_str())
+        {
+            BoxedPayloadShape::Struct(struct_name.clone())
+        } else if let Some(en) = self.variant_pattern_enum_name(sub) {
+            BoxedPayloadShape::EnumVariant(en)
+        } else {
             return;
         };
-        // Boxed iff the struct's width exceeds the enum's inline payload
+        // Boxed iff the payload's width exceeds the enum's inline payload
         // area — the same predicate the pack side (`coerce_to_payload_words`)
         // and the unpack side (`reconstruct_payload_value`'s debox) use. An
         // inline payload's w0 is NOT a pointer; zeroing through it would
         // corrupt memory.
+        let payload_words = match &payload {
+            BoxedPayloadShape::Struct(n) => {
+                let Some(&st) = self.type_decls.struct_types.get(n.as_str()) else {
+                    return;
+                };
+                Self::llvm_type_word_count(st.into())
+            }
+            BoxedPayloadShape::EnumVariant(n) => {
+                let Some(l) = self.type_decls.enum_layouts.get(n.as_str()) else {
+                    return;
+                };
+                if l.is_shared {
+                    // A `shared enum` payload is an RC handle, not a value the
+                    // box owns outright — the same carve-out
+                    // `suppress_destructured_enum_payload_cleanup_at` makes.
+                    return;
+                }
+                Self::llvm_type_word_count(l.llvm_type.into())
+            }
+        };
         let area = if enum_name == "Option" { 3 } else { 5 };
-        if Self::llvm_type_word_count(st.into()) <= area {
+        if payload_words <= area {
             return;
         }
         let Some(layout) = self.type_decls.enum_layouts.get(enum_name) else {
@@ -11245,23 +11411,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_null, join_bb, do_bb)
             .unwrap();
         self.builder.position_at_end(do_bb);
-        for field_pat in fields {
-            // Disarm exactly the fields the pattern BINDS — those now have a
-            // leaf binding that owns and frees them. Everything else stays
-            // owned by the box: a `field: _` sub-pattern, a field omitted
-            // behind `..`, and (B-2026-08-04-6) a field the pattern only
-            // TESTS, like `Full { name: "x", buf }`. The old check was
-            // `Wildcard`-only, so a literal-test field was disarmed and then
-            // leaked — nobody owned it.
-            let binds = match &field_pat.pattern {
-                // Shorthand `Full { name }` binds by the field's own name.
-                None => true,
-                Some(sub) => Self::pattern_binds_anything(sub),
-            };
-            if !binds {
-                continue;
+        match &payload {
+            BoxedPayloadShape::Struct(sname) => {
+                for field_pat in fields {
+                    // Disarm exactly the fields the pattern BINDS — those now
+                    // have a leaf binding that owns and frees them. Everything
+                    // else stays owned by the box: a `field: _` sub-pattern, a
+                    // field omitted behind `..`, and (B-2026-08-04-6) a field
+                    // the pattern only TESTS, like `Full { name: "x", buf }`.
+                    // The old check was `Wildcard`-only, so a literal-test
+                    // field was disarmed and then leaked — nobody owned it.
+                    let binds = match &field_pat.pattern {
+                        // Shorthand `Full { name }` binds by the field's own name.
+                        None => true,
+                        Some(sub) => Self::pattern_binds_anything(sub),
+                    };
+                    if !binds {
+                        continue;
+                    }
+                    self.zero_struct_field_move_cap(box_ptr, sname, &field_pat.name);
+                }
             }
-            self.zero_struct_field_move_cap(box_ptr, &struct_name, &field_pat.name);
+            // The enum sibling reuses the NON-boxed path's own disarmer rather
+            // than open-coding a second consumed-field walk: it already
+            // resolves the live variant, reads `field_word_offsets` /
+            // `field_drop_kinds`, and applies the same bind-vs-test rule the
+            // struct arm spells out above. Only the base pointer differs —
+            // the box interior here, the enum's own slot there.
+            BoxedPayloadShape::EnumVariant(ename) => {
+                self.suppress_destructured_enum_payload_cleanup_at(box_ptr, ename, sub);
+            }
         }
         self.builder.build_unconditional_branch(join_bb).unwrap();
         self.builder.position_at_end(join_bb);
@@ -12839,4 +13018,14 @@ fn is_scalar_surface_name(name: &str) -> bool {
             | "bool"
             | "char"
     )
+}
+
+/// Which shape a BOXED `Option`/`Result` payload has, for
+/// [`Codegen::suppress_boxed_payload_struct_destructure_at`]. The two arms
+/// disarm the same storage — the box interior — and differ only in how a
+/// consumed field is located: by struct field name, or by the live variant's
+/// word offsets (B-2026-08-31-23).
+enum BoxedPayloadShape {
+    Struct(String),
+    EnumVariant(String),
 }

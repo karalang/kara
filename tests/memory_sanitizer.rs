@@ -63916,6 +63916,84 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-23 under ASAN/LSan — a consuming arm over a BOXED
+    /// user-ENUM payload frees the buffer exactly once, and the fields it does
+    /// NOT take are still freed by the box.
+    ///
+    /// The E2E twin pins the text, which catches the double free. It cannot
+    /// see the other direction: disarming a field the arm never took is a
+    /// LEAK, and that is the failure both sibling disarmers were fixed for
+    /// (B-2026-08-04-6, B-2026-08-28-66). `two_fields_one_taken` is that
+    /// control — it binds `s` and leaves `t` to the box.
+    ///
+    /// Same two fixture rules the B-2026-08-30-52 sibling records, for the
+    /// same reasons: the scrutinee is a FUNCTION-SCOPE local (a loop-body one
+    /// takes a different path where AOT is clean and only the JIT aborts), and
+    /// the payload's BYTES are read rather than its length (a `.len()`-only
+    /// buffer is a dead allocation LLVM deletes outright).
+    #[test]
+    fn asan_consuming_arm_over_a_boxed_enum_payload_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+enum E { A { s: String }, B }
+enum T { P { s: String, t: String }, Q }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str(f"payload-padded-out-well-past-thirty-six-bytes-{i}");
+    return s;
+}
+fn digits(i: i64) -> String { let mut d: String = String.new(); d.push_str(f"{i}"); return d; }
+// The row's NESTED spelling: outer arm binds the payload whole, inner match
+// moves a heap field out of it.
+fn nested(i: i64) -> i64 {
+    let a: Option[E] = Some(E.A { s: s_of(i) });
+    let mut r = 0;
+    match a {
+        Some(p) => { match p { E.A { s } => { let owned: String = s; if owned.contains(digits(i)) { r = owned.len(); } } E.B => {} } }
+        None => {}
+    }
+    return r;
+}
+// The SINGLE-LEVEL spelling, which was broken for the same reason.
+fn single(i: i64) -> i64 {
+    let a: Option[E] = Some(E.A { s: s_of(i) });
+    let mut r = 0;
+    match a { Some(E.A { s }) => { let owned: String = s; if owned.contains(digits(i)) { r = owned.len(); } } Some(E.B) => {} None => {} }
+    return r;
+}
+// CONTROL, the leak direction: TWO heap fields, the arm takes ONE. Disarming
+// `t` as well would leak it — nobody else owns it.
+fn two_fields_one_taken(i: i64) -> i64 {
+    let a: Option[T] = Some(T.P { s: s_of(i), t: s_of(i) });
+    let mut r = 0;
+    match a { Some(T.P { s, .. }) => { let owned: String = s; if owned.contains(digits(i)) { r = owned.len(); } } Some(T.Q) => {} None => {} }
+    return r;
+}
+// CONTROL: the arm only READS the payload (B-2026-08-30-52's borrow path).
+fn read_only(i: i64) -> i64 {
+    let a: Option[E] = Some(E.A { s: s_of(i) });
+    let mut r = 0;
+    match a { Some(p) => { match p { E.A { s } => { if s.contains(digits(i)) { r = s.len(); } } E.B => {} } } None => {} }
+    match a { Some(p) => { match p { E.A { s } => { if s.contains(digits(i)) { r = r + s.len(); } } E.B => {} } } None => {} }
+    return r;
+}
+fn main() {
+    let base: i64 = env.args().len();
+    let mut n = 0i64;
+    let mut i = base;
+    while i < base + 50i64 {
+        n = n + nested(i) + single(i) + two_fields_one_taken(i) + read_only(i);
+        i = i + 1i64;
+    }
+    if n > 0i64 { println("done"); }
+}
+"#,
+            &["done"],
+            "consuming arm over a boxed enum payload frees once",
+            200,
+        );
+    }
+
     /// B-2026-08-29-66 under ASAN/LSan — the memory half of the auto-par
     /// branch-publish handshake, which the ordering assertions in
     /// `tests/par_codegen.rs` can only see indirectly (a garbage id printed

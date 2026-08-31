@@ -122142,6 +122142,116 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-23 — A CONSUMING ARM OVER A BOXED USER-ENUM PAYLOAD
+    /// DOUBLE FREED, WHILE THE SAME ARM OVER A BOXED STRUCT PAYLOAD WAS FINE.
+    ///
+    /// `suppress_boxed_payload_struct_destructure_at` resolved the payload
+    /// pattern's last path segment against `struct_types` ONLY. `Some(E.A { s })`
+    /// looks up "A", finds nothing, and returns before anything is disarmed —
+    /// so the box interior's drop stayed armed while the arm's binding owned
+    /// the same buffer, and both freed it.
+    ///
+    /// THE AXIS IS THE PAYLOAD'S TYPE, NOT THE MATCH'S SHAPE. The row that
+    /// filed this recorded the nested `match` spelling as load-bearing and a
+    /// single-level destructure as a clean control; re-measuring found the
+    /// single-level ENUM spelling broken too, and the clean control had been a
+    /// STRUCT payload. Both spellings are pinned here so the correction cannot
+    /// be lost.
+    ///
+    /// The nested spelling needs a second half: there the outer pattern is a
+    /// bare binding, so no payload pattern reaches the disarmer at all. The
+    /// binding is a bit copy of the box interior and the inner match's own
+    /// cap-zeroing disarms the COPY, so `boxed_payload_alias` records what it
+    /// aliases and the box gets disarmed too.
+    ///
+    /// EVERY ROW ALLOCATES AGAIN INSIDE THE ARM, and that is what makes this
+    /// fixture a gate rather than decoration. Written first with short literal
+    /// payloads, all eight rows PASSED against the reverted fix: the second
+    /// free lands on a block nothing reclaims, so glibc stays quiet and the
+    /// text is correct. `pad()` gives the payload a real heap buffer and the
+    /// in-arm allocation reuses the freed block, which turns the same defect
+    /// into an abort on both compiled backends.
+    #[test]
+    fn e2e_consuming_arm_over_a_boxed_enum_payload_frees_once() {
+        // Shared prelude: a heap payload big enough to be a real allocation,
+        // and a second allocation the arm makes after taking the first.
+        const PAD: &str = "fn pad(tag: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-bytes-\");\n\
+             s.push_str(f\"{tag}\");\n\
+             return s;\n\
+         }\n";
+        let cases: &[(&str, String, &str)] = &[
+            (
+                "single-level enum-variant payload destructure",
+                format!(
+                    "enum E {{ A {{ s: String }}, B }}\n{PAD}                     fn main() {{\n                         let a: Option[E] = Some(E.A {{ s: pad(1) }});\n                         match a {{ Some(E.A {{ s }}) => {{ let owned: String = s; let extra: String = pad(2); println(owned.len() + extra.len()); }} Some(E.B) => {{}} None => {{}} }}\n                         println(\"end\");\n                     }}\n"
+                ),
+                "94\nend\n",
+            ),
+            (
+                "nested match over a whole-bound payload, inner arm MOVES the leaf",
+                format!(
+                    "enum E {{ A {{ s: String }}, B }}\n{PAD}                     fn main() {{\n                         let a: Option[E] = Some(E.A {{ s: pad(1) }});\n                         match a {{ Some(p) => {{ match p {{ E.A {{ s }} => {{ let owned: String = s; let extra: String = pad(2); println(owned.len() + extra.len()); }} E.B => {{}} }} }} None => {{}} }}\n                         println(\"end\");\n                     }}\n"
+                ),
+                "94\nend\n",
+            ),
+            (
+                "tuple-variant payload, not a struct variant",
+                format!(
+                    "enum E {{ A(String), B }}\n{PAD}                     fn main() {{\n                         let a: Option[E] = Some(E.A(pad(1)));\n                         match a {{ Some(p) => {{ match p {{ E.A(s) => {{ let owned: String = s; let extra: String = pad(2); println(owned.len() + extra.len()); }} E.B => {{}} }} }} None => {{}} }}\n                         println(\"end\");\n                     }}\n"
+                ),
+                "94\nend\n",
+            ),
+            (
+                "the `Result` container, whose payload area is 5 words",
+                format!(
+                    "enum E {{ A {{ s: String, t: String, u: String }}, B }}\n{PAD}                     fn main() {{\n                         let a: Result[E, i64] = Ok(E.A {{ s: pad(1), t: pad(2), u: pad(3) }});\n                         match a {{ Ok(E.A {{ s, .. }}) => {{ let owned: String = s; let extra: String = pad(4); println(owned.len() + extra.len()); }} Ok(E.B) => {{}} Err(_) => {{}} }}\n                         println(\"end\");\n                     }}\n"
+                ),
+                "94\nend\n",
+            ),
+            // CONTROLS — each keeps the path it takes today.
+            (
+                "control: a boxed STRUCT payload was always correct",
+                format!(
+                    "struct S {{ s: String, t: String }}\n{PAD}                     fn main() {{\n                         let a: Option[S] = Some(S {{ s: pad(1), t: pad(2) }});\n                         match a {{ Some(S {{ s, t }}) => {{ let owned: String = s; let extra: String = pad(3); println(owned.len() + t.len() + extra.len()); }} None => {{}} }}\n                         println(\"end\");\n                     }}\n"
+                ),
+                "141\nend\n",
+            ),
+            (
+                "control: an INLINE enum payload is not boxed and must not be touched",
+                "enum E { A(i64), B }\n                 fn main() {\n                     let a: Option[E] = Some(E.A(7));\n                     match a { Some(E.A(n)) => println(n), Some(E.B) => {} None => println(\"none\") }\n                 }\n"
+                    .to_string(),
+                "7\n",
+            ),
+            (
+                "control: a READ-ONLY nested arm stays a borrow (B-2026-08-30-52)",
+                format!(
+                    "enum E {{ A {{ s: String }}, B }}\n{PAD}                     fn main() {{\n                         let a: Option[E] = Some(E.A {{ s: pad(1) }});\n                         match a {{ Some(p) => {{ match p {{ E.A {{ s }} => println(s.len()), E.B => {{}} }} }} None => {{}} }}\n                         match a {{ Some(p) => {{ match p {{ E.A {{ s }} => println(s.len()), E.B => {{}} }} }} None => {{}} }}\n                     }}\n"
+                ),
+                "47\n47\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter is the reference for this text"
+            );
+            if let Some(aot) = run_program(src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: a consuming arm and the box must not both free the payload"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-30-26 — AN INTEGER <-> `bf16` CONVERSION WAS REFUSED BY BOTH
     /// COMPILED BACKENDS, IN EVERY DIRECTION, WHILE THE INTERPRETER PERFORMED IT.
     ///
