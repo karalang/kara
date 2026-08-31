@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 331 | 2 |
+| miscompile | 331 | 1 |
 | run-vs-build | 268 | 18 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1290 | 35 |
-| interp | 285 | 18 |
+| codegen | 1290 | 34 |
+| interp | 285 | 17 |
 | typecheck | 282 | 2 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 41 open · 1815 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 40 open · 1816 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (41)
+### Open (40)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -169,7 +169,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
 | B-2026-08-31-9 | 2026-08-31 | codegen | medium | A STRUCT FIELD OF `Vector[T, N]` TYPE HAS NO DERIVED-Display ARM UNDER `karac build`, AND THE REFUSAL DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr -- spans and all -- INTO THE USER-FACING ERROR; the same vector renders correctly at depth 0, in a `Vec`, in a tuple, as a `Map` value and under `dbg`, so the struct emitter is the one container that did not gain the recursion | — |
 | B-2026-08-31-10 | 2026-08-31 | codegen | medium | AN `Option` WHOSE PAYLOAD LOWERS TO A MULTI-WORD STRUCT CANNOT BE INTERPOLATED IN AN F-STRING UNDER `karac build`, AND THE ERROR MISDESCRIBES ITS OWN CAUSE -- `Option[Vec[i64]]` is refused with "bind a struct literal or call result to a `let` first" when the expression is already a `let`-bound variable, while `Option[i64]` and `Result[i64, i64]` interpolate fine | — |
-| B-2026-08-31-12 | 2026-08-31 | interp+codegen | medium | A `u64` FIELD READ INSIDE A GENERIC `impl` PRINTS AS `-1` ON ALL THREE BACKENDS — `impl[T] Box[T] { fn get(ref self) -> String { f"{self.v}" } }` at `Box[u64]`, where the free-function spelling of the same interpolation is correct on all three since B-2026-08-30-44 | — |
 | B-2026-08-31-13 | 2026-08-31 | typecheck | low | THE VALUE-RECEIVER SPELLING `x.partial_cmp(y)` IS REJECTED ON A CONCRETE RECEIVER WITH "expects 2 argument(s), found 1" WHILE THE IDENTICALLY-REGISTERED `x.cmp(y)` IS ACCEPTED — some receiver-arity adjustment is keyed on the method NAME and has not been told about the second one; the `T: PartialOrd` bound path is unaffected because a type-param receiver resolves by a different route | — |
 
 ### Relocated (2)
@@ -203,9 +202,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 
 </details>
 
-### Fixed (1815)
+### Fixed (1816)
 
-<details><summary>1815 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1816 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2024,6 +2023,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
 | B-2026-08-31-5 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding… | 9eeb04a2 |
 | B-2026-08-31-11 | codegen | medium | A GENERIC CALLING ANOTHER GENERIC LOSES THE UNSIGNED READING ON BOTH COMPILED BACKENDS — `wrap[T](x) { show(x) }` prints `u64::MAX` as `-1` from JIT… | d87ae4f |
+| B-2026-08-31-12 | interp+codegen | medium | A `u64` FIELD READ INSIDE A GENERIC `impl` PRINTS AS `-1` ON ALL THREE BACKENDS — `impl[T] Box[T] { fn get(ref self) -> String { f"{self.v}" } }` at… | 17279ac |
 
 </details>
 
