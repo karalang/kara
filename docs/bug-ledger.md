@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 270 | 20 |
 | leak | 240 | 9 |
 | missing-feature | 191 | 1 |
-| double-free | 158 | 0 |
+| double-free | 159 | 1 |
 | codegen-gap | 155 | 1 |
 | diagnostics | 113 | 1 |
 | false-positive | 101 | 0 |
@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 87 | 1 |
 | other | 65 | 1 |
 | crash | 64 | 2 |
-| use-after-free | 26 | 1 |
+| use-after-free | 26 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1297 | 37 |
+| codegen | 1298 | 37 |
 | interp | 288 | 19 |
 | typecheck | 283 | 1 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1894 surfaced · 43 open · 1822 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1895 surfaced · 43 open · 1823 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (43)
 
@@ -155,7 +155,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1894 surfaced
 | B-2026-08-30-22 | 2026-08-30 | interp | medium | THE INTERPRETER RUNS AN EXTRA `Drop` BODY FOR AN ASSOCIATED-FN PASSTHROUGH ARGUMENT -- `let x = H.id(R { .. })` where `fn id(a: R) -> R { a }` prints `dR1 x=1 dR1` under `--interp` against `x=1 dR1` on JIT and AOT; here the COMPILED backends are the oracle (they match the free-function spelling on all three) and the interpreter double-fires | none |
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
-| B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- MOSTLY FIXED. Struct/tuple/nested/`if let`/`..` destructure borrow (d22cf63), and an arm using TWO BOUND LEAVES in one expression now does too (c64cbfd, via the lowered-operator predicate `consume_class` already had). ONE REMAINS: an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`) still double frees, because the outer binding's borrow-ness does not propagate into the nested pattern | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
 | B-2026-08-30-55 | 2026-08-30 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter (neither the enum's own nor its payload's) against two compiled, and a NAMED one runs one too MANY. The free-fn twin and the struct-param twin are both correct, which localizes it to the intersection B-2026-08-28-70 did not reach | — |
@@ -173,6 +172,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1894 surfaced
 | B-2026-08-31-20 | 2026-08-31 | interp | medium | THE INTERPRETER DOES NOT NARROW A FLOAT LITERAL TO THE ANNOTATED PAYLOAD WIDTH INSIDE `Option.Some(...)` -- `let q: Option[f16] = Option.Some(0.1)` prints `Some(0.1)` under `--interp` and `Some(0.0999755859375)` under `karac build`, while every other position narrows on both backends | — |
 | B-2026-08-31-21 | 2026-08-31 | interp+codegen | medium | A DISCARDED `shared` STRUCT LITERAL RUNS NO `Drop` BODY AND LEAKS ITS RC BOX ON ALL THREE BACKENDS -- `let _ = S { .. };`, `S { .. };` and the branch spellings are all silent and strand 41 B, while the same value BOUND (`let s = S { .. };`) is correct at one body and clean everywhere. | — |
 | B-2026-08-31-22 | 2026-08-31 | interp+codegen | medium | A DISCARDED `if`/`else` WHOSE ARMS ARE OWN-`Drop` ENUM CTORS RUNS ONE BODY ON THE INTERPRETER AND NONE ON EITHER COMPILED BACKEND -- `let _ = if c { E.A(mk(8)) } else { E.B };` prints `dE` under `--interp` and nothing under `karac run` / `karac build`, while stranding 6 B; the DIRECT spelling `let _ = E.A(mk(8));` is correct at `dE dR8` on all three. | — |
+| B-2026-08-31-23 | 2026-08-31 | codegen | high | A NESTED `match` ARM THAT MOVES A HEAP LEAF OUT OF A WHOLE-BOUND *BOXED* `Option` PAYLOAD DOUBLE FREES -- the TRANSFER-path twin of B-2026-08-30-52 (b), which fixed the READ-ONLY path beside it. The JIT aborts on the bare shape while AOT prints the right answer; AOT joins in as soon as the arm's `if` CONDITION allocates. The `Result[E, i64]` twin (INLINE payload area) is clean, so this is the boxed channel specifically | — |
 
 ### Relocated (2)
 
@@ -205,9 +205,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1894 surfaced
 
 </details>
 
-### Fixed (1822)
+### Fixed (1823)
 
-<details><summary>1822 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1823 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2023,6 +2023,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1894 surfaced
 | B-2026-08-30-49 | codegen | high | BOTH COMPILED BACKENDS PRODUCE `0` FOR AN INTEGER COERCED INTO A FLOAT-TYPED `if`/`else` OR `match` BRANCH, FOR ANY VALUE AND AT BOTH f32 AND f64 --… | b554da2 |
 | B-2026-08-30-50 | interp+codegen | medium | A MIXED CONTROL-FLOW ARGUMENT LOSES THE FRESH BRANCH'S `Drop` BODY when that branch is the one taken -- `one(if false { k } else { mk(31) })` runs `k… | 76677be1 |
 | B-2026-08-30-51 | interp | high | INTERPRETER: A SHADOWED BINDING'S `Drop` BODY NEVER RUNS AND THE SHADOWING VALUE'S RUNS TWICE -- `let t = mk(1); let t = mk(2);` prints `dR2 dR2` und… | 07dc9e76 |
+| B-2026-08-30-52 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES OR NESTS OVER AN `Option`/`Result` PAYLOAD TOOK ITS HEAP -- FULLY FIXED | 022f07c |
 | B-2026-08-30-56 | codegen | high | BOTH COMPILED BACKENDS BITCAST AN INTEGER INTO AN `Option` / `Result` PAYLOAD AND AN ENUM STRUCT-VARIANT FLOAT FIELD, so `let o: Option[f64] = Some(m… | b9500f80 |
 | B-2026-08-31-1 | interp+codegen | medium | A MATCH ARM THAT MOVES AN OWNED STRUCT PARAM'S ENUM PAYLOAD INTO A FRESH LOCAL RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON BOTH… | e59a31b |
 | B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
