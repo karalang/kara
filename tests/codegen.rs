@@ -23017,6 +23017,129 @@ fn main() {
     /// built a non-empty one.
     ///
     /// Every row here must read exactly as its one-hop analogue does.
+    /// B-2026-08-29-38 — a METHOD's FRESH-TEMP argument whose value the callee
+    /// hands back out.
+    ///
+    /// The passthrough guard that exists for exactly this computes the right
+    /// answer and then acts only `if let ExprKind::Identifier(var_name)`, which
+    /// a temp never is — so the caller-side temp drop fired AND the returned
+    /// value's own binding fired, two bodies for one object, against one in the
+    /// interpreter. The fix feeds the same predicate into `escapes_frame`,
+    /// which the registrar reads off the VALUE rather than off a name.
+    ///
+    /// MEMORY: the row left open whether the extra body came with a second
+    /// free. It does not — measured under valgrind with a `String`-carrying
+    /// payload, 0 errors and no leak before or after. Bodies only.
+    #[test]
+    fn e2e_method_fresh_temp_arg_handed_back_runs_one_body() {
+        let hdr = "struct R { id: i64, name: String }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+                   fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+                   enum Box2 { Full(R), Empty }\n\
+                   struct T { n: i64 }\n\
+                   impl T {\n\
+                   \x20   fn take(ref self, b: Box2) -> R {\n\
+                   \x20       match b { Box2.Full(r) => { return r; } Box2.Empty => { return mk(0); } }\n\
+                   \x20   }\n\
+                   \x20   fn keep(ref self, b: Box2) -> i64 {\n\
+                   \x20       match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } }\n\
+                   \x20   }\n\
+                   }\n\
+                   struct K { n: i64 }\n\
+                   impl K { fn g(ref self, r: R) -> i64 { return r.id; } }\n";
+        for (label, body, want) in [
+            (
+                "the row: enum temp whose payload is handed back",
+                "let t = T { n: 1 };\n\
+                 let r = t.take(Box2.Full(mk(7)));\n\
+                 println(f\"got {r.id}\");",
+                "got 7\ndrop 7 h7\n",
+            ),
+            (
+                "same, result read twice so its own body is unmistakably the survivor",
+                "let t = T { n: 1 };\n\
+                 let r = t.take(Box2.Full(mk(7)));\n\
+                 println(f\"got {r.id}\");\n\
+                 println(f\"again {r.id}\");",
+                "got 7\nagain 7\ndrop 7 h7\n",
+            ),
+            // The NAMED spelling was always correct — it is what the guard
+            // reaches — and is the in-tree proof that this row is about the
+            // argument's SYNTACTIC FORM, not about passthrough analysis.
+            (
+                "control: the same call with a NAMED binding argument",
+                "let t = T { n: 1 };\n\
+                 let b = Box2.Full(mk(7));\n\
+                 let r = t.take(b);\n\
+                 println(f\"got {r.id}\");",
+                "got 7\ndrop 7 h7\n",
+            ),
+            // Controls the widened `escapes_frame` must keep DECLINING: the
+            // callee consumes the value instead of handing it back, so the
+            // caller-side temp drop is the only owner and must still fire.
+            (
+                "control: method consumes a struct temp and returns a scalar",
+                "let k = K { n: 1 };\n\
+                 let n = k.g(mk(7));\n\
+                 println(f\"n{n}\");",
+                "drop 7 h7\nn7\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n{body}\n}}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
+        // PINNED AT KNOWN DEFECTS, not asserted as correct.
+        //
+        // (a) The METHOD leg's OTHER spelling — a struct temp escaping inside a
+        // returned `Option.Some(r)` rather than as the bare param — still runs
+        // two bodies compiled against one interpreted. It is NOT reachable by
+        // widening a predicate: these are documented conservative-true, and the
+        // non-escaping calls in this very program (`false`, `false`) correctly
+        // print their body today. A conservative-true answer would skip the
+        // caller-side drop on ALL THREE calls, trading one doubled body for two
+        // LOST ones and a leak. It needs the per-path callee-side ownership
+        // flip that `fn_conditionally_returns_param_bare` has for the bare
+        // form. Filed separately.
+        //
+        // (b) `t.keep(..)`, whose arm binds the payload but returns a SCALAR,
+        // runs no body at all on the interpreter against one compiled — the
+        // opposite direction, and a different defect. Filed separately.
+        let hdr2 = "struct R { id: i64, name: String }\n\
+                    impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
+                    fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+                    enum Box2 { Full(R), Empty }\n\
+                    struct T { n: i64 }\n\
+                    impl T { fn keep(ref self, b: Box2) -> i64 {\n\
+                    \x20   match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } } }\n\
+                    struct K { n: i64 }\n\
+                    impl K { fn f(ref self, r: R, keep: bool) -> Option[R] {\n\
+                    \x20   if keep { return Option.Some(r); }\n\
+                    \x20   return Option.None; } }\n";
+        assert_eq!(
+            run_program(&format!(
+                "{hdr2}fn main() {{\n\
+                 let k = K {{ n: 1 }};\n\
+                 let _ = k.f(mk(3), false); println(\"a\");\n\
+                 let _ = k.f(mk(4), true);  println(\"b\");\n\
+                 let _ = k.f(mk(5), false); println(\"c\");\n}}\n"
+            ))
+            .as_deref(),
+            Some("drop 3 h3\na\ndrop 4 h4\ndrop 4 h4\nb\ndrop 5 h5\nc\n"),
+            "[pinned DEFECT (a): temp escaping inside a returned Option ctor]"
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{hdr2}fn main() {{\n\
+                 let t = T {{ n: 1 }};\n\
+                 let n = t.keep(Box2.Full(mk(7)));\n\
+                 println(f\"n{{n}}\");\n}}\n"
+            ))
+            .as_deref(),
+            Some("drop 7 h7\nn7\n"),
+            "[pinned DEFECT (b): compiled runs the body the interpreter loses]"
+        );
+    }
+
     #[test]
     fn e2e_deep_projection_scrutinee_runs_one_payload_body() {
         let hdr = "struct R { id: i64 }\n\

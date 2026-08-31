@@ -7938,8 +7938,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             crate::ast::fn_always_returns_param(f, i)
                                 || crate::ast::fn_conditionally_returns_param_bare(f, i)
                         });
+                    // B-2026-08-29-38 — the FRESH-TEMP leg of the same
+                    // passthrough rule the named-binding guard above applies.
+                    // That guard (`callee_returns_enum_arg_payload`, a few
+                    // hundred lines up) computes the right answer and then acts
+                    // only `if let ExprKind::Identifier`, which a temp never is
+                    // — so `t.take(Box2.Full(mk(7)))` registered the temp's
+                    // drop AND let the returned payload's own binding fire, two
+                    // bodies for one object, while the interpreter ran one.
+                    // Feeding the same predicate into `escapes_frame` reaches
+                    // the temp, because the registrar is keyed on the VALUE
+                    // rather than on a name.
                     let escapes_frame = handed_off
-                        || self.call_arg_moves_into_outliving_place(&qualified, i, false);
+                        || self.call_arg_moves_into_outliving_place(&qualified, i, false)
+                        || self.callee_returns_enum_arg_payload(&qualified, pidx);
                     self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
                     // Fresh-heap by-value arg materialization — the method-call
                     // sibling of the #20 arm in `compile_call` (call_dispatch.rs).
