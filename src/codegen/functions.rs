@@ -3643,14 +3643,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     ("Vec", 1) => {
                         self.display.display_vec_types.insert(key, args[0].clone());
                     }
-                    // NO `Slice` ARM — deliberately, and it must stay absent
-                    // until B-2026-08-31-40 is fixed. Seeding one makes
-                    // `main() -> Result[(), Slice[i64]]` BUILD, and it then
-                    // prints `Error: [94664940209587]` where the interpreter
-                    // prints `Error: [1]`: the entry point hands the renderer a
-                    // value one indirection off, so the slice's own data
-                    // pointer is read as its first ELEMENT. Declining is a
-                    // clean build error; seeding is a silent miscompile.
+                    // B-2026-08-31-25 — the slice sibling. Without it a
+                    // `main() -> Result[(), Slice[i64]]` reached the f-string
+                    // renderer with no element type for the synthetic operand
+                    // and the build failed on a type the interpreter renders.
+                    //
+                    // This arm was briefly held back on the theory that the
+                    // entry point mis-reconstructs a slice. It does not: the
+                    // reconstruction is correct, and the garbage that prompted
+                    // the hold came from programs whose slice borrowed a LOCAL
+                    // `Vec` already freed by the cleanup drain — a dangling
+                    // borrow the checker admits (B-2026-08-31-41), not a
+                    // Display defect. An array-backed slice, whose storage is
+                    // not freed, renders correctly here on both backends.
+                    ("Slice", 1) => {
+                        self.display
+                            .display_slice_types
+                            .insert(key, args[0].clone());
+                    }
                     ("Map", 2) | ("SortedMap", 2) => {
                         self.display
                             .display_map_types

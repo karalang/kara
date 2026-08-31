@@ -1669,28 +1669,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(seg, "Vector" | "Array") {
                     return true;
                 }
-                // `Slice[T]` STAYS OUT, and the reason has changed — read this
-                // before flipping it. The original reason was that codegen had
-                // no slice Display at any depth, so there was nothing to
-                // reconstruct INTO; B-2026-08-31-25 fixed that, and ordinary
-                // interpolation of an `Option[Slice[i64]]` renders correctly
-                // through this predicate when it is admitted (measured:
-                // `Some([1, 2])`, `None`, `Ok(...)`, and `Option[Slice[String]]`
-                // → `Some([ab, cd])`, all matching the interpreter).
+                // `Slice[T]` was EXCLUDED here for one stated reason — codegen
+                // had no slice Display at any depth, so there was nothing to
+                // reconstruct INTO. B-2026-08-31-25 gave it one, and the
+                // reconstruction half needed no work: a slice's 2-word
+                // `{ptr, len}` round-trips exactly like the `{ptr, len, cap}`
+                // triple admitted above.
                 //
-                // It is held out by a DIFFERENT consumer. This one predicate
-                // also gates `main`'s error type, and that path hands the
-                // renderer a slice one indirection off: admitting `Slice` here
-                // turned `main() -> Result[(), Option[Slice[i64]]]` from a
-                // clean build error into a binary printing
-                // `Error: Some([93867340896349])` — the slice's own data
-                // pointer rendered as its first element — where the interpreter
-                // prints `Error: Some([1])`. Trading a refusal for a silent
-                // miscompile is the wrong direction, so the admission waits on
-                // B-2026-08-31-40. That row is the one to fix; then delete this
-                // arm and pin `Option[Slice]` on both paths.
+                // THE ADMISSION WAS BRIEFLY HELD BACK ON A MISREADING, recorded
+                // because the evidence looked damning. `main`'s error path
+                // printed `Error: Some([93867340896349])` with `Slice` admitted,
+                // which reads as a bad reconstruction. It is not: those are the
+                // bytes of a `Vec` buffer the cleanup drain had already freed,
+                // because the test program's slice borrowed a LOCAL. An
+                // ARRAY-backed slice — stack storage, never freed — renders
+                // `Error: Some([7, 8])` identically on both backends, and the
+                // same dangling program is equally wrong through an ordinary
+                // `fn f() -> Result[(), Slice[i64]]`, which is what shows the
+                // entry point is not the variable. The real defect is that the
+                // checker admits the dangling borrow at all (B-2026-08-31-41).
+                //
+                // Measured on well-formed programs across `Some`/`None`/`Ok`/
+                // `Err`, a nested `Option`, a match destructure, an element type
+                // that owns heap, a value crossing a function return, and the
+                // entry point — all identical to the interpreter.
                 if matches!(seg, "Slice") {
-                    return false;
+                    return true;
                 }
                 // A user struct: rebuilt field by field, so recurse. The old
                 // rule here was "≤ 3 fields, all one-word scalars", which

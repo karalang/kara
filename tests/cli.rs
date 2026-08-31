@@ -34479,21 +34479,26 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
 /// CANNOT render an `E`, the build must fail loudly rather than emit an empty
 /// message.
 ///
-/// `Option[Slice[i64]]` is the live example. It passes
-/// `E_MAIN_ERR_NOT_DISPLAY`, the interpreter renders it `Some([1])`, and
-/// codegen declines it — so before the fail-closed change `karac build`
-/// succeeded and the program printed `Error: ` and exited 1.
+/// THE EXAMPLE HAS BEEN RETIRED THREE TIMES AND HAS RUN OUT, which changes what
+/// this fixture can assert. `Option[(i64, i64)]` was the original (retired by
+/// B-2026-08-31-10), then `Option[Vector[i64, 4]]` (-18 / -19), then
+/// `Option[Slice[i64]]` (B-2026-08-31-25 / -41). All three build and match the
+/// interpreter now, and all three are asserted below — keeping them is the
+/// point, since each is a regression guard for the capability that retired it.
 ///
-/// WHY IT IS STILL DECLINED CHANGED, and the distinction matters if you are
-/// tempted to admit it. Originally codegen had no slice Display at any depth,
-/// so an ordinary `f"{o}"` on this type was a hard error too. B-2026-08-31-25
-/// fixed that — slices now render at every ordinary depth, and admitting the
-/// payload makes plain interpolation of an `Option[Slice[i64]]` correct. It is
-/// held out by THIS path alone: with the admission, `main` here builds and
-/// prints `Error: Some([93867340896349])`, the slice's own data pointer
-/// rendered as its first element, against the interpreter's `Error: Some([1])`
-/// (B-2026-08-31-40). A refusal is the right answer until that is fixed, which
-/// is exactly what this fixture exists to hold.
+/// There is no fourth subject, and that is MEASURED rather than a failure to
+/// think of one: every `E` codegen would decline is now rejected earlier by the
+/// typechecker's `E_MAIN_ERR_NOT_DISPLAY` — probed with `VecDeque[i64]`,
+/// `Fn(i64) -> i64`, `()` and `Option` wrappers of each. The gap the original
+/// fail-open exploited was a type that PASSES that check and that codegen then
+/// declines, and no such type is reachable today. (An unsubstituted generic `T`
+/// still declines — see `codegen_declined_option_payload_names_its_shape` — but
+/// `main` cannot be generic, so it is not available here.)
+///
+/// So the first assertion now pins the UPSTREAM half of the same guarantee: a
+/// non-Display `E` is a named build error, not a binary. If a codegen-declined
+/// `E` ever becomes reachable again, restore the original assertion rather than
+/// reasoning that this one covers it — they fail on different gates.
 ///
 /// THE EXAMPLE HAS BEEN RETIRED TWICE, and each retirement stays as a row.
 /// `Option[(i64, i64)]` was the original; B-2026-08-31-10 taught the renderer
@@ -34509,13 +34514,9 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
     let tmp = scratch_project("mainerr-failclosed");
     write(
         &tmp.join("m.kara"),
-        "fn mkslice() -> Slice[i64] {\n\
-         \x20   let mut v: Vec[i64] = Vec.new();\n\
-         \x20   v.push(1);\n\
-         \x20   return v.as_slice()\n\
-         }\n\
-         fn main() -> Result[(), Option[Slice[i64]]] {\n\
-         \x20   return Err(Some(mkslice()));\n\
+        "fn main() -> Result[(), VecDeque[i64]] {\n\
+         \x20   let d: VecDeque[i64] = VecDeque.new();\n\
+         \x20   return Err(d);\n\
          }\n",
     );
     let o = karac_bin()
@@ -34533,13 +34534,17 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
          binary that prints `Error: ` with nothing after it"
     );
     assert!(
-        stderr.contains("cannot render") && stderr.contains("Option[Slice[i64]]"),
-        "the diagnostic must name the offending error type and say the exit \
-         line would print nothing; got: {stderr}"
+        stderr.contains("E_MAIN_ERR_NOT_DISPLAY") && stderr.contains("VecDeque"),
+        "the diagnostic must name the offending error type; got: {stderr}"
     );
 
-    // The retired examples, each renderable since the row that retired it:
-    // the tuple payload (B-2026-08-31-10) and the vector one (-18 / -19).
+    // The retired examples, each renderable since the row that retired it: the
+    // tuple payload (B-2026-08-31-10), the vector one (-18 / -19) and the slice
+    // one (-25). The slice case builds its `Vec` in `main` and returns a slice
+    // of it, which DANGLES — the cleanup drain frees the buffer before the error
+    // line is rendered (B-2026-08-31-41) — so it uses an ARRAY-backed slice,
+    // whose storage is not freed, and is a genuine Display assertion rather than
+    // an accidental use-after-free.
     for (stem, src, want_line) in [
         (
             "n",
@@ -34554,6 +34559,15 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
              }\n"
             .to_string(),
             "Error: Some(Vector(1, 2, 3, 4))",
+        ),
+        (
+            "q",
+            "fn main() -> Result[(), Option[Slice[i64]]] {\n\
+             \x20   let a: Array[i64, 2] = [1, 2];\n\
+             \x20   return Err(Some(a[0..2]));\n\
+             }\n"
+            .to_string(),
+            "Error: Some([1, 2])",
         ),
     ] {
         let file = format!("{stem}.kara");

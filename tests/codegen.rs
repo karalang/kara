@@ -12619,16 +12619,26 @@ none   None
     /// an Option/Result PLACE EXPRESSION whose payload the synthesizer declines
     /// — already `let`-bound, so the advice was false as well as unhelpful.
     ///
-    /// The message also prescribes no rewrite, deliberately — but the REASON
-    /// changed under it and the old one is no longer true. It used to be that
-    /// destructuring the payload hit the same refusal one level down, because
-    /// codegen had no slice Display at any depth. Since B-2026-08-31-25 it has
-    /// one: `f"{s}"` on a slice is correct everywhere, and a match-arm binding
-    /// renders. `Option[Slice[i64]]` stays declined for a different reason —
-    /// `is_reconstructable_display_payload` holds it out on account of `main`'s
-    /// error path, where admitting it printed the slice's data POINTER as its
-    /// first element (B-2026-08-31-40). So the honest advice is still "no
-    /// rewrite": the fix is the admission, not a change to the program.
+    /// THE SUBJECT HAS RUN OUT, and that changes what this fixture asserts.
+    /// It has been retired three times — `Option[Vector[i64, 4]]`, then
+    /// `Option[Array[i64, 3]]` (B-2026-08-31-18 / -19), then
+    /// `Option[Slice[i64]]` (B-2026-08-31-25 / -41) — and there is no fourth
+    /// shape: every `E` the payload gate would decline is now rejected EARLIER
+    /// by the typechecker (`does not implement Display`), measured across
+    /// `VecDeque`, `Fn(..)`, `()` and `Option` wrappers of each.
+    ///
+    /// The one shape that still reaches the declined arm is an UNSUBSTITUTED
+    /// GENERIC `T` — an `Option[T]` inside `fn f[T: Display](x: Option[T])` —
+    /// and that is a DEFECT (B-2026-08-31-39), not an inherently unrenderable
+    /// type, so pinning to it would enshrine a bug. It is used below anyway,
+    /// deliberately and with this note, because the property being protected
+    /// (a declined payload names its type and gives no false advice) is worth
+    /// keeping and has no other subject. When -39 is fixed, DELETE the first
+    /// assertion rather than hunting for a new victim.
+    ///
+    /// The message prescribes no rewrite, and for every shape that has actually
+    /// reached the declined arm the rewrite would have been worse than the
+    /// error — see `deferred_display_error`'s doc for all three.
     ///
     /// The declined shape was `Option[Vector[i64, 4]]` when this was written;
     /// B-2026-08-31-18 and -19 taught codegen both vectors and arrays, so the
@@ -12643,17 +12653,15 @@ none   None
     #[test]
     fn codegen_declined_option_payload_names_its_shape() {
         let err = codegen_error(
-            r#"fn main() {
-    let mut v: Vec[i64] = Vec.new();
-    v.push(1);
-    let sl: Slice[i64] = v.as_slice();
-    let o: Option[Slice[i64]] = Some(sl);
-    println(f"{o}");
+            r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    let a: Array[i64, 2] = [1, 2];
+    show(Some(a));
 }
 "#,
         );
         assert!(
-            err.contains("Option[Slice[i64]]") && err.contains("`Slice[i64]` payload"),
+            err.contains("Option[T]") && err.contains("`T` payload"),
             "declined payload must name the type and the payload; got: {err}"
         );
         assert!(
@@ -12689,12 +12697,20 @@ fn main() { println(f"{mk()}"); }
     let a: Array[i64, 3] = [n, n + 1, n + 2];
     let oa: Option[Array[i64, 3]] = Some(a);
     println(f"{oa}");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(n);
+    v.push(n + 1);
+    let os: Option[Slice[i64]] = Some(v.as_slice());
+    println(f"{os}");
 }
 "#,
         ) else {
             return;
         };
-        assert_eq!(out, "Some(Vector(1, 2, 3, 4))\nSome([1, 2, 3])\n");
+        assert_eq!(
+            out,
+            "Some(Vector(1, 2, 3, 4))\nSome([1, 2, 3])\nSome([1, 2])\n"
+        );
     }
 
     /// B-2026-07-31-38 (enum sibling) — a plain value enum whose walker
