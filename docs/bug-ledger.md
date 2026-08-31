@@ -92,26 +92,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 331 | 1 |
-| run-vs-build | 268 | 18 |
-| leak | 238 | 8 |
+| miscompile | 332 | 2 |
+| run-vs-build | 269 | 19 |
+| leak | 239 | 9 |
 | missing-feature | 191 | 1 |
 | double-free | 158 | 0 |
-| codegen-gap | 155 | 2 |
+| codegen-gap | 155 | 1 |
 | diagnostics | 113 | 1 |
 | false-positive | 101 | 0 |
 | soundness | 92 | 4 |
 | perf | 87 | 1 |
 | other | 65 | 1 |
-| crash | 63 | 1 |
+| crash | 64 | 2 |
 | use-after-free | 26 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1292 | 34 |
-| interp | 285 | 17 |
+| codegen | 1295 | 36 |
+| interp | 286 | 18 |
 | typecheck | 283 | 1 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1888 surfaced · 39 open · 1820 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1892 surfaced · 42 open · 1821 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (39)
+### Open (42)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -166,9 +166,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1888 surfaced
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
-| B-2026-08-31-10 | 2026-08-31 | codegen | medium | AN `Option` WHOSE PAYLOAD LOWERS TO A MULTI-WORD STRUCT CANNOT BE INTERPOLATED IN AN F-STRING UNDER `karac build`, AND THE ERROR MISDESCRIBES ITS OWN CAUSE -- `Option[Vec[i64]]` is refused with "bind a struct literal or call result to a `let` first" when the expression is already a `let`-bound variable, while `Option[i64]` and `Result[i64, i64]` interpolate fine | — |
 | B-2026-08-31-15 | 2026-08-31 | typecheck | medium | A COMPARISON METHOD ON A PRIMITIVE RECEIVER IS SILENTLY POISONED, NOT CHECKED — `let s: String = n.cmp(m)` type-checks and PRINTS `Less` into the String slot, while the identical `a.cmp(b)` on a String receiver is correctly rejected; the name-keyed exemption that shields the seven comparison methods from a mis-count returns `Type::Error`, which is universally assignable | — |
 | B-2026-08-31-16 | 2026-08-31 | codegen | low | THE DERIVED-Display REFUSAL FOR AN UNSUPPORTED FIELD TYPE DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr — spans and byte offsets included — INTO USER-FACING OUTPUT, running to hundreds of characters for a one-line source construct and never naming the type in source syntax; the refusal itself is correct, and what it needs is a TypeExpr-to-source formatter this file lacks | — |
+| B-2026-08-31-18 | 2026-08-31 | codegen | high | A `Vector[T, N]` OR `Array[T, N]` ENUM PAYLOAD RECONSTRUCTS AS GARBAGE UNDER CODEGEN -- silently, in `match` as well as in Display, so a bound payload is a wrong VALUE and not merely wrong text: `match` on an `Option[Array[i64, 3]]` binds `1` where the interpreter binds `[1, 2, 3]` | — |
+| B-2026-08-31-19 | 2026-08-31 | codegen | medium | `Array[T, N]` NESTED INSIDE ANOTHER TYPE'S Display PANICS THE COMPILER -- `f"{v}"` on a `Vec[Array[i64, 3]]` aborts with `emit_display_fn_for_type: type_name 'Array_i64_3' not yet supported`, the exact shape B-2026-08-31-9 fixed for `Vector` | — |
+| B-2026-08-31-17 | 2026-08-31 | codegen | medium | AN `Option`/`Result` CALL RESULT INTERPOLATED IN AN F-STRING LEAKS ITS PAYLOAD ONCE PER EVALUATION -- `f"{mk(n)}"` where `mk` returns `Option[String]` leaks 20 buffers over 20 iterations, while the `let`-bound spelling of the same value is clean | — |
+| B-2026-08-31-20 | 2026-08-31 | interp | medium | THE INTERPRETER DOES NOT NARROW A FLOAT LITERAL TO THE ANNOTATED PAYLOAD WIDTH INSIDE `Option.Some(...)` -- `let q: Option[f16] = Option.Some(0.1)` prints `Some(0.1)` under `--interp` and `Some(0.0999755859375)` under `karac build`, while every other position narrows on both backends | — |
 
 ### Relocated (2)
 
@@ -201,9 +204,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1888 surfaced
 
 </details>
 
-### Fixed (1820)
+### Fixed (1821)
 
-<details><summary>1820 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1821 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2023,6 +2026,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1888 surfaced
 | B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
 | B-2026-08-31-5 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding… | 9eeb04a2 |
 | B-2026-08-31-9 | codegen | medium | A STRUCT FIELD OF `Vector[T, N]` TYPE HAS NO DERIVED-Display ARM UNDER `karac build`, AND THE REFUSAL DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr --… | 86c9957 |
+| B-2026-08-31-10 | codegen | medium | AN `Option` WHOSE PAYLOAD LOWERS TO A MULTI-WORD STRUCT CANNOT BE INTERPOLATED IN AN F-STRING UNDER `karac build`, AND THE ERROR MISDESCRIBES ITS OWN… | da529e8 |
 | B-2026-08-31-11 | codegen | medium | A GENERIC CALLING ANOTHER GENERIC LOSES THE UNSIGNED READING ON BOTH COMPILED BACKENDS — `wrap[T](x) { show(x) }` prints `u64::MAX` as `-1` from JIT… | d87ae4f |
 | B-2026-08-31-12 | interp+codegen | medium | A `u64` FIELD READ INSIDE A GENERIC `impl` PRINTS AS `-1` ON ALL THREE BACKENDS — `impl[T] Box[T] { fn get(ref self) -> String { f"{self.v}" } }` at… | 17279ac |
 | B-2026-08-31-13 | typecheck | low | THE VALUE-RECEIVER SPELLING `x.partial_cmp(y)` IS REJECTED ON A CONCRETE RECEIVER WITH "expects 2 argument(s), found 1" WHILE THE IDENTICALLY-REGISTE… | 7bd0b04 |
