@@ -2154,8 +2154,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let destructures = arms
             .iter()
             .any(|a| self.pattern_destructures_heap_payload(optres_te.as_ref(), &a.pattern));
-        if !self.scrutinee_is_inline_optres_local(scrutinee)
-            && !(destructures && self.scrutinee_is_boxed_optres_local(scrutinee))
+        if !(self.scrutinee_is_inline_optres_local(scrutinee)
+            || (destructures && self.scrutinee_is_boxed_optres_local(scrutinee)))
         {
             return false;
         }
@@ -2673,8 +2673,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.scrutinee_optres_type_expr(scrutinee).as_ref(),
             pattern,
         );
-        if !self.scrutinee_is_inline_optres_local(scrutinee)
-            && !(destructures && self.scrutinee_is_boxed_optres_local(scrutinee))
+        if !(self.scrutinee_is_inline_optres_local(scrutinee)
+            || (destructures && self.scrutinee_is_boxed_optres_local(scrutinee)))
         {
             return false;
         }
