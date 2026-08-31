@@ -4855,6 +4855,45 @@ impl<'a> super::Interpreter<'a> {
                 // inspect and the payload is materialized by definition.
                 self.disarm_moved_out_enum_payload_one(value, &val, pattern, None);
                 if self.try_match_pattern(pattern, &val) {
+                    // B-2026-08-31-30 — the STRUCT sibling of the enum-payload
+                    // disarm above, and the same failure it describes: a bare
+                    // struct pattern (`let P { r, .. } = h else { … }`) moves
+                    // each bound field into an ESCAPING binding, but the
+                    // source's field-bodies walk still visited them, so the
+                    // body ran TWICE — once at `h`'s NLL death, BEFORE the
+                    // binding is even used, and once via the binding's own
+                    // slot. Measured `dR[a] a dR[a] end` against every compiled
+                    // backend's `a dR[a] end`.
+                    //
+                    // Masks per FIELD rather than retracting the source
+                    // wholesale, so a field the pattern leaves unbound still
+                    // gets its body. This is the same cut codegen's
+                    // `disarm_arm_destructured_struct_field_bodies` makes, and
+                    // `moved_out_struct_field_bodies` is the map
+                    // `drop_user_drop_fields_of_binding` already consults
+                    // (B-2026-08-03-8) — the `let x = h.f` spelling has used it
+                    // since then; only this one never registered.
+                    //
+                    // Match edge only: the `else` edge binds nothing, so the
+                    // source keeps every body it owes.
+                    if let (
+                        crate::ast::PatternKind::Struct { fields, .. },
+                        ExprKind::Identifier(src),
+                    ) = (&pattern.kind, &value.kind)
+                    {
+                        for fp in fields {
+                            let whole_move = match &fp.pattern {
+                                None => true,
+                                Some(p) => {
+                                    matches!(p.kind, crate::ast::PatternKind::Binding(_))
+                                }
+                            };
+                            if whole_move {
+                                self.moved_out_struct_field_bodies
+                                    .insert((src.clone(), fp.name.clone()));
+                            }
+                        }
+                    }
                     self.bind_pattern(pattern, val);
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
                         self.run_user_drop_body_on_value(&tn, dv);

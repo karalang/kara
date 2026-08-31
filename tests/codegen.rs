@@ -123091,6 +123091,107 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-30 — THE `if let` / `let … else` / NESTED-`match` SPELLINGS
+    /// OF A STRUCT DESTRUCTURE DOUBLE FREED A MOVED-OUT HEAP FIELD.
+    ///
+    /// `suppress_destructured_struct_pattern_cleanup` (#16) cap-zeroes each
+    /// moved-out field in the SOURCE struct so the scrutinee's drop skips the
+    /// buffer the binding now owns. It had exactly one caller — the `match` arm
+    /// loop. The `if let` / `while let` / `let … else` legs ran the whole
+    /// neighbouring battery and never this one, so the source field stayed
+    /// populated while the binding owned the same buffer and both freed it.
+    /// The NESTED spelling is a second, independent half: it does reach #16,
+    /// but the `whole_move` gate correctly declines to mask an outer field
+    /// whose sub-pattern destructures, and nothing then descended to the inner
+    /// field. #16 now recurses, and `FieldSkipTree::nested` carries the bodies
+    /// mask through `struct_moved_nested_field_bodies`.
+    ///
+    /// EVERY ROW PADS ITS PAYLOAD PAST THE SHORT-STRING THRESHOLD AND
+    /// ALLOCATES AGAIN AFTERWARDS. Without both, the second free lands on a
+    /// block nothing reclaims, glibc stays quiet and the printed text is
+    /// correct — the trap that made an earlier version of the B-2026-08-31-23
+    /// fixture pass against its own reverted fix. With them, each row aborts
+    /// with `free(): double free detected in tcache 2` on the pre-fix compiler.
+    ///
+    /// EVERY ROW PINS ONE STRING FOR BOTH BACKENDS, but note what that depends
+    /// on: this harness builds with auto-par OFF. Under the DEFAULT build the
+    /// `let … else` row prints `47 47 end dR47` instead — the binding's body
+    /// slides to scope exit — which is B-2026-08-31-6 (an auto-par outlined
+    /// region swallows the NLL drop points of the statements it spans), not
+    /// anything this row fixed. Measured both ways while deriving these values;
+    /// recorded here so a future reader who runs the same program from the CLI
+    /// and sees a different order does not re-diagnose it as a regression.
+    #[test]
+    fn e2e_every_struct_destructure_spelling_frees_once() {
+        const PRELUDE: &str = "fn pad(t: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-bytes-\");\n\
+             s.push_str(f\"{t}\");\n\
+             return s;\n\
+         }\n\
+         struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s.len()}\"); } }\n\
+         struct H { r: R, n: i64 }\n\
+         struct Q { h: H }\n";
+        // (label, statements, interpreter text, compiled text)
+        let cases: &[(&str, &str, &str, &str)] = &[
+            (
+                "`if let` over a bare struct",
+                "let h: H = H { r: R { s: pad(1) }, n: 4 };\n\
+                 if let H { r, .. } = h { println(r.s.len()) }",
+                "47\ndR47\n47\nend\n",
+                "47\ndR47\n47\nend\n",
+            ),
+            (
+                "`let … else` over a bare struct",
+                "let h: H = H { r: R { s: pad(1) }, n: 4 };\n\
+                 let H { r, .. } = h else { return };\n\
+                 println(r.s.len());",
+                "47\ndR47\n47\nend\n",
+                "47\ndR47\n47\nend\n",
+            ),
+            (
+                "NESTED struct sub-pattern under `match`",
+                "let q: Q = Q { h: H { r: R { s: pad(1) }, n: 4 } };\n\
+                 match q { Q { h: H { r, .. } } => println(r.s.len()) }",
+                "47\ndR47\n47\nend\n",
+                "47\ndR47\n47\nend\n",
+            ),
+            (
+                "NESTED struct sub-pattern under `if let`",
+                "let q: Q = Q { h: H { r: R { s: pad(1) }, n: 4 } };\n\
+                 if let Q { h: H { r, .. } } = q { println(r.s.len()) }",
+                "47\ndR47\n47\nend\n",
+                "47\ndR47\n47\nend\n",
+            ),
+            (
+                "control: the flat `match` spelling, correct throughout",
+                "let h: H = H { r: R { s: pad(1) }, n: 4 };\n\
+                 match h { H { r, .. } => println(r.s.len()) }",
+                "47\ndR47\n47\nend\n",
+                "47\ndR47\n47\nend\n",
+            ),
+        ];
+        for (label, stmts, want_interp, want_aot) in cases {
+            let src = format!(
+                "{PRELUDE}fn main() {{\n    {stmts}\n    let extra: String = pad(2);\n    \
+                 println(extra.len());\n    println(\"end\");\n}}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want_interp, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want_aot,
+                    "{label}: the source field and the binding must not both free the buffer"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-31-26 / B-2026-08-31-27 — A DESTRUCTURING `match` ARM MUST RUN
     /// EACH `Drop` BODY EXACTLY ONCE, AND THE TWO BACKENDS WERE WRONG IN
     /// OPPOSITE DIRECTIONS.

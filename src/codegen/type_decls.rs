@@ -169,6 +169,15 @@ pub(crate) struct TypeDecls<'ctx> {
     /// `dE`. Accumulates across arms and is cleared per function alongside its
     /// sibling.
     pub(crate) struct_moved_field_payload_bodies: HashMap<String, std::collections::HashSet<usize>>,
+    /// B-2026-08-31-30 — the NESTED sibling of `struct_moved_field_bodies`:
+    /// outer field index -> the INNER field indices a nested struct sub-pattern
+    /// moved out (`match q { Q { h: H { r, .. } } => … }`). The outer field
+    /// itself did not move, so masking it through the flat map would lose every
+    /// other body `H` owes; this feeds `FieldSkipTree::nested`, which masks
+    /// inside the surviving field's own walker. Accumulates across arms and is
+    /// cleared per function alongside its siblings.
+    pub(crate) struct_moved_nested_field_bodies:
+        HashMap<String, std::collections::BTreeMap<usize, std::collections::BTreeSet<usize>>>,
     /// B-2026-08-02-7 / B-2026-08-02-13 — prelude type names a user program
     /// re-declared, shadowing the stdlib type of the same name.
     ///

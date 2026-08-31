@@ -6006,6 +6006,7 @@ impl<'ctx> Codegen<'ctx> {
                 enum_inst_type_exprs: HashMap::new(),
                 enum_inst_var_types: HashMap::new(),
                 struct_moved_field_bodies: HashMap::new(),
+                struct_moved_nested_field_bodies: HashMap::new(),
                 struct_moved_field_payload_bodies: HashMap::new(),
                 user_shadowed_prelude_types: std::collections::HashSet::new(),
             },

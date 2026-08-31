@@ -284,6 +284,25 @@ impl<'ctx> super::Codegen<'ctx> {
             // place. It also carries the BODIES half now, so the two move
             // together — the B-2026-08-28-67 lockstep rule.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
+            // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
+            // which the `match` arm loop has run since it was added and these
+            // three legs never did. `if let H { r, .. } = h { … }` therefore
+            // left the source struct's field fully populated while the binding
+            // owned the same buffer, and BOTH freed it: measured as
+            // `free(): double free detected in tcache 2` on `karac build` and
+            // on the JIT, against a clean `match` on the same value. Exactly
+            // the shape, and exactly the omission, that B-2026-08-29-33 found
+            // one level down for an enum-typed FIELD.
+            //
+            // Then/match edge only, like every suppression around it: the miss
+            // edge runs none and the drop frees the source whole.
+            self.suppress_destructured_struct_pattern_cleanup(value, pattern);
+            // The BODIES half, moving in lockstep with the memory half above —
+            // the B-2026-08-28-67 rule. Without it the source's bodies walk
+            // still visits the moved-out field and runs its user `Drop` body a
+            // second time on the husk the cap-zeroing just left
+            // (B-2026-08-31-26).
+            self.disarm_arm_destructured_struct_field_bodies(value, pattern);
         }
         // B-2026-06-10-6: a variable `Option[String]`/`Option[Vec]` scrutinee
         // with a `FreeInlineOptionPayload` needs its source `cap` zeroed when
@@ -847,6 +866,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.suppress_destructured_enum_payload_cleanup(value, pattern);
             // B-2026-08-29-33, `while let` leg — see the `if let` note above.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
+            // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
+            // which the `match` arm loop has run since it was added and these
+            // three legs never did. `if let H { r, .. } = h { … }` therefore
+            // left the source struct's field fully populated while the binding
+            // owned the same buffer, and BOTH freed it: measured as
+            // `free(): double free detected in tcache 2` on `karac build` and
+            // on the JIT, against a clean `match` on the same value. Exactly
+            // the shape, and exactly the omission, that B-2026-08-29-33 found
+            // one level down for an enum-typed FIELD.
+            //
+            // Then/match edge only, like every suppression around it: the miss
+            // edge runs none and the drop frees the source whole.
+            self.suppress_destructured_struct_pattern_cleanup(value, pattern);
+            // The BODIES half, moving in lockstep with the memory half above —
+            // the B-2026-08-28-67 rule. Without it the source's bodies walk
+            // still visits the moved-out field and runs its user `Drop` body a
+            // second time on the husk the cap-zeroing just left
+            // (B-2026-08-31-26).
+            self.disarm_arm_destructured_struct_field_bodies(value, pattern);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee source-cap
         // suppression (see `compile_if_let`). No-op for temp / non-inline.
@@ -1352,6 +1390,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.suppress_destructured_enum_payload_cleanup(value, pattern);
             // B-2026-08-29-33, `let … else` leg — see the `if let` note above.
             self.suppress_destructured_struct_field_enum_cleanup(value, pattern);
+            // B-2026-08-31-30 — #16, the plain struct-pattern destructure,
+            // which the `match` arm loop has run since it was added and these
+            // three legs never did. `if let H { r, .. } = h { … }` therefore
+            // left the source struct's field fully populated while the binding
+            // owned the same buffer, and BOTH freed it: measured as
+            // `free(): double free detected in tcache 2` on `karac build` and
+            // on the JIT, against a clean `match` on the same value. Exactly
+            // the shape, and exactly the omission, that B-2026-08-29-33 found
+            // one level down for an enum-typed FIELD.
+            //
+            // Then/match edge only, like every suppression around it: the miss
+            // edge runs none and the drop frees the source whole.
+            self.suppress_destructured_struct_pattern_cleanup(value, pattern);
+            // The BODIES half, moving in lockstep with the memory half above —
+            // the B-2026-08-28-67 rule. Without it the source's bodies walk
+            // still visits the moved-out field and runs its user `Drop` body a
+            // second time on the husk the cap-zeroing just left
+            // (B-2026-08-31-26).
+            self.disarm_arm_destructured_struct_field_bodies(value, pattern);
         }
         // B-2026-06-10-6: variable inline-`Option` scrutinee — `s` binds into
         // the enclosing scope where x's `FreeInlineOptionPayload` also lives,

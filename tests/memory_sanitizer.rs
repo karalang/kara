@@ -64212,6 +64212,98 @@ fn main() {
         );
     }
 
+    /// B-2026-08-31-30 — the `if let` / `let … else` / NESTED spellings of a
+    /// struct destructure double freed the moved-out field's buffer, and unlike
+    /// the flat `match` spelling's quiet duplicate BODY (B-2026-08-31-26) this
+    /// one is a real memory error, so it belongs here as well as in the E2E
+    /// twin.
+    ///
+    /// `suppress_destructured_struct_pattern_cleanup` (#16) had exactly one
+    /// caller — the `match` arm loop — so the three statement forms left the
+    /// source field populated while the binding owned the same buffer. The
+    /// NESTED spelling reached #16 but stopped at its `whole_move` gate, which
+    /// correctly declines to mask an outer field whose sub-pattern
+    /// destructures; #16 now recurses into it.
+    ///
+    /// `two_fields_one_taken` is the LEAK-direction control, and it is the half
+    /// a double-free fixture cannot see on its own: over-disarming a field the
+    /// pattern never bound leaks it, which is the failure both sibling
+    /// disarmers were fixed for (B-2026-08-04-6, B-2026-08-28-66). LSan catches
+    /// that only on the Linux CI leg — a local macOS asan run is blind to it.
+    ///
+    /// Same two fixture rules the sibling rows record: the scrutinee is a
+    /// FUNCTION-SCOPE local, and the payload's BYTES are read rather than its
+    /// length, since a `.len()`-only buffer is a dead allocation LLVM deletes
+    /// outright and the fixture would then prove nothing.
+    #[test]
+    fn asan_every_struct_destructure_spelling_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { s: String }
+struct H { r: R, n: i64 }
+struct Q { h: H }
+struct W { a: R, b: R }
+fn s_of(i: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{i}");
+    return s;
+}
+fn if_let_spelling() -> bool {
+    let h: H = H { r: R { s: s_of(1) }, n: 4 };
+    let mut hit: bool = false;
+    if let H { r, .. } = h { hit = r.s.contains("padded"); }
+    return hit;
+}
+fn let_else_spelling() -> bool {
+    let h: H = H { r: R { s: s_of(2) }, n: 4 };
+    let H { r, .. } = h else { return false };
+    return r.s.contains("padded");
+}
+fn nested_match_spelling() -> bool {
+    let q: Q = Q { h: H { r: R { s: s_of(3) }, n: 4 } };
+    let mut hit: bool = false;
+    match q { Q { h: H { r, .. } } => { hit = r.s.contains("padded"); } }
+    return hit;
+}
+fn nested_if_let_spelling() -> bool {
+    let q: Q = Q { h: H { r: R { s: s_of(4) }, n: 4 } };
+    let mut hit: bool = false;
+    if let Q { h: H { r, .. } } = q { hit = r.s.contains("padded"); }
+    return hit;
+}
+fn two_fields_one_taken() -> bool {
+    let w: W = W { a: R { s: s_of(5) }, b: R { s: s_of(6) } };
+    let mut hit: bool = false;
+    if let W { a, .. } = w { hit = a.s.contains("padded"); }
+    return hit;
+}
+fn flat_match_control() -> bool {
+    let h: H = H { r: R { s: s_of(7) }, n: 4 };
+    let mut hit: bool = false;
+    match h { H { r, .. } => { hit = r.s.contains("padded"); } }
+    return hit;
+}
+fn main() {
+    println(if_let_spelling());
+    println(let_else_spelling());
+    println(nested_match_spelling());
+    println(nested_if_let_spelling());
+    println(two_fields_one_taken());
+    println(flat_match_control());
+    println("done");
+}
+"#,
+            &["true", "true", "true", "true", "true", "true", "done"],
+            "every-struct-destructure-spelling-frees-once",
+            // Measured 99 on the fixed compiler. The floor is set just under
+            // that rather than at the sibling's 200 (which was calibrated
+            // against a fixture doing more work): its job is to fail if a
+            // future optimizer folds these payloads away, and a floor above
+            // the real count would fail every run instead.
+            80,
+        );
+    }
     /// B-2026-08-31-23 under ASAN/LSan — a consuming arm over a BOXED
     /// user-ENUM payload frees the buffer exactly once, and the fields it does
     /// NOT take are still freed by the box.

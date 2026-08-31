@@ -8253,6 +8253,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(p) => matches!(p.kind, PatternKind::Binding(_)),
             };
             if !whole_move {
+                // B-2026-08-31-30 — a NESTED struct sub-pattern
+                // (`match q { Q { h: H { r, .. } } => … }`) moves a field of the
+                // INNER struct out, and the source's drop still freed it: a
+                // DOUBLE FREE, not the quiet duplicate body the flat spelling
+                // produced. Suppressing the whole outer field would be wrong
+                // (the field itself did not move, only something inside it), so
+                // descend one level and run the same per-field zeroing against
+                // the inner struct's slot. Recursion, so it composes to any
+                // depth.
+                if let Some(sub) = &field_pat.pattern {
+                    if matches!(sub.kind, PatternKind::Struct { .. }) {
+                        let sub = sub.clone();
+                        if let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) {
+                            let inner = field_type_names.get(idx).and_then(|o| o.clone());
+                            if let Some(inner) = inner {
+                                if self.type_decls.struct_types.contains_key(inner.as_str())
+                                    && !self.type_decls.shared_types.contains_key(inner.as_str())
+                                {
+                                    if let Ok(fp) = self.builder.build_struct_gep(
+                                        st,
+                                        base_ptr,
+                                        idx as u32,
+                                        "p16.nest.p",
+                                    ) {
+                                        self.suppress_destructured_struct_pattern_cleanup_at(
+                                            fp, &inner, &sub,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
@@ -8872,27 +8905,79 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return;
         };
+        let field_type_names = self
+            .type_decls
+            .struct_field_type_names
+            .get(struct_name.as_str())
+            .cloned()
+            .unwrap_or_default();
         let mut masked_any = false;
         for field_pat in fields {
-            // Only a WHOLE-field move into one binding is suppressible, the
-            // same gate the memory half applies: a nested destructure leaves
-            // the field itself in place and its walk must stand.
+            let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
+                continue;
+            };
+            // A WHOLE-field move into one binding masks the field outright.
             let whole_move = match &field_pat.pattern {
                 None => true,
                 Some(p) => matches!(p.kind, PatternKind::Binding(_)),
             };
-            if !whole_move {
+            if whole_move {
+                self.type_decls
+                    .struct_moved_field_bodies
+                    .entry(var_name.clone())
+                    .or_default()
+                    .insert(idx);
+                masked_any = true;
                 continue;
             }
-            let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
+            // B-2026-08-31-30 — a NESTED struct sub-pattern moved a field of
+            // the INNER struct out. The outer field did NOT move, so masking it
+            // outright would lose every other body it owes; record the inner
+            // indices instead and let `FieldSkipTree::nested` mask inside that
+            // field's own walker. The memory twin in
+            // `suppress_destructured_struct_pattern_cleanup_at` descends by
+            // recursion at the same point.
+            let Some(sub) = &field_pat.pattern else {
                 continue;
             };
-            self.type_decls
-                .struct_moved_field_bodies
-                .entry(var_name.clone())
-                .or_default()
-                .insert(idx);
-            masked_any = true;
+            let PatternKind::Struct {
+                fields: inner_fields,
+                ..
+            } = &sub.kind
+            else {
+                continue;
+            };
+            let inner_fields = inner_fields.clone();
+            let Some(inner_name) = field_type_names.get(idx).and_then(|o| o.clone()) else {
+                continue;
+            };
+            let Some(inner_field_names) = self
+                .type_decls
+                .struct_field_names
+                .get(inner_name.as_str())
+                .cloned()
+            else {
+                continue;
+            };
+            for ifp in &inner_fields {
+                let inner_whole = match &ifp.pattern {
+                    None => true,
+                    Some(p) => matches!(p.kind, PatternKind::Binding(_)),
+                };
+                if !inner_whole {
+                    continue;
+                }
+                if let Some(iidx) = inner_field_names.iter().position(|n| n == &ifp.name) {
+                    self.type_decls
+                        .struct_moved_nested_field_bodies
+                        .entry(var_name.clone())
+                        .or_default()
+                        .entry(idx)
+                        .or_default()
+                        .insert(iidx);
+                    masked_any = true;
+                }
+            }
         }
         if !masked_any {
             return;
@@ -8921,10 +9006,29 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(var_name.as_str())
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
+        let nested: std::collections::BTreeMap<usize, super::synth_drop::FieldSkipTree> = self
+            .type_decls
+            .struct_moved_nested_field_bodies
+            .get(var_name.as_str())
+            .map(|m| {
+                m.iter()
+                    .map(|(outer, inner)| {
+                        (
+                            *outer,
+                            super::synth_drop::FieldSkipTree {
+                                here: inner.clone(),
+                                payload_here: Default::default(),
+                                nested: Default::default(),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let skip = super::synth_drop::FieldSkipTree {
             here,
             payload_here,
-            nested: Default::default(),
+            nested,
         };
         match self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip) {
             Some(bodies) => {
