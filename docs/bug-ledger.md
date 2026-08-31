@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 331 | 3 |
+| miscompile | 331 | 2 |
 | run-vs-build | 268 | 20 |
 | leak | 237 | 8 |
 | missing-feature | 191 | 2 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1290 | 36 |
-| interp | 285 | 20 |
+| interp | 285 | 19 |
 | typecheck | 282 | 2 |
 | other | 70 | 0 |
 | ownership | 69 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 44 open · 1812 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced · 43 open · 1813 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (44)
+### Open (43)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -157,7 +157,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-23 | 2026-08-30 | interp+codegen | medium | THE FREE-FUNCTION SPELLING OF A CONDITIONAL RETURN LOSES THE DYING PARAMETER'S `Drop` BODY on all three backends -- `fn pick(a: R, k: bool) -> R { if k { return R { id: 98 }; } a }` at `k = true` never runs `a`'s body, while the METHOD and ASSOCIATED spellings of the same function do; the free-fn arm is the last one still gated on the union-over-return-sites predicate | none |
 | B-2026-08-30-40 | 2026-08-30 | typecheck | low | THE `f16.` / `bf16.` ASSOCIATED-CALL NAMESPACE IS UNREACHABLE: `f16.add(a, b)`, `f16.from(x)` and `f16.parse(s)` are all rejected with "'f16' is a type, not a function", while the same call at `f32` RESOLVES and fails (or succeeds) on its own merits. Two hardcoded width lists in `method_identifier_receiver.rs` omit the reduced-precision widths, so the leading segment is never recognized as a type receiver and the path falls through to the identifier-in-value-position diagnostic | — |
 | B-2026-08-30-42 | 2026-08-30 | codegen | medium | A `bf16` PARAMETER ON A FUNCTION BOUNDARY LLVM DOES NOT INLINE ABORTS THE WASM BUILD WITH `LLVM ERROR: Cannot select: bf16_to_fp` — a hard process abort, not a diagnostic. Reproduces on `main` with a bound-free `fn pick[T](a: T, b: T) -> T` at bf16 and with any `pub fn` taking a `bf16`; a bf16 RETURN, a bf16 struct field, `Vec[bf16]` and all direct bf16 arithmetic build and run on wasm correctly | — |
-| B-2026-08-30-43 | 2026-08-30 | interp | medium | A METHOD ON A GENERIC `impl` COMPUTES AT f64 UNDER `--interp` AT EVERY NARROW FLOAT WIDTH — `impl[T: Add + Mul] Pair[T] { fn combine(...) -> T }` at f32 reads 0.13000000312924387 against both compiled backends' 0.12999999523162842. Only FREE-FUNCTION calls push a generic-substitution frame (`push_type_subs_for_call` has exactly one call site), so an impl's own `T` is never resolvable and the tree-walk's narrow-float rounding is skipped | — |
 | B-2026-08-30-48 | 2026-08-30 | interp | medium | AN INTEGER REACHING A FLOAT SLOT THROUGH AN AGGREGATE OR A VARIANT PAYLOAD IS STILL CONVERTED WRONG UNDER `--interp` -- a tuple / `Array` literal element converts with the AGGREGATE's signedness (so `u64::MAX` reads -1), and an `Option` payload / `Map` value / enum variant field is not converted AT ALL. B-2026-08-30-34 fixed ten direct sites | — |
 | B-2026-08-30-52 | 2026-08-30 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES AN `Option`/`Result` PAYLOAD TAKES ITS HEAP -- PARTIALLY FIXED (d22cf63): struct/tuple/nested/`if let`/`..` destructure now borrow. TWO REMAIN: an arm using TWO BOUND LEAVES in one expression (`v[0] + n` fails where `v[0] + 1` passes -- the consume classifier counts a SCALAR leaf's use as an escape), and an INNER `match` over a whole-bound payload (`Some(p) => match p { A { s } => .. }`), where the outer binding's borrow-ness does not propagate into the nested pattern | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
@@ -206,9 +205,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 
 </details>
 
-### Fixed (1812)
+### Fixed (1813)
 
-<details><summary>1812 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1813 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2013,6 +2012,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1885 surfaced
 | B-2026-08-30-38 | interp+codegen | medium | AN ARGUMENT THAT IS A CONTROL-FLOW OR BLOCK EXPRESSION LOSES ITS `Drop` BODY ENTIRELY -- `one(if c { mk(1) } else { mk(2) })`, the `match` spelling a… | 0d34440b |
 | B-2026-08-30-39 | codegen | medium | `dbg` OF A `Vector`, AND ANY CONTAINER-NESTED `Vector` IN AN F-STRING, PANIC THE COMPILER -- `emit_display_fn_for_type: type_name 'Vector_u64_2' not… | 57327e8 |
 | B-2026-08-30-41 | interp+codegen | medium | A `T: PartialOrd` BOUND MAKES `a < b` UNRUNNABLE ON BOTH BACKENDS, FOR EVERY TYPE — the tree-walk aborts with "method 'partial_cmp' not found" and `k… | dc6f56f |
+| B-2026-08-30-43 | interp | medium | A METHOD ON A GENERIC `impl` COMPUTES AT f64 UNDER `--interp` AT EVERY NARROW FLOAT WIDTH — `impl[T: Add + Mul] Pair[T] { fn combine(...) -> T }` at… | 8245dc9 |
 | B-2026-08-30-44 | interp | medium | AN UNSIGNED VALUE PRINTS AS `-1` FROM INSIDE A GENERIC BODY UNDER `--interp` — `fn show[T](x: T) -> String { f"{x}" }` renders `u64::MAX` and `u128::… | d1ec5de |
 | B-2026-08-30-45 | codegen | medium | `i128` AND `u128` SHARE ONE MONOMORPH SYMBOL, so a generic instantiated at both computes the second at the first's signedness — `show[T](x) { f"{x}"… | da21408 |
 | B-2026-08-30-46 | interp | medium | `dbg()` OF A `Set` / `SortedSet` / `SortedMap` RENDERS A `u64` ELEMENT AT OR ABOVE 2^63 AS ITS NEGATIVE under `--interp`, while `f"{s}"` on the SAME… | 0d25859 |
