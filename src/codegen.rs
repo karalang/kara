@@ -6182,6 +6182,7 @@ impl<'ctx> Codegen<'ctx> {
             enumerate_index_pattern: None,
             target_abi: TargetAbi {
                 fn_niche_abi: HashMap::new(),
+                fn_wasm_bf16_abi: HashMap::new(),
                 boxed_export_names: std::collections::HashSet::new(),
                 headerless_fns: HashMap::new(),
                 headerless_type_candidates: HashMap::new(),

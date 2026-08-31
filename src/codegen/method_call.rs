@@ -8093,6 +8093,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Option, never a niche position) so source args line up
                 // with declared params 1..N.
                 self.pack_niche_abi_args(&qualified, &mut compiled_args);
+                self.pack_wasm_bf16_args(&qualified, &mut compiled_args);
                 // Scalar width coercion at the method-arg boundary —
                 // mirrors the free-fn site in `call_dispatch.rs`
                 // (`p.scale(2)` against `fn scale(self, k: i8)` would
@@ -8109,7 +8110,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // expression slot with const-0 i64. NOT a dispatch fall-through.
                     Ok(self.context.i64_type().const_int(0, false).into())
                 } else {
-                    Ok(self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()))
+                    Ok(self.unpack_wasm_bf16_ret(
+                        &qualified,
+                        self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()),
+                    ))
                 };
             }
         }

@@ -490,6 +490,64 @@ impl<'ctx> super::Codegen<'ctx> {
         // slice 5; the mono path (regardless of param name) is the sole SoA
         // by-value carrier.
 
+        // B-2026-08-30-42 — keep `bfloat` out of a wasm function SIGNATURE.
+        //
+        // wasm has no `bfloat` register class, so the ABI promotes a `bfloat`
+        // parameter to `f32` and the prologue's demote back lowers to
+        // `fp_to_bf16`; a `bfloat` return promotes the other way into
+        // `bf16_to_fp`. Neither is selectable on wasm, and an unselectable node
+        // is not a diagnostic — `report_fatal_error` aborts the process (exit
+        // 134, no span, nothing naming bf16). Carrying the value as `i16` and
+        // bitcasting at both ends means no promotion is ever requested.
+        //
+        // Recorded per function so the prologue, the return sites and the four
+        // call surfaces can bitcast at exactly the positions the signature
+        // rewrote — the same contract `fn_niche_abi` uses, for the same reason:
+        // the body keeps the conventional shape and only the boundary moves.
+        //
+        // Measured before writing this: the trigger is the CONVERSION at the
+        // boundary, not the signature alone. `fn idb(a: bf16) -> bf16 { a }`
+        // built even before this, because promote-in and promote-out cancel;
+        // `fn takeb(a: bf16) -> f32 { a as f32 }` aborted. Fixing the signature
+        // covers both, and does so without depending on which side converts.
+        let bf16_abi_params: Vec<bool> = if crate::target::active_target_is_wasm() {
+            func.params
+                .iter()
+                .map(|p| self.type_expr_is_bf16(&p.ty))
+                .collect()
+        } else {
+            vec![false; func.params.len()]
+        };
+        let bf16_abi_ret = crate::target::active_target_is_wasm()
+            && func
+                .return_type
+                .as_ref()
+                .is_some_and(|te| self.type_expr_is_bf16(te));
+        if bf16_abi_params.iter().any(|&b| b) || bf16_abi_ret {
+            let i16_ty = self.context.i16_type();
+            for (i, &is_bf) in bf16_abi_params.iter().enumerate() {
+                if is_bf {
+                    // Only rewrite a position still carrying the raw scalar —
+                    // an earlier ABI patch above (niche / coerced / indirect)
+                    // owns the slot if it took it, and none of those shapes can
+                    // be a bare `bf16` anyway.
+                    if matches!(
+                        param_types.get(i),
+                        Some(BasicMetadataTypeEnum::FloatType(_))
+                    ) {
+                        param_types[i] = i16_ty.into();
+                    }
+                }
+            }
+            self.target_abi.fn_wasm_bf16_abi.insert(
+                func.name.clone(),
+                super::state::Bf16Abi {
+                    ret: bf16_abi_ret,
+                    params: bf16_abi_params,
+                },
+            );
+        }
+
         // A2 slice 2b.3: a coroutine-compiled network-boundary fn is a *ramp*.
         // It takes a hidden trailing `ptr` completion-slot param (the caller
         // `park_slot_new`s it and waits on it; the body signals it) and returns
@@ -566,6 +624,10 @@ impl<'ctx> super::Codegen<'ctx> {
             sret_params.push(ptr_ty.into());
             sret_params.extend_from_slice(&param_types);
             self.context.void_type().fn_type(&sret_params, false)
+        } else if bf16_abi_ret {
+            // B-2026-08-30-42: the declared return is `i16`; the return sites
+            // bitcast the `bfloat` tail value into it.
+            self.context.i16_type().fn_type(&param_types, false)
         } else {
             match self.llvm_return_type(&func.return_type) {
                 Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
@@ -1843,6 +1905,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_some_and(|abi| abi.params.get(i).copied().unwrap_or(false))
                 {
                     self.niche_ptr_to_option_value(param_val.into_pointer_value(), &param_name)
+                } else {
+                    param_val
+                };
+                // B-2026-08-30-42 wasm bf16 param unpack: the position is
+                // declared `i16` so no `bfloat` appears in the signature (see
+                // `declare_function`). Bitcast it back to `bfloat` here, before
+                // the alloca below, so every downstream consumer — the
+                // software-emulated arithmetic, `Display`, casts — sees the
+                // same `bfloat` value it saw when the signature carried one.
+                // A bitcast is free and exact: same 16 bits, no rounding.
+                let param_val = if self
+                    .target_abi
+                    .fn_wasm_bf16_abi
+                    .get(&func.name)
+                    .is_some_and(|abi| abi.params.get(i).copied().unwrap_or(false))
+                {
+                    self.builder
+                        .build_bit_cast(
+                            param_val.into_int_value(),
+                            self.context.bf16_type(),
+                            &format!("{param_name}.bf16"),
+                        )
+                        .unwrap()
                 } else {
                     param_val
                 };
@@ -3308,6 +3393,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // type zero-extends (B-2026-08-13-15).
                     let val =
                         self.coerce_to_current_ret_type_from(val, func.body.final_expr.as_deref());
+                    // B-2026-08-30-42: `bfloat` -> the declared `i16`.
+                    let val = self.pack_wasm_bf16_ret(val);
                     self.builder.build_return(Some(&val)).unwrap();
                 }
             } else {

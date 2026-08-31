@@ -21985,6 +21985,122 @@ fn main() {
 /// `None` when node is not on PATH — callers skip the run leg. Node
 /// enables WASM SIMD-128 unconditionally (it is WASM 2.0 baseline), so
 /// this also exercises `v128`-carrying modules.
+/// B-2026-08-30-42 — a `bf16` in a wasm function SIGNATURE builds, and computes
+/// what the interpreter and native backends compute.
+///
+/// wasm has no `bfloat` register class, so the ABI promoted a `bfloat`
+/// parameter to `f32` and the prologue's demote back lowered to `fp_to_bf16`
+/// (a `bfloat` return promoted the other way into `bf16_to_fp`). Neither is
+/// selectable on wasm, and an unselectable node is NOT a diagnostic:
+/// `report_fatal_error` aborts the process — `LLVM ERROR`, exit 134, no span,
+/// nothing naming bf16. Codegen now carries such a position as `i16` and
+/// bitcasts at both ends, so no promotion is ever requested.
+///
+/// The build succeeding is the regression proper — pre-fix `karac build`
+/// terminated on a signal rather than returning an error — but the values are
+/// asserted too, because a bitcast ABI is exactly the kind of change that can
+/// compile and compute garbage. Each line was measured identical on
+/// `--interp`, native `karac build`, and here.
+///
+/// Shapes chosen to cover the ways a position can be reached: the row's own
+/// `pub fn` repro, its bound-free generic monomorph, a bf16 param on a METHOD
+/// (whose `compiled_args` put the receiver at index 0, so an off-by-one in the
+/// pack would land on `self`), a signature mixing bf16 with i64/f32 so the
+/// positional mapping has to be right rather than merely uniform, a nested call
+/// whose argument is another bf16 call's result, and a bare `bf16` return off a
+/// literal — that last one caught a real regression while this was written, the
+/// literal arriving as a `double` against the newly-`i16` signature.
+///
+/// `f16` rides along as the control: it is a legal wasm type, was never
+/// affected, and must not be rewritten by the bf16 ABI.
+#[test]
+fn wasm_bf16_signature_positions_build_and_match_native() {
+    let tmp = wasm_test_dir("bf16abi");
+    let path = tmp.join("bf16_abi.kara");
+    std::fs::write(
+        &path,
+        r#"
+struct Holder { n: i64 }
+
+impl Holder {
+    pub fn scaled(self, k: bf16) -> bf16 {
+        return k + (self.n as bf16)
+    }
+}
+
+pub fn addb(a: bf16, b: bf16) -> bf16 { return a + b }
+pub fn widen(a: bf16) -> f32 { return a as f32 }
+pub fn mixed(a: i64, b: bf16, c: f32, d: bf16) -> bf16 {
+    return b + d + (a as bf16) + (c as bf16)
+}
+pub fn lit() -> bf16 { return 0.5 }
+fn pick[T](a: T, b: T) -> T { return a }
+pub fn addh(a: f16, b: f16) -> f16 { return a + b }
+
+fn main() {
+    let x: bf16 = 0.5;
+    let y: bf16 = 0.25;
+    println(f"add {addb(x, y)}");
+    println(f"wide {widen(x)}");
+    println(f"mix {mixed(1, x, 2.0, y)}");
+    println(f"lit {lit()}");
+    println(f"nest {addb(addb(x, y), x)}");
+    println(f"gen {pick(x, y)}");
+    println(f"meth {Holder { n: 2 }.scaled(x)}");
+    println(f"h16 {addh(0.5, 0.25)}");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_bf16_signature_positions_build_and_match_native — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Pre-fix this did not fail — it DIED. `report_fatal_error` raises SIGABRT,
+    // so `status.success()` is false with no exit code at all; naming both in
+    // the message keeps a future signal-death from reading as an ordinary
+    // compile error.
+    assert!(
+        out.status.success(),
+        "bf16 in a wasm signature must build (exit={:?}, signal-death means the \
+         `Cannot select: bf16_to_fp` abort is back): {stderr}",
+        out.status.code(),
+    );
+
+    let wasm_path = tmp.join("bf16_abi.wasm");
+    let Some(node_out) = run_wasm_under_node(&tmp, &wasm_path) else {
+        eprintln!("skip: wasm_bf16_signature_positions_build_and_match_native — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "bf16 module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout,
+        "add 0.75\nwide 0.5\nmix 3.75\nlit 0.5\nnest 1.25\ngen 0.5\nmeth 2.5\nh16 0.75\n",
+        "bf16 across a wasm function boundary must compute the native values; \
+         stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 fn run_wasm_under_node(
     tmp: &std::path::Path,
     wasm: &std::path::Path,

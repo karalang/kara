@@ -1583,6 +1583,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // rides along so a widen off an unsigned narrow type
                         // zero-extends (B-2026-08-13-15).
                         let v = self.coerce_to_current_ret_type_from(v, val.as_deref());
+                        // B-2026-08-30-42: `bfloat` -> the declared `i16`.
+                        let v = self.pack_wasm_bf16_ret(v);
                         self.builder.build_return(Some(&v)).unwrap();
                     }
                 } else {

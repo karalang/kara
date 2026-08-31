@@ -350,6 +350,20 @@ impl<'ctx> super::Codegen<'ctx> {
         named.then_some(te)
     }
 
+    /// Is this type expression exactly the primitive `bf16`?
+    ///
+    /// Used by the wasm bf16 signature ABI (B-2026-08-30-42), which must key on
+    /// the SOURCE type rather than on the lowered LLVM type: `f16` also lowers
+    /// to a 16-bit float and is perfectly selectable on wasm, so a predicate
+    /// over `FloatType` bit width would rewrite `f16` signatures too and change
+    /// an ABI that has nothing wrong with it.
+    pub(super) fn type_expr_is_bf16(&self, ty: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &ty.kind else {
+            return false;
+        };
+        p.generic_args.is_none() && p.segments.len() == 1 && p.segments[0] == "bf16"
+    }
+
     pub(super) fn llvm_type_for_type_expr(&self, ty: &TypeExpr) -> BasicTypeEnum<'ctx> {
         match &ty.kind {
             TypeKind::Path(path) => {
@@ -3978,6 +3992,58 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok()
             .and_then(|name| self.target_abi.fn_niche_abi.get(name))
             .is_some_and(|abi| abi.ret)
+    }
+
+    /// Bitcast a `bfloat` tail/return value into the `i16` the wasm bf16
+    /// signature ABI declares (B-2026-08-30-42); pass-through everywhere else.
+    ///
+    /// Keyed off `current_fn`'s LLVM symbol name for the same reason
+    /// [`Self::current_fn_ret_is_niche`] is: closures, par branch fns, reduce
+    /// workers and generic monos all swap `current_fn` and none of them mint a
+    /// `fn_wasm_bf16_abi` entry, so they resolve to pass-through with no flag
+    /// threading.
+    ///
+    /// Guarded on the value actually being a `bfloat`: a `return` in a
+    /// bf16-returning fn can hand this an already-`i16` value if some earlier
+    /// boundary converted it, and bitcasting that again would be a type error
+    /// rather than a no-op.
+    pub(crate) fn pack_wasm_bf16_ret(
+        &self,
+        v: inkwell::values::BasicValueEnum<'ctx>,
+    ) -> inkwell::values::BasicValueEnum<'ctx> {
+        let Some(cf) = self.current_fn else {
+            return v;
+        };
+        let is_bf16_ret = cf
+            .get_name()
+            .to_str()
+            .ok()
+            .and_then(|name| self.target_abi.fn_wasm_bf16_abi.get(name))
+            .is_some_and(|abi| abi.ret);
+        if !is_bf16_ret {
+            return v;
+        }
+        // Narrow to `bfloat` FIRST, then bitcast. Skipping the narrowing was a
+        // real regression while writing this: `fn mk() -> bf16 { 0.5 }`
+        // materializes the literal as a `double`, and the old signature's
+        // `bfloat` return made `coerce_to_current_ret_type_from`'s
+        // (Float, Float) arm narrow it. Declaring the return `i16` stops that
+        // arm firing — (Float, Int) has no arm and falls through unchanged —
+        // so the value reached `ret` as a `double` against an `i16` signature
+        // and the module verifier rejected it. Routing through the same
+        // coercion here restores the conversion for every source width, and
+        // also covers an integer tail (`-> bf16 { 1 }`), which needs `sitofp`
+        // rather than a bitcast of the integer's bits.
+        let as_bf16 = self.coerce_scalar_to_type(v, self.context.bf16_type().into());
+        let inkwell::values::BasicValueEnum::FloatValue(fv) = as_bf16 else {
+            return v;
+        };
+        if fv.get_type() != self.context.bf16_type() {
+            return v;
+        }
+        self.builder
+            .build_bit_cast(fv, self.context.i16_type(), "ret.bf16.abi")
+            .unwrap()
     }
 
     /// Inner shared heap type when the function currently being compiled

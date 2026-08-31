@@ -50,6 +50,10 @@ pub(crate) struct TargetAbi<'ctx> {
     /// monos, coroutine ramps, extern decls) keep the conventional ABI.
     /// Eligibility is decided once in `declare_function`.
     pub(crate) fn_niche_abi: HashMap<String, state::NicheAbi>,
+    /// Per-function record of which `bf16` signature positions are carried as
+    /// `i16` on wasm (B-2026-08-30-42). See [`state::Bf16Abi`]. Empty on every
+    /// non-wasm target, so the pack/unpack sites are inert there.
+    pub(crate) fn_wasm_bf16_abi: HashMap<String, state::Bf16Abi>,
     /// Names of `pub extern "C" fn`s whose aggregate return is C-ABI
     /// auto-boxed (additive-interop Slice 4 Path B). Their LLVM signature
     /// returns a `ptr` (the heap box), not the `{data,len,cap}` value a

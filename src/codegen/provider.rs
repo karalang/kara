@@ -1924,6 +1924,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // share the lowered signature, so its niche positions are
         // representative of whichever override is active at runtime.
         self.pack_niche_abi_args(&impl_key, &mut call_args);
+        self.pack_wasm_bf16_args(&impl_key, &mut call_args);
 
         // 4. Indirect call through the loaded fn pointer.
         let call = self
@@ -1937,9 +1938,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // path handles unit-returning method calls.
             Ok(Some(self.context.i64_type().const_int(0, false).into()))
         } else {
-            Ok(Some(
+            Ok(Some(self.unpack_wasm_bf16_ret(
+                &impl_key,
                 self.unpack_niche_abi_ret(&impl_key, basic.unwrap_basic()),
-            ))
+            )))
         }
     }
 

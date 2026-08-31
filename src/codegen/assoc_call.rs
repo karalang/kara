@@ -3338,6 +3338,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // (a self-taking method lowered through this form passes the
             // receiver as the first source arg, matching param 0).
             self.pack_niche_abi_args(&qualified, &mut compiled_args);
+            self.pack_wasm_bf16_args(&qualified, &mut compiled_args);
             let call_site = self
                 .builder
                 .build_call(fn_val, &compiled_args, "usercall")
@@ -3346,7 +3347,10 @@ impl<'ctx> super::Codegen<'ctx> {
             return if basic_val.is_instruction() {
                 Ok(self.context.i64_type().const_int(0, false).into())
             } else {
-                Ok(self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()))
+                Ok(self.unpack_wasm_bf16_ret(
+                    &qualified,
+                    self.unpack_niche_abi_ret(&qualified, basic_val.unwrap_basic()),
+                ))
             };
         }
 

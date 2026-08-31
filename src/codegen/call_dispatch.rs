@@ -2428,6 +2428,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`share_option_shared_ref_for_arg` & co.) operated on the
         // conventional shape.
         self.pack_niche_abi_args(&name, &mut compiled_args);
+        self.pack_wasm_bf16_args(&name, &mut compiled_args);
 
         // Scalar width coercion at the call-arg boundary — internal
         // values default to i64/f64 widths while the callee's params
@@ -2491,6 +2492,7 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
             let v = self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic());
+            let v = self.unpack_wasm_bf16_ret(&name, v);
             // LazyFrame codegen twin — rule 3 of the ownership model
             // (`src/codegen/lazyframe.rs`): a user fn DECLARED to return
             // LazyExpr/LazyFrame hands back an escaping +1 (retained in the
@@ -5369,6 +5371,86 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.niche_ptr_to_option_value(v.into_pointer_value(), "call.niche");
         }
         v
+    }
+
+    /// wasm bf16 ABI arg pack (B-2026-08-30-42): positions the callee declares
+    /// as `i16` receive the argument's 16 bits bitcast out of `bfloat`.
+    ///
+    /// Positional contract is identical to [`Self::pack_niche_abi_args`] —
+    /// entries are 1:1 with the callee's declared params, method sites having
+    /// pushed the receiver at 0. No-op for callees with no record, which is
+    /// every callee on every non-wasm target.
+    ///
+    /// The bitcast is exact and free: the same 16 bits, no rounding, no
+    /// conversion. That is the whole point of carrying it as an integer rather
+    /// than letting the ABI promote it to `f32` and demote it back.
+    pub(super) fn pack_wasm_bf16_args(
+        &self,
+        callee: &str,
+        compiled_args: &mut [BasicMetadataValueEnum<'ctx>],
+    ) {
+        let Some(abi) = self.target_abi.fn_wasm_bf16_abi.get(callee) else {
+            return;
+        };
+        let positions: Vec<usize> = abi
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &b)| b.then_some(i))
+            .collect();
+        for i in positions {
+            let Some(slot) = compiled_args.get_mut(i) else {
+                continue;
+            };
+            // Narrow to `bfloat` first — the argument may arrive at any float
+            // width (`addb(0.5, x)` materializes the literal as a `double`) or
+            // as an integer. The old `bfloat` signature had
+            // `coerce_args_to_fn_params` do this narrowing; declaring the
+            // position `i16` stops it, since (Float, Int) has no coercion arm.
+            // That absence is also what makes this safe rather than lucky: a
+            // stray float against an integer slot passes through untouched
+            // instead of being silently `fptosi`d.
+            let cur: BasicValueEnum<'ctx> = match *slot {
+                BasicMetadataValueEnum::FloatValue(fv) => fv.into(),
+                BasicMetadataValueEnum::IntValue(iv) => iv.into(),
+                _ => continue,
+            };
+            let as_bf16 = self.coerce_scalar_to_type(cur, self.context.bf16_type().into());
+            if let BasicValueEnum::FloatValue(fv) = as_bf16 {
+                if fv.get_type() == self.context.bf16_type() {
+                    let packed = self
+                        .builder
+                        .build_bit_cast(fv, self.context.i16_type(), "arg.bf16.abi")
+                        .unwrap();
+                    *slot = packed.into();
+                }
+            }
+        }
+    }
+
+    /// wasm bf16 ABI result unpack (B-2026-08-30-42): a callee whose return is
+    /// declared `i16` hands back 16 bits that are a `bfloat`; bitcast them so
+    /// every downstream consumer is blind to the ABI, exactly as
+    /// [`Self::unpack_niche_abi_ret`] leaves its callers blind to the niche.
+    pub(super) fn unpack_wasm_bf16_ret(
+        &self,
+        callee: &str,
+        v: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if !self
+            .target_abi
+            .fn_wasm_bf16_abi
+            .get(callee)
+            .is_some_and(|abi| abi.ret)
+        {
+            return v;
+        }
+        let BasicValueEnum::IntValue(iv) = v else {
+            return v;
+        };
+        self.builder
+            .build_bit_cast(iv, self.context.bf16_type(), "call.bf16.abi")
+            .unwrap()
     }
 
     /// Lower a diverging prelude builtin (`todo()` / `unreachable()` /

@@ -196,6 +196,34 @@ pub(crate) struct NicheAbi {
     pub(crate) params: Vec<bool>,
 }
 
+/// Which signature positions of one function carry a `bf16` as `i16` at the
+/// ABI (B-2026-08-30-42). Wasm-only, and empty on every other target.
+///
+/// wasm has no `bfloat` register class, so a `bfloat` in a function SIGNATURE
+/// is promoted to `f32` by the ABI and the promote/demote at the boundary
+/// lowers to `fp_to_bf16` / `bf16_to_fp` — nodes the wasm backend cannot
+/// select, which `report_fatal_error`s the whole process (`LLVM ERROR`, exit
+/// 134, no span). Carrying the value as `i16` and bitcasting at both ends
+/// keeps `bfloat` out of the signature entirely, so no promotion is ever
+/// requested.
+///
+/// The body-side shape is unchanged — every local, alloca, struct field and
+/// `Vec` element stays `bfloat`, which is what makes the software-emulated
+/// arithmetic (`build_float_cast_bf16_safe` and the widen/narrow helpers)
+/// continue to match on type. Only the boundary is rewritten, exactly as
+/// [`NicheAbi`] rewrites only the boundary for `Option[shared T]`.
+///
+/// Deliberately NOT folded into the generic scalar coercion
+/// (`coerce_scalar_to_type_unsigned`): an `i16` → `bf16` *numeric* conversion
+/// is legal Kāra and must stay a `sitofp`, so a bitcast arm keyed on types
+/// alone would silently miscompile it. Keying on this per-function record
+/// instead means the bitcast happens only where the ABI actually asked for it.
+#[derive(Clone)]
+pub(crate) struct Bf16Abi {
+    pub(crate) ret: bool,
+    pub(crate) params: Vec<bool>,
+}
+
 // ── Enum variant layout ─────────────────────────────────────────
 
 /// Per-payload-field drop classification recorded at `declare_enums`
