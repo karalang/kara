@@ -49921,3 +49921,123 @@ fn interp_transitive_generic_is_the_codegen_unsignedness_oracle() {
         assert_eq!(run(&src), want, "{label}");
     }
 }
+
+#[test]
+fn interp_generic_impl_field_is_the_codegen_unsignedness_oracle() {
+    // B-2026-08-31-12's oracle half. That row was filed as wrong on ALL THREE
+    // backends — which is what made it dangerous, since A/B agreement on a
+    // wrong value hides in every comparison. B-2026-08-30-43 then gave a
+    // generic `impl` body its substitution frame and fixed the interpreter,
+    // leaving an ordinary run-vs-build divergence with the interpreter as the
+    // reference.
+    //
+    // Every value below is what `--interp` prints, and
+    // `e2e_generic_impl_field_keeps_the_declared_unsignedness` in
+    // tests/codegen.rs asserts the same table on the compiled side. Pinning
+    // both is the point: the row's whole history is two backends agreeing on
+    // `-1`, so a regression on EITHER side must fail rather than restore the
+    // agreement.
+    //
+    // The controls carry the row's other correction. Its scope note asks
+    // whether ARITHMETIC on a `u64` field inside a generic impl is affected as
+    // well as display; measured, it is not — `self.v / d` and `self.v < o`
+    // were correct on every backend before the fix, as were a method PARAM of
+    // type `T` and the field copied to a local first.
+    let hdr = "struct Box[T] { v: T }\n\
+               impl[T] Box[T] {\n\
+               \x20   fn get(ref self) -> String { f\"{self.v}\" }\n\
+               \x20   fn viaParam(ref self, x: T) -> String { f\"{x}\" }\n\
+               \x20   fn viaLocal(ref self) -> String { let y = self.v; f\"{y}\" }\n\
+               }\n\
+               impl[T: Div] Box[T] { fn half(ref self, d: T) -> T { self.v / d } }\n\
+               impl[T: PartialOrd] Box[T] {\n\
+               \x20   fn under(ref self, o: T) -> bool { self.v < o }\n\
+               }\n\
+               struct Bag[T] { xs: Vec[T] }\n\
+               impl[T] Bag[T] { fn first(ref self) -> String { f\"{self.xs[0]}\" } }\n\
+               struct BoxU { v: u64 }\n\
+               impl BoxU { fn get(ref self) -> String { f\"{self.v}\" } }\n";
+    let big = "let big: u64 = 18446744073709551615u64; let b = Box[u64] { v: big };";
+    let cases: Vec<(&str, String, &str)> = vec![
+        (
+            "field-u8",
+            "let s: u8 = 255u8; let c = Box[u8] { v: s }; println(c.get());".into(),
+            "255\n",
+        ),
+        (
+            "field-u16",
+            "let s: u16 = 65535u16; let c = Box[u16] { v: s }; println(c.get());".into(),
+            "65535\n",
+        ),
+        (
+            "field-u32",
+            "let s: u32 = 4294967295u32; let c = Box[u32] { v: s }; println(c.get());".into(),
+            "4294967295\n",
+        ),
+        (
+            "field-u64",
+            format!("{big} println(b.get());"),
+            "18446744073709551615\n",
+        ),
+        (
+            "field-u128",
+            "let s: u128 = 340282366920938463463374607431768211455u128;\n\
+             let c = Box[u128] { v: s }; println(c.get());"
+                .into(),
+            "340282366920938463463374607431768211455\n",
+        ),
+        (
+            "vec-field-index",
+            "let big: u64 = 18446744073709551615u64;\n\
+             let g = Bag[u64] { xs: [big] }; println(g.first());"
+                .into(),
+            "18446744073709551615\n",
+        ),
+        (
+            "control-arith-div",
+            format!("{big} let d: u64 = 2u64; println(b.half(d));"),
+            "9223372036854775807\n",
+        ),
+        (
+            "control-arith-cmp",
+            format!("{big} let d: u64 = 2u64; println(b.under(d));"),
+            "false\n",
+        ),
+        (
+            "control-method-param",
+            format!("{big} println(b.viaParam(big));"),
+            "18446744073709551615\n",
+        ),
+        (
+            "control-field-via-local",
+            format!("{big} println(b.viaLocal());"),
+            "18446744073709551615\n",
+        ),
+        (
+            "control-nongeneric-struct",
+            "let big: u64 = 18446744073709551615u64;\n\
+             let n = BoxU { v: big }; println(n.get());"
+                .into(),
+            "18446744073709551615\n",
+        ),
+        (
+            "control-i64-field",
+            "let s: i64 = -7; let c = Box[i64] { v: s }; println(c.get());".into(),
+            "-7\n",
+        ),
+        (
+            "control-f64-field",
+            "let f: f64 = 1.5; let c = Box[f64] { v: f }; println(c.get());".into(),
+            "1.5\n",
+        ),
+        (
+            "control-string-field",
+            "let s: String = \"hi\"; let c = Box[String] { v: s }; println(c.get());".into(),
+            "hi\n",
+        ),
+    ];
+    for (label, body, want) in cases {
+        let src = format!("{hdr}fn main() {{\n    {body}\n}}");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}

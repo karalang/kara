@@ -5050,6 +5050,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .contains(&(expr.span.offset, expr.span.length))
     }
 
+    /// A declared type NAME resolved through the enclosing monomorph's
+    /// type-parameter binding, or unchanged when there is none.
+    ///
+    /// `mono_state.type_subst_names` is empty outside a monomorph and holds no
+    /// entry for a concrete name, so this is the identity in both cases; it
+    /// only bites for a name that IS a type parameter of the mono being
+    /// compiled. B-2026-08-31-12.
+    pub(super) fn resolve_mono_type_name<'n>(&'n self, name: &'n str) -> &'n str {
+        self.mono_state
+            .type_subst_names
+            .get(name)
+            .map(String::as_str)
+            .unwrap_or(name)
+    }
+
     fn expr_is_unsigned_int_syntactic(&self, expr: &Expr) -> bool {
         // Single-sourced (B-2026-08-28-5). The local list this replaces omitted
         // `bool`, so `true as i64` SIGN-extended the `i1` and produced -1 where
@@ -5293,7 +5308,28 @@ impl<'ctx> super::Codegen<'ctx> {
                                 return p
                                     .segments
                                     .last()
-                                    .map(|s| is_uint_name(s.as_str()))
+                                    // B-2026-08-31-12 — the DECLARED name of a
+                                    // generic struct's field is its type
+                                    // PARAMETER (`struct Box[T] { v: T }` gives
+                                    // `T`), which is not a uint name, so
+                                    // `f"{self.v}"` inside `impl[T] Box[T]`
+                                    // printed `u64::MAX` as -1 on both compiled
+                                    // backends at every unsigned width. The
+                                    // enclosing monomorph knows the concrete
+                                    // binding; resolve through it, which is a
+                                    // no-op outside a mono (the map is empty)
+                                    // and for a field whose type is already
+                                    // concrete.
+                                    //
+                                    // The interpreter was fixed separately
+                                    // (B-2026-08-30-43 gave a generic impl body
+                                    // its substitution frame) and is the oracle.
+                                    // Narrower than "a generic impl": arithmetic
+                                    // on the same field, a method PARAM of type
+                                    // `T`, and the field copied to a local first
+                                    // were all already correct — only the inline
+                                    // interpolation of the field reaches here.
+                                    .map(|s| is_uint_name(self.resolve_mono_type_name(s)))
                                     .unwrap_or(false);
                             }
                         }
@@ -5309,7 +5345,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             return p
                                 .segments
                                 .last()
-                                .map(|s| is_uint_name(s.as_str()))
+                                // B-2026-08-31-12, same resolution as the
+                                // FieldAccess arm above: a `Vec[T]` local inside
+                                // a generic impl records `T` as its element.
+                                .map(|s| is_uint_name(self.resolve_mono_type_name(s)))
                                 .unwrap_or(false);
                         }
                     }
@@ -5354,7 +5393,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                                 return ep
                                                     .segments
                                                     .last()
-                                                    .map(|s| is_uint_name(s.as_str()))
+                                                    // B-2026-08-31-12 — the
+                                                    // GENERIC-IMPL sibling of
+                                                    // the field arm above:
+                                                    // `struct Bag[T] { xs:
+                                                    // Vec[T] }` records the
+                                                    // element as `T`, so
+                                                    // `f"{self.xs[0]}"` inside
+                                                    // `impl[T] Bag[T]` printed
+                                                    // `u64::MAX` as -1 for the
+                                                    // same reason.
+                                                    .map(|s| {
+                                                        is_uint_name(self.resolve_mono_type_name(s))
+                                                    })
                                                     .unwrap_or(false);
                                             }
                                         }

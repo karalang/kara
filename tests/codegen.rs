@@ -24979,6 +24979,172 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-12 — a `u64` FIELD read inside a generic `impl` printed as
+    /// -1 on both compiled backends.
+    ///
+    /// `expr_is_unsigned_int` decides signedness for the print / f-string path
+    /// from the field's DECLARED type name. For `struct Box[T] { v: T }` that
+    /// name is `T`, which is not a uint name, so the field fell through to
+    /// signed and every widening sign-extended. The enclosing monomorph knows
+    /// what `T` is; the three arms that read a declared name (the field itself,
+    /// a `Vec[T]` element reached through a local, and one reached through a
+    /// field) now resolve through `type_subst_names` first — a no-op outside a
+    /// mono and for an already-concrete name.
+    ///
+    /// The interpreter is the oracle: B-2026-08-30-43 gave a generic impl body
+    /// its substitution frame, which fixed that half, and this row's own
+    /// correction records that the remaining divergence was compiled-only.
+    /// `interp_generic_impl_field_is_the_codegen_unsignedness_oracle` in
+    /// tests/interpreter.rs pins the same values on that side.
+    ///
+    /// NARROWER THAN "A GENERIC IMPL", which is why the controls outnumber the
+    /// cases. Measured pre-fix, 8 of these 19 shapes diverged and 11 agreed:
+    /// ARITHMETIC on the same field (`self.v / d`, `self.v < o`) was already
+    /// correct — answering the row's open scope note in the negative — as were
+    /// a method PARAM of type `T` and the field copied to a local before use.
+    /// Only a read that reaches `expr_is_unsigned_int` with the field's own
+    /// declared name was affected.
+    #[test]
+    fn e2e_generic_impl_field_keeps_the_declared_unsignedness() {
+        let hdr = "struct Box[T] { v: T }\n\
+                   impl[T] Box[T] {\n\
+                   \x20   fn get(ref self) -> String { f\"{self.v}\" }\n\
+                   \x20   fn viaParam(ref self, x: T) -> String { f\"{x}\" }\n\
+                   \x20   fn viaLocal(ref self) -> String { let y = self.v; f\"{y}\" }\n\
+                   \x20   fn pr(ref self) { println(self.v); }\n\
+                   }\n\
+                   impl[T: Div] Box[T] { fn half(ref self, d: T) -> T { self.v / d } }\n\
+                   impl[T: PartialOrd] Box[T] {\n\
+                   \x20   fn under(ref self, o: T) -> bool { self.v < o }\n\
+                   }\n\
+                   struct Bag[T] { xs: Vec[T] }\n\
+                   impl[T] Bag[T] {\n\
+                   \x20   fn first(ref self) -> String { f\"{self.xs[0]}\" }\n\
+                   \x20   fn localFirst(ref self) -> String { let ys = self.xs; f\"{ys[0]}\" }\n\
+                   }\n\
+                   struct BoxU { v: u64 }\n\
+                   impl BoxU { fn get(ref self) -> String { f\"{self.v}\" } }\n\
+                   fn show[T](x: T) -> String { f\"{x}\" }\n";
+        let big = "let big: u64 = 18446744073709551615u64; let b = Box[u64] { v: big };";
+        for (label, body, want) in [
+            // The field read, at every unsigned width.
+            (
+                "field-u8",
+                "let s: u8 = 255u8; let c = Box[u8] { v: s }; println(c.get());".to_string(),
+                "255\n",
+            ),
+            (
+                "field-u16",
+                "let s: u16 = 65535u16; let c = Box[u16] { v: s }; println(c.get());".to_string(),
+                "65535\n",
+            ),
+            (
+                "field-u32",
+                "let s: u32 = 4294967295u32; let c = Box[u32] { v: s }; println(c.get());"
+                    .to_string(),
+                "4294967295\n",
+            ),
+            (
+                "field-u64",
+                format!("{big} println(b.get());"),
+                "18446744073709551615\n",
+            ),
+            (
+                "field-u128",
+                "let s: u128 = 340282366920938463463374607431768211455u128;\n\
+                 let c = Box[u128] { v: s }; println(c.get());"
+                    .to_string(),
+                "340282366920938463463374607431768211455\n",
+            ),
+            // `println(self.v)` reaches the same predicate by a different route.
+            (
+                "field-println",
+                format!("{big} b.pr();"),
+                "18446744073709551615\n",
+            ),
+            // A `Vec[T]` ELEMENT, reached through the field and through a local
+            // — the two Index arms that read a declared element name.
+            (
+                "vec-field-index",
+                "let big: u64 = 18446744073709551615u64;\n\
+                 let g = Bag[u64] { xs: [big] }; println(g.first());"
+                    .to_string(),
+                "18446744073709551615\n",
+            ),
+            (
+                "vec-local-index",
+                "let big: u64 = 18446744073709551615u64;\n\
+                 let g = Bag[u64] { xs: [big] }; println(g.localFirst());"
+                    .to_string(),
+                "18446744073709551615\n",
+            ),
+            // Controls that were ALREADY correct pre-fix. The first two answer
+            // the row's scope note: arithmetic on the field was never affected.
+            (
+                "control-arith-div",
+                format!("{big} let d: u64 = 2u64; println(b.half(d));"),
+                "9223372036854775807\n",
+            ),
+            (
+                "control-arith-cmp",
+                format!("{big} let d: u64 = 2u64; println(b.under(d));"),
+                "false\n",
+            ),
+            (
+                "control-method-param",
+                format!("{big} println(b.viaParam(big));"),
+                "18446744073709551615\n",
+            ),
+            (
+                "control-field-via-local",
+                format!("{big} println(b.viaLocal());"),
+                "18446744073709551615\n",
+            ),
+            (
+                "control-free-fn",
+                "let big: u64 = 18446744073709551615u64; println(show(big));".to_string(),
+                "18446744073709551615\n",
+            ),
+            (
+                "control-nongeneric-struct",
+                "let big: u64 = 18446744073709551615u64;\n\
+                 let n = BoxU { v: big }; println(n.get());"
+                    .to_string(),
+                "18446744073709551615\n",
+            ),
+            // Signed / non-integer instantiations must not move.
+            (
+                "control-i64-field",
+                "let s: i64 = -7; let c = Box[i64] { v: s }; println(c.get());".to_string(),
+                "-7\n",
+            ),
+            (
+                "control-i32-field",
+                "let s: i32 = -7i32; let c = Box[i32] { v: s }; println(c.get());".to_string(),
+                "-7\n",
+            ),
+            (
+                "control-f64-field",
+                "let f: f64 = 1.5; let c = Box[f64] { v: f }; println(c.get());".to_string(),
+                "1.5\n",
+            ),
+            (
+                "control-string-field",
+                "let s: String = \"hi\"; let c = Box[String] { v: s }; println(c.get());"
+                    .to_string(),
+                "hi\n",
+            ),
+            (
+                "control-i64-vec-field",
+                "let s: i64 = -9; let g = Bag[i64] { xs: [s] }; println(g.first());".to_string(),
+                "-9\n",
+            ),
+        ] {
+            let src = format!("{hdr}fn main() {{\n    {body}\n}}");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "case {label}");
+        }
+    }
+
     #[test]
     fn test_e2e_generic_arithmetic_at_reduced_precision() {
         // The compiled twin of `tests/interpreter.rs`'s
