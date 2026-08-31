@@ -136,7 +136,7 @@ impl<'a> super::OwnershipChecker<'a> {
             // `fn f(x: ref S) -> ref S { return x }` was rejected with "this
             // borrow-return form is not yet supported" while the identical
             // `{ return x; }` and `{ x }` spellings both passed. Pre-existing
-            // for `-> ref T` and `-> StringSlice` (B-2026-08-31-42); fixed here
+            // for `-> ref T` and `-> StringSlice` (B-2026-08-31-45); fixed here
             // because the new `Slice` arm would otherwise inherit it.
             if !matches!(tail.kind, ExprKind::Return(_)) {
                 returns.push(tail);
@@ -345,7 +345,7 @@ impl<'a> super::OwnershipChecker<'a> {
             // `fn f(x: ref S) -> ref S { return x }` was rejected with "this
             // borrow-return form is not yet supported" while the identical
             // `{ return x; }` and `{ x }` spellings both passed. Pre-existing
-            // for `-> ref T` and `-> StringSlice` (B-2026-08-31-42); fixed here
+            // for `-> ref T` and `-> StringSlice` (B-2026-08-31-45); fixed here
             // because the new `Slice` arm would otherwise inherit it.
             if !matches!(tail.kind, ExprKind::Return(_)) {
                 returns.push(tail);

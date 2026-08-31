@@ -2054,7 +2054,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1917 surfaced
 | B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
 | B-2026-08-31-34 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b:… | 2b3b966 |
 | B-2026-08-31-41 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[… | c5b5f6a |
-| B-2026-08-31-42 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
+| B-2026-08-31-45 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
 
 </details>
 

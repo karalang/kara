@@ -4096,7 +4096,7 @@ fn slice_return_must_outlive_its_backing_owner() {
     }
 }
 
-/// B-2026-08-31-42 — a SEMICOLON-LESS `return e` in tail position is not an
+/// B-2026-08-31-45 — a SEMICOLON-LESS `return e` in tail position is not an
 /// unsupported borrow-return form.
 ///
 /// `collect_return_exprs_in_block` already walks the body's `final_expr` and
