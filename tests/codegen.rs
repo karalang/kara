@@ -98526,6 +98526,53 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-09-01-28 — compiled twin of `tests/interpreter.rs`'s
+    /// `pattern_spellings_agree_on_a_field_only_drop_payload`, same programs
+    /// and expectations.
+    ///
+    /// This backend was correct on every row; the interpreter's `if let` and
+    /// `while let` lost the body. The twin is what makes "the three spellings
+    /// and the two backends all agree" a property a test can hold, rather than
+    /// something only the fixed side asserts.
+    #[test]
+    fn test_e2e_pattern_spellings_agree_on_a_field_only_drop_payload() {
+        const H: &str = "struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.s}]\") } }\n\
+             struct P { r: R, n: i64 }\n\
+             struct D { n: i64 }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"dD[{self.n}]\") } }\n\
+             fn optp(t: String) -> Option[P] { return Option.Some(P { r: R { s: t }, n: 1 }); }\n\
+             fn optd(k: i64) -> Option[D] { return Option.Some(D { n: k }); }\n";
+        for (label, body, want) in [
+            (
+                "match",
+                "match optp(\"m\") { Some(p) => { println(p.n) } None => { println(\"x\") } }",
+                "1\ndR[m]\n",
+            ),
+            (
+                "if-let",
+                "if let Some(p) = optp(\"i\") { println(p.n) }",
+                "1\ndR[i]\n",
+            ),
+            (
+                "own-drop-payload, if-let",
+                "if let Some(d) = optd(7) { println(d.n) }",
+                "7\ndD[7]\n",
+            ),
+            (
+                "own-drop-payload, match",
+                "match optd(8) { Some(d) => { println(d.n) } None => { println(\"x\") } }",
+                "8\ndD[8]\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-31-32 — compiled twin of `tests/interpreter.rs`'s
     /// `fresh_temp_struct_scrutinee_arm_binding_runs_its_body`, same programs
     /// and expectations.

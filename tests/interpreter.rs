@@ -52853,3 +52853,80 @@ fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
         );
     }
 }
+
+/// B-2026-09-01-28 — `match`, `if let` and `while let` agree on a payload
+/// struct whose `Drop` is only in a FIELD.
+///
+/// The drop-slot filter existed as FOUR copies. B-2026-08-31-27 widened the
+/// struct arm from "declares its own `Drop`" to the transitive
+/// `value_runs_user_drop` at the two `match` copies and left the two `let`-form
+/// copies on the narrow test, so `struct P { r: R }` — no `Drop` of its own, a
+/// Drop-bearing field — registered no slot in the `let` forms and ran no body.
+///
+/// All four now call one `pattern_binding_owes_drop_body`. This fixture is the
+/// guard on that: it fails if any site is ever re-specialized, which is how the
+/// previous three splits in this family arose.
+///
+/// `own-drop-payload` is the control that shows what the narrow test DID catch,
+/// and must keep catching — a payload declaring its own `Drop` was correct in
+/// every spelling throughout.
+#[test]
+fn pattern_spellings_agree_on_a_field_only_drop_payload() {
+    const H: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.s}]\") } }\n\
+         struct P { r: R, n: i64 }\n\
+         struct D { n: i64 }\n\
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD[{self.n}]\") } }\n\
+         fn optp(t: String) -> Option[P] { return Option.Some(P { r: R { s: t }, n: 1 }); }\n\
+         fn optd(k: i64) -> Option[D] { return Option.Some(D { n: k }); }\n";
+    for (label, body, want) in [
+        (
+            "match",
+            "match optp(\"m\") { Some(p) => { println(p.n) } None => { println(\"x\") } }",
+            "1\ndR[m]\n",
+        ),
+        (
+            "if-let",
+            "if let Some(p) = optp(\"i\") { println(p.n) }",
+            "1\ndR[i]\n",
+        ),
+        (
+            "own-drop-payload, if-let",
+            "if let Some(d) = optd(7) { println(d.n) }",
+            "7\ndD[7]\n",
+        ),
+        (
+            "own-drop-payload, match",
+            "match optd(8) { Some(d) => { println(d.n) } None => { println(\"x\") } }",
+            "8\ndD[8]\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+
+    // `while let` drains a driver, so it pins that EVERY iteration's body runs
+    // — the shape lost both of them before the fix, which a single-iteration
+    // fixture could not have distinguished from losing one.
+    assert_eq!(
+        run("struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.s}]\") } }\n\
+             struct P { r: R, n: i64 }\n\
+             struct C { mut i: i64 }\n\
+             impl C { fn next(mut ref self) -> Option[P] {\n\
+             \x20   self.i = self.i + 1;\n\
+             \x20   if self.i > 2 { return Option.None; }\n\
+             \x20   return Option.Some(P { r: R { s: f\"w{self.i}\" }, n: self.i });\n\
+             } }\n\
+             fn main() {\n\
+             \x20   let mut c = C { i: 0 };\n\
+             \x20   while let Some(p) = c.next() { println(p.n) }\n\
+             \x20   println(\"end\");\n\
+             }\n"),
+        "1\ndR[w1]\n2\ndR[w2]\nend\n",
+        "while-let: one body per iteration"
+    );
+}
