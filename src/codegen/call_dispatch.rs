@@ -3281,10 +3281,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The owned type a discarded BRANCH tail mints, for
     /// [`Self::try_track_discarded_user_drop_temp`]'s `Match` and `If` arms.
     /// A struct literal names its own type; a call resolves through the fn
-    /// return table; a nested branch recurses, which is what carries an
-    /// `else if` chain and a `match` inside an `if` arm. Anything else
-    /// yields `None` and the battery registers nothing — the same
-    /// uncertain-⇒-silent rule the gate that admitted the shape applies.
+    /// return table; an enum CONSTRUCTION names its enum; a nested branch
+    /// recurses, which is what carries an `else if` chain and a `match`
+    /// inside an `if` arm. Anything else yields `None` and the battery
+    /// registers nothing — the same uncertain-⇒-silent rule the gate that
+    /// admitted the shape applies.
+    ///
+    /// B-2026-09-01-11 — the enum-construction arms are the late ones, and
+    /// their absence is what left `let _ = if c { E.A(mk(8)) } else { mke(9) };`
+    /// with NO owner on either compiled backend: the FIRST arm decides the
+    /// type, a variant ctor is a `Call` through a `Path` rather than through
+    /// the fn-return table, and every arm here keyed on the latter. The
+    /// mirror-image spelling — `if c { mke(9) } else { E.A(mk(8)) }` — named
+    /// its type off the call in first position and ran the body correctly all
+    /// along, which is exactly the asymmetry that made this look like a
+    /// property of ctor arms rather than of arm ORDER.
+    ///
+    /// A bare `Identifier` is deliberately absent: only a name that resolves
+    /// to a UNIT VARIANT is a construction, and one that resolves to a local
+    /// hands out a binding whose own cleanup already owns it.
     fn discard_branch_tail_type_name(&self, body: &Expr) -> Option<String> {
         let t = Self::block_tail_expr(body);
         match &t.kind {
@@ -3293,8 +3308,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::Identifier(fn_name) => {
                     self.fn_sig.fn_return_type_names.get(fn_name).cloned()
                 }
+                // `E.A(payload)` — a variant construction, whose enum is the
+                // first path segment. Gated on the enum actually being one we
+                // have a layout for, so a two-segment path that is not a
+                // variant ctor stays silent.
+                ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                    .type_decls
+                    .enum_layouts
+                    .contains_key(segments[0].as_str())
+                    .then(|| segments[0].clone()),
                 _ => None,
             },
+            // `E.B` — the unit-variant spelling of the same construction.
+            ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                .type_decls
+                .enum_layouts
+                .contains_key(segments[0].as_str())
+                .then(|| segments[0].clone()),
             ExprKind::Match { arms, .. } => arms
                 .first()
                 .and_then(|arm| self.discard_branch_tail_type_name(&arm.body)),
@@ -3432,7 +3462,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // arm's tail decides it. Resolved through the same two shapes this
             // routine already understands plus a struct literal, which is the
             // canonical way an arm mints a fresh owned value.
-            ExprKind::Match { arms, .. } => arms
+            //
+            // B-2026-09-01-11 — but NOT when every arm constructs inline.
+            // That branch is owned by the representative-tail redirect at the
+            // discard site, which runs the own body AND the payload walk
+            // (`dE dR8`); naming it here too registers a SECOND owner and
+            // doubles the own body. The guard is behaviour-preserving as it
+            // lands, because a ctor arm resolved to `None` before this row
+            // widened `discard_branch_tail_type_name` — it is what keeps that
+            // widening from reaching a shape that already had an owner.
+            ExprKind::Match { arms, .. } if !self.branch_arms_all_inline_enum_ctors(tail) => arms
                 .first()
                 .and_then(|arm| self.discard_branch_tail_type_name(&arm.body)),
             // B-2026-08-29-25 — the `if` sibling of the arm above, and the
@@ -3445,11 +3484,13 @@ impl<'ctx> super::Codegen<'ctx> {
             //
             // The THEN branch decides it, for the same reason the `match`
             // arm's first arm does: every branch of one `if` yields the same
-            // type.
-            ExprKind::If { then_block, .. } => then_block
-                .final_expr
-                .as_deref()
-                .and_then(|t| self.discard_branch_tail_type_name(t)),
+            // type. Same all-ctor exclusion as the `match` arm above.
+            ExprKind::If { then_block, .. } if !self.branch_arms_all_inline_enum_ctors(tail) => {
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .and_then(|t| self.discard_branch_tail_type_name(t))
+            }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(fn_name) => {
                     self.fn_sig.fn_return_type_names.get(fn_name).cloned()

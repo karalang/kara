@@ -56320,6 +56320,109 @@ fn main() { println(go()); }
         }
     }
 
+    /// B-2026-09-01-11 — the MEMORY half of the discarded branch whose FIRST
+    /// arm is an enum construction.
+    ///
+    /// `try_track_discarded_user_drop_temp` names a branch's type off its FIRST
+    /// arm, and its resolver understood a struct literal and a fn call but not
+    /// a variant construction — so `let _ = if c { E.A(mk(8)) } else { mke(9) };`
+    /// registered NOTHING, while the mirror-image `if c { mke(8) } else { E.A(mk(9)) }`
+    /// named its type off the call in first position and was owned all along.
+    ///
+    /// The `guard:` cells are the point of putting this here at all: the
+    /// widening must not reach a value that already has an owner. The all-ctor
+    /// branch belongs to the representative-tail redirect, the mirror order to
+    /// the resolver's existing call arm, and a bound `let` to its binding —
+    /// registering a second owner over any of those is a double free, not a
+    /// leak.
+    #[test]
+    fn asan_a_discarded_branch_with_a_ctor_first_arm_is_owned_once() {
+        // The `Drop` bodies are SILENT on purpose: the transcript (which body
+        // ran, how many times) is pinned by the codegen E2E twin, and this
+        // fixture asks only the memory question. Both impls must exist, since
+        // an own-`Drop` type is what arms the registration under test.
+        const H: &str = "struct R { id: i64, s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { } }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { return f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\"; }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn mke(i: i64) -> E { return E.A(mk(i)); }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str)] = &[
+            (
+                "ctor FIRST, call second — the row's shape",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let _ = if c { E.A(mk(8)) } else { mke(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "ctor FIRST, the OTHER arm taken",
+                "fn go() -> i64 { let c = seed() > 99;\n\
+                 \x20  let _ = if c { E.A(mk(8)) } else { mke(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "ctor FIRST, bare-statement spelling",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  if c { E.A(mk(8)) } else { mke(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "ctor FIRST, `match` spelling",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let _ = match c { true => E.A(mk(8)), _ => mke(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "a UNIT variant first, call second",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let _ = if c { E.B } else { mke(9) };\n\
+                 \x20  1 }\n",
+            ),
+            // ── guards: values that already had exactly one owner ──
+            (
+                "guard: the MIRROR order, owned by the resolver's call arm",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let _ = if c { mke(8) } else { E.A(mk(9)) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: the mirror order, `match` spelling",
+                "fn go() -> i64 { let c = seed() > 99;\n\
+                 \x20  let _ = match c { true => mke(8), _ => E.A(mk(9)) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: ALL arms are ctors — owned by the redirect",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let _ = if c { E.A(mk(8)) } else { E.A(mk(9)) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: ALL arms are calls",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let _ = if c { mke(8) } else { mke(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: the direct call spelling",
+                "fn go() -> i64 { let _ = mke(8);\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: the BOUND `let`, whose binding owns it",
+                "fn go() -> i64 { let c = seed() > 0;\n\
+                 \x20  let w = if c { E.A(mk(8)) } else { mke(9) };\n\
+                 \x20  match w { E.A(r) => r.id - 7, _ => 1 } }\n",
+            ),
+        ];
+        for (label, body) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), &["1"], label);
+        }
+    }
+
     /// B-2026-09-01-22 — a discarded struct literal behind **TWO OR MORE**
     /// block wrappers registered ONE OWNER PER WRAPPER, so its consumed local's
     /// heap was freed once per nesting level: a double free at depth 2 and a

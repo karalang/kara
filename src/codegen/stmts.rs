@@ -16157,7 +16157,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Deliberately the same rule as the interpreter's
     /// `discard_producer_runs_payload_walk`, so the two backends admit one
     /// population rather than two that happen to overlap.
-    fn branch_arms_all_inline_enum_ctors(&self, e: &Expr) -> bool {
+    pub(super) fn branch_arms_all_inline_enum_ctors(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Seq(b)

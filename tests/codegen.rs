@@ -126213,6 +126213,145 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-11 (shape 1) — A DISCARDED BRANCH WHOSE **FIRST** ARM IS
+    /// AN ENUM CONSTRUCTION registered NOTHING on either compiled backend.
+    ///
+    /// `let _ = if c { E.A(mk(8)) } else { mke(9) };` ran no body at all on
+    /// jit/aot, against `dE` under `--interp` — and against `let _ = mke(9);`,
+    /// which runs `dE` on all three.
+    ///
+    /// The defect is one of arm ORDER, not of ctor arms, and the mirror-image
+    /// spelling is the proof: `if c { mke(8) } else { E.A(mk(9)) }` ran `dE`
+    /// correctly all along. `try_track_discarded_user_drop_temp` resolves a
+    /// branch's type from its FIRST arm through `discard_branch_tail_type_name`,
+    /// which understood a struct literal and a fn call but not a variant
+    /// construction — so a call in first position named the type and a ctor in
+    /// first position yielded `None` and the whole battery stayed silent.
+    ///
+    /// The fix is two arms on that resolver (`E.A(x)`, whose enum is the path's
+    /// first segment, and the `E.B` unit spelling) plus an all-ctor exclusion
+    /// on the two branch arms that call it: a branch whose arms ALL construct
+    /// inline is owned by the representative-tail redirect, which runs the
+    /// payload walk too (`dE dR8`), so naming it here as well would register a
+    /// second owner and double the own body.
+    ///
+    /// The mixed cases run the own body ALONE, with no payload walk — which is
+    /// exactly what the direct `let _ = mke(9);` spelling does on every
+    /// backend, and what `--interp` does for the branch. Both orders and both
+    /// statement spellings are pinned here because the two that already worked
+    /// are what would break if the exclusion were dropped.
+    #[test]
+    fn e2e_a_discarded_branch_with_a_non_ctor_arm_runs_its_own_body() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\"); } }\n\
+             fn mk(n: i64) -> R { return R { id: n }; }\n\
+             fn mke(n: i64) -> E { return E.A(mk(n)); }\n";
+        // (label, the discarded statement, the `go` argument, expected)
+        let cases: &[(&str, &str, &str, &str)] = &[
+            (
+                "ctor FIRST, call second, wildcard `let` — the row's shape",
+                "let _ = if c { E.A(mk(8)) } else { mke(9) };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            (
+                "the same with the OTHER arm taken",
+                "let _ = if c { E.A(mk(8)) } else { mke(9) };",
+                "false",
+                "dE\nv=7\n",
+            ),
+            (
+                "ctor FIRST, bare-statement spelling",
+                "if c { E.A(mk(8)) } else { mke(9) };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            (
+                "ctor FIRST, `match` spelling",
+                "let _ = match c { true => E.A(mk(8)), _ => mke(9) };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            (
+                "a UNIT variant first, call second",
+                "let _ = if c { E.B } else { mke(9) };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            (
+                "nested `else if`, the call arm deepest",
+                "let _ = if c { E.A(mk(8)) } else { if c { E.B } else { mke(9) } };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            // ── the MIRROR order, which named its type off the call in first
+            //    position and was already correct. Pinned because it is what
+            //    the all-ctor exclusion and the first-arm rule must not
+            //    double: an "any arm is a ctor" reading of this fix printed
+            //    `dE dE` on the `match` row below.
+            (
+                "call FIRST, ctor second",
+                "let _ = if c { mke(8) } else { E.A(mk(9)) };",
+                "false",
+                "dE\nv=7\n",
+            ),
+            (
+                "call FIRST, ctor second, `match` spelling",
+                "let _ = match c { true => mke(8), _ => E.A(mk(9)) };",
+                "false",
+                "dE\nv=7\n",
+            ),
+            (
+                "call FIRST, UNIT variant second",
+                "let _ = if c { mke(8) } else { E.B };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            // ── the three shapes that already had an owner
+            (
+                "guard: ALL arms are calls — the first-arm rule already named it",
+                "let _ = if c { mke(8) } else { mke(9) };",
+                "true",
+                "dE\nv=7\n",
+            ),
+            (
+                "guard: a bare CALL tail — the direct spelling",
+                "let _ = mke(8);",
+                "true",
+                "dE\nv=7\n",
+            ),
+            (
+                "guard: ALL arms are ctors — owned by the redirect, payload too",
+                "let _ = if c { E.A(mk(8)) } else { E.A(mk(9)) };",
+                "true",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "guard: ALL ctor arms, bare-statement spelling",
+                "if c { E.A(mk(8)) } else { E.A(mk(9)) };",
+                "false",
+                "dE\ndR9\nv=7\n",
+            ),
+        ];
+        for (label, stmt, arg, want) in cases {
+            let src = format!(
+                "{PRELUDE}fn go(c: bool) -> i64 {{ {stmt}\n return 7; }}\n\
+                 fn main() {{ println(f\"v={{go({arg})}}\"); }}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: the own body, exactly once");
+            }
+        }
+    }
+
     /// B-2026-08-31-22 — A DISCARDED BRANCH OF OWN-`Drop` ENUM CONSTRUCTORS
     /// dropped its merged value with NO OWNER on either compiled backend: no
     /// own body, no payload walk, and the payload's heap stranded.
