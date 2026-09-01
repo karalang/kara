@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 343 | 5 |
-| run-vs-build | 283 | 21 |
+| run-vs-build | 285 | 22 |
 | leak | 245 | 5 |
 | missing-feature | 192 | 1 |
 | double-free | 161 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1333 | 29 |
-| interp | 308 | 20 |
+| codegen | 1335 | 31 |
+| interp | 308 | 19 |
 | typecheck | 285 | 1 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced · 37 open · 1874 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1944 surfaced · 38 open · 1875 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (38)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -165,8 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced
 | B-2026-09-01-11 | 2026-09-01 | interp+codegen | medium | THE NON-CONSTRUCTOR ARMS OF A DISCARDED BRANCH STILL DISAGREE IN THREE SHAPES -- a CALL arm registers nothing on either compiled backend where the direct call spelling runs the own body, and a LIVE-LOCAL arm makes the interpreter drop that local at the branch (doubling the enum's own body in the `let _ =` spelling) where both compiled backends correctly leave it to its own scope end | — |
 | B-2026-09-01-16 | 2026-09-01 | codegen | medium | A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON ALL THREE COMPILED SURFACES -- `println(f"field={readf(h.r)}")` is interp `field=43 drop 40 end` vs compiled `field=43 end drop 40`, against design.md line 866; hoisting the call to its own `let` makes all four agree, and the callee returns `i64`, which is B-2026-08-31-4's own passing CONTROL | — |
 | B-2026-09-01-17 | 2026-09-01 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { .. };` over a local `W` doubles on all three backends because the aggregate-literal source walker resolves a bare NAME and not a field projection, so the disarm e49a85f wired up never names `t` | — |
-| B-2026-09-01-18 | 2026-09-01 | interp | medium | A DISCARDED AGGREGATE LITERAL BEHIND A BLOCK WRAPPER, OR WRITTEN BARE IN STATEMENT POSITION, RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON THE INTERPRETER AND ONCE ON BOTH COMPILED BACKENDS -- `{ W { r: t, b: 1 } };`, `let _ = { W { r: t, b: 1 } };` and `W { r: t, b: 1 };` all diverge, while the `if` / `match` spellings agree | — |
 | B-2026-09-01-20 | 2026-09-01 | typecheck | medium | DEFAULT ARGUMENTS ARE FILLED FOR FREE FUNCTIONS ONLY -- `H.f(1)` and `h.g(1)` both fail with `expected 2 argument(s), found 1` for a parameter that has a default, while the identical free function accepts the omitted argument, and design.md scopes the feature to no function kind | — |
+| B-2026-09-01-21 | 2026-09-01 | codegen | medium | A DISCARDED STRUCT LITERAL MIXING A LIVE LOCAL SOURCE WITH A MINTED SIBLING LOSES THE MINTED FIELD'S `Drop` BODY ON BOTH COMPILED BACKENDS -- `S2 { r: t, s: R { id: 9 }, k: 1 };` runs `dR9 dR7` under `--interp` and only `dR7` on `karac run` / `karac build`, because one non-fresh field declines the WHOLE literal at `discarded_owned_literal_tail` | — |
+| B-2026-09-01-22 | 2026-09-01 | codegen | medium | A DISCARDED STRUCT LITERAL BEHIND **TWO** BLOCK WRAPPERS RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `{ { S { r: t, k: 1 } } };` prints `dR7 dR7` on `karac run` / `karac build` against one body under `--interp`, while the ONE-wrapper spelling is correct everywhere | — |
 
 ### Relocated (2)
 
@@ -199,9 +200,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced
 
 </details>
 
-### Fixed (1874)
+### Fixed (1875)
 
-<details><summary>1874 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1875 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2078,6 +2079,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced
 | B-2026-09-01-13 | codegen+interp | medium | THE QUALIFIED `Type.method` CALLEE SPELLING IS RESOLVED DIFFERENTLY FROM THE BARE ONE IN AT LEAST THREE PLACES, AND NOBODY HAS SWEPT FOR THE REST --… | 43a0e728 |
 | B-2026-09-01-14 | cli | medium | THE DEFAULT `cargo test` LEG WAS RED ON `main` FOR TWO HOURS BECAUSE A CODEGEN-DIAGNOSTIC ASSERTION IS NOT GATED ON THE llvm FEATURE -- `ref_binding_… | Added `#[cfg(feature = "llvm")]`, the gate the other 98 `ka… |
 | B-2026-09-01-15 | codegen | medium | A NESTED `ref c[i][j]` STILL DECLINES ON FOUR ROOTS THE Vec-ROOTED LOWERING DOES NOT MODEL -- `Array[Vec[T], N]`, `Vec[Array[T, N]]`, a struct FIELD… | 2143f047 |
+| B-2026-09-01-18 | interp | medium | A DISCARDED AGGREGATE LITERAL BEHIND A BLOCK WRAPPER, OR WRITTEN BARE IN STATEMENT POSITION, RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON THE INTER… | 0033588 |
 | B-2026-09-01-19 | typecheck+interp+codegen | medium | AN OUT-OF-RANGE INTEGER LITERAL WITH A WIDER SUFFIX REACHES A GENERIC PAYLOAD SLOT UNCHECKED, SO THE BACKENDS DISAGREE AND ONE SHAPE FLIPS SIGN -- `O… | f366e42e |
 
 </details>
