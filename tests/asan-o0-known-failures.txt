@@ -175,7 +175,7 @@ memory_sanitizer_tests::asan_discarded_branch_literal_field_over_a_loop_outer_lo
 # cell would have taken those off the leg too, which is the decay this file
 # documents itself against. Note what the split also fixes: B-2026-09-01-5's
 # prose already cited a test of this name that did not exist.
-memory_sanitizer_tests::asan_a_mixed_discarded_literal_still_leaks_its_field_heap  # B-2026-09-01-24
+memory_sanitizer_tests::asan_a_mixed_discarded_literal_still_leaks_its_field_heap  # B-2026-09-01-25
 #
 # The MEMORY half of B-2026-09-01-21. That row's fix made a discarded struct
 # literal whose fields mix a live-local source with a minted sibling run every

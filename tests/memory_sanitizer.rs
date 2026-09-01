@@ -56129,7 +56129,7 @@ fn main() { println(go()); }
             // Measured identical on unmodified `main`, so it predates this
             // fix and is the same "one non-fresh field declines the whole
             // literal" mechanism with a different field shape. Filed as
-            // B-2026-09-01-23 rather than folded in; a scalar read moves
+            // B-2026-09-01-24 rather than folded in; a scalar read moves
             // nothing, so its fix is an admission with no retraction, not
             // this row's admission-plus-retraction.
             (
@@ -56144,7 +56144,7 @@ fn main() { println(go()); }
         }
     }
 
-    /// B-2026-09-01-24 — the MEMORY half of B-2026-09-01-21, QUARANTINED on the
+    /// B-2026-09-01-25 — the MEMORY half of B-2026-09-01-21, QUARANTINED on the
     /// `-O0` leg (`tests/asan-o0-known-failures.txt`) against that row.
     ///
     /// B-2026-09-01-21 made these six shapes run every field's `Drop` BODY once
