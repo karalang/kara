@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 343 | 5 |
-| run-vs-build | 285 | 19 |
+| run-vs-build | 285 | 18 |
 | leak | 249 | 5 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1339 | 27 |
+| codegen | 1339 | 26 |
 | interp | 308 | 19 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1948 surfaced · 33 open · 1884 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1948 surfaced · 32 open · 1885 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (33)
+### Open (32)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -160,7 +160,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1948 surfaced
 | B-2026-09-01-11 | 2026-09-01 | interp+codegen | medium | THE NON-CONSTRUCTOR ARMS OF A DISCARDED BRANCH STILL DISAGREE IN THREE SHAPES -- a CALL arm registers nothing on either compiled backend where the direct call spelling runs the own body, and a LIVE-LOCAL arm makes the interpreter drop that local at the branch (doubling the enum's own body in the `let _ =` spelling) where both compiled backends correctly leave it to its own scope end | — |
 | B-2026-09-01-16 | 2026-09-01 | codegen | medium | A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON ALL THREE COMPILED SURFACES -- `println(f"field={readf(h.r)}")` is interp `field=43 drop 40 end` vs compiled `field=43 end drop 40`, against design.md line 866; hoisting the call to its own `let` makes all four agree, and the callee returns `i64`, which is B-2026-08-31-4's own passing CONTROL | — |
 | B-2026-09-01-17 | 2026-09-01 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { .. };` over a local `W` doubles on all three backends because the aggregate-literal source walker resolves a bare NAME and not a field projection, so the disarm e49a85f wired up never names `t` | — |
-| B-2026-09-01-22 | 2026-09-01 | codegen | medium | A DISCARDED STRUCT LITERAL BEHIND **TWO** BLOCK WRAPPERS RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `{ { S { r: t, k: 1 } } };` prints `dR7 dR7` on `karac run` / `karac build` against one body under `--interp`, while the ONE-wrapper spelling is correct everywhere | — |
 | B-2026-09-01-23 | 2026-09-01 | codegen | low | THE BRANCH ARM-OWNER SLOT IS ONE PER CONSTRUCT AND RESET EACH PASS, so a branch inside a loop whose owner frame lives OUTSIDE the loop frees only the LAST pass's escaping value -- `while i < 3 { let k = if i > 0 { mkA(n) } else { t }.contains("aaa"); }` strands `iterations - 1` of them (42 B in 2 blocks at 3 iterations, 72 B in 4 at 5); the same branch with the sibling binding declared INSIDE the loop body is clean, which isolates the frame CHOICE rather than the slot as the cause | — |
 | B-2026-09-01-26 | 2026-09-01 | codegen | medium | A `match` OVER A FRESH-TEMP ENUM IN A NESTED EXPRESSION POSITION LEAKS THE HEAP PAYLOAD ITS ARM MOVED OUT -- `println(f"out[{match mkVe(9) { Ve.A(s) => { s } .. }}]")` loses 15 B at BOTH opt levels while the let-bound spelling of the same match is clean; both enum flavours, and clean for a scalar payload | — |
 
@@ -195,9 +194,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1948 surfaced
 
 </details>
 
-### Fixed (1884)
+### Fixed (1885)
 
-<details><summary>1884 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1885 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2083,6 +2082,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1948 surfaced
 | B-2026-09-01-19 | typecheck+interp+codegen | medium | AN OUT-OF-RANGE INTEGER LITERAL WITH A WIDER SUFFIX REACHES A GENERIC PAYLOAD SLOT UNCHECKED, SO THE BACKENDS DISAGREE AND ONE SHAPE FLIPS SIGN -- `O… | f366e42e |
 | B-2026-09-01-20 | typecheck | medium | DEFAULT ARGUMENTS ARE FILLED FOR FREE FUNCTIONS ONLY -- `H.f(1)` and `h.g(1)` both fail with `expected 2 argument(s), found 1` for a parameter that h… | fc67e1f |
 | B-2026-09-01-21 | codegen | medium | A DISCARDED STRUCT LITERAL MIXING A LIVE LOCAL SOURCE WITH A MINTED SIBLING LOSES THE MINTED FIELD'S `Drop` BODY ON BOTH COMPILED BACKENDS -- `S2 { r… | e3b9e67 |
+| B-2026-09-01-22 | codegen | medium | A DISCARDED STRUCT LITERAL BEHIND **TWO** BLOCK WRAPPERS RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `{ { S { r: t, k: 1… | 1fcdb47 |
 | B-2026-09-01-24 | codegen | medium | A DISCARDED ALL-MINTED STRUCT LITERAL WITH ONE FIELD THAT IS A SCALAR FIELD READ OF A LIVE LOCAL LEAKS EVERY MINTED OBJECT ON BOTH COMPILED BACKENDS… | 7ef82d3 |
 | B-2026-09-01-25 | codegen | medium | THE MEMORY HALF OF B-2026-09-01-21: a DISCARDED aggregate whose fields/elements MIX a live-local source with anything else runs every `Drop` BODY onc… | f909f9a |
 
