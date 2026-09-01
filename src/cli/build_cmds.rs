@@ -403,7 +403,14 @@ pub(super) fn cmd_build(
             release,
             true, // A2: coroutines on for `karac build` (bug-C fix reaches real builds)
         ) {
-            eprintln!("error: codegen failed: {e}");
+            // B-2026-09-01-8 — render the failure with its source position and
+            // a caret, like every front-end diagnostic. `filename` and the
+            // source text are both already in scope here for the same reason
+            // codegen wanted them: error-return traces.
+            eprintln!(
+                "{}",
+                crate::cli::render_codegen_error(&e, filename, Some(&source))
+            );
             process::exit(1);
         }
 

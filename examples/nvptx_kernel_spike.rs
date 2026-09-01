@@ -210,7 +210,7 @@ fn compile(src: &str) -> Result<String, String> {
         return Err(format!("{:?}", tc.errors[0]));
     }
     let own = karac::ownershipcheck(&program, &tc);
-    karac::codegen::compile_to_ir(&program, Some(&own), None)
+    karac::codegen::compile_to_ir(&program, Some(&own), None).map_err(|e| e.message)
 }
 
 /// Lift one `define ... @name(` block out of a textual module, dropping the

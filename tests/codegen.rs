@@ -595,7 +595,7 @@ mod codegen_tests {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
-        compile_to_ir(&parsed.program, None, None)
+        compile_to_ir(&parsed.program, None, None).map_err(|e| e.message)
     }
 
     #[test]
@@ -3879,7 +3879,7 @@ mod codegen_tests {
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         match compile_to_ir(&parsed.program, Some(&ownership), None) {
             Ok(_) => panic!("expected codegen to decline this program, but it compiled"),
-            Err(e) => e,
+            Err(e) => e.message,
         }
     }
 
@@ -26923,7 +26923,8 @@ fn main() { barrier(); }
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("a Relaxed fence must be rejected at codegen");
+            .expect_err("a Relaxed fence must be rejected at codegen")
+            .message;
         assert!(
             err.contains("fence ordering must be") && err.contains("Relaxed"),
             "expected a Relaxed-fence rejection, got: {err}"
@@ -29667,7 +29668,7 @@ fn main() {
             )
             .err();
             let _ = std::fs::remove_file(&obj_path);
-            err
+            err.map(|e| e.message)
         };
         // (a) heap-FREE aggregate now compiles.
         let ok = compile_err(
@@ -29739,7 +29740,7 @@ fn main() {
             )
             .err();
             let _ = std::fs::remove_file(&obj_path);
-            err
+            err.map(|e| e.message)
         };
         // (a) heap-FITTING `String` element compiles clean.
         let ok = compile_err(
@@ -63823,7 +63824,8 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("standalone array-literal range-slice must fail loud");
+            .expect_err("standalone array-literal range-slice must fail loud")
+            .message;
         assert!(
             err.contains("anonymous array/Vec literal") && err.contains("bind it to a variable"),
             "expected the actionable bind-first message, got: {err}"
@@ -63863,7 +63865,8 @@ fn main() {
         );
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("Map.try_clone codegen must fail loud (interpreter-only)");
+            .expect_err("Map.try_clone codegen must fail loud (interpreter-only)")
+            .message;
         assert!(
             err.contains("interpreter-only") && err.contains("item 8") && err.contains("try_clone"),
             "expected the actionable item-8 message, got: {err}"
@@ -70419,7 +70422,8 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject chained indexed receivers");
+            .expect_err("expected codegen to reject chained indexed receivers")
+            .message;
         assert!(
             err.contains("chained indexed receivers"),
             "expected chained-rejection diagnostic; got: {}",
@@ -83767,10 +83771,12 @@ fn main() {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None).expect_err(
-            "expected codegen to Err on unsupported slice method; \
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err(
+                "expected codegen to Err on unsupported slice method; \
              the dispatcher silent-zero must not be re-introduced",
-        );
+            )
+            .message;
         assert!(
             err.contains("no_such_slice_method"),
             "expected diagnostic to name the missing slice method; got: {}",
@@ -87224,7 +87230,8 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected closure-as-handler to be rejected");
+            .expect_err("expected closure-as-handler to be rejected")
+            .message;
         assert!(
             err.contains("E_CLOSURE_AS_FN_PTR_NOT_YET"),
             "expected diagnostic to carry E_CLOSURE_AS_FN_PTR_NOT_YET; got: {}",
@@ -104883,7 +104890,8 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject sort() on unordered element types");
+            .expect_err("expected codegen to reject sort() on unordered element types")
+            .message;
         assert!(
             err.contains("use sort_by"),
             "expected the sort_by-directing diagnostic; got: {}",
@@ -104993,7 +105001,8 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject Option[i64] == i64");
+            .expect_err("expected codegen to reject Option[i64] == i64")
+            .message;
         assert!(
             err.contains("Binary op Eq"),
             "expected mention of Eq op; got: {err}"
@@ -115168,7 +115177,8 @@ fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o).v); }
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, Some(&ownership), None)
-            .expect_err("a borrowed place must not travel out through the result slot");
+            .expect_err("a borrowed place must not travel out through the result slot")
+            .message;
         assert!(
             err.contains("Module verification failed"),
             "expected the loud refusal, got: {err}"
@@ -115449,7 +115459,8 @@ fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o, false).v); 
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, Some(&ownership), None)
-            .expect_err("one place-reading tail must sink the whole branch");
+            .expect_err("one place-reading tail must sink the whole branch")
+            .message;
         assert!(
             err.contains("Module verification failed"),
             "expected the loud refusal, got: {err}"
@@ -116499,7 +116510,9 @@ pub fn main() with writes(Console) blocks {
             None,
         );
         let _ = std::fs::remove_file(&obj);
-        let err = result.expect_err("expected backend to reject extern \"C-unwind\" export");
+        let err = result
+            .expect_err("expected backend to reject extern \"C-unwind\" export")
+            .message;
         assert!(
             err.contains("C-unwind") && err.contains("substrate"),
             "expected the substrate-gate message, got: {err}"

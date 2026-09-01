@@ -1779,7 +1779,7 @@ mod tests {
     /// passes, returning post-CoroSplit IR (the `.resume`/`.destroy` clones).
     /// Mirrors `compile_link_coro`'s full network-boundary pipeline population
     /// but routes to `compile_to_ir_with_coro_split` instead of object emission.
-    fn compile_coro_split_ir(src: &str) -> Result<String, String> {
+    fn compile_coro_split_ir(src: &str) -> Result<String, karac::codegen::CodegenError> {
         use karac::cli::{
             build_call_effect_subs_table, build_callee_network_yield_effect_table,
             build_callee_purely_polymorphic_effects_set, build_state_struct_layouts,
@@ -1789,15 +1789,15 @@ mod tests {
 
         let mut parsed = karac::parse(src);
         if !parsed.errors.is_empty() {
-            return Err(format!("parse errors: {:?}", parsed.errors));
+            return Err(format!("parse errors: {:?}", parsed.errors).into());
         }
         let resolved = karac::resolve(&parsed.program);
         if !resolved.errors.is_empty() {
-            return Err(format!("resolve errors: {:?}", resolved.errors));
+            return Err(format!("resolve errors: {:?}", resolved.errors).into());
         }
         let typed = karac::typecheck(&parsed.program, &resolved);
         if !typed.errors.is_empty() {
-            return Err(format!("typecheck errors: {:?}", typed.errors));
+            return Err(format!("typecheck errors: {:?}", typed.errors).into());
         }
         let method_types = typed.method_callee_types.clone();
         let call_type_subs = typed.call_type_subs.clone();

@@ -1797,6 +1797,43 @@ fn diagnostic_snippet(
     ))
 }
 
+/// Render a codegen failure the way every front-end diagnostic renders:
+/// `<file>:<line>:<col>` and a caret under the offending expression.
+///
+/// B-2026-09-01-8. Codegen's channel carried no position at all, so its ~248
+/// messages printed as a bare sentence while `typecheck` / `resolve` / the
+/// lints all pointed at the source. Now [`crate::codegen::CodegenError`]
+/// carries the span the walk was on, and this puts it on screen.
+///
+/// The `error: codegen failed: ` prefix is DELIBERATELY unchanged — it is what
+/// distinguishes a backend bail from a front-end rejection, and the test suite
+/// asserts on that phrase in over a hundred places. The position and the caret
+/// are added around it, not in place of it.
+///
+/// A span-less error (module verification, target-machine setup, a linker
+/// invocation — failures with no source position to point at) renders exactly
+/// as it did before, rather than inventing a location.
+#[cfg(feature = "llvm")]
+pub(crate) fn render_codegen_error(
+    e: &crate::codegen::CodegenError,
+    filename: &str,
+    source: Option<&str>,
+) -> String {
+    match e.span {
+        Some(span) => with_snippet(
+            format!(
+                "error: codegen failed: {filename}:{}:{}: {}",
+                span.line, span.column, e.message
+            ),
+            source,
+            span.line,
+            span.column,
+            span.length,
+        ),
+        None => format!("error: codegen failed: {}", e.message),
+    }
+}
+
 /// `header` plus its source snippet, when one can be rendered.
 fn with_snippet(
     header: String,

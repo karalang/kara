@@ -62,4 +62,25 @@ pub(crate) struct Tracing {
     /// compiled (synthetic panics with no originating expression fall back to
     /// the bare `panic: <msg>` form).
     pub(crate) current_span: Option<crate::token::Span>,
+    /// Source span of the STATEMENT or EXPRESSION currently being compiled,
+    /// maintained for DIAGNOSTICS rather than for runtime panics
+    /// (B-2026-09-01-8). Read once, at the codegen boundary, to give a
+    /// `CodegenError` the position its message never carried.
+    ///
+    /// Deliberately separate from `current_span` above, which belongs to the
+    /// crash-diagnostics feature and is stamped by `compile_expr` only. Two
+    /// differences matter and both were measured:
+    ///
+    /// * A bail raised at STATEMENT level — `let r = ref m[1];` is rejected in
+    ///   `compile_stmt`, before the RHS is walked — leaves `current_span` on
+    ///   whatever expression was compiled last, which is the PREVIOUS
+    ///   statement. Reported that way, the caret sits confidently on unrelated
+    ///   source, which is worse than the bare sentence it replaced. So this
+    ///   cursor is stamped by `compile_stmt` too.
+    /// * It is restored on the way OUT of a successful compile, so it always
+    ///   names the innermost node still in progress rather than the last one
+    ///   finished. On the error path it is deliberately NOT restored: the
+    ///   innermost failing node is exactly what should propagate to the
+    ///   boundary.
+    pub(crate) diag_span: Option<crate::token::Span>,
 }

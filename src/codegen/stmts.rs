@@ -3489,7 +3489,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Inheriting is also the SAFE direction if it ever over-reaches: an
     /// argument wrongly treated as a self-assignment keeps today's behaviour —
     /// a double body — never a lost one.
+    /// B-2026-09-01-8 — the statement half of the diagnostic span cursor. See
+    /// `compile_expr`'s wrapper for why it is restored only on success.
+    ///
+    /// A statement-level bail (`let r = ref m[1];` is rejected here, before the
+    /// RHS is walked) is precisely the case that had no useful span: the
+    /// expression cursor still pointed at the PREVIOUS statement.
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        let saved = self.tracing.diag_span;
+        self.tracing.diag_span = Some(stmt.span);
+        let out = self.compile_stmt_tracking_assign_target(stmt);
+        if out.is_ok() {
+            self.tracing.diag_span = saved;
+        }
+        out
+    }
+
+    fn compile_stmt_tracking_assign_target(&mut self, stmt: &Stmt) -> Result<(), String> {
         let saved = self.drop_rc.assign_ident_target.clone();
         if let StmtKind::Assign { target, .. } = &stmt.kind {
             if let ExprKind::Identifier(n) = &target.kind {

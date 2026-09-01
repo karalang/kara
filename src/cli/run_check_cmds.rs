@@ -1224,7 +1224,11 @@ pub(super) fn cmd_run(
                 // else: fall through to the interpreter below.
             }
             Err(e) => {
-                eprintln!("error: codegen failed: {e}");
+                // B-2026-09-01-8 — position + caret, as the front end renders.
+                eprintln!(
+                    "{}",
+                    crate::cli::render_codegen_error(&e, filename, Some(&source))
+                );
                 // The JIT is the default backend (Slice 6c). A codegen gap the
                 // interpreter still covers is recoverable — point the user at
                 // the escape hatch so a not-yet-lowerable construct doesn't dead-

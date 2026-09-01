@@ -171,6 +171,128 @@ use helpers::{
 };
 use state::{EnumLayout, LayoutId, SpawnSiteRecord, VarSlot};
 
+// ── Errors ─────────────────────────────────────────────────────
+
+/// A codegen failure, carrying the source position it happened at.
+///
+/// B-2026-09-01-8. Codegen used to fail with a bare `String`, and the CLI
+/// rendered it as `error: codegen failed: {e}` — a sentence with no file, line,
+/// column or caret, against a front end that gives all four for every
+/// diagnostic it emits. The repo's own standard is that "every compiler phase
+/// must emit structured diagnostics with source spans"; this is the phase that
+/// did not.
+///
+/// ## Where the span comes from — no per-message work
+///
+/// The row that filed this expected the fix to be incremental: add a span to
+/// each of the ~248 `codegen: …` messages one at a time, wherever the emitting
+/// site happens to have one in scope. It does not have to be. `compile_expr`
+/// ALREADY stamps `tracing.current_span` with the expression it is about to
+/// compile — it has done since the Level 2 crash diagnostics, so that
+/// `emit_panic` can bake `<file>:<line>:<col>` into a runtime panic — and a
+/// codegen bail is raised while compiling the very node that stamped it.
+///
+/// So the span is read once, at the boundary, from the cursor the walk already
+/// maintains, and EVERY message gains a position at once. A site that knows
+/// better can still say so ([`CodegenError::at`]); nothing has to.
+///
+/// `Display` renders the message alone, so every existing `{e}` formatting —
+/// `format!("codegen failed: {e}")` and friends — is unchanged. Rendering the
+/// position is the CLI's job, next to the caret it draws from the source text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodegenError {
+    /// The failure text, exactly as the emitting site wrote it.
+    pub message: String,
+    /// Where it happened, when known. `None` for a failure raised outside any
+    /// expression walk — module verification, target-machine setup, a linker
+    /// invocation — which genuinely has no source position to point at, and
+    /// must keep rendering as today's bare sentence rather than inventing one.
+    pub span: Option<Span>,
+}
+
+impl CodegenError {
+    /// A failure with no position — the shape every `Err("…".to_string())`
+    /// inside codegen produces before the boundary attaches the cursor.
+    pub fn new(message: impl Into<String>) -> Self {
+        CodegenError {
+            message: message.into(),
+            span: None,
+        }
+    }
+
+    /// A failure at a known position, for a site that has a better answer than
+    /// the walk cursor.
+    pub fn at(message: impl Into<String>, span: Span) -> Self {
+        CodegenError {
+            message: message.into(),
+            span: Some(span),
+        }
+    }
+
+    /// Attach `span` unless a more specific one is already recorded.
+    ///
+    /// Used once per entry point, on the error out of `compile_program`, to
+    /// stamp the walk cursor. `Option::or` rather than assignment so a site
+    /// that used [`CodegenError::at`] keeps its own answer.
+    #[must_use]
+    pub fn or_span(mut self, span: Option<Span>) -> Self {
+        self.span = self.span.or(span);
+        self
+    }
+}
+
+impl std::fmt::Display for CodegenError {
+    /// The message alone. Callers that render a position do it themselves, so
+    /// that a `{e}` written before this type existed reads exactly as it did.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CodegenError {}
+
+impl From<String> for CodegenError {
+    fn from(message: String) -> Self {
+        CodegenError::new(message)
+    }
+}
+
+impl From<&str> for CodegenError {
+    fn from(message: &str) -> Self {
+        CodegenError::new(message)
+    }
+}
+
+impl From<CodegenError> for String {
+    fn from(e: CodegenError) -> String {
+        e.message
+    }
+}
+
+/// Run `compile_program` and, on failure, stamp the walk's current span onto
+/// the error.
+///
+/// B-2026-09-01-8. This is the whole of the span plumbing, and it is one place
+/// rather than ~248 because `compile_expr` already records the node it is
+/// compiling in `tracing.current_span` (for the Level 2 crash diagnostics that
+/// let `emit_panic` print `<file>:<line>:<col>`). A codegen bail is raised
+/// while compiling the node that stamped the cursor, so reading it here gives
+/// the erroring expression's position for every message at once.
+///
+/// The read has to happen after `compile_program` returns — the call borrows
+/// `cg` mutably, so a `map_err` closure capturing `cg` would not borrow-check.
+///
+/// `or_span` rather than assignment: a site that already answered with
+/// [`CodegenError::at`] keeps its own, more specific, span.
+fn compile_program_spanned(cg: &mut Codegen<'_>, program: &Program) -> Result<(), CodegenError> {
+    match cg.compile_program(program) {
+        Ok(()) => Ok(()),
+        Err(message) => Err(CodegenError::new(message)
+            .or_span(cg.tracing.diag_span)
+            .or_span(cg.tracing.current_span)),
+    }
+}
+
 // ── Public API ─────────────────────────────────────────────────
 
 /// Compile a Kāra program to LLVM IR text (for debugging/testing).
@@ -178,7 +300,7 @@ pub fn compile_to_ir(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     compile_to_ir_with_options(program, ownership, concurrency, None, None)
 }
 
@@ -199,7 +321,7 @@ pub fn compile_to_ir_with_options(
     concurrency: Option<&ConcurrencyAnalysis>,
     source_filename: Option<&str>,
     source_text: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     compile_to_ir_with_hot_swap(
         program,
         ownership,
@@ -362,7 +484,7 @@ pub fn compile_to_ir_for_repl_cell(
     program: &Program,
     declare_only_fns: &std::collections::HashSet<String>,
     main_symbol: &str,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     compile_to_ir_for_repl_cell_with_snapshots(
         program,
         declare_only_fns,
@@ -413,7 +535,7 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
     snapshot_capture: &HashMap<String, SnapshotPrimKind>,
     snapshot_replay: &HashMap<String, SnapshotPrimKind>,
     snapshot_value_types: &HashMap<String, crate::ast::TypeExpr>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_repl_cell");
     cg.fn_sig.declare_only_fns = declare_only_fns.clone();
@@ -421,7 +543,7 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
     cg.snapshot_capture = snapshot_capture.clone();
     cg.snapshot_replay = snapshot_replay.clone();
     cg.snapshot_value_types = snapshot_value_types.clone();
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -435,12 +557,12 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
 pub fn compile_to_ir_for_test_module(
     program: &Program,
     source_filename: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_test_module");
     cg.force_external_linkage = true;
     cg.source_filename = source_filename.map(|s| s.to_string());
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -939,7 +1061,7 @@ pub fn compile_to_ir_with_hot_swap(
     source_filename: Option<&str>,
     source_text: Option<&str>,
     enable_hot_swap: bool,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
@@ -948,7 +1070,7 @@ pub fn compile_to_ir_with_hot_swap(
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
     cg.set_hot_swap_enabled(enable_hot_swap);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -962,14 +1084,14 @@ pub fn compile_to_ir_with_contracts_stripped(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
     cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_strip_contracts(true);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -985,7 +1107,7 @@ pub fn compile_to_ir_with_debug_info(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
@@ -993,7 +1115,7 @@ pub fn compile_to_ir_with_debug_info(
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(Some("debug.kara"));
     cg.force_debug_info();
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -1006,14 +1128,14 @@ pub fn compile_to_ir_with_error_trace_stripped(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
     cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_strip_error_trace(true);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -1023,7 +1145,7 @@ pub fn compile_to_object(
     output_path: &str,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<(), String> {
+) -> Result<(), CodegenError> {
     compile_to_object_with_options(program, output_path, ownership, concurrency, None, None)
 }
 
@@ -1042,20 +1164,20 @@ pub fn compile_to_object_with_coro(
     output_path: &str,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<(), String> {
+) -> Result<(), CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
     cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_coro_enabled(true);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
 
     let target_machine = create_target_machine()?;
     apply_optimization_passes(&cg.module, &target_machine, cg.bce.binsearch_assume_emitted)?;
     target_machine
         .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
-        .map_err(|e| format!("Failed to write object file: {}", e))
+        .map_err(|e| CodegenError::new(format!("Failed to write object file: {}", e)))
 }
 
 /// Like [`compile_to_object_with_coro`] but returns the textual LLVM IR **after
@@ -1074,14 +1196,14 @@ pub fn compile_to_ir_with_coro_split(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
     cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_coro_enabled(true);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
 
     let target_machine = create_target_machine()?;
     let opts = inkwell::passes::PassBuilderOptions::create();
@@ -1101,7 +1223,7 @@ pub fn compile_to_object_with_options(
     concurrency: Option<&ConcurrencyAnalysis>,
     source_filename: Option<&str>,
     source_text: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), CodegenError> {
     compile_to_object_with_hot_swap(
         program,
         output_path,
@@ -1156,7 +1278,7 @@ pub fn compile_to_object_with_hot_swap(
     enable_hot_swap: bool,
     release: bool,
     coro_enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CodegenError> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
@@ -1170,13 +1292,13 @@ pub fn compile_to_object_with_hot_swap(
         cg.set_strip_error_trace(true);
     }
     cg.set_coro_enabled(coro_enabled);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
 
     let target_machine = create_target_machine()?;
     apply_optimization_passes(&cg.module, &target_machine, cg.bce.binsearch_assume_emitted)?;
     target_machine
         .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
-        .map_err(|e| format!("Failed to write object file: {}", e))
+        .map_err(|e| CodegenError::new(format!("Failed to write object file: {}", e)))
 }
 
 /// Compile the **threaded pass** of a `--features wasm-threads` build to
@@ -1207,7 +1329,7 @@ pub fn compile_to_object_wasm_threaded(
     source_filename: Option<&str>,
     source_text: Option<&str>,
     release: bool,
-) -> Result<(), String> {
+) -> Result<(), CodegenError> {
     let context = Context::create();
     let target_machine = driver::create_target_machine_threaded()?;
     let mut cg = Codegen::new(&context, "karac_module");
@@ -1225,12 +1347,12 @@ pub fn compile_to_object_wasm_threaded(
     }
     cg.set_coro_enabled(true);
     cg.set_wasm_threaded_pass(true);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
 
     apply_optimization_passes(&cg.module, &target_machine, cg.bce.binsearch_assume_emitted)?;
     target_machine
         .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
-        .map_err(|e| format!("Failed to write object file: {}", e))
+        .map_err(|e| CodegenError::new(format!("Failed to write object file: {}", e)))
 }
 
 /// IR-text sibling of [`compile_to_object_wasm_threaded`] for the
@@ -1243,7 +1365,7 @@ pub fn compile_to_ir_wasm_threaded(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<String, String> {
+) -> Result<String, CodegenError> {
     let context = Context::create();
     let target_machine = driver::create_target_machine_threaded()?;
     let mut cg = Codegen::new(&context, "karac_module");
@@ -1254,7 +1376,7 @@ pub fn compile_to_ir_wasm_threaded(
     cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
     cg.set_wasm_threaded_pass(true);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
     Ok(cg.module.print_to_string().to_string())
 }
 
@@ -1276,7 +1398,7 @@ pub fn jit_run_main(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<i32, String> {
+) -> Result<i32, CodegenError> {
     use inkwell::targets::{InitializationConfig, Target};
     use inkwell::OptimizationLevel;
 
@@ -1288,7 +1410,7 @@ pub fn jit_run_main(
     cg.load_rc_fallback(ownership);
     cg.load_deque_head_locals(program);
     cg.load_concurrency_analysis(concurrency);
-    cg.compile_program(program)?;
+    compile_program_spanned(&mut cg, program)?;
 
     let engine = cg
         .module
@@ -1343,7 +1465,7 @@ pub fn jit_run_main_lljit(
     program: &Program,
     ownership: Option<&OwnershipCheckResult>,
     concurrency: Option<&ConcurrencyAnalysis>,
-) -> Result<i32, String> {
+) -> Result<i32, CodegenError> {
     let ir = compile_to_ir(program, ownership, concurrency)?;
     let engine = lljit::LLJITEngine::new()?;
     engine.add_ir_module(&ir)?;
@@ -5965,6 +6087,7 @@ impl<'ctx> Codegen<'ctx> {
                 runtime_panic_prefix_needed: true,
                 panic_site_counter: std::cell::Cell::new(0),
                 current_span: None,
+                diag_span: None,
             },
             runtime_fns: RuntimeFns {
                 karac_runtime_enter_predicate_fn,

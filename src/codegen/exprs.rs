@@ -33,7 +33,25 @@ fn expr_kind_name(kind: &ExprKind) -> String {
 }
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// B-2026-09-01-8 — maintain the DIAGNOSTIC span cursor around the real
+    /// compile, so a `CodegenError` can name the node that failed.
+    ///
+    /// Restored on SUCCESS only. That asymmetry is the whole point: on the way
+    /// out of a node that compiled, the parent becomes current again, so the
+    /// cursor always names the innermost node still in progress; on the way out
+    /// of one that FAILED, it is left alone so the innermost failing node is
+    /// what reaches the boundary.
     pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        let saved = self.tracing.diag_span;
+        self.tracing.diag_span = Some(expr.span);
+        let out = self.compile_expr_inner(expr);
+        if out.is_ok() {
+            self.tracing.diag_span = saved;
+        }
+        out
+    }
+
+    fn compile_expr_inner(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
         // Level 2 crash diagnostics: record the span of the expression being
         // compiled so `emit_panic` can report `panic at <file>:<line>:<col>`.
         // The headline panic sites (index OOB, unwrap-None, divide-by-zero,
