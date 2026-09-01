@@ -35564,6 +35564,18 @@ fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
 /// The assertions are deliberately about CONTENT, not the exact sentence: that
 /// the internal string is gone, that the container class is named, and that the
 /// `--interp` advice appears for exactly the case where it is true.
+///
+/// B-2026-09-01-14 — `#[cfg(feature = "llvm")]`, like the 98 other tests in
+/// this file that shell out to a `karac build` whose OUTPUT they assert. Every
+/// string below is emitted by CODEGEN; on the default leg `karac` has none, so
+/// `karac build` type-checks, prints `note: karac build requires the llvm
+/// feature; falling back to type check` and exits zero, and the assertion
+/// cannot hold there for the same structural reason `tests/codegen.rs` is a
+/// gated module outright. Without the gate the DEFAULT `cargo test` — the leg
+/// CI runs — failed here, and since `cargo test` stops at the first failing
+/// test BINARY and `cli` sorts early, every suite after it silently did not
+/// run.
+#[cfg(feature = "llvm")]
 #[test]
 fn ref_binding_codegen_gap_explains_itself() {
     // `std::env::temp_dir()` with uniquely-named fixtures, the shape the other
