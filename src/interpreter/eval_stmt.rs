@@ -264,6 +264,10 @@ impl<'a> super::Interpreter<'a> {
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
+            // B-2026-09-01-18 — the same rule for a struct literal DISCARDED as
+            // a bare statement (`W { r: t, b: 1 };`, `{ W { r: t, b: 1 } };`),
+            // which is not a `Let` and so never reached the hook above.
+            self.suppress_discarded_literal_source_user_drops(stmt, &mut cleanup);
             self.suppress_discarded_tuple_moved_elem_user_drops(stmt, &mut cleanup);
             // B-2026-07-30-11 (displaced-value leg): `a = b;` moves b's value
             // into `a` exactly as the let-rebind above does — the source's
@@ -3360,20 +3364,49 @@ impl<'a> super::Interpreter<'a> {
         // listener is ever used. `spread` (`..base`) is deliberately NOT
         // treated as a move source: it copies remaining fields from a base
         // that stays live and owns its own drop.
-        let source_names: Vec<String> = match &value.kind {
-            ExprKind::Identifier(n) => vec![n.clone()],
-            ExprKind::StructLiteral { fields, .. } => fields
-                .iter()
-                .filter_map(|f| match &f.value.kind {
-                    ExprKind::Identifier(n) => Some(n.clone()),
-                    _ => None,
-                })
-                .collect(),
+        // B-2026-09-01-18 — the literal may sit behind block wrappers
+        // (`let _ = { W { r: t, b: 1 } };`). Peeled through
+        // `discarded_struct_literal_tail`, so the wrapped spelling answers
+        // exactly as the direct one does; the `Identifier` arm is deliberately
+        // NOT peeled, since a wrapped bare name reaches its own hooks.
+        let literal = match &value.kind {
+            ExprKind::StructLiteral { .. } => Some(value),
+            _ => Self::discarded_struct_literal_tail(value),
+        };
+        let source_names: Vec<String> = match (&value.kind, literal) {
+            (ExprKind::Identifier(n), _) => vec![n.clone()],
+            (_, Some(lit)) => match &lit.kind {
+                ExprKind::StructLiteral { fields, .. } => fields
+                    .iter()
+                    .filter_map(|f| match &f.value.kind {
+                        ExprKind::Identifier(n) => Some(n.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => return,
+            },
             _ => return,
         };
-        for source_name in source_names {
+        self.retract_user_drop_actions_for(&source_names, cleanup);
+    }
+
+    /// Retract the `Drop` cleanup action of every named source whose value
+    /// carries a user `impl Drop`, because the statement just moved that value
+    /// somewhere that now owns it.
+    ///
+    /// Factored out of [`Self::suppress_let_rebind_user_drop`] so its
+    /// bare-statement sibling
+    /// [`Self::suppress_discarded_literal_source_user_drops`] applies the same
+    /// rule rather than a second copy of it — the drift B-2026-08-29-20 had to
+    /// repair once already on the `let _ =` / bare-statement pair.
+    fn retract_user_drop_actions_for(
+        &mut self,
+        names: &[String],
+        cleanup: &mut Vec<CleanupAction>,
+    ) {
+        for source_name in names {
             // Only suppress when the source's value has a user impl Drop.
-            let type_name = match self.env.get(&source_name) {
+            let type_name = match self.env.get(source_name) {
                 Some(Value::Struct { name, .. }) => name.clone(),
                 // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
                 Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
@@ -3383,10 +3416,57 @@ impl<'a> super::Interpreter<'a> {
                 continue;
             }
             cleanup.retain(|action| match action {
-                CleanupAction::Drop { name } => name != &source_name,
+                CleanupAction::Drop { name } => name != source_name,
                 _ => true,
             });
         }
+    }
+
+    /// B-2026-09-01-18 — the struct literal a DISCARDED statement owns, seen
+    /// through any block wrappers around it.
+    ///
+    /// `suppress_let_rebind_user_drop` matches the literal SYNTACTICALLY at the
+    /// `let`'s RHS, so it reaches `let _ = W { r: t, b: 1 };` and nothing else:
+    /// a wrapper (`let _ = { W { .. } };`, `{ W { .. } };`) or a bare statement
+    /// (`W { .. };`) all fell out of its `_ => return`. Those three ran the
+    /// consumed local's body TWICE on this backend against once on both
+    /// compiled ones, while the direct wildcard `let` — the one spelling it
+    /// does reach — agreed. Peeling here is what makes the four answer alike.
+    fn discarded_struct_literal_tail(e: &Expr) -> Option<&Expr> {
+        match &e.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
+                .final_expr
+                .as_deref()
+                .and_then(Self::discarded_struct_literal_tail),
+            ExprKind::StructLiteral { .. } => Some(e),
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-01-18 — the BARE-STATEMENT sibling of
+    /// [`Self::suppress_let_rebind_user_drop`]: `W { r: t, b: 1 };` and
+    /// `{ W { r: t, b: 1 } };` construct a value nothing binds, so the
+    /// statement itself owns it and runs its field bodies — and the local a
+    /// field consumed must not run a second one at scope exit.
+    ///
+    /// Restricted to a STRUCT literal, which is the shape the `let` hook above
+    /// covers and the shape measured to diverge. Tuple and array literals take
+    /// the whole-value channel in `record_container_bodies_move_sources`
+    /// instead, and were measured correct in every spelling of this family.
+    fn suppress_discarded_literal_source_user_drops(
+        &mut self,
+        stmt: &Stmt,
+        cleanup: &mut Vec<CleanupAction>,
+    ) {
+        let StmtKind::Expr(e) = &stmt.kind else {
+            return;
+        };
+        let Some(tail) = Self::discarded_struct_literal_tail(e) else {
+            return;
+        };
+        let mut names = Vec::new();
+        Self::collect_aggregate_literal_sources(tail, &mut names);
+        self.retract_user_drop_actions_for(&names, cleanup);
     }
 
     /// B-2026-07-30-11 (displaced-value leg) — the ASSIGN sibling of

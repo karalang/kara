@@ -125073,6 +125073,121 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-18 — A DISCARDED STRUCT LITERAL BEHIND A BLOCK WRAPPER, OR
+    /// WRITTEN BARE IN STATEMENT POSITION, ran its consumed local's `Drop` body
+    /// TWICE under `--interp` and once on both compiled backends.
+    ///
+    /// `suppress_let_rebind_user_drop` retracts the source's cleanup action by
+    /// matching the literal SYNTACTICALLY at a `let`'s RHS, so it reached
+    /// `let _ = S { r: t, k: 1 };` — the one spelling that agreed — and nothing
+    /// else. A wrapper (`let _ = { S { .. } };`, `{ S { .. } };`) or a bare
+    /// statement (`S { .. };`) all fell out of its `_ => return`.
+    ///
+    /// The ORACLE is the BOUND `let` (`let w = S { r: t, k: 1 };`), which was
+    /// correct on all four surfaces throughout and fixes what "once" means
+    /// here: the literal owns `t`'s value, so `t` must not run its own body.
+    #[test]
+    fn e2e_a_discarded_literal_behind_a_wrapper_owns_what_it_consumed() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct S { r: R, k: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "bare struct literal in statement position",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 S { r: t, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "BLOCK wrapper in statement position",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 { S { r: t, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "wildcard `let` over a BLOCK wrapper",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = { S { r: t, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "TWO sources, bare literal — both bodies, each once",
+                "fn go() -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 S2 { r: t, s: u, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            (
+                "TWO sources behind a wrapper",
+                "fn go() -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 { S2 { r: t, s: u, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            (
+                "control: the wildcard `let` DIRECT spelling, which always agreed",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = S { r: t, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "ORACLE: the BOUND `let`, correct on every surface throughout",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = S { r: t, k: 1 };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "control: an ALL-MINTED discarded literal keeps its own body",
+                "fn go() -> i64 {\n\
+                 S { r: R { id: 7 }, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "control: all-minted behind a wrapper, both fields still fire",
+                "fn go() -> i64 {\n\
+                 { S2 { r: R { id: 7 }, s: R { id: 9 }, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+            (
+                "control: a NON-`Drop` field source is untouched by the retraction",
+                "fn go() -> i64 { let t = R { id: 7 }; let n = 5;\n\
+                 S { r: t, k: n };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: one value, one body");
+            }
+        }
+    }
+
     /// B-2026-08-31-22 — A DISCARDED BRANCH OF OWN-`Drop` ENUM CONSTRUCTORS
     /// dropped its merged value with NO OWNER on either compiled backend: no
     /// own body, no payload walk, and the payload's heap stranded.
