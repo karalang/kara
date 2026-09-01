@@ -175,18 +175,21 @@ memory_sanitizer_tests::asan_discarded_branch_literal_field_over_a_loop_outer_lo
 # cell would have taken those off the leg too, which is the decay this file
 # documents itself against. Note what the split also fixes: B-2026-09-01-5's
 # prose already cited a test of this name that did not exist.
-memory_sanitizer_tests::asan_a_mixed_discarded_literal_still_leaks_its_field_heap  # B-2026-09-01-25
+# B-2026-09-01-25's entry (asan_a_mixed_discarded_literal_still_leaks_its_field_heap)
+# was REMOVED 2026-09-01, hours after it was added, and THE LIST IS EMPTY AGAIN.
+# Its rows went back into
+# `asan_a_discarded_literal_mixing_a_source_and_a_mint_frees_once`, which is
+# where they were split from, so the whole family is on the leg again.
 #
-# The MEMORY half of B-2026-09-01-21. That row's fix made a discarded struct
-# literal whose fields mix a live-local source with a minted sibling run every
-# field's `Drop` BODY once on all three backends; it did not make the field
-# HEAP get freed. At -O0 each of the six shapes still leaks the two `String`
-# payloads (76 B / 2 allocations), and the same measurement holds on
-# unmodified `main` with that fix reverted — so this is a pre-existing leak the
-# body fix neither caused nor cured, not a regression it introduced.
+# The line's own prose blamed the memory leg inside
+# `track_inline_owned_aggregate_arg_inst` for being gated all-fresh like its
+# bodies leg. That was wrong twice over, and both wrong answers came from
+# READING the registrar. Probes settled it: the registrar is never entered with
+# this value at all, because `tuple_elem_is_movable_drop_struct_place` required
+# the moved type to run a USER `Drop`. A struct that merely CARRIES heap was
+# declined, so `discarded_movable_literal_tail` declined the literal and no
+# owner was registered — while the ALL-MINTED spelling of the same literal was
+# clean the whole time, which is the contrast that located it.
 #
-# Its own `#[test]`, split from
-# `asan_a_discarded_literal_mixing_a_source_and_a_mint_frees_once`, whose
-# double-own guards (the bound `let`, the all-minted literal) assert real
-# cleanliness — quarantining that function whole would have taken those off
-# the leg, which is the decay this file documents itself against.
+# The predicate now also admits a heap-carrying struct. It was answering the
+# BODIES question at a caller that needed the MEMORY one.

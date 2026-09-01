@@ -17361,7 +17361,22 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|tn| {
                 self.type_decls.struct_types.contains_key(tn.as_str())
                     && !self.type_decls.shared_types.contains_key(tn.as_str())
-                    && self.type_runs_user_drop(tn.as_str(), &mut Vec::new())
+                    && (self.type_runs_user_drop(tn.as_str(), &mut Vec::new())
+                        // B-2026-09-01-25 — or merely CARRIES heap. The move is
+                        // the same move either way; requiring a user `Drop` made
+                        // the predicate answer the BODIES question when the
+                        // caller also needs it for the MEMORY one, so a
+                        // heap-carrying struct with no `impl Drop` was declined
+                        // and the discarded literal that consumed it registered
+                        // no owner at all -- both field buffers leaked, while
+                        // the all-minted spelling of the same literal is clean.
+                        || self
+                            .type_decls
+                            .struct_field_type_exprs
+                            .get(tn.as_str())
+                            .is_some_and(|ftes| {
+                                ftes.iter().any(|f| self.type_expr_has_drop_heap(f))
+                            }))
             })
     }
 
