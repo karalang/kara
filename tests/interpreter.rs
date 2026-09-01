@@ -51117,23 +51117,40 @@ fn test_discarded_branch_of_body_less_heap_literals_keeps_one_owner() {
         let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
         assert_eq!(run(&src), want, "[{label}]");
     }
-    // PINNED AT A KNOWN DEFECT on THIS backend too, which is what makes it an
-    // agreed gap rather than a divergence: a discarded branch whose arm
-    // literal consumes a LOCAL runs that local's body twice. Pre-existing —
-    // measured byte-identical at `c4af3243` — and pinned on both sides so a
-    // one-sided "fix" of either backend shows up as a failure here.
-    for (label, body) in [
-        (
-            "pinned DEFECT: discarded arm literal consuming a whole local",
-            "let t = mkd(7);\nlet _ = if n == 0 { W { r: t, b: 1 } } else { W { r: mkd(2), b: 2 } };",
-        ),
-        (
-            "pinned DEFECT: discarded arm literal consuming a local's field",
-            "let t = mkw(7);\nlet _ = if n == 0 { W { r: t.r, b: 1 } } else { W { r: mkd(2), b: 2 } };",
-        ),
-    ] {
-        let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
-        assert_eq!(run(&src), "dD7\ndD7\nend\n", "[{label}]");
+    // B-2026-08-31-35 — the WHOLE-LOCAL move is FIXED on this backend too, and
+    // asserted as correct. The codegen twin
+    // (`e2e_discarded_branch_of_body_less_heap_literals_keeps_one_owner`)
+    // carries the same assertion, so the two cannot drift apart: the pair was
+    // pinned on both sides precisely so a one-sided change shows up here, and
+    // that is how this one was kept honest while it was being written.
+    {
+        let src = format!(
+            "{hdr}fn main() {{\nlet n = 0;\nlet t = mkd(7);\n\
+             let _ = if n == 0 {{ W {{ r: t, b: 1 }} }} else {{ W {{ r: mkd(2), b: 2 }} }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(
+            run(&src),
+            "dD7\nend\n",
+            "[discarded arm literal consuming a whole local runs one body]"
+        );
+    }
+    // STILL PINNED AT A KNOWN DEFECT on both backends, which is what keeps it
+    // an agreed gap rather than a divergence: the PROJECTED spelling runs the
+    // local's body twice, because the disarm resolves a bare name and not a
+    // field projection. Pre-existing — measured byte-identical at `c4af3243`.
+    // Filed separately.
+    {
+        let src = format!(
+            "{hdr}fn main() {{\nlet n = 0;\nlet t = mkw(7);\n\
+             let _ = if n == 0 {{ W {{ r: t.r, b: 1 }} }} else {{ W {{ r: mkd(2), b: 2 }} }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(
+            run(&src),
+            "dD7\ndD7\nend\n",
+            "[pinned DEFECT: discarded arm literal consuming a local's field]"
+        );
     }
 }
 

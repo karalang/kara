@@ -16862,7 +16862,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// returned, not the wrapper: `compile_expr` still compiles the whole
     /// block, and the returned expression is only what the cleanup battery
     /// keys its shape queries on.
-    fn discarded_match_value_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+    pub(super) fn discarded_match_value_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
         match &expr.kind {
             ExprKind::Match { arms, .. } => {
                 if arms.is_empty() {

@@ -3488,6 +3488,68 @@ impl<'a> super::Interpreter<'a> {
             .find(|t| (t.span.offset, t.span.length) == taken)
     }
 
+    /// B-2026-08-31-35 — the tail of the arm that actually RAN, for a
+    /// discarded branch this site is about to own.
+    ///
+    /// Peels the same three wrappers `discard_rhs_produces_owned_value` peels
+    /// and asks [`Self::taken_arm_tail_of`], so "which arm ran" has one answer
+    /// per backend rather than one per call site.
+    fn taken_discarded_tail<'e>(&self, rhs: &'e Expr) -> Option<&'e Expr> {
+        match &rhs.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
+                .final_expr
+                .as_deref()
+                .and_then(|e| self.taken_discarded_tail(e)),
+            ExprKind::Match { arms, .. } => self.taken_arm_tail_of(arms.iter().map(|a| &a.body)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => self.taken_arm_tail_of(
+                [then_block.final_expr.as_deref(), else_branch.as_deref()]
+                    .into_iter()
+                    .flatten(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// B-2026-08-31-35 — disarm every local the TAKEN arm's tail consumed,
+    /// once this discard site has decided to own the value it produced.
+    ///
+    /// The interpreter twin of the codegen seed in `note_escaping_stmt_sites`.
+    /// Both backends already disarm an arm tail's aggregate-literal sources on
+    /// the path that hands them over; what neither did was reach that disarm
+    /// for a DISCARDED branch, because a discarded statement is deliberately
+    /// not an escaping site — its arm tails go nowhere WHEN NOTHING OWNS THE
+    /// RESULT, which is the case the exclusion was written for. Where this
+    /// site does own it, the local has handed its value over and a second body
+    /// is one too many: `let t = mkd(7); let _ = if n == 0 { W { r: t, b: 1 } }
+    /// else { .. };` printed `dD7 dD7` on every backend.
+    ///
+    /// Keyed on the arm that RAN, not on all arms: the sibling arm of a mixed
+    /// branch never consumed anything and must keep its own body — which is
+    /// why the codegen twin emits its store in the arm's own basic block
+    /// rather than retracting statically.
+    fn disarm_discarded_tail_sources(&mut self, rhs: &Expr) {
+        let Some(tail) = self.taken_discarded_tail(rhs).cloned() else {
+            return;
+        };
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_aggregate_literal_sources(&tail, &mut names);
+        for name in names {
+            let type_name = match self.env.get(&name) {
+                Some(Value::Struct { name, .. }) => name.clone(),
+                Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+                _ => continue,
+            };
+            if !self.program.drop_method_keys.contains_key(&type_name) {
+                continue;
+            }
+            self.moved_out_user_drop_bindings.insert(name);
+        }
+    }
+
     /// B-2026-08-29-31 — record the tail of the branch arm now running; see
     /// [`crate::Interpreter::taken_branch_tail`]. `None` clears it, so a
     /// construct that yields no value cannot leave a stale span behind for the
@@ -5075,6 +5137,9 @@ impl<'a> super::Interpreter<'a> {
                     && self.discard_rhs_produces_owned_value(value, &val)
                 {
                     self.run_discarded_value_user_drops(val.clone());
+                    // B-2026-08-31-35 — this site now owns the value, so the
+                    // taken arm's consumed locals must not run a second body.
+                    self.disarm_discarded_tail_sources(value);
                     // B-2026-08-28-39 — and its PAYLOAD, for an enum that
                     // declares its own `impl Drop`. The walk above runs such an
                     // enum's OWN body and deliberately stops there, on the
@@ -5800,6 +5865,16 @@ impl<'a> super::Interpreter<'a> {
                             self.run_discarded_shared_user_drop(&discarded);
                             let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
+                            // B-2026-08-31-35 — the BARE-STATEMENT spelling of
+                            // the disarm at the wildcard-`let` gate. This site
+                            // has just taken the value, so a local the taken
+                            // arm's literal consumed must not run a second
+                            // body. The `hands_out_live_binding` / `owns` gates
+                            // above already decline an arm handing out a live
+                            // binding WHOLE; a literal that CONSUMES one is the
+                            // same move an aggregate deeper, and was invisible
+                            // to both backends.
+                            self.disarm_discarded_tail_sources(expr);
                             // B-2026-08-31-22 — and its PAYLOAD, exactly as the
                             // `Path`-ctor arm above runs one and for the same
                             // reason: the shared walker runs the enum's OWN body
@@ -5881,6 +5956,16 @@ impl<'a> super::Interpreter<'a> {
                             self.run_discarded_shared_user_drop(&discarded);
                             let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
+                            // B-2026-08-31-35 — the BARE-STATEMENT spelling of
+                            // the disarm at the wildcard-`let` gate. This site
+                            // has just taken the value, so a local the taken
+                            // arm's literal consumed must not run a second
+                            // body. The `hands_out_live_binding` / `owns` gates
+                            // above already decline an arm handing out a live
+                            // binding WHOLE; a literal that CONSUMES one is the
+                            // same move an aggregate deeper, and was invisible
+                            // to both backends.
+                            self.disarm_discarded_tail_sources(expr);
                             // B-2026-08-31-22 — and its PAYLOAD, exactly as the
                             // `Path`-ctor arm above runs one and for the same
                             // reason: the shared walker runs the enum's OWN body
@@ -6025,6 +6110,23 @@ impl<'a> super::Interpreter<'a> {
                     }
                     ExprKind::Identifier(n) if self.fresh_bare_unit_variant_enum(n).is_some() => {
                         self.run_discarded_value_user_drops(discarded);
+                    }
+                    // B-2026-08-31-35 — a bare value-position BLOCK in
+                    // statement position (`{ W { r: t, b: 1 } };`). It runs no
+                    // body of its own here — whatever already owned the tail's
+                    // value still does — but the local its tail literal
+                    // CONSUMED must not run a second one. Codegen reaches this
+                    // shape because `discarded_match_value_tail` recurses
+                    // through the wrapper; this is the same recursion on this
+                    // backend, and without it the two disagreed on the block
+                    // spelling alone while agreeing on `if`, `match` and the
+                    // wildcard `let`.
+                    ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b)
+                        if b.final_expr.as_deref().is_some_and(|t| {
+                            self.discard_rhs_produces_owned_value(t, &discarded)
+                        }) =>
+                    {
+                        self.disarm_discarded_tail_sources(expr);
                     }
                     _ => {}
                 }

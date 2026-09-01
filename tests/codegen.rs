@@ -23964,34 +23964,46 @@ fn main() {
             let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
             assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
         }
-        // PINNED AT A KNOWN DEFECT, not asserted as correct. A discarded
-        // branch whose arm literal CONSUMES A LOCAL — whole (`W { r: t, .. }`)
-        // or projected (`W { r: t.r, .. }`) — runs that local's body TWICE:
-        // once at the discard and once at the local's own scope end. All
-        // three backends agree on it, so it is an agreed gap rather than a
+        // B-2026-08-31-35 — the WHOLE-LOCAL move is FIXED and asserted as
+        // correct: a discarded branch whose arm literal consumes a local now
+        // runs that local's body ONCE, at the discard, on every backend. The
+        // discarded statement position is an escaping site exactly when this
+        // site owns the merged value, so the taken arm's consumed sources are
+        // disarmed on the path that handed them over.
+        let src = format!(
+            "{hdr}fn main() {{\nlet n = 0;\nlet t = mkd(7);\n\
+             let _ = if n == 0 {{ W {{ r: t, b: 1 }} }} else {{ W {{ r: mkd(2), b: 2 }} }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(
+            run_program(&src).as_deref(),
+            Some("dD7\nend\n"),
+            "[discarded arm literal consuming a whole local runs one body]"
+        );
+        // STILL PINNED AT A KNOWN DEFECT, not asserted as correct. The
+        // PROJECTED spelling (`W { r: t.r, .. }`) runs the local's body twice
+        // — once at the discard, once at its own scope end — because
+        // `collect_aggregate_literal_sources` resolves a bare name and not a
+        // field projection, so the disarm above never names `t`. All three
+        // backends agree on it, so it is an agreed gap rather than a
         // divergence, and it is PRE-EXISTING: measured byte-identical at
         // `c4af3243`, the commit before B-2026-08-29-31 taught this path to
-        // own an arm's value at all. The BOUND spelling of the same move
-        // (`let w = W { r: t, .. };`) is correct at one body, which is what
-        // localizes it to the discard. Filed separately; this row's guard
-        // neither causes it nor can reach it.
-        for (label, body) in [
-            (
-                "pinned DEFECT: discarded arm literal consuming a whole local",
-                "let t = mkd(7);\nlet _ = if n == 0 { W { r: t, b: 1 } } else { W { r: mkd(2), b: 2 } };",
-            ),
-            (
-                "pinned DEFECT: discarded arm literal consuming a local's field",
-                "let t = mkw(7);\nlet _ = if n == 0 { W { r: t.r, b: 1 } } else { W { r: mkd(2), b: 2 } };",
-            ),
-        ] {
-            let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
-            assert_eq!(
-                run_program(&src).as_deref(),
-                Some("dD7\ndD7\nend\n"),
-                "[{label}]"
-            );
-        }
+        // own an arm's value at all. Filed separately.
+        //
+        // Its MEMORY is balanced, which corrects what B-2026-08-31-35's own
+        // prose recorded: measured clean under valgrind at `-O2` and at
+        // `-O0`, over a 5-iteration loop, and clean at `ebaacfc` too — the
+        // second body runs over the moved-from husk rather than re-freeing.
+        let src = format!(
+            "{hdr}fn main() {{\nlet n = 0;\nlet t = mkw(7);\n\
+             let _ = if n == 0 {{ W {{ r: t.r, b: 1 }} }} else {{ W {{ r: mkd(2), b: 2 }} }};\n\
+             println(\"end\");\n}}\n"
+        );
+        assert_eq!(
+            run_program(&src).as_deref(),
+            Some("dD7\ndD7\nend\n"),
+            "[pinned DEFECT: discarded arm literal consuming a local's field]"
+        );
     }
 
     #[test]
@@ -124586,8 +124598,70 @@ fn main() {
                  fn take() -> i64 { return go(3); }",
                 "dR7\ndR9\nv=7\n",
             ),
+            // ── B-2026-08-31-35's own DISCARDED repro, the half its first
+            // pass left open. The bound spellings above run one body because
+            // the consumer registers a drop; a DISCARDED branch registers one
+            // too whenever the statement site qualifies to own the merged
+            // value, and the taken arm's consumed local must stand down for it
+            // exactly the same way. All four surfaces agree.
+            (
+                "DISCARDED `if` arm literal consumes a local",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let _ = if n == 0 { S { r: t, k: 1 } } else { S { r: R { id: 9 }, k: 2 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "DISCARDED `match` arm literal consumes a local",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let _ = match n { 0 => { S { r: t, k: 1 } } _ => { S { r: R { id: 9 }, k: 2 } } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "DISCARDED bare-statement spelling of the same branch",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 if n == 0 { S { r: t, k: 1 } } else { S { r: R { id: 9 }, k: 2 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "DISCARDED, mixed arms: the NON-taken arm's source keeps its body",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 let _ = if n == 0 { S { r: t, k: 1 } } else { S { r: u, k: 2 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\ndR8\nv=7\n",
+            ),
+            (
+                "DISCARDED, ELSE taken: the unconsumed source dies on its own",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let _ = if n == 0 { S { r: t, k: 1 } } else { S { r: R { id: 9 }, k: 2 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(3); }",
+                "dR9\ndR7\nv=7\n",
+            ),
             // CONTROLS — already correct before this row, and together the
             // reason the wrapper rather than the discard is the trigger.
+            (
+                "control: a DISCARDED branch the statement site does NOT own",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let _ = if n == 0 { t } else { R { id: 9 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "control: a DISCARDED all-mint branch stays statement-owned",
+                "fn go(n: i64) -> i64 {\n\
+                 let _ = if n == 0 { S { r: R { id: 7 }, k: 1 } } else { S { r: R { id: 9 }, k: 2 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
             (
                 "control: the UNCONDITIONAL `let` spelling",
                 "fn go() -> i64 { let t = R { id: 7 };\n\

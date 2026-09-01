@@ -9098,6 +9098,40 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.note_escaping_site(value)
             }
+            // B-2026-08-31-35 — a WILDCARD `let` is readmitted for exactly the
+            // branches THIS SITE OWNS. The blanket exclusion above is right
+            // about its own population and too wide by one: it reasons that a
+            // discarded branch's "arm tails go nowhere", which holds when the
+            // discard registers no owner — and `discarded_match_value_tail` is
+            // precisely the predicate for when it does. Where that admits the
+            // construct, the statement frame frees the merged value and runs
+            // its body, so an arm tail's consumed local has handed its value
+            // over and must not run a second body: `let t = mkd(7); let _ = if
+            // n == 0 { W { r: t, b: 1 } } else { .. };` printed `dD7 dD7` on
+            // all three backends, which is why no A/B gate reported it.
+            //
+            // The gate is the SAME predicate the statement site consults to
+            // decide ownership, so seeding can never outrun registration. An
+            // arm handing out a bare live local (`if c { t } else { mk(9) }`)
+            // is declined by it — an `Identifier` is not a fresh owned temp —
+            // which is what preserves the exclusion's own case.
+            //
+            // DIRECTLY an `if` / `match`, not through a BLOCK wrapper, even
+            // though `discarded_match_value_tail` recurses through one. The
+            // wrapper spellings (`let _ = { W { r: t, b: 1 } };` and its bare
+            // statement) double on every backend today, and the interpreter's
+            // disarm does not reach them: its `taken_branch_tail` names the arm
+            // of a BRANCH, and a plain block has no arm to name. Seeding them
+            // here alone would fix the compiled pair and leave the interpreter
+            // doubling — trading an agreed gap for a run-vs-build divergence,
+            // which is the trade this family is repeatedly held back to avoid.
+            // Filed separately.
+            StmtKind::Let { value, .. }
+                if matches!(&value.kind, ExprKind::If { .. } | ExprKind::Match { .. })
+                    && self.discarded_match_value_tail(value).is_some() =>
+            {
+                self.note_escaping_site(value)
+            }
             StmtKind::LetElse { value, .. } => self.note_escaping_site(value),
             // B-2026-08-30-50 — an ASSIGNMENT's RHS is an escaping position for
             // the same reason a `let`'s initializer is: the value goes to the
@@ -9120,6 +9154,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // that runs one body today to zero. A call's arguments are the
                 // opposite: they have a consumer by construction.
                 if matches!(&e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. }) {
+                    self.note_escaping_site(e);
+                }
+                // B-2026-08-31-35 — the BARE-STATEMENT spelling of the wildcard
+                // `let` readmission above, on the same predicate and for the
+                // same reason. `if n == 0 { W { r: t, b: 1 } } else { .. };`
+                // doubles identically, so the two statement forms must answer
+                // alike here exactly as they do at the discard site itself.
+                if matches!(&e.kind, ExprKind::If { .. } | ExprKind::Match { .. })
+                    && self.discarded_match_value_tail(e).is_some()
+                {
                     self.note_escaping_site(e);
                 }
             }
