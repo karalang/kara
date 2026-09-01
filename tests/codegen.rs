@@ -120559,9 +120559,11 @@ fn main() {
     /// "Method / associated-function calls and module-qualified `Path` callees are
     /// out of scope for this slice." design.md scopes the feature to no function
     /// kind, though — "Parameters may have default values, allowing callers to omit
-    /// them" — and `runtime/stdlib/column.kara` already declares such a signature on
-    /// an impl method, so the declaration form was in use on a surface where the call
-    /// form was an arity error.
+    /// them" — so two of the three call forms lacked the feature the document
+    /// describes. (The row's `runtime/stdlib/column.kara` evidence does not hold:
+    /// `Column.fillna` is `#[compiler_builtin]` and always dispatched through the
+    /// builtin surface, so `c.fillna(0)` type-checked and ran before the fix, and
+    /// it is the only defaulted method signature in `runtime/stdlib`.)
     ///
     /// The four shapes are the free-function fixture's, verbatim, so the two read as
     /// one oracle: omit every default, omit the tail, skip one by label, and mix a
@@ -120570,10 +120572,9 @@ fn main() {
     /// anything else for the same signature would mean the two spellings disagree —
     /// which is the whole complaint.
     ///
-    /// Only the ASSOCIATED half is covered. `h.g(1)` on a method with a receiver is
-    /// still an arity error: picking its impl needs the receiver's TYPE, and this
-    /// pass runs pre-resolve where no type exists. Filling by bare method name
-    /// instead would guess, and a wrong guess rewrites the call silently.
+    /// This fixture covers the ASSOCIATED half, which the pre-resolve pass fills
+    /// because `Type.assoc_fn` names its callee syntactically. The instance-method
+    /// half is the twin below.
     #[test]
     fn test_e2e_default_parameter_fill_through_an_associated_call() {
         assert_eq!(
@@ -120592,6 +120593,47 @@ fn main() {
     println(Server.create(1, 9090));
     println(Server.create(1, max_connections: 100));
     println(Server.create(1, 9090, max_connections: 100, timeout_ms: 250));
+}
+"#
+            ),
+            Some("14081\n15091\n13181\n9441\n".to_string())
+        );
+    }
+
+    /// B-2026-09-01-20 — the INSTANCE-METHOD spelling of the same fill.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_default_parameter_fill_through_an_instance_method_oracle`; same four
+    /// shapes and same values as both siblings, with a receiver whose `id` is 0 so
+    /// the arithmetic stays identical across all three fixtures.
+    ///
+    /// THIS IS THE HALF THAT FAILS IF ONLY THE TYPECHECKER IS TAUGHT ABOUT METHOD
+    /// DEFAULTS. With the plan recorded but not spliced, `karac check` passes and
+    /// the tree-walk interpreter answers correctly, while codegen dies in the
+    /// module verifier with `Incorrect number of arguments passed to called
+    /// function` — measured, that was the state of the first draft. The splice
+    /// lives in `lowering::lower_program`, which runs before effectcheck,
+    /// ownership, the interpreter and codegen alike, so this fixture and its
+    /// interpreter twin cannot drift.
+    #[test]
+    fn test_e2e_default_parameter_fill_through_an_instance_method() {
+        assert_eq!(
+            run_program(
+                r#"
+struct Server { id: i64 }
+
+impl Server {
+    fn create(ref self, host: i64, port: i64 = 8080, max_connections: i64 = 1000, timeout_ms: i64 = 5000) -> i64 {
+        self.id + host + port + max_connections + timeout_ms
+    }
+}
+
+fn main() {
+    let s = Server { id: 0 };
+    println(s.create(1));
+    println(s.create(1, 9090));
+    println(s.create(1, max_connections: 100));
+    println(s.create(1, 9090, max_connections: 100, timeout_ms: 250));
 }
 "#
             ),

@@ -52443,9 +52443,17 @@ fn test_seeded_slot_range_check_boundary_agrees_across_backends() {
 /// "Method / associated-function calls and module-qualified `Path` callees are
 /// out of scope for this slice." design.md scopes the feature to no function
 /// kind, though — "Parameters may have default values, allowing callers to omit
-/// them" — and `runtime/stdlib/column.kara` already declares such a signature on
-/// an impl method, so the declaration form was in use on a surface where the call
-/// form was an arity error.
+/// them" — so two of the three call forms did not have the feature the document
+/// describes.
+///
+/// (This paragraph used to add that `runtime/stdlib/column.kara` "already
+/// declares such a signature on an impl method, so the declaration form was in
+/// use on a surface where the call form was an arity error". Measured against
+/// the pre-fix tree, that is wrong: `Column.fillna` is `#[compiler_builtin]`
+/// and dispatches through the builtin surface, so `c.fillna(0)` type-checked
+/// and ran all along. It is also the only defaulted method signature in the
+/// whole of `runtime/stdlib`, so the stdlib was never blocked by this. The row
+/// stands on its actual symptom — a user-declared method.)
 ///
 /// The four shapes are the free-function fixture's, verbatim, so the two read as
 /// one oracle: omit every default, omit the tail, skip one by label, and mix a
@@ -52454,10 +52462,10 @@ fn test_seeded_slot_range_check_boundary_agrees_across_backends() {
 /// anything else for the same signature would mean the two spellings disagree —
 /// which is the whole complaint.
 ///
-/// Only the ASSOCIATED half is covered. `h.g(1)` on a method with a receiver is
-/// still an arity error: picking its impl needs the receiver's TYPE, and this
-/// pass runs pre-resolve where no type exists. Filling by bare method name
-/// instead would guess, and a wrong guess rewrites the call silently.
+/// This fixture covers the ASSOCIATED half, which the pre-resolve pass fills
+/// because `Type.assoc_fn` names its callee syntactically. The instance-method
+/// half is the twin below: it cannot be filled here — picking the impl needs the
+/// receiver's TYPE — so the typechecker plans it and `lowering` splices it.
 #[test]
 fn test_default_parameter_fill_through_an_associated_call_oracle() {
     assert_eq!(
@@ -52475,6 +52483,44 @@ fn main() {
     println(Server.create(1, 9090));
     println(Server.create(1, max_connections: 100));
     println(Server.create(1, 9090, max_connections: 100, timeout_ms: 250));
+}
+"#),
+        "14081\n15091\n13181\n9441\n"
+    );
+}
+
+/// B-2026-09-01-20 — the same call-site default fill, reached through the
+/// INSTANCE-METHOD spelling `h.g(..)`.
+///
+/// Deliberately the same four shapes and the SAME EXPECTED VALUES as its free-
+/// function and associated-function siblings: omit every default, omit the tail,
+/// skip one by label, and mix a positional override with two labels. A receiver
+/// whose `id` is 0 keeps the arithmetic identical, so the three fixtures read as
+/// one oracle — a fill that produced anything else for the same signature would
+/// mean the spellings disagree, which is the whole complaint the row makes.
+///
+/// This is the half the pre-resolve pass structurally cannot do. The typechecker
+/// plans the fill once the receiver has a type and `lowering` splices it into the
+/// AST, which is what keeps this fixture and its `tests/codegen.rs` twin in
+/// agreement rather than requiring the two backends to implement the rule twice.
+#[test]
+fn test_default_parameter_fill_through_an_instance_method_oracle() {
+    assert_eq!(
+        run(r#"
+struct Server { id: i64 }
+
+impl Server {
+    fn create(ref self, host: i64, port: i64 = 8080, max_connections: i64 = 1000, timeout_ms: i64 = 5000) -> i64 {
+        self.id + host + port + max_connections + timeout_ms
+    }
+}
+
+fn main() {
+    let s = Server { id: 0 };
+    println(s.create(1));
+    println(s.create(1, 9090));
+    println(s.create(1, max_connections: 100));
+    println(s.create(1, 9090, max_connections: 100, timeout_ms: 250));
 }
 "#),
         "14081\n15091\n13181\n9441\n"

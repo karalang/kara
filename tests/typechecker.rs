@@ -47994,15 +47994,23 @@ fn associated_default_fill_does_not_borrow_another_function_s_defaults() {
          fn main() { println(H.f(10)); }",
         "H.f declared by two impls",
     );
-    // The instance-method spelling is still out of scope: picking its impl
-    // needs the receiver's type, which this pre-resolve pass does not have.
-    // Pinned so the day it starts working is a deliberate change with its own
-    // fixture rather than an unnoticed side effect.
-    arity_error(
+    // The instance-method spelling USED to be pinned here as still-failing,
+    // with the note that "the day it starts working is a deliberate change
+    // with its own fixture rather than an unnoticed side effect". That day is
+    // B-2026-09-01-20's second half, and this is the flip: the fixtures are
+    // `instance_method_default_fill_*` below plus the twinned interpreter /
+    // codegen oracles. The sentinel worked exactly as intended — the change
+    // was caught here before it was pushed.
+    //
+    // It is still not THIS pass that fills it. The pre-resolve pass declines an
+    // instance method for the reason the old comment gave, and the typechecker
+    // plans the fill later, once the receiver has a type; `lowering` splices
+    // it. So the assertion moves from "errors" to "clean" while the pass under
+    // test keeps behaving exactly as it did.
+    fills_ok(
         "struct H { x: i64 }\n\
          impl H { fn g(ref self, a: i64, b: i64 = 7) -> i64 { return self.x + a + b; } }\n\
          fn main() { let h = H { x: 100 }; println(h.g(1)); }",
-        "h.g, an instance method",
     );
 
     // Both sides keeping their OWN defaults is the positive half of the first
@@ -48227,5 +48235,125 @@ fn borrow_projection_copy_offers_clone_only_where_one_exists() {
         bare.fix_it.is_none(),
         "`R` has no `#[derive(Clone)]`, so no fix-it may be offered: a steer to \
          a method that does not exist fails with `no handler for method 'clone'`"
+    );
+}
+
+/// B-2026-09-01-20 — instance-method default fill, planned by the typechecker.
+///
+/// The pre-resolve pass cannot do this one: a method names its callee through
+/// the RECEIVER, and that pass runs before anything knows a receiver's type.
+/// The typechecker does know, and `sig` there is the resolved impl, so the
+/// table lookup is exact rather than a guess by method name — which is what
+/// makes it safe where a name-keyed fill in the earlier pass would not be.
+///
+/// Uses the plain helpers deliberately (parse -> resolve -> typecheck, no
+/// `prepare_for_resolve`): that skips the pre-resolve fill entirely, so a pass
+/// here can only come from the typechecker's own plan.
+///
+/// The recorded plan is asserted, not just the absence of an error. Acceptance
+/// alone would pass even if the fill were empty, and an empty fill is exactly
+/// the shape that reaches codegen as a wrong-arity call.
+#[test]
+fn instance_method_default_fill_completes_the_argument_list() {
+    let src = "struct H { x: i64 }\n\
+               impl H { fn g(ref self, a: i64, b: i64 = 7, c: i64 = 30) -> i64 {\n\
+                   return self.x + a + b + c;\n\
+               } }\n\
+               fn main() {\n\
+                   let h = H { x: 100 };\n\
+                   println(h.g(1));\n\
+                   println(h.g(1, 2));\n\
+                   println(h.g(1, c: 9));\n\
+                   println(h.g(1, 2, 3));\n\
+               }";
+    let result = typecheck_ok(src);
+    let mut sizes: Vec<usize> = result
+        .method_default_fills
+        .iter()
+        .filter(|((_, m), _)| m == "g")
+        .map(|(_, v)| v.len())
+        .collect();
+    sizes.sort_unstable();
+    assert_eq!(
+        sizes,
+        vec![3, 3, 3],
+        "the three incomplete calls must each be planned up to full arity; the \
+         already-complete `h.g(1, 2, 3)` must not be planned at all. got: {:?}",
+        result.method_default_fills
+    );
+
+    // `h.g(1, c: 9)` is the shape that fixes the ORDER of the fix: the plan has
+    // to be computed before `validate_labels`, because a label exists here
+    // precisely to skip the defaulted `b`. Validating the author's shorter list
+    // rejects it with "label 'c' does not match parameter 'b' at position 2".
+    let labeled = typecheck_ok(
+        "struct H { x: i64 }\n\
+         impl H { fn g(ref self, a: i64, b: i64 = 7, c: i64 = 30) -> i64 {\n\
+             return self.x + a + b + c;\n\
+         } }\n\
+         fn main() { let h = H { x: 100 }; println(h.g(1, c: 9)); }",
+    );
+    let filled = labeled
+        .method_default_fills
+        .values()
+        .next()
+        .expect("the label-skipping call is planned like any other");
+    assert_eq!(
+        filled
+            .iter()
+            .map(|a| a.label.clone())
+            .collect::<Vec<Option<String>>>(),
+        vec![None, Some("b".to_string()), Some("c".to_string())],
+        "the spliced `b` carries its parameter name as a label so the completed \
+         list still satisfies the contiguous/declaration-order label rule"
+    );
+}
+
+/// B-2026-09-01-20 — what the instance-method fill must NOT do.
+///
+/// Every case is a silent-wrong-program risk rather than a missing feature: a
+/// fill that picks the wrong signature rewrites the call with someone else's
+/// default values, and nothing downstream can tell.
+#[test]
+fn instance_method_default_fill_declines_what_it_cannot_name() {
+    let plans = |src: &str| {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "parse errors in: {src}");
+        let resolved = resolve(&parsed.program);
+        typecheck(&parsed.program, &resolved)
+            .method_default_fills
+            .len()
+    };
+
+    // A `Type.method` claimed by BOTH an inherent and a trait impl is two
+    // signatures under one spelling, and the receiver's type does not separate
+    // them — the table is keyed `Type.method`, and the resolved `FunctionSig`
+    // carries no default expressions to key on instead. Declined, not guessed:
+    // filling `k = 2` where the trait's `k = 1` was meant is an argument the
+    // author never wrote.
+    assert_eq!(
+        plans(
+            "trait T1 { fn m(ref self, k: i64 = 1) -> i64; }\n\
+             struct S { v: i64 }\n\
+             impl S { fn m(ref self, k: i64 = 2) -> i64 { return self.v + k; } }\n\
+             impl T1 for S { fn m(ref self, k: i64 = 1) -> i64 { return self.v + k; } }\n\
+             fn main() { let s = S { v: 0 }; println(s.m()); }"
+        ),
+        0,
+        "an ambiguous inherent/trait pair must plan no fill at all"
+    );
+
+    // A method with no defaults is not reachable through a same-named method
+    // that has them: the table is keyed by type as well as name.
+    assert_eq!(
+        plans(
+            "struct A { v: i64 }\n\
+             struct B { v: i64 }\n\
+             impl A { fn m(ref self, k: i64 = 5) -> i64 { return k; } }\n\
+             impl B { fn m(ref self, k: i64) -> i64 { return k; } }\n\
+             fn main() { let b = B { v: 0 }; println(b.m()); }"
+        ),
+        0,
+        "`B.m` has no default, so `A.m`'s must not reach it"
     );
 }
