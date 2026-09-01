@@ -8070,15 +8070,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !arg_flows_into_return && entry_copied.is_none() && !boxed_struct_binding {
                         self.suppress_inline_option_result_binding_move(&a.value);
                     }
-                    // B-2026-09-01-29 — the METHOD twin of the free-fn store
-                    // gate; see `compile_call` for why the two can never stand
-                    // down an owner that balances an entry copy. `i`, not
-                    // `pidx`: the predicate keys on the raw AST method whose
-                    // `params` exclude the receiver, exactly as the
-                    // `callee_returns_enum_arg_payload` gate above does.
-                    let callee_stores_arg =
-                        self.call_arg_moves_into_outliving_place(&qualified, i, false);
-                    if let Some(param_te) = entry_copied.filter(|_| !callee_stores_arg) {
+                    // B-2026-09-01-35 — the OWNERSHIP question needs the copy
+                    // to actually happen, which `entry_copied` (type only) does
+                    // not answer; the suppressor above deliberately keeps the
+                    // type-only form.
+                    if let Some(param_te) =
+                        self.callee_optres_param_entry_copied_and_owned(&qualified, pidx)
+                    {
                         // Both halves, for the reason the free-fn site gives:
                         // the payload buffer and the boxed field envelope are
                         // separate allocations with separate freshness rules.

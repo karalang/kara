@@ -2353,35 +2353,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // is suppressed for this shape, still fires at scope exit.
                 // Identifier args are excluded for exactly that reason — owning
                 // one here would be the double free the zero used to prevent.
-                // B-2026-09-01-29 — a callee that MOVES the argument into a
-                // place outliving the call (`fn sink(acc: mut ref Vec[Option[
-                // String]], x: Option[String]) { acc.push(x) }`) hands
-                // ownership to that place, so a caller-side owner here is a
-                // SECOND one and the pair is a double free, not a leak.
-                //
-                // Measured on an unmodified tree: `sink(mut acc, Some(mks(i)))`
-                // aborts under ASAN with `attempting double-free`, and the same
-                // program with the argument bound to a `let` first is clean —
-                // the fresh temp is the only spelling that reaches the
-                // ownership registered below.
-                //
-                // The gate is exact for this route rather than conservative:
-                // the callee cannot both store the argument and entry-copy it.
-                // The entry copy (functions.rs) fires only for a param in
-                // `nonescaping_param_names`, and a param pushed into a `mut
-                // ref` accumulator is escaping by that analysis's own
-                // definition. So this never stands down an owner that was
-                // balancing a copy.
-                //
-                // `call_arg_flows_into_return` guards this whole block for the
-                // RETURN direction already; this is the STORE direction. A
-                // THIRD route — the callee pushing the argument into a LOCAL it
-                // then returns inside an aggregate — is covered by neither and
-                // is a live double free on `main`; it is filed separately
-                // rather than papered over here, because catching it needs an
-                // escape analysis neither predicate performs.
-                let callee_stores_arg = self.call_arg_moves_into_outliving_place(&name, i, false);
-                if let Some(param_te) = callee_entry_copies.clone().filter(|_| !callee_stores_arg) {
+                // B-2026-09-01-29's store gate USED to sit here, keeping the
+                // caller from owning a temp the callee pushes into an outliving
+                // place. B-2026-09-01-35 subsumes it: `callee_entry_copies` now
+                // asks whether the callee's param ESCAPES, and a param pushed
+                // into a `mut ref` accumulator escapes by that analysis's own
+                // definition — so does one returned inside an aggregate, which
+                // is the third route the store gate could not see. One question
+                // in one place, rather than one syntactic gate per escape route.
+                if let Some(param_te) = self.callee_optres_param_entry_copied_and_owned(&name, i) {
                     // Two independent ownership questions about one temp — the
                     // `{ptr,len,cap}` payload buffer and the boxed field
                     // envelope — with different freshness rules and so
@@ -3022,15 +3002,41 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::FieldAccess { .. }
             | ExprKind::Index { .. }
             | ExprKind::MethodCall { .. } => false,
-            ExprKind::Call { callee, args, .. } => {
-                // An enum CONSTRUCTOR is only as fresh as what it wraps:
-                // `Ok(mkv())` manufactures its payload, `Ok(x)` wraps a buffer
-                // `x` still owns. Recurse rather than accept or reject the whole
-                // ctor shape.
+            ExprKind::Call { callee, .. } => {
+                // An enum CONSTRUCTOR at an argument position is ALWAYS an
+                // unowned temp, whatever it wraps (B-2026-09-01-29).
+                //
+                // This used to recurse into the payload, on the reasoning that
+                // "`Ok(mkv())` manufactures its payload, `Ok(x)` wraps a buffer
+                // `x` still owns". The second half is false at a call site: the
+                // constructor MOVES `x` in, so the binding's cleanup is
+                // disarmed and the envelope this expression mints is the only
+                // owner left. Answering "owned elsewhere" then left nobody to
+                // free it.
+                //
+                // Measured, `fn show(x: Option[Vec[String]])` over three
+                // iterations: `show(Some(vs))` leaked 333 B in 6 allocations
+                // and `show(Some(vs.clone()))` 336 B, while the only spelling
+                // the recursion admitted — `show(Some(mkv()))` — was clean. The
+                // `.clone()` case is what shows the predicate was asking the
+                // wrong QUESTION rather than being incomplete: a `.clone()`
+                // result is unambiguously a fresh temp nothing else owns, and
+                // it was rejected for being spelled as a `MethodCall`.
+                //
+                // SAFE ONLY BECAUSE THE CALLER'S GATE NOW ASKS ABOUT ESCAPE.
+                // Widening this alone turns three shapes that are clean today
+                // into DOUBLE FREES — a callee that stores the argument, or
+                // returns it inside an aggregate, already owns it. B-2026-09-01-35
+                // moved `callee_optres_param_entry_copied` onto the same
+                // escape analysis the callee's entry copy uses, so ownership is
+                // taken here only where the callee provably copies. The two
+                // land together and neither is correct without the other.
+                //
+                // A scalar or `None` payload owns no heap, and the cleanups
+                // this admits carry their own `cap > 0` / tag guards, so
+                // widening to them is a no-op rather than a wild free.
                 if self.enum_name_of_expr(arg).is_some() {
-                    return args
-                        .iter()
-                        .all(|a| self.optres_arg_is_unowned_temp(&a.value));
+                    return true;
                 }
                 // A direct call to a real function manufactures its result.
                 matches!(&callee.kind, ExprKind::Identifier(n)
@@ -3167,6 +3173,63 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             _ => None,
         })
+    }
+
+    /// Does the callee ACTUALLY emit the by-value `Option`/`Result` entry copy
+    /// for argument `arg_index` — type admitted AND the param provably not
+    /// escaping the callee's frame? B-2026-09-01-35.
+    ///
+    /// The TYPE half alone is [`Self::callee_optres_param_entry_copied`], and
+    /// the two must stay separate because they answer different questions.
+    /// That one gates whether the caller's BINDING hands its buffer over; this
+    /// one gates whether the caller OWNS a fresh temp, and only the second
+    /// depends on the copy actually happening. `compile_function` emits the
+    /// copy solely for a param in `by_value_nonescaping_param_names`, so a
+    /// callee that stores the argument, or returns it inside an aggregate,
+    /// copies nothing and already owns what it was given — a caller-side owner
+    /// there is a second one, which is the double free this closes.
+    ///
+    /// Conflating the two was measured: narrowing the shared predicate also
+    /// fired `suppress_inline_option_result_binding_move` on every PASSTHROUGH
+    /// callee, so the caller's named binding lost its cleanup while the callee
+    /// still moved the buffer through — two passthrough fixtures went from
+    /// clean to a 10 B leak.
+    pub(super) fn callee_optres_param_entry_copied_and_owned(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> Option<TypeExpr> {
+        let te = self.callee_optres_param_entry_copied(callee_name, arg_index)?;
+        let program = self.program_snapshot.as_deref()?;
+        let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
+        let nonescaping = |f: &crate::ast::Function, ast_i: usize| -> bool {
+            let Some(p) = f.params.get(ast_i) else {
+                return false;
+            };
+            let crate::ast::PatternKind::Binding(pname) = &p.pattern.kind else {
+                return false;
+            };
+            crate::result_escape::by_value_nonescaping_param_names(f).contains(pname.as_str())
+        };
+        let ok = program.items.iter().any(|item| match item {
+            crate::ast::Item::Function(f) if f.name == callee_name => nonescaping(f, arg_index),
+            crate::ast::Item::ImplBlock(b) => b.items.iter().any(|ii| match ii {
+                crate::ast::ImplItem::Method(f) if f.name == bare => {
+                    let ast_i = if f.self_param.is_some() {
+                        match arg_index.checked_sub(1) {
+                            Some(v) => v,
+                            None => return false,
+                        }
+                    } else {
+                        arg_index
+                    };
+                    nonescaping(f, ast_i)
+                }
+                _ => false,
+            }),
+            _ => false,
+        });
+        ok.then_some(te)
     }
 
     pub(super) fn call_arg_flows_into_return(&self, callee_name: &str, arg_index: usize) -> bool {

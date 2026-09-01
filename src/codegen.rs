@@ -2012,6 +2012,14 @@ pub(super) struct Codegen<'ctx> {
     /// suppression. Recomputed per function in `compile_function` by
     /// `crate::result_escape::nonescaping_param_names`.
     pub(crate) result_shared_nonescaping_param_names: std::collections::HashSet<String>,
+    /// The BY-VALUE sibling of `result_shared_nonescaping_param_names`
+    /// (`crate::result_escape::by_value_nonescaping_param_names`): the params
+    /// that never escape the frame, counting a read-only interpolation hole as
+    /// a read rather than an escape. Gates the by-value `Option`/`Result` param
+    /// ENTRY COPY, and the caller's matching ownership of a fresh temp argument
+    /// reads the same analysis off the callee's AST — B-2026-09-01-29 /
+    /// B-2026-09-01-35 are what the two answering differently cost.
+    pub(crate) optres_by_value_nonescaping_param_names: std::collections::HashSet<String>,
     /// Staging slot — set by `compile_expr`'s `InterpolatedStringLit` arm
     /// to the f-string's accumulator alloca. The Let / Assign handlers
     /// consume it when the RHS is an f-string AND the LHS is a tracked
@@ -6422,6 +6430,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_reverse_iter: false,
             result_shared_nonescaping_let_spans: std::collections::HashSet::new(),
             result_shared_nonescaping_param_names: std::collections::HashSet::new(),
+            optres_by_value_nonescaping_param_names: std::collections::HashSet::new(),
             mapset: MapSet {
                 pending_map_insert_old_dec: false,
                 map_tag_override: match std::env::var("KARAC_MAP_TAG").as_deref() {

@@ -35,10 +35,10 @@ use crate::ast::{
 use std::collections::{HashMap, HashSet};
 
 /// Per-binding-name use tally: `(total Identifier uses, uses that are a direct
-/// `match` scrutinee)`.
+/// `match` scrutinee, uses that are a READ-ONLY position)`.
 #[derive(Default)]
 struct Acc<'a> {
-    counts: HashMap<&'a str, (u32, u32)>,
+    counts: HashMap<&'a str, (u32, u32, u32)>,
     /// `(binding name, value-span (offset,length))` for every `Binding`-pattern
     /// `let` / `let…else` encountered — filtered against `counts` after the walk.
     lets: Vec<(&'a str, (usize, usize))>,
@@ -61,7 +61,7 @@ pub fn nonescaping_let_value_spans(func: &Function) -> HashSet<(usize, usize)> {
     walk_block(&func.body, &mut acc);
     let mut out = HashSet::new();
     for (name, span) in &acc.lets {
-        let (total, scrut) = acc.counts.get(name).copied().unwrap_or((0, 0));
+        let (total, scrut, _) = acc.counts.get(name).copied().unwrap_or((0, 0, 0));
         if total == scrut {
             out.insert(*span);
         }
@@ -85,8 +85,47 @@ pub fn nonescaping_param_names(func: &Function) -> HashSet<String> {
             let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
                 return None;
             };
-            let (total, scrut) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0));
+            let (total, scrut, _) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
             (total == scrut).then(|| name.clone())
+        })
+        .collect()
+}
+
+/// Names of `func`'s PARAMETERS that never escape the frame BY VALUE — used
+/// only as a direct `match` scrutinee, in a read-only position, or unused.
+///
+/// The looser sibling of [`nonescaping_param_names`], and the difference is one
+/// position: a bare-identifier interpolation hole (`f"{x}"`). That reads the
+/// value and cannot move it, but the stricter predicate counts every
+/// non-scrutinee use as an escape, so a callee whose whole body is
+/// `println(f"{x}")` was classified escaping.
+///
+/// THAT CLASSIFICATION IS LOAD-BEARING IN TWO PLACES AT ONCE, which is why this
+/// exists as its own function rather than as a relaxation of the other one
+/// (whose `Result[shared]` RC consumer needs the strict rule — see its doc for
+/// the `takeout` shape that fools anything looser). The by-value
+/// `Option`/`Result` param entry copy (`compile_function`) is emitted only for
+/// a non-escaping param, and the CALLER's ownership of a fresh temp argument
+/// (`callee_optres_param_entry_copied`) must answer the same question or the
+/// two disagree: the caller believing a copy was made when it was not is a
+/// LEAK, and believing one was not made when it was is a DOUBLE FREE. Both were
+/// live (B-2026-09-01-29, B-2026-09-01-35). Passing this one set to both sites
+/// makes them agree by construction.
+///
+/// The conservative direction is unchanged and still the safe one: an
+/// unrecognised position counts as an escape, which costs a leak and never
+/// memory unsafety.
+pub fn by_value_nonescaping_param_names(func: &Function) -> HashSet<String> {
+    let mut acc = Acc::default();
+    walk_block(&func.body, &mut acc);
+    func.params
+        .iter()
+        .filter_map(|p| {
+            let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
+                return None;
+            };
+            let (total, scrut, ro) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
+            (total == scrut + ro).then(|| name.clone())
         })
         .collect()
 }
@@ -119,18 +158,30 @@ pub fn unused_param_names(func: &Function) -> HashSet<String> {
             let crate::ast::PatternKind::Binding(name) = &p.pattern.kind else {
                 return None;
             };
-            let (total, _) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0));
+            let (total, _, _) = acc.counts.get(name.as_str()).copied().unwrap_or((0, 0, 0));
             (total == 0).then(|| name.clone())
         })
         .collect()
 }
 
 fn record_use<'a>(acc: &mut Acc<'a>, name: &'a str, scrutinee: bool) {
-    let e = acc.counts.entry(name).or_insert((0, 0));
+    let e = acc.counts.entry(name).or_insert((0, 0, 0));
     e.0 += 1;
     if scrutinee {
         e.1 += 1;
     }
+}
+
+/// Record a use in a position that reads the value and cannot move it out —
+/// today, a bare-identifier interpolation hole (`f"{x}"`). Counted in the total
+/// like every other use, and additionally in the read-only slot, so
+/// [`by_value_nonescaping_param_names`] can subtract it while
+/// [`nonescaping_param_names`] (which never looks at that slot) keeps its
+/// stricter answer unchanged.
+fn record_read_only_use<'a>(acc: &mut Acc<'a>, name: &'a str) {
+    let e = acc.counts.entry(name).or_insert((0, 0, 0));
+    e.0 += 1;
+    e.2 += 1;
 }
 
 /// Walk a pattern-matching CONSTRUCT's scrutinee (`match` / `if let` / `while
@@ -247,7 +298,22 @@ fn walk_expr<'a>(e: &'a Expr, acc: &mut Acc<'a>) {
         ExprKind::InterpolatedStringLit(parts) => {
             for p in parts {
                 if let ParsedInterpolationPart::Expr(inner, _) = p {
-                    walk_expr(inner, acc);
+                    // A BARE identifier hole is a READ: the Display path loads
+                    // from the binding's slot and formats it, and there is no
+                    // spelling of `f"{x}"` that moves `x` anywhere. Intercepted
+                    // here rather than recursed, exactly as the `Match` arm
+                    // intercepts its scrutinee, so the recursion below never
+                    // sees it and never counts it as an escape.
+                    //
+                    // Suppressed inside a closure for the same reason the
+                    // scrutinee case is: referencing an outer binding there is
+                    // a CAPTURE into an env that can outlive the binding.
+                    match &inner.kind {
+                        ExprKind::Identifier(n) if !acc.in_closure => {
+                            record_read_only_use(acc, n.as_str())
+                        }
+                        _ => walk_expr(inner, acc),
+                    }
                 }
             }
         }

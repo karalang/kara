@@ -1432,6 +1432,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // transferred +1 (see the field doc + `track_rc_result_var`).
         self.result_shared_nonescaping_param_names =
             crate::result_escape::nonescaping_param_names(func);
+        // By-value `Option`/`Result` leg: same question, one position looser —
+        // a read-only interpolation hole is a read, not an escape. Kept as its
+        // own set because the RC consumer above needs the strict rule.
+        self.optres_by_value_nonescaping_param_names =
+            crate::result_escape::by_value_nonescaping_param_names(func);
         // (The per-function owner-table resets, the currying scan, and the
         // misuse guard all run inside `EscapeAnalysis::check_function` above —
         // only the emission-side per-function state is reset here.)
@@ -2301,7 +2306,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         if matches!(&param.ty.kind, TypeKind::Path(_))
                             && (type_name == "Option" || type_name == "Result")
                             && self
-                                .result_shared_nonescaping_param_names
+                                .optres_by_value_nonescaping_param_names
                                 .contains(&param_name)
                         {
                             let te = param.ty.clone();

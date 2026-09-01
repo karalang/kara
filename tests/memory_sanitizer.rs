@@ -66323,15 +66323,14 @@ fn main() {
     /// identifier argument is not a temp and never reached the ownership at
     /// all — which is what isolates this to the fresh-temp path.
     ///
-    /// LEAK DETECTION IS OFF HERE, DELIBERATELY, and that is the honest shape
-    /// of this fix rather than a convenience. Standing the caller's owner down
-    /// leaves NOBODY freeing the buffer, because the callee did not copy it and
-    /// its own param slot registers no cleanup for an escaping param either.
-    /// The result is a leak where there was a double free — strictly safer, and
-    /// strictly incomplete. Asserting `success()` under `detect_leaks=0` pins
-    /// exactly what changed (the memory error is gone) without claiming the
-    /// balance this row's remaining half is about. When the leak half lands,
-    /// this fixture should move to `assert_clean_asan_run`.
+    /// LEAK DETECTION WAS OFF HERE when this landed, because standing the
+    /// caller's owner down left NOBODY freeing the buffer: the callee did not
+    /// copy it, and its own param slot registers no cleanup for an escaping
+    /// param either. That was a leak where there had been a double free —
+    /// strictly safer and strictly incomplete — and the fixture carried an
+    /// instruction to move to `assert_clean_asan_run` once the leak half
+    /// landed. B-2026-09-01-35 landed it, so this is now a full balance
+    /// assertion; the `detect_leaks=0` form is gone.
     ///
     /// Three call shapes, because each reaches a DIFFERENT ownership site with
     /// its own copy of the gate: a free function (`call_dispatch.rs`), a method
@@ -66358,19 +66357,28 @@ fn main() {
             ),
             (
                 "method",
+                // The accumulator is a LOCAL rather than a field of the
+                // receiver, deliberately. The `self.xs.push(x)` spelling of the
+                // same test leaks 173 B in 4 allocations — a `Vec[Option[
+                // String]]` STRUCT FIELD never frees its elements — and that is
+                // an independent defect measured identically on an unmodified
+                // tree, filed as B-2026-09-01-41. Pinning it here would make
+                // this fixture fail for a reason that has nothing to do with
+                // argument ownership; the local-accumulator spelling exercises
+                // the same method-path escape route and is clean.
                 r#"
-struct Bag { xs: Vec[Option[String]] }
-impl Bag {
-    fn sink(mut ref self, x: Option[String]) { self.xs.push(x); }
-    fn size(ref self) -> i64 { return self.xs.len(); }
+struct Mk { n: i64 }
+impl Mk {
+    fn sink(ref self, acc: mut ref Vec[Option[String]], x: Option[String]) { acc.push(x); }
 }
 fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
 fn main() {
-    let mut b = Bag { xs: Vec.new() };
+    let m = Mk { n: 1 };
+    let mut acc: Vec[Option[String]] = Vec.new();
     let mut i = 0;
     while i < 3 {
-        b.sink(Some(mks(i)));
-        println(f"{b.size()}");
+        m.sink(mut acc, Some(mks(i)));
+        println(f"{acc.len()}");
         i = i + 1;
     }
     println("done");
@@ -66399,27 +66407,166 @@ fn main() {
             ),
         ];
         for (label, src) in cases {
-            if !asan_available() {
-                eprintln!("[{label}] ASAN unavailable on this host — skipping");
-                return;
-            }
-            let Some((stdout, stderr, status)) =
-                run_under_asan_no_leak_check(src, "b29-stored-optres-temp")
-            else {
-                eprintln!("[{label}] setup failed — skipping");
-                return;
-            };
-            assert!(
-                status.success(),
-                "[{label}] the stored temp must have exactly one owner; ASAN \
-                 exited {:?}. stderr was: {stderr:?}",
-                status.code(),
-            );
-            assert_eq!(
-                stdout.lines().collect::<Vec<_>>(),
-                vec!["1", "2", "3", "done"],
-                "[{label}] output must be unchanged"
+            assert_clean_asan_run(
+                src,
+                &["1", "2", "3", "done"],
+                &format!("b29-stored-optres-temp-{label}"),
             );
         }
+    }
+
+    /// B-2026-09-01-35 — the caller owns a fresh `Option`/`Result` temp
+    /// argument exactly when the callee provably does NOT let it escape.
+    ///
+    /// `track_optres_arg_temp` gave the caller ownership whenever the param's
+    /// TYPE admitted an entry copy. The callee emits that copy only for a param
+    /// in `by_value_nonescaping_param_names`, so the two disagreed in both
+    /// directions at once: the caller believing a copy was made when it was not
+    /// is a LEAK, and believing one was not made when it was is a DOUBLE FREE.
+    /// Both sides now read the same analysis, so they agree by construction.
+    ///
+    /// THE THREE ESCAPE ROUTES ARE ALL HERE, because each was reachable through
+    /// a different door and only one of them had a guard:
+    ///
+    ///   * RETURNED BARE — `call_arg_flows_into_return` already covered it.
+    ///   * STORED through a `mut ref` param — B-2026-09-01-29's syntactic gate
+    ///     covered it, and this replaces that gate.
+    ///   * RETURNED INSIDE AN AGGREGATE (`v.push(x); return Bag { xs: v }`) —
+    ///     covered by NEITHER, and a live double-free abort on `main` in the
+    ///     assoc-fn spelling. The free-fn and method spellings were clean only
+    ///     because the payload spelling that reached the ownership was narrow;
+    ///     widening it for the leak half made all three abort, which is why the
+    ///     two halves had to land together.
+    ///
+    /// THE LEAK HALF IS THE OTHER SIX ROWS. `show(Some(vs))` and
+    /// `show(Some(vs.clone()))` leaked 333 B / 336 B in 6 allocations because
+    /// `optres_arg_is_unowned_temp` recursed into the constructor's payload and
+    /// called an identifier "owned elsewhere" — false at a call site, where the
+    /// constructor MOVES it in and disarms the binding. The `.clone()` row is
+    /// the one that shows this was the wrong QUESTION rather than an incomplete
+    /// answer: that result is unambiguously a fresh temp, rejected for being
+    /// spelled as a `MethodCall`.
+    ///
+    /// The CONTROLS are load-bearing in both directions: a NAMED binding by
+    /// value was always clean and must stay so (owning it here would be the
+    /// double free the old recursion was avoiding), and a manufactured payload
+    /// was the one spelling that always worked.
+    #[test]
+    fn asan_optres_temp_arg_ownership_follows_callee_escape() {
+        // Escape routes — each of these aborted or leaked before.
+        assert_clean_asan_run(
+            r#"
+struct Bag { xs: Vec[Option[String]] }
+struct Mk { n: i64 }
+impl Bag {
+    fn wrap(x: Option[String]) -> Bag { let mut v: Vec[Option[String]] = Vec.new(); v.push(x); return Bag { xs: v }; }
+}
+impl Mk {
+    fn wrap(ref self, x: Option[String]) -> Bag { let mut v: Vec[Option[String]] = Vec.new(); v.push(x); return Bag { xs: v }; }
+}
+fn wrapf(x: Option[String]) -> Bag { let mut v: Vec[Option[String]] = Vec.new(); v.push(x); return Bag { xs: v }; }
+fn pass(x: Option[Vec[String]]) -> Option[Vec[String]] { return x; }
+fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
+fn main() {
+    let m = Mk { n: 1 };
+    let mut i = 0;
+    while i < 3 {
+        println(f"{Bag.wrap(Some(mks(i))).xs.len()}");
+        println(f"{m.wrap(Some(mks(i))).xs.len()}");
+        println(f"{wrapf(Some(mks(i))).xs.len()}");
+        let mut vs: Vec[String] = Vec.new();
+        vs.push(f"payloadpayload{i}");
+        println(f"{pass(Some(vs))}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "1",
+                "1",
+                "1",
+                "Some([payloadpayload0])",
+                "1",
+                "1",
+                "1",
+                "Some([payloadpayload1])",
+                "1",
+                "1",
+                "1",
+                "Some([payloadpayload2])",
+                "done",
+            ],
+            "b35-optres-temp-escape-routes",
+        );
+
+        // Non-escaping callees — the leak half, plus both controls.
+        assert_clean_asan_run(
+            r#"
+struct H { n: i64 }
+struct W { f: Vec[String] }
+impl H { fn show(ref self, x: Option[String]) { println(f"{self.n} {x}"); } }
+fn mkv(n: i64) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(f"payloadpayload{n}"); return v; }
+fn show(x: Option[Vec[String]]) { println(f"{x}"); }
+fn showr(x: Result[i64, Vec[String]]) { println(f"{x}"); }
+fn main() {
+    let h = H { n: 7 };
+    let mut i = 0;
+    while i < 3 {
+        let mut a: Vec[String] = Vec.new();
+        a.push(f"payloadpayload{i}");
+        show(Some(a));
+        let mut b: Vec[String] = Vec.new();
+        b.push(f"payloadpayload{i}");
+        show(Some(b.clone()));
+        println(f"{b.len()}");
+        show(Some(mkv(i)));
+        let mut c: Vec[String] = Vec.new();
+        c.push(f"payloadpayload{i}");
+        let w = W { f: c };
+        show(Some(w.f));
+        let mut d: Vec[String] = Vec.new();
+        d.push(f"payloadpayload{i}");
+        showr(Err(d));
+        let s: String = f"payloadpayload{i}";
+        h.show(Some(s));
+        let mut e: Vec[String] = Vec.new();
+        e.push(f"payloadpayload{i}");
+        let named: Option[Vec[String]] = Some(e);
+        show(named);
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "Some([payloadpayload0])",
+                "Some([payloadpayload0])",
+                "1",
+                "Some([payloadpayload0])",
+                "Some([payloadpayload0])",
+                "Err([payloadpayload0])",
+                "7 Some(payloadpayload0)",
+                "Some([payloadpayload0])",
+                "Some([payloadpayload1])",
+                "Some([payloadpayload1])",
+                "1",
+                "Some([payloadpayload1])",
+                "Some([payloadpayload1])",
+                "Err([payloadpayload1])",
+                "7 Some(payloadpayload1)",
+                "Some([payloadpayload1])",
+                "Some([payloadpayload2])",
+                "Some([payloadpayload2])",
+                "1",
+                "Some([payloadpayload2])",
+                "Some([payloadpayload2])",
+                "Err([payloadpayload2])",
+                "7 Some(payloadpayload2)",
+                "Some([payloadpayload2])",
+                "done",
+            ],
+            "b35-optres-temp-nonescaping",
+        );
     }
 }
