@@ -195,15 +195,7 @@ impl<'a> super::Interpreter<'a> {
                         && scrutinee_place.is_none_or(Self::struct_scrutinee_has_no_other_owner)
                     {
                         for n in arm.pattern.binding_names() {
-                            let is_drop_binding = match self.env.get(&n) {
-                                Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
-                                Some(Value::EnumVariant { enum_name: en, .. })
-                                    if en != "Option" && en != "Result" =>
-                                {
-                                    self.type_name_runs_user_drop(&en, &mut Vec::new())
-                                }
-                                _ => false,
-                            };
+                            let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
                             if is_drop_binding {
                                 self.pending_arm_drop_bindings.push(n);
                             }
@@ -241,15 +233,7 @@ impl<'a> super::Interpreter<'a> {
                             // `invoke_user_drop_if_applicable` both already
                             // knew how to walk such a value once it is
                             // registered (B-2026-07-29-39).
-                            let is_drop_binding = match self.env.get(&n) {
-                                Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
-                                Some(Value::EnumVariant { enum_name: en, .. })
-                                    if en != "Option" && en != "Result" =>
-                                {
-                                    self.type_name_runs_user_drop(&en, &mut Vec::new())
-                                }
-                                _ => false,
-                            };
+                            let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
                             if is_drop_binding {
                                 self.pending_arm_drop_bindings.push(n);
                             }
@@ -824,6 +808,36 @@ impl<'a> super::Interpreter<'a> {
     /// Shared by the `match`, `if let` and `while let` sites so the three
     /// spellings cannot answer differently — the split this family has had to
     /// close before (B-2026-08-28-63, B-2026-08-29-17).
+    /// B-2026-09-01-28 — does a binding introduced by a `match` arm, an
+    /// `if let` or a `while let` owe a user `Drop` body?
+    ///
+    /// ONE definition for all four sites, which is the whole point. It existed
+    /// as four copies, and they drifted: B-2026-08-31-27 widened the STRUCT
+    /// test from "declares its own `Drop`" to the transitive
+    /// `value_runs_user_drop` at the two `match` copies and left the `if let`
+    /// and `while let` ones on the narrow test. So `if let Some(p) = opt()`
+    /// over a `struct P { r: R }` — no `Drop` of its own, a Drop-bearing FIELD
+    /// — registered nothing and ran no body, while the `match` spelling of the
+    /// identical program ran one, as did both compiled backends.
+    ///
+    /// That is the fourth spelling-dependent split in this family
+    /// (B-2026-08-28-63, B-2026-08-29-17, B-2026-08-31-32's `if let` half), and
+    /// every one of them was the same rule written out more than once. A shared
+    /// predicate is the only thing that stops a fifth.
+    ///
+    /// `Option`/`Result` bindings are excluded here rather than at the callers:
+    /// a nested built-in payload rides its own walker, so registering a slot
+    /// for it would double the body.
+    pub(super) fn pattern_binding_owes_drop_body(&self, name: &str) -> bool {
+        match self.env.get(name) {
+            Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
+            Some(Value::EnumVariant { enum_name: en, .. }) if en != "Option" && en != "Result" => {
+                self.type_name_runs_user_drop(&en, &mut Vec::new())
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn struct_scrutinee_has_no_other_owner(place: &Expr) -> bool {
         matches!(
             place.kind,

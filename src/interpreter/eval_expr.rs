@@ -1128,17 +1128,13 @@ impl<'a> super::Interpreter<'a> {
                         // for it, so the body ran nowhere; they have to move
                         // together or the same program prints differently
                         // depending on which spelling consumed the payload.
-                        let is_drop_binding = match self.env.get(&n) {
-                            Some(Value::Struct { name: tn, .. }) => {
-                                self.program.drop_method_keys.contains_key(&tn)
-                            }
-                            Some(Value::EnumVariant { enum_name: en, .. })
-                                if en != "Option" && en != "Result" =>
-                            {
-                                self.type_name_runs_user_drop(&en, &mut Vec::new())
-                            }
-                            _ => false,
-                        };
+                        // B-2026-09-01-28 — the SHARED predicate. This was a
+                        // fourth copy of the test carrying the NARROW struct
+                        // arm (`drop_method_keys.contains_key`), so a payload
+                        // struct with a Drop-bearing field but no `Drop` of its
+                        // own ran no body here while the `match` spelling ran
+                        // one.
+                        let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
                         if is_drop_binding {
                             self.pending_arm_drop_bindings.push(n);
                         }
@@ -1309,17 +1305,13 @@ impl<'a> super::Interpreter<'a> {
                         // for it, so the body ran nowhere; they have to move
                         // together or the same program prints differently
                         // depending on which spelling consumed the payload.
-                        let is_drop_binding = match self.env.get(&n) {
-                            Some(Value::Struct { name: tn, .. }) => {
-                                self.program.drop_method_keys.contains_key(&tn)
-                            }
-                            Some(Value::EnumVariant { enum_name: en, .. })
-                                if en != "Option" && en != "Result" =>
-                            {
-                                self.type_name_runs_user_drop(&en, &mut Vec::new())
-                            }
-                            _ => false,
-                        };
+                        // B-2026-09-01-28 — the SHARED predicate. This was a
+                        // fourth copy of the test carrying the NARROW struct
+                        // arm (`drop_method_keys.contains_key`), so a payload
+                        // struct with a Drop-bearing field but no `Drop` of its
+                        // own ran no body here while the `match` spelling ran
+                        // one.
+                        let is_drop_binding = self.pattern_binding_owes_drop_body(&n);
                         if is_drop_binding {
                             self.pending_arm_drop_bindings.push(n);
                         }
