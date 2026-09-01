@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 343 | 5 |
-| run-vs-build | 286 | 18 |
+| run-vs-build | 286 | 17 |
 | leak | 249 | 5 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1339 | 26 |
-| interp | 309 | 19 |
+| interp | 309 | 18 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1949 surfaced · 32 open · 1886 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1949 surfaced · 31 open · 1887 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (32)
+### Open (31)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -149,7 +149,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1949 surfaced
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
-| B-2026-08-31-47 | 2026-08-31 | interp | medium | THE INTERPRETER LOSES A `Drop` BODY THAT BOTH COMPILED BACKENDS RUN, IN TWO METHOD-ARG SHAPES -- a fresh enum temp whose payload an arm BINDS but does not return (`t.keep(Box2.Full(mk(7)))` over `fn keep(..) -> i64 { match b { Box2.Full(r) => { return r.id; } .. } }`) prints nothing under `--interp` against one body compiled; and the BARE-STATEMENT discard of a method call returning `Option[R]` loses the body where the `let _ =` spelling of the same call keeps it | — |
 | B-2026-08-31-50 | 2026-08-31 | interp+codegen | medium | AN ENUM-CONSTRUCTOR MIXED WRAP LOSES ITS SLOT MASK ACROSS A WHOLE-VALUE REBIND, AND CODEGEN CANNOT INHERIT IT BECAUSE IT STORES NOTHING PER VARIABLE -- `let w = W2.Two(r, mk(2)); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, on all three backends; the STRUCT and TUPLE spellings of the same rebind were fixed by B-2026-08-29-44 and this one could not be, because `enum_ctor_param_view_payload_slots` derives the masked slots from the ctor EXPRESSION at the `let` and keeps no per-var record for a rebind to copy | — |
 | B-2026-09-01-1 | 2026-09-01 | codegen | low | A SELF-ASSIGNMENT WHOSE RHS IS AN `if`/`match` LEAKS THE OVERWRITTEN VALUE -- `e = if c { pass(e) } else { pass(e) }` loses a block (12 allocs / 11 frees at -O0), the same shape B-2026-08-29-51 fixed for blocks and measured UNTOUCHED by it; MIXED arms leak identically, and like its sibling the leak is clean at -O2 | — |
 | B-2026-09-01-2 | 2026-09-01 | interp | medium | THE INTERPRETER LOSES A MIXED WRAP'S FRESH FIELD BODY WHEN THE VIEW FIELD IS MOVED OUT -- `let s = S3 { a: r, b: mk(2) }; let x = s.a;` prints `dR1` against every compiled backend's due `dR2 dR1`, because the COARSE whole-walk disarm short-circuits the per-field mask the same statement also registers | none |
@@ -194,9 +193,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1949 surfaced
 
 </details>
 
-### Fixed (1886)
+### Fixed (1887)
 
-<details><summary>1886 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1887 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2068,6 +2067,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1949 surfaced
 | B-2026-08-31-42 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a pa… | b1be5b9 |
 | B-2026-08-31-44 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE… | 1b5c026 |
 | B-2026-08-31-45 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
+| B-2026-08-31-47 | interp | medium | THE INTERPRETER LOSES A `Drop` BODY THAT BOTH COMPILED BACKENDS RUN, IN TWO METHOD-ARG SHAPES -- a fresh enum temp whose payload an arm BINDS but doe… | 30e0e5d |
 | B-2026-08-31-48 | codegen | high | TWO INSTANTIATIONS OF ONE GENERIC FN AT DIFFERENT `Array`/`Slice`/`Vector` TYPE ARGS COLLIDE ON ONE MONO SYMBOL AND FAIL MODULE VERIFICATION -- `fn i… | 007c279 |
 | B-2026-08-31-49 | codegen | high | A GENERIC `Result[T, E]` RENDERS WITH THE `Option` VARIANT TABLE WHEN A GENERIC `Option[T]` DISPLAY IS EMITTED FIRST -- `Ok(7)` prints `Some(7)` and… | e5fd34f |
 | B-2026-09-01-4 | codegen | medium | READING A NON-`Copy` FIELD OUT OF A `ref` PARAM MINTS AN IMPLICIT DEEP COPY -- silently allocating and running a user `Drop` body the source never wr… | e207be3 |
