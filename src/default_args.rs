@@ -73,30 +73,89 @@ struct FnDefaultInfo {
     defaults: Vec<Option<Expr>>,
 }
 
-pub(crate) fn fill_default_args_in_program(program: &mut Program) {
-    let mut table: HashMap<String, FnDefaultInfo> = HashMap::new();
-    for item in &program.items {
-        if let Item::Function(f) = item {
-            if f.params.iter().any(|p| p.default_value.is_some()) {
-                table.insert(
-                    f.name.clone(),
-                    FnDefaultInfo {
-                        names: f
-                            .params
-                            .iter()
-                            .map(|p| p.name().map(|s| s.to_string()))
-                            .collect(),
-                        defaults: f.params.iter().map(|p| p.default_value.clone()).collect(),
-                    },
-                );
-            }
+impl FnDefaultInfo {
+    fn of(params: &[Param]) -> Self {
+        FnDefaultInfo {
+            names: params
+                .iter()
+                .map(|p| p.name().map(|s| s.to_string()))
+                .collect(),
+            defaults: params.iter().map(|p| p.default_value.clone()).collect(),
         }
     }
-    if table.is_empty() {
+}
+
+/// The head name of an impl's target type — `H` for `impl H`, `Vec` for
+/// `impl Vec[T]`. `None` for a target this pass cannot name (a tuple, a
+/// pointer, a function type), which simply means its associated fns are not
+/// registered and calls to them keep today's behaviour.
+fn impl_target_head(target: &TypeExpr) -> Option<String> {
+    match &target.kind {
+        TypeKind::Path(p) => p.segments.last().cloned(),
+        _ => None,
+    }
+}
+
+pub(crate) fn fill_default_args_in_program(program: &mut Program) {
+    let mut table: HashMap<String, FnDefaultInfo> = HashMap::new();
+    // B-2026-09-01-20 — ASSOCIATED fns, keyed `"Type.method"`. Kept in a
+    // separate map from the free-function one on purpose: the key spaces do
+    // not overlap (one holds bare names, the other dotted ones), and merging
+    // them would let a free `fn take` be reached by a `H.take(..)` call
+    // through the shared key space, which is the false positive
+    // B-2026-08-22-11 records one phase later.
+    let mut assoc: HashMap<String, FnDefaultInfo> = HashMap::new();
+    // Keys claimed by more than one impl for the same type — an inherent and
+    // a trait method of the same name, say. A call spelled `H.f(..)` names no
+    // trait, so this pass cannot tell which one it means, and filling the
+    // wrong signature's defaults is worse than not filling: it changes the
+    // program silently. Recorded and then REMOVED below, so the ambiguous case
+    // falls back to today's arity error.
+    let mut assoc_ambiguous: Vec<String> = Vec::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                if f.params.iter().any(|p| p.default_value.is_some()) {
+                    table.insert(f.name.clone(), FnDefaultInfo::of(&f.params));
+                }
+            }
+            Item::ImplBlock(imp) => {
+                let Some(head) = impl_target_head(&imp.target_type) else {
+                    continue;
+                };
+                for it in &imp.items {
+                    let ImplItem::Method(m) = it else { continue };
+                    // ASSOCIATED fns only. A method with a receiver is called
+                    // `h.g(..)`, an `ExprKind::MethodCall` whose impl this
+                    // pre-resolve pass cannot pick without the receiver's
+                    // TYPE — see the module doc's "Scope of the rewrite".
+                    if m.self_param.is_some() {
+                        continue;
+                    }
+                    if !m.params.iter().any(|p| p.default_value.is_some()) {
+                        continue;
+                    }
+                    let key = format!("{head}.{}", m.name);
+                    if assoc
+                        .insert(key.clone(), FnDefaultInfo::of(&m.params))
+                        .is_some()
+                    {
+                        assoc_ambiguous.push(key);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for key in assoc_ambiguous {
+        assoc.remove(&key);
+    }
+    if table.is_empty() && assoc.is_empty() {
         return;
     }
     let mut filler = Filler {
         table,
+        assoc,
         scopes: Vec::new(),
     };
     for item in &mut program.items {
@@ -127,6 +186,8 @@ pub(crate) fn fill_default_args_in_program(program: &mut Program) {
 
 struct Filler {
     table: HashMap<String, FnDefaultInfo>,
+    /// Associated fns keyed `"Type.method"` — see the table build above.
+    assoc: HashMap<String, FnDefaultInfo>,
     /// Lexical scope stack of locally-bound names. A callee identifier that
     /// appears here refers to a local value, not the top-level fn — no fill.
     scopes: Vec<HashSet<String>>,
@@ -323,13 +384,23 @@ impl Filler {
                 for a in args.iter_mut() {
                     self.walk_expr(&mut a.value);
                 }
-                if let ExprKind::Identifier(name) = &callee.kind {
-                    if !self.is_shadowed(name) {
-                        if let Some(info) = self.table.get(name) {
-                            if let Some(filled) = try_fill(args, info) {
-                                *args = filled;
-                            }
-                        }
+                let info = match &callee.kind {
+                    ExprKind::Identifier(name) if !self.is_shadowed(name) => self.table.get(name),
+                    // B-2026-09-01-20 — `Type.assoc_fn(args)`. The path NAMES
+                    // the type, so this needs no inference and no heuristic:
+                    // the key is exact and a miss simply leaves the call
+                    // alone. That is what separates it from the sibling
+                    // `h.g(args)` spelling, which would have to guess the
+                    // receiver's type at a point in the pipeline where no type
+                    // exists yet.
+                    ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                        self.assoc.get(&format!("{}.{}", segments[0], segments[1]))
+                    }
+                    _ => None,
+                };
+                if let Some(info) = info {
+                    if let Some(filled) = try_fill(args, info) {
+                        *args = filled;
                     }
                 }
             }

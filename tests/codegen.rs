@@ -120365,6 +120365,53 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-20 — the same call-site default fill, reached through the
+    /// QUALIFIED `Type.assoc_fn(..)` spelling.
+    ///
+    /// B-2026-08-17-19 shipped the fill for a bare identifier only and said so:
+    /// "Method / associated-function calls and module-qualified `Path` callees are
+    /// out of scope for this slice." design.md scopes the feature to no function
+    /// kind, though — "Parameters may have default values, allowing callers to omit
+    /// them" — and `runtime/stdlib/column.kara` already declares such a signature on
+    /// an impl method, so the declaration form was in use on a surface where the call
+    /// form was an arity error.
+    ///
+    /// The four shapes are the free-function fixture's, verbatim, so the two read as
+    /// one oracle: omit every default, omit the tail, skip one by label, and mix a
+    /// positional override with two labels. Same values as
+    /// `test_e2e_default_parameter_call_site_fill`, because a fill that produced
+    /// anything else for the same signature would mean the two spellings disagree —
+    /// which is the whole complaint.
+    ///
+    /// Only the ASSOCIATED half is covered. `h.g(1)` on a method with a receiver is
+    /// still an arity error: picking its impl needs the receiver's TYPE, and this
+    /// pass runs pre-resolve where no type exists. Filling by bare method name
+    /// instead would guess, and a wrong guess rewrites the call silently.
+    #[test]
+    fn test_e2e_default_parameter_fill_through_an_associated_call() {
+        assert_eq!(
+            run_program(
+                r#"
+struct Server { id: i64 }
+
+impl Server {
+    fn create(host: i64, port: i64 = 8080, max_connections: i64 = 1000, timeout_ms: i64 = 5000) -> i64 {
+        host + port + max_connections + timeout_ms
+    }
+}
+
+fn main() {
+    println(Server.create(1));
+    println(Server.create(1, 9090));
+    println(Server.create(1, max_connections: 100));
+    println(Server.create(1, 9090, max_connections: 100, timeout_ms: 250));
+}
+"#
+            ),
+            Some("14081\n15091\n13181\n9441\n".to_string())
+        );
+    }
+
     /// B-2026-08-17-41 — a qualified unit-variant match compiles and selects
     /// the right arm. The bug that row fixed was in the exhaustiveness
     /// ANALYSIS (`Dir.North` lowered to a wildcard, so a non-exhaustive match

@@ -47924,3 +47924,95 @@ fn labels_are_validated_on_a_qualified_associated_call() {
          fn main() { println(H.take(a: 5)); println(take(zzz: 1)); }",
     );
 }
+
+/// B-2026-09-01-20 — the guards around the associated-fn default fill.
+///
+/// The fill itself is pinned by the twinned oracle pair
+/// (`tests/interpreter.rs::test_default_parameter_fill_through_an_associated_call_oracle`
+/// and its `tests/codegen.rs` twin). What those cannot show is what the pass
+/// must NOT do, and both cases here are silent-wrong-program risks rather than
+/// missing-feature ones: a fill that picks the wrong signature rewrites the
+/// call with someone else's default values and nothing downstream can tell.
+///
+/// The key spaces are kept separate for the first case. A free `fn take` and
+/// an associated `H.take` are different functions that share a last segment,
+/// so a single map keyed on bare names would let `H.take(10)` pick up the free
+/// function's defaults — the false positive B-2026-08-22-11 records one phase
+/// later, where `H.take(x)` found a global `mem.take` and discharged its
+/// bound.
+///
+/// The second case is the one this pass cannot resolve at all. `H.f` declared
+/// by both an inherent impl and a trait impl is two signatures under one
+/// spelling, and the call names no trait. Rather than pick, the key is dropped
+/// and the call keeps the arity error it had — a fill of the wrong one would
+/// be an argument the author never wrote.
+#[test]
+fn associated_default_fill_does_not_borrow_another_function_s_defaults() {
+    // The fill is a PRE-RESOLVE rewrite run by `prepare_for_resolve`, which
+    // the plain `typecheck_ok` / `typecheck_errors` helpers skip — they go
+    // parse -> resolve -> typecheck. Without it every assertion below would
+    // hold for the wrong reason: the call is unfilled because the pass never
+    // ran, not because the pass declined. Measured, not assumed — the positive
+    // case at the end failed on the first draft of this test for exactly that
+    // reason, while the same program ran correctly under `karac`.
+    let checked = |src: &str| {
+        let mut parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "parse errors in: {src}");
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve errors in: {src}");
+        typecheck(&parsed.program, &resolved)
+    };
+    let arity_error = |src: &str, what: &str| {
+        let errs = checked(src).errors;
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("argument(s), found")),
+            "{what} must not be filled\ngot: {errs:?}"
+        );
+    };
+    let fills_ok = |src: &str| {
+        let errs = checked(src).errors;
+        assert!(errs.is_empty(), "expected a clean fill, got: {errs:?}");
+    };
+    // A free function with a default must not lend it to a same-named
+    // associated fn that has none.
+    arity_error(
+        "fn take(a: i64, b: i64 = 99) -> i64 { return a + b; }\n\
+         struct H { x: i64 }\n\
+         impl H { fn take(a: i64, b: i64) -> i64 { return a - b; } }\n\
+         fn main() { println(H.take(10)); }",
+        "H.take, whose own signature has no default",
+    );
+    // Two impls claiming the same `Type.method` are ambiguous here — the call
+    // spelling names no trait — so neither default is used.
+    arity_error(
+        "struct H { x: i64 }\n\
+         trait T { fn f(a: i64, b: i64 = 1) -> i64; }\n\
+         impl H { fn f(a: i64, b: i64 = 2) -> i64 { return a + b; } }\n\
+         impl T for H { fn f(a: i64, b: i64 = 3) -> i64 { return a * b; } }\n\
+         fn main() { println(H.f(10)); }",
+        "H.f declared by two impls",
+    );
+    // The instance-method spelling is still out of scope: picking its impl
+    // needs the receiver's type, which this pre-resolve pass does not have.
+    // Pinned so the day it starts working is a deliberate change with its own
+    // fixture rather than an unnoticed side effect.
+    arity_error(
+        "struct H { x: i64 }\n\
+         impl H { fn g(ref self, a: i64, b: i64 = 7) -> i64 { return self.x + a + b; } }\n\
+         fn main() { let h = H { x: 100 }; println(h.g(1)); }",
+        "h.g, an instance method",
+    );
+
+    // Both sides keeping their OWN defaults is the positive half of the first
+    // case, and it is what a shared key space would break in the direction a
+    // rejection test cannot see. It is also what proves the three assertions
+    // above are not vacuous: the same helper fills this one.
+    fills_ok(
+        "fn take(a: i64, b: i64 = 99) -> i64 { return a + b; }\n\
+         struct H { x: i64 }\n\
+         impl H { fn take(a: i64, b: i64 = 1) -> i64 { return a - b; } }\n\
+         fn main() { println(H.take(10)); println(take(10)); }",
+    );
+}
