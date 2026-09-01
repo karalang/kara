@@ -35659,3 +35659,63 @@ fn ref_binding_codegen_gap_explains_itself() {
         }
     }
 }
+
+/// B-2026-08-31-39, the never-panic half — a generic `Option[T]` instantiated at
+/// `T = Vec[i64]` REFUSES with a diagnostic instead of ICEing.
+///
+/// The row is not fixed by this and is deliberately still open: rendering the
+/// aggregate instantiations needs the monomorph's type side-tables substituted
+/// wholesale (or the body re-typechecked), and an investigating session measured
+/// that a narrower fix turns a clean refusal into a SEGFAULT. What was fixable
+/// on its own is that ONE instantiation crashed the compiler where its siblings
+/// declined politely.
+///
+/// The asymmetry had a cause worth keeping: the monomorph's name-level
+/// substitution records `{"T": "Vec"}` for `T = Vec[i64]` — HEAD ONLY, element
+/// dropped — while `T = Array[i64, 2]` gets no entry at all. So `Array` stayed a
+/// bare `T`, matched no arm of the reconstructability gate and declined, and
+/// `Vec` passed the gate's handle-collection arm as a container, reached the
+/// by-name emitter with no element type, and hit its `panic!` catch-all. A
+/// head-only path is not something a program can write, so requiring the generic
+/// args there costs nothing and turns the ICE into the sibling's refusal.
+///
+/// Asserted as a PROPERTY, not a sentence: the build fails, and it fails without
+/// a Rust panic reaching the user. The exact refusal text belongs to
+/// `codegen_declined_option_payload_names_its_shape`, whose doc says to delete
+/// its generic assertion when -39 is properly fixed — that is still the right
+/// instruction, and this test is not it.
+#[test]
+fn generic_option_vec_instantiation_refuses_without_ice() {
+    let tmp = std::env::temp_dir();
+    let f = tmp.join("karac_generic_option_vec.kara");
+    let src = "fn show[T: Display](x: Option[T]) { println(f\"{x}\") }\n\
+               fn main() { let v: Vec[i64] = [1]; show(Some(v)) }\n";
+    if std::fs::write(&f, src).is_err() {
+        return;
+    }
+    let out = match karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "karac_generic_option_vec.kara"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the generic aggregate instantiation is still declined, so the build must fail:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked at"),
+        "a compiler PANIC reached the user; codegen must decline with a diagnostic:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("emit_display_fn_for_type"),
+        "the by-name Display emitter's internal name leaked to the user:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("not yet supported under codegen"),
+        "expected the structured Display refusal its `Array`/`Slice` siblings get:\n{stderr}"
+    );
+}

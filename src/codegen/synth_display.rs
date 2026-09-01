@@ -1631,7 +1631,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // list holds only shapes that were measured against the
                 // interpreter.
                 if matches!(seg, "Vec" | "Map" | "Set" | "SortedMap" | "SortedSet") {
-                    return true;
+                    // B-2026-08-31-39 — but only when the ELEMENT types are
+                    // actually here. A head-only path (`Vec` with no generic
+                    // args) is not something a program can write; it is what
+                    // the monomorph's NAME-LEVEL substitution produces for a
+                    // generic `T = Vec[i64]`, which records `{"T": "Vec"}` and
+                    // drops the element.
+                    //
+                    // Reconstruction genuinely does not need the element — the
+                    // comment above is right about that — but RENDERING does,
+                    // and admitting the head-only name sent it to the by-name
+                    // emitter, whose catch-all PANICS ("type_name 'Vec' not yet
+                    // supported"): a compiler ICE with a Rust backtrace, on a
+                    // program the interpreter renders. Declining here routes it
+                    // to the same structured refusal the `Array` and `Slice`
+                    // instantiations already take, which is the honest answer
+                    // until the substitution channels stop being lossy.
+                    //
+                    // A concrete `Option[Vec[i64]]` is unaffected: it arrives
+                    // with its args, as every spelling a user can write does.
+                    return p.generic_args.is_some();
                 }
                 // A `shared` type is an RC HANDLE — one pointer word, whatever
                 // its fields are — so it reconstructs by `inttoptr` and its
