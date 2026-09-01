@@ -2505,6 +2505,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(path) = &te.kind {
             match path.segments.last().map(|s| s.as_str()) {
                 Some("Option") => {
+                    // B-2026-08-31-49 — the DECLARED type decides which map may
+                    // answer for this name, so retract the sibling FIRST and
+                    // unconditionally. Doing it only on a successful
+                    // registration left the hole open in exactly the case that
+                    // dropped a payload: when the payload is not
+                    // reconstructable the registration below is declined, and a
+                    // stale entry of the OTHER kind (an earlier function's
+                    // same-named binding) then answered instead. Falling
+                    // through to the generic Display error is correct there;
+                    // rendering as the wrong enum is not.
+                    self.var_types.var_result_payload_te.remove(var_name);
                     // Only register inline-representable payloads — the display
                     // synthesizer reconstructs the payload from ≤3 words, which
                     // is invalid for a boxed/wide payload (its word is a
@@ -2524,6 +2535,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 Some("Result") => {
+                    // See the Option arm: the declared type retracts the
+                    // sibling unconditionally. This is the direction that
+                    // actually bit — `showr(Err(9))` after a `show(Some(..))`
+                    // whose parameter shared the name printed `None`, dropping
+                    // the payload, because the `Err`-only instantiation leaves
+                    // the Ok type param unresolved, the registration below is
+                    // declined, and the stale Option entry answered.
+                    self.var_types.var_option_payload_te.remove(var_name);
                     if let Some((ok, err)) = Self::result_payload_tes(te) {
                         let ok = Self::peel_scalar_ref_display_payload(&ok);
                         let err = Self::peel_scalar_ref_display_payload(&err);

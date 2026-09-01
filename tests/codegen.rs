@@ -123841,6 +123841,121 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-49 — A `Result[T, E]` RENDERED WITH THE `Option` VARIANT
+    /// TABLE. `Ok(7)` printed `Some(7)` and `Err(9)` printed `None`, DROPPING
+    /// THE PAYLOAD, silently, on both compiled backends.
+    ///
+    /// THE ROW'S AXIS WAS WRONG AND THE CORRECTION IS THE POINT. It recorded
+    /// this as generics-only and order-dependent "between two generic
+    /// instantiations". Measured: the two GENERIC functions with DIFFERENT
+    /// parameter names are both correct, and two NON-GENERIC functions that
+    /// share a parameter name collide identically. Generics are incidental —
+    /// the row's non-generic control happened to use different names. Sharing a
+    /// parameter name is the whole condition, which is why this reaches
+    /// ordinary code.
+    ///
+    /// ROOT CAUSE. `var_option_payload_te` and `var_result_payload_te` are
+    /// keyed on the BARE variable name, and both Display dispatch sites (the
+    /// `compile_print` identifier arms and the f-string collection-display
+    /// path) test the Option arm FIRST. Neither map was cleared per function,
+    /// so an `Option` binding named `x` in one function was still there when a
+    /// `Result` parameter named `x` was rendered in a later one. Instrumented,
+    /// the second hole saw BOTH entries live for `x`.
+    ///
+    /// TWO PARTS, because the per-function reset alone is not enough: generic
+    /// MONO bodies are compiled without passing through it, so the registration
+    /// itself now retracts the sibling. It does so UNCONDITIONALLY on the
+    /// declared type rather than only on a successful registration — the
+    /// payload-dropping `Err` case is exactly the one where the registration is
+    /// DECLINED (an `Err`-only instantiation leaves the Ok type param
+    /// unsubstituted), and the stale entry answered in its place.
+    ///
+    /// THE `Err` ROW IS DELIBERATELY ABSENT and its absence is the finding.
+    /// `showr(Err(9))` on a generic `Result[T, i64]` REFUSES to build — "its
+    /// `T` payload cannot be reconstructed" — and refuses identically on a
+    /// pristine tree with this fix stashed out, so that refusal is
+    /// pre-existing (B-2026-08-31-39's unsubstituted-`T` territory) and not
+    /// something this change introduced. What changed is that the collision
+    /// used to MASK it: preceded by a same-named `Option` binding the same
+    /// program printed `None` instead of refusing. A refusal that names the
+    /// limitation is the correct behaviour and is what the identical program
+    /// without the preceding call already did.
+    #[test]
+    fn e2e_option_and_result_displays_do_not_collide_on_a_shared_var_name() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "NON-generic, both parameters named `x` — the row's missing control",
+                "fn show(x: Option[i64]) { println(f\"o {x}\"); }\n\
+                 fn showr(x: Result[i64, i64]) { println(f\"r {x}\"); }\n\
+                 fn main() { show(Some(7)); showr(Ok(7)); }\n",
+                "o Some(7)\nr Ok(7)\n",
+            ),
+            (
+                "generic, both parameters named `x` — the row's own repro",
+                "fn show[T: Display](x: Option[T]) { println(f\"o {x}\"); }\n\
+                 fn showr[T: Display](x: Result[T, i64]) { println(f\"r {x}\"); }\n\
+                 fn main() { show(Some(7)); showr(Ok(7)); }\n",
+                "o Some(7)\nr Ok(7)\n",
+            ),
+            (
+                "generic at `T = String`",
+                "fn show[T: Display](x: Option[T]) { println(f\"o {x}\"); }\n\
+                 fn showr[T: Display](x: Result[T, i64]) { println(f\"r {x}\"); }\n\
+                 fn main() { show(Some(\"yo\")); showr(Ok(\"hi\")); }\n",
+                "o Some(yo)\nr Ok(hi)\n",
+            ),
+            (
+                "both orders and both variants, one shared name",
+                "fn show(x: Option[i64]) { println(f\"o {x}\"); }\n\
+                 fn showr(x: Result[i64, i64]) { println(f\"r {x}\"); }\n\
+                 fn main() { show(Some(7)); showr(Ok(7)); showr(Err(9)); show(None); }\n",
+                "o Some(7)\nr Ok(7)\nr Err(9)\no None\n",
+            ),
+            (
+                "FOUR functions sharing `x` across two payload types",
+                "fn a(x: Option[i64]) { println(f\"a {x}\"); }\n\
+                 fn b(x: Result[i64, i64]) { println(f\"b {x}\"); }\n\
+                 fn c(x: Option[String]) { println(f\"c {x}\"); }\n\
+                 fn d(x: Result[String, i64]) { println(f\"d {x}\"); }\n\
+                 fn main() { a(Some(1)); b(Ok(2)); c(Some(\"s\")); d(Ok(\"t\")); }\n",
+                "a Some(1)\nb Ok(2)\nc Some(s)\nd Ok(t)\n",
+            ),
+            // CONTROLS — correct before the fix, and together they are what
+            // localized the cause to the NAME rather than to generics.
+            (
+                "control: the Result function compiled FIRST",
+                "fn show[T: Display](x: Option[T]) { println(f\"o {x}\"); }\n\
+                 fn showr[T: Display](x: Result[T, i64]) { println(f\"r {x}\"); }\n\
+                 fn main() { showr(Ok(7)); show(Some(7)); }\n",
+                "r Ok(7)\no Some(7)\n",
+            ),
+            (
+                "control: DISTINCT parameter names",
+                "fn show[T: Display](x: Option[T]) { println(f\"o {x}\"); }\n\
+                 fn showr[T: Display](y: Result[T, i64]) { println(f\"r {y}\"); }\n\
+                 fn main() { show(Some(7)); showr(Ok(7)); }\n",
+                "o Some(7)\nr Ok(7)\n",
+            ),
+            (
+                "control: the Result function alone",
+                "fn showr[T: Display](x: Result[T, i64]) { println(f\"r {x}\"); }\n\
+                 fn main() { showr(Ok(7)); }\n",
+                "r Ok(7)\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(src) {
+                assert_eq!(aot, *want, "{label}: run and build must agree");
+            }
+        }
+    }
+
     /// B-2026-08-31-34 — A HEAP FIELD READ OFF A FRESH TEMP AND CONSUMED BY AN
     /// OWNING AGGREGATE DOUBLE FREED ON BOTH COMPILED BACKENDS.
     ///
