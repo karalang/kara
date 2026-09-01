@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 343 | 5 |
-| run-vs-build | 287 | 17 |
+| run-vs-build | 287 | 16 |
 | leak | 249 | 5 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1339 | 26 |
-| interp | 310 | 18 |
+| interp | 310 | 17 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced · 31 open · 1888 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced · 30 open · 1889 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (31)
+### Open (30)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -160,7 +160,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced
 | B-2026-09-01-23 | 2026-09-01 | codegen | low | THE BRANCH ARM-OWNER SLOT IS ONE PER CONSTRUCT AND RESET EACH PASS, so a branch inside a loop whose owner frame lives OUTSIDE the loop frees only the LAST pass's escaping value -- `while i < 3 { let k = if i > 0 { mkA(n) } else { t }.contains("aaa"); }` strands `iterations - 1` of them (42 B in 2 blocks at 3 iterations, 72 B in 4 at 5); the same branch with the sibling binding declared INSIDE the loop body is clean, which isolates the frame CHOICE rather than the slot as the cause | — |
 | B-2026-09-01-27 | 2026-09-01 | interp | low | A FRESH-TEMP owned argument DESTRUCTURED inside a method runs the right Drop bodies in the WRONG ORDER -- the payload's body fires before the enum shell's under `--interp` and after it on both compiled backends, so the counts agree and the sequence does not | — |
 | B-2026-09-01-26 | 2026-09-01 | codegen | medium | A `match` OVER A FRESH-TEMP ENUM IN A NESTED EXPRESSION POSITION LEAKS THE HEAP PAYLOAD ITS ARM MOVED OUT -- `println(f"out[{match mkVe(9) { Ve.A(s) => { s } .. }}]")` loses 15 B at BOTH opt levels while the let-bound spelling of the same match is clean; both enum flavours, and clean for a scalar payload | — |
-| B-2026-09-01-28 | 2026-09-01 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program runs it -- a spelling-dependent split, and the third time this family has had one | — |
 
 ### Relocated (2)
 
@@ -193,9 +192,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced
 
 </details>
 
-### Fixed (1888)
+### Fixed (1889)
 
-<details><summary>1888 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1889 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2087,6 +2086,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced
 | B-2026-09-01-22 | codegen | medium | A DISCARDED STRUCT LITERAL BEHIND **TWO** BLOCK WRAPPERS RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `{ { S { r: t, k: 1… | 1fcdb47 |
 | B-2026-09-01-24 | codegen | medium | A DISCARDED ALL-MINTED STRUCT LITERAL WITH ONE FIELD THAT IS A SCALAR FIELD READ OF A LIVE LOCAL LEAKS EVERY MINTED OBJECT ON BOTH COMPILED BACKENDS… | 7ef82d3 |
 | B-2026-09-01-25 | codegen | medium | THE MEMORY HALF OF B-2026-09-01-21: a DISCARDED aggregate whose fields/elements MIX a live-local source with anything else runs every `Drop` BODY onc… | f909f9a |
+| B-2026-09-01-28 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program r… | 213f847 |
 
 </details>
 
