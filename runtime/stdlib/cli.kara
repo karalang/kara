@@ -483,7 +483,7 @@ impl Parser {
     // emitted when there are no flags; same for the args and
     // subcommands sections.
     fn help_text(ref self) -> String {
-        let mut out: String = self.program_name;
+        let mut out: String = self.program_name.clone();
         if self.about_text != "" {
             out = out + " - " + self.about_text;
         }

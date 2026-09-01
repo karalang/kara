@@ -8200,16 +8200,16 @@ help: to exchange two elements, use `swap`
     |         self.xs.swap(i, j);
 ```
 
-**Implementation status — this rule is NOT yet enforced.** The `ref` spelling
-in the table above is specified (§ *Binding-extension exception*) but the parser
-does not yet accept `ref` in expression position, so `let t = ref v[i];` does not
-compile today (B-2026-08-26-36). That matters because `ref` is the *only* fix-it
-available for an element type with no `.clone()` — `Tensor` among them — and
-`std.autograd` alone holds 67 such reads. Rejecting the form before the borrow
-spelling works would leave those sites with a diagnostic and no way to satisfy
-it, so the rejection is gated on the borrow form landing first. Measured across
-`runtime/stdlib`: 80 sites in 4 files (`autograd` 67, `protobuf` 9,
-`embeddings` 2, `priority_queue` 2 — the last now migrated to `Vec.swap`).
+**Implementation status — enforced.** Both halves landed: `ref` in expression
+position parses, typechecks, interprets and compiles for the one v1 operand
+shape, a sequence index (B-2026-08-26-36), and the rejection above rides on top
+of it (B-2026-08-26-21). That ORDER was load-bearing, and it is the precedent
+the sibling rule below still defers to. `ref` is the *only* fix-it available for
+an element type with no `.clone()` — `Tensor` among them, and `std.autograd`
+alone held 67 of the 80 such reads measured across `runtime/stdlib` — so
+rejecting the form before the borrow spelling worked would have left those sites
+with a diagnostic and no way to satisfy it. **A rule whose fix-it does not exist
+is not enforceable**, whatever this document says about it.
 
 **Why this is stated rather than left to inference.** Both backends previously
 *accepted* the rejected forms and improvised different semantics for them: a
@@ -8227,6 +8227,52 @@ borrows — is a **destroying** overwrite: the displaced element is destroyed in
 place and its `Drop` body runs there, per `index_set` taking ownership of the
 incoming value. Both backends already implement that, and it is the only element
 store form the language admits for a non-`Copy` `T`.
+
+
+#### Field projection off a borrow (`<borrow>.field`)
+
+**A projection off a borrow is an implicit copy, and that is a stopgap.**
+`let m = s.r;` where `s: ref S` and `r`'s type is not `Copy` reads a field
+*through* a reference. By the dereference rule above that requires `T: Copy`, so
+read strictly it is the same error `v[i]` raises one level down. It is not
+rejected today for one reason: there is nothing to reject it *toward*. `ref v[i]`
+gives the index rule a zero-cost fix-it; `ref s.r` is
+`E_REF_OPERAND_UNSUPPORTED` — v1's `ref` operand is a sequence index and nothing
+else — and `.clone()` exists only for a type that has one.
+
+So the read is accepted, and it **copies**. Both backends already agree on that:
+a heap-bearing field is deep-copied, a heap-free one bit-copied. What is worth
+stating out loud is the consequence, because nothing at the use site shows it:
+
+- the binding is an **independent value**, not a view of `s.r`;
+- a user `Drop` body therefore runs **twice** — once for the caller's field, once
+  for the copy;
+- a `String` / `Vec` / `Map` field is **reallocated on every read**, so a loop
+  that reads one is quadratic in the field's size. Measured, AOT, a `Vec[i64]`
+  field read once per iteration: 72 ms at n=16,000 and 302 ms at n=32,000 —
+  4.2x for a 2x input — against **5 ms** for the same loop with the read hoisted
+  out of it.
+
+`karac check` reports it as the `borrow_projection_copy` lint, offering
+`.clone()` as a machine-applicable fix where the type has one. That fix is
+behaviour-**preserving**: the copy already happens, and `.clone()` only spells
+it.
+
+**This is not the kind of clone the enum-payload rule forbids.** That rule
+(B-2026-08-09-9, pinned by the `enum_payload_clone_is_faithful` codegen test)
+refuses to duplicate a payload on the ground that "a clone is a
+compiler-internal artifact the source language never asked for", and it stands —
+it governs clones a *backend* mints to simplify its own lowering, which no
+spelling in the program implies and no reader can predict. This copy is a
+different thing: it is the meaning the language currently assigns to a
+*source-level* read, in the same way `let a = b;` copies a `Copy` value. The
+distinction is exactly why the lint exists. A copy the author can see is a
+language rule; one they cannot is a bug.
+
+**Where this is going.** When `ref` accepts a general place expression, this
+becomes an error carrying `ref s.r` as its zero-cost fix-it, exactly as `v[i]`
+became one after `ref v[i]` landed. Until then the rule is stated and warned,
+not enforced — the same gate, for the same reason.
 
 
 ### Match Arm Binding Modes

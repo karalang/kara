@@ -262,6 +262,18 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              disambiguate with explicit parentheses.",
     },
     LintInfo {
+        name: "borrow_projection_copy",
+        default_level: LintLevel::Warn,
+        description:
+            "A non-`Copy` field read out of a BORROWED value (`let m = s.r;` where \
+             `s: ref S`) mints an implicit copy — the heap is allocated again and any \
+             user `Drop` body runs a second time, neither of which is visible at the \
+             read. `.clone()` says the same thing out loud where the type has one. \
+             design.md's dereference rule makes this an error in principle, and the \
+             sibling `E_INDEX_MOVE_NON_COPY` already enforces it for `v[i]`; it stays a \
+             warning here until `ref <place>` gives it a zero-cost fix-it. B-2026-09-01-4.",
+    },
+    LintInfo {
         name: "chained_field_receiver",
         default_level: LintLevel::Deny,
         description:

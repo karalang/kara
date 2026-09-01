@@ -48016,3 +48016,216 @@ fn associated_default_fill_does_not_borrow_another_function_s_defaults() {
          fn main() { println(H.take(10)); println(take(10)); }",
     );
 }
+
+/// B-2026-09-01-4 — `borrow_projection_copy` fires on a non-`Copy` field read
+/// out of a BORROW.
+///
+/// `let m = s.r;` where `s: ref S` neither moves (the caller still owns `s.r`)
+/// nor borrows (`ref s.r` is `E_REF_OPERAND_UNSUPPORTED`); both backends copy.
+/// The copy is a real second value — measured, the row's own program prints its
+/// `Drop` body twice — and nothing at the read says so, which is what the lint
+/// is for. design.md § "Field projection off a borrow".
+///
+/// The negative in the same test is the point: the IDENTICAL line over an
+/// OWNED root is a move, runs one `Drop` body, and must stay silent.
+#[test]
+fn borrow_projection_copy_fires_only_when_the_root_is_a_borrow() {
+    let borrowed = typecheck_ok(
+        "struct R { id: i64 }\n\
+         struct S { r: R }\n\
+         fn steal(s: ref S) -> i64 { let m = s.r; return m.id; }\n\
+         fn main() { let s = S { r: R { id: 3 } }; println(steal(s)); }",
+    );
+    let hits: Vec<_> = borrowed
+        .warnings
+        .iter()
+        .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected one warning at the `let m = s.r;` read; got: {:?}",
+        borrowed.warnings
+    );
+
+    let owned = typecheck_ok(
+        "struct R { id: i64 }\n\
+         struct S { r: R }\n\
+         fn steal(s: S) -> i64 { let m = s.r; return m.id; }\n\
+         fn main() { let s = S { r: R { id: 3 } }; println(steal(s)); }",
+    );
+    assert!(
+        !owned
+            .warnings
+            .iter()
+            .any(|w| w.lint_name.as_deref() == Some("borrow_projection_copy")),
+        "an OWNED root moves the field — one value, one `Drop` body — so the \
+         same line must not warn; got: {:?}",
+        owned.warnings
+    );
+}
+
+/// B-2026-09-01-4 — the three other shapes that copy, and the four that do not.
+///
+/// Covered because each was measured on all of `--interp`, the JIT and
+/// `karac build` rather than reasoned about, and because two of them are the
+/// exemptions the lint would otherwise get wrong:
+///
+/// * a `Copy` field never copies anything worth reporting;
+/// * `Option[Node]` for a `shared struct Node` copies an RC HANDLE — no second
+///   node, no second `Drop` body. Without the exemption the lint's own claim is
+///   false, which it was at three sites in `examples/tangle`;
+/// * a CALL ARGUMENT (`eat(s.r)`) was measured to mint no copy at all and run
+///   the `Drop` body exactly once, so warning there would be a false claim
+///   rather than a wider net. It is left out for that reason, not for the
+///   blast-radius reason the sibling index rule gives.
+#[test]
+fn borrow_projection_copy_covers_the_copying_shapes_and_exempts_the_rest() {
+    let fires = |src: &str| -> usize {
+        typecheck_ok(src)
+            .warnings
+            .iter()
+            .filter(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+            .count()
+    };
+
+    // Assignment RHS — the sibling rule's other value position.
+    assert_eq!(
+        fires(
+            "struct R { id: i64 }\n\
+             struct S { r: R }\n\
+             fn f(s: ref S) -> i64 { let mut m = R { id: 9 }; m = s.r; return m.id; }\n\
+             fn main() { let s = S { r: R { id: 3 } }; println(f(s)); }"
+        ),
+        1,
+        "an assignment RHS is a value position exactly as a `let` initializer is"
+    );
+
+    // `ref self` roots the chain under the name `self`.
+    assert_eq!(
+        fires(
+            "struct R { id: i64 }\n\
+             struct S { r: R }\n\
+             impl S { fn f(ref self) -> i64 { let m = self.r; return m.id; } }\n\
+             fn main() { let s = S { r: R { id: 3 } }; println(s.f()); }"
+        ),
+        1,
+        "`ref self` is a borrowed root like any other"
+    );
+
+    // A `Copy` field is not a copy anyone needs told about.
+    assert_eq!(
+        fires(
+            "struct S { n: i64 }\n\
+             fn f(s: ref S) -> i64 { let m = s.n; return m; }\n\
+             fn main() { println(f(S { n: 3 })); }"
+        ),
+        0,
+        "a `Copy` field read is the ordinary case the deref rule already allows"
+    );
+
+    // A shared handle behind an `Option` — the `examples/tangle` link shape.
+    assert_eq!(
+        fires(
+            "shared struct Node { val: i64, mut next: Option[Node] }\n\
+             struct List { head: Option[Node] }\n\
+             fn f(l: ref List) -> i64 {\n\
+                 let cur = l.head;\n\
+                 match cur { Some(n) => { return n.val; } None => { return 0; } }\n\
+                 return -1;\n\
+             }\n\
+             fn main() { println(f(List { head: None })); }"
+        ),
+        0,
+        "copying `Option[<shared>]` retains a handle; it duplicates no node and \
+         runs no user `Drop` body, so the lint's message would be false"
+    );
+
+    // A name SHADOWING the borrowed parameter is a different, owned binding,
+    // and its projection is a move. The signature's borrow set alone gets this
+    // wrong; the lint cross-checks the scope at the read.
+    assert_eq!(
+        fires(
+            "struct R { id: i64 }\n\
+             struct S { r: R }\n\
+             fn f(s: ref S) -> i64 {\n\
+                 let mut total = s.r.id;\n\
+                 { let s = S { r: R { id: 5 } }; let m = s.r; total = total + m.id; }\n\
+                 return total;\n\
+             }\n\
+             fn main() { println(f(S { r: R { id: 3 } })); }"
+        ),
+        0,
+        "the inner `s` is an owned `let`, so `s.r` there moves rather than copies"
+    );
+
+    // A call argument passes a view — measured, one `Drop` body, no copy.
+    assert_eq!(
+        fires(
+            "struct R { id: i64 }\n\
+             struct S { r: R }\n\
+             fn eat(r: R) -> i64 { return r.id; }\n\
+             fn f(s: ref S) -> i64 { return eat(s.r); }\n\
+             fn main() { println(f(S { r: R { id: 3 } })); }"
+        ),
+        0,
+        "a call argument mints no copy, so this position is out of scope"
+    );
+}
+
+/// B-2026-09-01-4 — the `.clone()` fix-it, and its absence.
+///
+/// The edit is behaviour-PRESERVING (the read already copies; `.clone()` only
+/// spells it), which is what lets `karac fix` migrate existing code
+/// mechanically — the same argument the sibling `E_INDEX_MOVE_NON_COPY` fix-it
+/// makes. It is a zero-length insertion at the end of the read's span so the
+/// author's own spelling of the projection survives.
+///
+/// It is offered ONLY where the type has a `.clone()`. B-2026-07-29-31 is the
+/// standing lesson: the Mend loop is an LLM acting on this text, so steering it
+/// to a method that does not exist is worse than offering nothing.
+#[test]
+fn borrow_projection_copy_offers_clone_only_where_one_exists() {
+    let with_clone = typecheck_ok(
+        "struct S { name: String }\n\
+         fn f(s: ref S) -> i64 { let n = s.name; return n.len(); }\n\
+         fn main() { println(f(S { name: \"ab\" })); }",
+    );
+    let hit = with_clone
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+        .expect("a String field read out of a borrow copies the buffer");
+    let fix = hit
+        .fix_it
+        .as_ref()
+        .expect("`String` has a `.clone()`, so the migration is machine-applicable");
+    assert_eq!(fix.replacement, ".clone()");
+    assert_eq!(
+        fix.span.length, 0,
+        "the edit inserts after the read rather than replacing it, so the \
+         author's own spelling of the projection survives"
+    );
+    assert_eq!(
+        fix.span.offset,
+        hit.span.offset + hit.span.length,
+        "the insertion point is the end of the read's own span"
+    );
+
+    let without_clone = typecheck_ok(
+        "struct R { id: i64 }\n\
+         struct S { r: R }\n\
+         fn f(s: ref S) -> i64 { let m = s.r; return m.id; }\n\
+         fn main() { println(f(S { r: R { id: 3 } })); }",
+    );
+    let bare = without_clone
+        .warnings
+        .iter()
+        .find(|w| w.lint_name.as_deref() == Some("borrow_projection_copy"))
+        .expect("the read still copies, so it is still reported");
+    assert!(
+        bare.fix_it.is_none(),
+        "`R` has no `#[derive(Clone)]`, so no fix-it may be offered: a steer to \
+         a method that does not exist fails with `no handler for method 'clone'`"
+    );
+}

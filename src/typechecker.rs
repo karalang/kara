@@ -2173,6 +2173,21 @@ pub struct TypeChecker<'a> {
     /// enforces), and it stays enforced because this set contains only
     /// parameters the escape checker governs.
     pub(super) current_fn_frozen_params: FxHashSet<String>,
+    /// This function's BORROWED parameter names — every `ref T` / `mut ref T`
+    /// parameter, plus `self` under `ref self` / `mut ref self`. B-2026-09-01-4.
+    ///
+    /// Saved and restored around each body check on exactly the terms
+    /// `current_fn_frozen_params` above is, so a nested item walk (an impl
+    /// method, a trait default body) does not inherit the enclosing
+    /// signature's borrows.
+    ///
+    /// Read by `warn_borrow_projection_copy`, which needs the root of a
+    /// projection chain to be a BORROW. It reads the declared parameter mode
+    /// rather than the root expression's inferred type on purpose: `expr_types`
+    /// is keyed by span, and a projection's root shares its start offset with
+    /// the whole chain (the overwrite hazard `map_entry_lint` documents for the
+    /// same reason), so `s` in `s.r` reads back as the type of `s.r`.
+    pub(super) current_fn_ref_params: FxHashSet<String>,
     /// Spans at which a `frozen` PARAMETER was read as a value. B-2026-08-08-11.
     ///
     /// `frozen T` lowers to `TypeKind::Ref(T)` at parse time (B-2026-08-01-33 —
@@ -2629,6 +2644,7 @@ impl<'a> TypeChecker<'a> {
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
+            current_fn_ref_params: FxHashSet::default(),
             frozen_param_use_spans: FxHashSet::default(),
             break_value_types: Vec::new(),
             closure_return_types: Vec::new(),

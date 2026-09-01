@@ -1978,6 +1978,22 @@ impl<'a> super::TypeChecker<'a> {
                 .filter_map(|p| p.name().map(str::to_string))
                 .collect(),
         );
+        // B-2026-09-01-4 — this signature's BORROWED parameters, on the same
+        // save/restore terms as the frozen set above and for the same reason.
+        // `ref self` / `mut ref self` join under the name `self`, matching how
+        // codegen's own `signature_ref_params` roots a projection chain.
+        let saved_ref_params = std::mem::replace(&mut self.current_fn_ref_params, {
+            let mut set: rustc_hash::FxHashSet<String> = f
+                .params
+                .iter()
+                .filter(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+                .filter_map(|p| p.name().map(str::to_string))
+                .collect();
+            if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+                set.insert("self".to_string());
+            }
+            set
+        });
         if f.body.final_expr.is_some() {
             self.check_block_against(&f.body, &return_type);
         } else {
@@ -2011,6 +2027,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.current_fn_is_gpu = saved_fn_is_gpu;
         self.current_fn_frozen_params = saved_frozen_params;
+        self.current_fn_ref_params = saved_ref_params;
         if comptime_fn {
             self.comptime_depth -= 1;
         }
@@ -4310,6 +4327,179 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or(false)
     }
 
+    /// Whether copying a value of this type duplicates nothing but reference
+    /// counts — the exemption test for [`Self::warn_borrow_projection_copy`].
+    ///
+    /// True for a `shared` handle, and for an `Option` / `Result` / tuple
+    /// built only out of those and `Copy` scalars. Deliberately shallow past
+    /// that: a `Vec[shared T]` copy DOES duplicate the element buffer (while
+    /// retaining each element), so it is a real copy and stays reportable.
+    fn copy_is_only_an_rc_retain(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Shared(_) => true,
+            Type::Named { name, args } if self.name_is_shared_decl(name) => {
+                let _ = args;
+                true
+            }
+            Type::Named { name, args } if matches!(name.as_str(), "Option" | "Result") => {
+                !args.is_empty()
+                    && args.iter().any(|a| self.copy_is_only_an_rc_retain(a))
+                    && args.iter().all(|a| {
+                        self.copy_is_only_an_rc_retain(a) || self.is_copy_type_during_check(a)
+                    })
+            }
+            Type::Tuple(elems) => {
+                !elems.is_empty()
+                    && elems.iter().any(|e| self.copy_is_only_an_rc_retain(e))
+                    && elems.iter().all(|e| {
+                        self.copy_is_only_an_rc_retain(e) || self.is_copy_type_during_check(e)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-09-01-4 — warn that reading a non-`Copy` field out of a
+    /// BORROWED value mints an implicit copy the source never asked for.
+    ///
+    /// `let m = s.r;` where `s: ref S` does not move `s.r` (it cannot — the
+    /// caller still owns it) and does not borrow it either (Kāra has no
+    /// borrow spelling for a projection yet). Both backends improvise the
+    /// third option: they COPY. For a heap-bearing field that is a deep copy
+    /// (`clone_ref_chain_field_move_rhs`, B-2026-07-21-11, which exists to
+    /// stop the double-free the aliasing bit-copy caused); for a heap-free
+    /// one it is a bit-copy. Either way there are now TWO values where the
+    /// author wrote one, so a user `Drop` body runs twice and an allocation
+    /// happens that is invisible at the use site.
+    ///
+    /// ## Why a warning and not an error
+    ///
+    /// design.md § "The dereference operator" says a non-`Copy` value may be
+    /// read through a reference "only via methods (`.clone()`, field
+    /// projection, etc.)", which read strictly makes this an error — and the
+    /// sibling `E_INDEX_MOVE_NON_COPY` enforces exactly that strict reading
+    /// one level down, for `v[i]`.
+    ///
+    /// The index rule could be an error because it has a fix-it that costs
+    /// nothing: `ref v[i]`. This shape does not. `ref s.r` is
+    /// `E_REF_OPERAND_UNSUPPORTED` ("only `ref <sequence>[i]` is supported in
+    /// v1"), and `.clone()` is unavailable on a type with no `Clone`. design.md
+    /// already set the precedent when it gated the index rejection on the
+    /// borrow form landing first — "rejecting the form before the borrow
+    /// spelling works would leave those sites with a diagnostic and no way to
+    /// satisfy it". The same gate applies here, so the rule is stated and made
+    /// VISIBLE now, and promoted to an error when `ref <place>` lands.
+    ///
+    /// ## Scope
+    ///
+    /// The two value positions the sibling rule covers: a `let` initializer and
+    /// an assignment RHS. Both were measured to copy, on all three surfaces. A
+    /// CALL ARGUMENT (`eat(s.r)`) is deliberately NOT included — measured, it
+    /// mints no copy and runs the `Drop` body exactly once, so a warning there
+    /// would be a false claim rather than a wider net.
+    ///
+    /// The `.clone()` fix-it is behaviour-PRESERVING, exactly as the index
+    /// rule's is: the read already copies, so spelling the copy changes
+    /// nothing but its visibility. It is offered only when the type actually
+    /// has a `.clone()` (B-2026-07-29-31's standing lesson — a confident wrong
+    /// steer is worse than no fix-it).
+    pub(super) fn warn_borrow_projection_copy(&mut self, value: &Expr, ty: &Type) {
+        if !matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return;
+        }
+        // Walk to the chain's root. Only projection hops: an `Index` hop is
+        // the sibling rule's business, and anything else (a call, a literal)
+        // produces a fresh value that nobody else owns — no copy, nothing to
+        // report.
+        let mut cur = value;
+        let rooted_in_borrow = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                // A named root must be a borrow BOTH in the signature and at
+                // this point in the body. The signature set alone is wrong
+                // under shadowing — an inner `let s = S { .. };` inside
+                // `fn f(s: ref S)` rebinds the name to an owned value, whose
+                // projection is a MOVE and must not be reported (measured: the
+                // first draft warned there). The scope lookup alone would be
+                // enough for a parameter, but not for `self`, which is bound
+                // under its bare type rather than a `Ref`, so both tests stay.
+                ExprKind::Identifier(n) => {
+                    break self.current_fn_ref_params.contains(n.as_str())
+                        && matches!(
+                            self.local_scope.lookup(n.as_str()),
+                            Some(Type::Ref(_) | Type::MutRef(_))
+                        )
+                }
+                ExprKind::SelfValue => break self.current_fn_ref_params.contains("self"),
+                _ => return,
+            }
+        };
+        if !rooted_in_borrow {
+            return;
+        }
+        if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
+            return;
+        }
+        // The same exemptions the sibling rule carries, for the same reasons.
+        // A `shared` handle read RETAINS rather than copies, so no second
+        // value exists and no user `Drop` body runs on the read. A function
+        // value is a fat pointer whose copy duplicates nothing.
+        //
+        // The shared test looks THROUGH `Option` / `Result` / tuples, which
+        // the sibling rule has no need to do: an indexed element is the shared
+        // handle itself (`Vec[shared T]`), whereas a FIELD routinely wraps one
+        // — `mut next: Option[Node]` for a `shared struct Node` is the
+        // canonical linked-list link, and `let cur = self.head;` there copies
+        // a handle, not a node. Without this the lint's own claim would be
+        // false at three sites in `examples/tangle`.
+        if self.copy_is_only_an_rc_retain(ty) || matches!(ty, Type::Function { .. }) {
+            return;
+        }
+        // An unsubstituted type parameter is not known to copy: a `T: Copy`
+        // instantiation of the same body does not, and this lint's whole
+        // value is that its claim is true at the site it points at. Declining
+        // costs a warning on the non-`Copy` instantiations; firing would put
+        // a false one on the `Copy` ones.
+        if matches!(ty, Type::TypeParam(_)) {
+            return;
+        }
+        let has_clone = self.type_supports_clone(ty);
+        let mut message = "reading a non-`Copy` field out of a borrowed value makes an \
+             implicit copy: this binding is an independent value rather than a view, so a \
+             heap-bearing field is duplicated on every read and any user `Drop` body runs a \
+             second time"
+            .to_owned();
+        if has_clone {
+            message += ". Write `.clone()` to say so at the use site";
+        } else {
+            message += ". There is no `.clone()` on this type and no borrow spelling for a \
+                 projection yet (`ref <place>` is not implemented), so the copy cannot be \
+                 avoided today — restructure to read the field in place if the second \
+                 `Drop` matters";
+        }
+        let fix_it = has_clone.then(|| crate::typechecker::FixIt {
+            span: Span {
+                offset: value.span.offset + value.span.length,
+                length: 0,
+                line: value.span.line,
+                column: value.span.column,
+            },
+            replacement: ".clone()".to_string(),
+        });
+        self.type_lint_warning_with_fix(
+            message,
+            value.span,
+            TypeErrorKind::TypeMismatch,
+            "borrow_projection_copy",
+            fix_it,
+        );
+    }
+
     pub(super) fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
         if !matches!(value.kind, ExprKind::Index { .. }) {
             return;
@@ -4455,6 +4645,9 @@ impl<'a> super::TypeChecker<'a> {
                 // initializer is the canonical value position, so a non-`Copy`
                 // element read here is rejected (B-2026-08-26-21).
                 self.reject_index_move_non_copy(value, &expected_ty);
+                // B-2026-09-01-4 — its sibling one level up: the same read
+                // through a BORROW rather than through a container index.
+                self.warn_borrow_projection_copy(value, &expected_ty);
                 // B-2026-07-31-20 — record the result type of a
                 // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                 // (read as an implicit binding annotation). The intercept in
@@ -4621,6 +4814,9 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     let rhs_ty = self.infer_expr(value);
                     self.reject_index_move_non_copy(value, &rhs_ty);
+                    // B-2026-09-01-4 — sibling of the rule above, same
+                    // value position.
+                    self.warn_borrow_projection_copy(value, &rhs_ty);
                 }
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
                 if let ExprKind::Unary {

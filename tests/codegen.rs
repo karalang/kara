@@ -98337,6 +98337,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_borrow_projection_copy_runs_the_drop_body_twice() {
+        // B-2026-09-01-4 — the OBSERVABLE this row is about, pinned so the
+        // language's current answer is a fact in the test suite rather than an
+        // inference from `clone_ref_chain_field_move_rhs`'s existence.
+        //
+        // `let m = s.r;` over `s: ref S` copies (design.md § "Field projection
+        // off a borrow"), so ONE constructed `R` yields TWO values and its
+        // `Drop` body runs twice — once for the copy, once for the caller's
+        // field. The same line over an OWNED root moves, and runs it once.
+        // Both spellings are here because the contrast is the whole point: the
+        // read's meaning is set by the root's parameter mode, and nothing at
+        // the read shows which one is in force. That invisibility is what
+        // `borrow_projection_copy` reports.
+        //
+        // THIS TEST IS EXPECTED TO CHANGE. design.md commits to promoting the
+        // lint to an error once `ref` accepts a place expression, exactly as
+        // `v[i]` became `E_INDEX_MOVE_NON_COPY` once `ref v[i]` landed
+        // (B-2026-08-26-36 then B-2026-08-26-21). When that happens the
+        // `borrowed` half stops compiling, and that is the intended signal —
+        // do not "fix" it by deleting the assertion.
+        let output = run_program(
+            "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(\"d\".to_string() + self.id.to_string()); } }\n\
+             struct S { r: R }\n\
+             fn borrowed(s: ref S) -> i64 { let m = s.r; return m.id; }\n\
+             fn owned(s: S) -> i64 { let m = s.r; return m.id; }\n\
+             fn main() {\n\
+                 let a = S { r: R { id: 3 } };\n\
+                 println(borrowed(a).to_string());\n\
+                 let b = S { r: R { id: 7 } };\n\
+                 println(owned(b).to_string());\n\
+                 println(\"end\");\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output, "d3\n3\nd3\n7\nd7\nend\n",
+            "the borrowed read copies (two `d3`), the owned read moves (one \
+             `d7`); if this ever prints one `d3`, the copy is gone and \
+             design.md § \"Field projection off a borrow\" is stale"
+        );
+    }
+
+    #[test]
     fn test_e2e_inline_index_map_get_unwrap_vec_value() {
         // B-2026-07-15-27: inline-indexing a `map.get(k).unwrap()` Vec value
         // (`m.get(k).unwrap()[i]`) used to loud-bail "Index operator applied to
