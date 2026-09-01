@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 7 |
-| run-vs-build | 290 | 16 |
+| run-vs-build | 290 | 15 |
 | leak | 251 | 7 |
 | missing-feature | 192 | 0 |
 | double-free | 162 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1347 | 33 |
-| interp | 312 | 17 |
+| interp | 312 | 16 |
 | typecheck | 285 | 0 |
 | ownership | 72 | 1 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1960 surfaced · 37 open · 1892 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1960 surfaced · 36 open · 1892 fixed · 11 wontfix · 3 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (36)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1960 surfaced
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
 | B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | — |
-| B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | — |
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
@@ -168,14 +167,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1960 surfaced
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
 | B-2026-09-01-38 | 2026-09-01 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's `drop` body RUNS ON THE ZEROED FIELD -- `match h { H { r, .. } }` prints `dR[d:3] dH dR[:0]` on both compiled backends | — |
 
-### Relocated (2)
+### Relocated (3)
 
-<details><summary>2 relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
+<details><summary>3 relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | implementation_checklist/phase-5-diagnostics.md#fn-type-effect-row-deferred |
 | B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | docs/roadmap.md § Phase 7.3 stdlib — the `StringSlice` item (zero-copy parsing/splitting), expanded in 5858a19 to carry the measured state, the v1/v2 blocker, and the open cursor-vs-split decision |
+| B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | B-2026-09-01-38 |
 
 </details>
 
