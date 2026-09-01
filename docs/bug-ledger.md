@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 159 | 1 |
 | diagnostics | 115 | 0 |
 | false-positive | 102 | 0 |
-| soundness | 94 | 2 |
+| soundness | 95 | 3 |
 | perf | 87 | 0 |
 | other | 69 | 2 |
 | crash | 67 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1346 | 32 |
+| codegen | 1347 | 33 |
 | interp | 312 | 17 |
 | typecheck | 285 | 0 |
-| ownership | 71 | 0 |
+| ownership | 72 | 1 |
 | other | 70 | 0 |
 | cli | 70 | 2 |
 | autopar | 55 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1959 surfaced · 36 open · 1892 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1960 surfaced · 37 open · 1892 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (36)
+### Open (37)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -166,6 +166,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1959 surfaced
 | B-2026-09-01-35 | 2026-09-01 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape guard sees that route, and it blocks B-2026-09-01-29's leak fix | — |
 | B-2026-09-01-36 | 2026-09-01 | cli+codegen | medium | A REPL CELL BINDING WHOSE OWN TYPE IS `shared` CANNOT JOIN THE JIT SNAPSHOT TIER: admitted, `s.n` reads the POINTER'S OWN BITS instead of the field (two different garbage values from the same expression where `--interp` prints `3`), because `register_var_from_type_expr` -- the registrar the snapshot replay path defers to -- re-registers a shared name as an INLINE struct; the OWNERSHIP half is fine (retracting the queued `RcDec` HOLDS the reference), and `shared` as a COMPONENT (`struct W { s: S }`, `Vec[S]`) round-trips correctly | — |
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
+| B-2026-09-01-38 | 2026-09-01 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's `drop` body RUNS ON THE ZEROED FIELD -- `match h { H { r, .. } }` prints `dR[d:3] dH dR[:0]` on both compiled backends | — |
 
 ### Relocated (2)
 
