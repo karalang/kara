@@ -125073,6 +125073,108 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-21 — A DISCARDED STRUCT LITERAL MIXING A LIVE-LOCAL SOURCE
+    /// WITH A MINTED SIBLING lost the minted field's `Drop` body on both
+    /// compiled backends.
+    ///
+    /// `discarded_owned_literal_tail`'s struct arm required EVERY field fresh,
+    /// and an `Identifier` naming a live Drop-bearing local is not, so one such
+    /// field declined the whole literal and no owner registered for ANY field:
+    /// `dR7` (the local's own scope-exit body) against `dR9 dR7` from the
+    /// interpreter and from the BOUND `let`, which is the oracle here.
+    ///
+    /// The TUPLE arm has had the escape hatch since B-2026-08-01-8 — admit the
+    /// place, retract that source's UserDrop at the caller so the temp's walk
+    /// is the single owner. `discarded_movable_literal_tail` is that hatch for
+    /// struct literals, kept SEPARATE from the all-fresh predicate because the
+    /// latter also feeds `discarded_arm_owned_aggregate_tail`, which performs
+    /// no retraction and would double-free.
+    #[test]
+    fn e2e_a_discarded_literal_mixing_a_source_and_a_mint_runs_both_bodies() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct S { r: R, k: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "mixed literal, bare statement",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 S2 { r: t, s: R { id: 9 }, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+            (
+                "mixed literal, wildcard `let`",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = S2 { r: t, s: R { id: 9 }, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+            (
+                "mixed literal behind a block wrapper",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 { S2 { r: t, s: R { id: 9 }, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+            (
+                "MINTED field first, source second — the order follows the literal",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 S2 { r: R { id: 9 }, s: t, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\ndR9\nv=7\n",
+            ),
+            (
+                "ORACLE: the BOUND `let` of the same literal",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = S2 { r: t, s: R { id: 9 }, k: 1 };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+            (
+                "control: TWO sources and no mint, unchanged by the widening",
+                "fn go() -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 S2 { r: t, s: u, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            (
+                "control: ONE source, single-field literal",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 S { r: t, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "control: ALL-MINTED keeps the owner it already had",
+                "fn go() -> i64 {\n\
+                 S2 { r: R { id: 7 }, s: R { id: 9 }, k: 1 };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: every field's body, each once");
+            }
+        }
+    }
+
     /// B-2026-09-01-18 — A DISCARDED STRUCT LITERAL BEHIND A BLOCK WRAPPER, OR
     /// WRITTEN BARE IN STATEMENT POSITION, ran its consumed local's `Drop` body
     /// TWICE under `--interp` and once on both compiled backends.

@@ -56090,6 +56090,141 @@ fn main() { println(go()); }
             10,
         );
     }
+    /// B-2026-09-01-21 — a DISCARDED struct literal MIXING a live-local source
+    /// with a minted sibling now registers an owner on the compiled backends,
+    /// where one non-fresh field used to decline the whole literal.
+    ///
+    /// The memory question this pins is the one the widening creates: the
+    /// literal's field walk becomes the single owner of the moved source, and
+    /// the source's own UserDrop is retracted at the statement site. Get the
+    /// retraction wrong in one direction and the source's wrapper fires over
+    /// the moved-from slot; wrong in the other and its `String` is freed twice.
+    /// The `String` field is what gives ASAN something to catch either way.
+    #[test]
+    fn asan_a_discarded_literal_mixing_a_source_and_a_mint_frees_once() {
+        const H: &str = "struct R { id: i64, s: String }\n\
+             struct S { r: R, k: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str)] = &[
+            // ── double-own guards: a second owner here is a DOUBLE FREE ──
+            (
+                "guard: the BOUND `let` is owned by its binding, not the site",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let w = S2 { r: t, s: mk(9), k: 1 };\n\
+                 \x20  w.k }\n",
+            ),
+            (
+                "guard: an ALL-MINTED discarded literal keeps its own owner",
+                "fn go() -> i64 { S2 { r: mk(7), s: mk(9), k: 1 };\n\
+                 \x20  1 }\n",
+            ),
+            // ── controls, clean before and after ─────────────────────────
+            // NOT a control here: `S2 { r: mk(1), s: mk(9), k: t.id };` — a
+            // SCALAR field read of a live local inside the literal — leaks
+            // both minted objects on the compiled backends (76 B / 2 allocs).
+            // Measured identical on unmodified `main`, so it predates this
+            // fix and is the same "one non-fresh field declines the whole
+            // literal" mechanism with a different field shape. Filed as
+            // B-2026-09-01-23 rather than folded in; a scalar read moves
+            // nothing, so its fix is an admission with no retraction, not
+            // this row's admission-plus-retraction.
+            (
+                "control: the local is read after the statement, not inside it",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  S2 { r: mk(1), s: mk(9), k: 5 };\n\
+                 \x20  t.id - t.id + 1 }\n",
+            ),
+        ];
+        for (label, body) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), &["1"], label);
+        }
+    }
+
+    /// B-2026-09-01-24 — the MEMORY half of B-2026-09-01-21, QUARANTINED on the
+    /// `-O0` leg (`tests/asan-o0-known-failures.txt`) against that row.
+    ///
+    /// B-2026-09-01-21 made these six shapes run every field's `Drop` BODY once
+    /// on all three backends. It did not make them FREE the field heap: at
+    /// `-O0`, where the allocations survive to be counted, each still leaks the
+    /// two `String` payloads (76 B / 2 allocations). Measured IDENTICAL on
+    /// unmodified `main`, so the leak predates that fix and is unchanged by it
+    /// — bodies-then-leak is strictly better than no-bodies-then-leak, and the
+    /// remaining half is its own row rather than a regression.
+    ///
+    /// Split out of `asan_a_discarded_literal_mixing_a_source_and_a_mint_frees_once`
+    /// rather than quarantining it whole: that test's double-own guards assert
+    /// real cleanliness, and taking them off the `-O0` leg to cover this is
+    /// exactly the decay the known-failures file documents itself against.
+    #[test]
+    fn asan_a_mixed_discarded_literal_still_leaks_its_field_heap() {
+        const H: &str = "struct R { id: i64, s: String }\n\
+             struct S { r: R, k: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str)] = &[
+            // The row's shape, in all three discarded spellings.
+            (
+                "mixed literal, bare statement",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  S2 { r: t, s: mk(9), k: 1 };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "mixed literal, wildcard `let`",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = S2 { r: t, s: mk(9), k: 1 };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "mixed literal behind a block wrapper",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  { S2 { r: t, s: mk(9), k: 1 } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "mixed literal, MINTED field first",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  S2 { r: mk(9), s: t, k: 1 };\n\
+                 \x20  1 }\n",
+            ),
+            // TWO sources and no mint: the widening admits this too, so the
+            // retraction has to cover both or one wrapper fires over a husk.
+            (
+                "two sources, no mint",
+                "fn go() -> i64 { let t = mk(7); let u = mk(8);\n\
+                 \x20  S2 { r: t, s: u, k: 1 };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "one source, single-field literal",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  S { r: t, k: 1 };\n\
+                 \x20  1 }\n",
+            ),
+            // The TUPLE leg's own shape (B-2026-08-01-8), which B-2026-09-01-21
+            // did not touch: `let _ = (t, 20);` leaks its `String` at -O0 too
+            // (38 B / 1 allocation). It belongs here because it shows the
+            // memory gap is SHARED by the tuple and struct legs rather than
+            // introduced by the struct admission — the tuple leg has had the
+            // movable-place hatch for a month and leaks identically.
+            (
+                "the TUPLE leg's own movable place leaks the same way",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = (t, 20);\n\
+                 \x20  1 }\n",
+            ),
+        ];
+        for (label, body) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), &["1"], label);
+        }
+    }
 
     /// B-2026-09-01-10 (leg 1) — a BLOCK-BODIED arm of a DISCARDED `match`
     /// stranded whatever its tail named.

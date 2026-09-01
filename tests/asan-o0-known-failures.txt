@@ -175,3 +175,18 @@ memory_sanitizer_tests::asan_discarded_branch_literal_field_over_a_loop_outer_lo
 # cell would have taken those off the leg too, which is the decay this file
 # documents itself against. Note what the split also fixes: B-2026-09-01-5's
 # prose already cited a test of this name that did not exist.
+memory_sanitizer_tests::asan_a_mixed_discarded_literal_still_leaks_its_field_heap  # B-2026-09-01-24
+#
+# The MEMORY half of B-2026-09-01-21. That row's fix made a discarded struct
+# literal whose fields mix a live-local source with a minted sibling run every
+# field's `Drop` BODY once on all three backends; it did not make the field
+# HEAP get freed. At -O0 each of the six shapes still leaks the two `String`
+# payloads (76 B / 2 allocations), and the same measurement holds on
+# unmodified `main` with that fix reverted — so this is a pre-existing leak the
+# body fix neither caused nor cured, not a regression it introduced.
+#
+# Its own `#[test]`, split from
+# `asan_a_discarded_literal_mixing_a_source_and_a_mint_frees_once`, whose
+# double-own guards (the bound `let`, the all-minted literal) assert real
+# cleanliness — quarantining that function whole would have taken those off
+# the leg, which is the decay this file documents itself against.

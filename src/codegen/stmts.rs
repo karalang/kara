@@ -3728,10 +3728,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // element/field exprs — see `discarded_owned_literal_tail`.
             StmtKind::Let { pattern, value, .. }
                 if matches!(&pattern.kind, PatternKind::Wildcard)
-                    && self.discarded_owned_literal_tail(value).is_some() =>
+                    && self.discarded_movable_literal_tail(value).is_some() =>
             {
                 let tail = self
-                    .discarded_owned_literal_tail(value)
+                    .discarded_movable_literal_tail(value)
                     .expect("guard guarantees a discarded literal tail")
                     .clone();
                 // B-2026-08-01-8: a PLACE element the tuple moved
@@ -3742,18 +3742,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // wrapper fired over the moved-from slot (empty-name body)
                 // and the moved heap leaked. Interp twin:
                 // `suppress_discarded_tuple_moved_elem_user_drops`.
-                if let ExprKind::Tuple(elems) = &tail.kind {
-                    let moved: Vec<String> = elems
-                        .iter()
-                        .filter(|e| self.tuple_elem_is_movable_drop_struct_place(e))
-                        .filter_map(|e| match &e.kind {
-                            ExprKind::Identifier(n) => Some(n.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    for n in moved {
-                        self.suppress_user_drop_for_var(&n);
-                    }
+                // B-2026-09-01-21 — and the STRUCT-literal fields that are the
+                // same movable place, now that the tail predicate admits them.
+                for n in self.discarded_literal_moved_place_sources(&tail) {
+                    self.suppress_user_drop_for_var(&n);
                 }
                 self.drop_rc.scope_cleanup_actions.push(Vec::new());
                 let val = self.compile_expr(value)?;
@@ -9683,7 +9675,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `let _ = H { s: payload() };`, since the aggregate registrar
                 // carries the memory side as well as the bodies.
                 let literal_tail = if tail.is_none() {
-                    self.discarded_owned_literal_tail(expr)
+                    self.discarded_movable_literal_tail(expr)
                 } else {
                     None
                 };
@@ -9692,18 +9684,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // has no owning destination, so the source's UserDrop must
                 // retract or its wrapper fires over a moved-from slot. Before
                 // the frame push and the compile, as there.
-                if let Some(ExprKind::Tuple(elems)) = literal_tail.map(|t| &t.kind) {
-                    let moved: Vec<String> = elems
-                        .iter()
-                        .filter(|e| self.tuple_elem_is_movable_drop_struct_place(e))
-                        .filter_map(|e| match &e.kind {
-                            ExprKind::Identifier(n) => Some(n.clone()),
-                            _ => None,
-                        })
-                        .collect();
-                    for n in moved {
-                        self.suppress_user_drop_for_var(&n);
-                    }
+                // B-2026-09-01-21 — and the STRUCT-literal fields that are the
+                // same movable place, now that the tail predicate admits them.
+                let moved = literal_tail
+                    .map(|t| self.discarded_literal_moved_place_sources(t))
+                    .unwrap_or_default();
+                for n in moved {
+                    self.suppress_user_drop_for_var(&n);
                 }
                 if tail.is_some() || literal_tail.is_some() {
                     self.drop_rc.scope_cleanup_actions.push(Vec::new());
@@ -17458,12 +17445,48 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn discarded_owned_literal_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        self.discarded_literal_tail_inner(expr, false)
+    }
+
+    /// B-2026-09-01-21 — the STATEMENT-DISCARD form of
+    /// [`Self::discarded_owned_literal_tail`], which additionally admits a
+    /// struct field that is a movable Drop-bearing place.
+    ///
+    /// The all-fresh rule declines the WHOLE literal when any one field names a
+    /// live local, so `S2 { r: t, s: R { id: 9 }, k: 1 };` registered no owner
+    /// at all and the MINTED sibling's body was lost on both compiled backends
+    /// (`dR7` against the interpreter's and the bound `let`'s `dR9 dR7`). The
+    /// TUPLE arm has had the escape hatch since B-2026-08-01-8: admit the
+    /// place, and have the CALLER retract that source's UserDrop so the temp's
+    /// field walk is the single owner. This is that hatch for struct literals.
+    ///
+    /// SEPARATE from `discarded_owned_literal_tail` on purpose, not a widening
+    /// of it. That predicate also feeds `discarded_arm_owned_aggregate_tail`,
+    /// whose doc records why a field naming a live binding must stay declined
+    /// THERE: an arm-level owner does not perform the caller-side retraction,
+    /// so a second owner would double-free rather than supply a missing body.
+    /// Only the two statement-discard sites, which do retract, may use this.
+    pub(super) fn discarded_movable_literal_tail<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
+        self.discarded_literal_tail_inner(expr, true)
+    }
+
+    /// Shared body of the two predicates above. `allow_movable_place` admits a
+    /// struct field that is an `Identifier` naming a tracked non-shared
+    /// Drop-bearing struct — the same shape the TUPLE arm already admits
+    /// unconditionally, and legal only where the caller retracts the source.
+    fn discarded_literal_tail_inner<'e>(
+        &self,
+        expr: &'e Expr,
+        allow_movable_place: bool,
+    ) -> Option<&'e Expr> {
         match &expr.kind {
             ExprKind::StructLiteral { fields, spread, .. }
                 if spread.is_none()
-                    && fields
-                        .iter()
-                        .all(|f| self.discard_tuple_elem_is_fresh_expr(&f.value)) =>
+                    && fields.iter().all(|f| {
+                        self.discard_tuple_elem_is_fresh_expr(&f.value)
+                            || (allow_movable_place
+                                && self.tuple_elem_is_movable_drop_struct_place(&f.value))
+                    }) =>
             {
                 Some(expr)
             }
@@ -17490,9 +17513,31 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::LabeledBlock { body: block, .. } => block
                 .final_expr
                 .as_deref()
-                .and_then(|e| self.discarded_owned_literal_tail(e)),
+                .and_then(|e| self.discarded_literal_tail_inner(e, allow_movable_place)),
             _ => None,
         }
+    }
+
+    /// B-2026-09-01-21 — every source a DISCARDED literal moves that the
+    /// statement site must retract: the tuple arm's movable places, and now a
+    /// struct literal's movable-place FIELDS. Their move has no owning
+    /// destination, so the temp's element/field walk is the single owner and
+    /// the source's own UserDrop must go — left armed it fires over the
+    /// moved-from slot.
+    pub(super) fn discarded_literal_moved_place_sources(&self, tail: &Expr) -> Vec<String> {
+        let values: Vec<&Expr> = match &tail.kind {
+            ExprKind::Tuple(elems) => elems.iter().collect(),
+            ExprKind::StructLiteral { fields, .. } => fields.iter().map(|f| &f.value).collect(),
+            _ => return Vec::new(),
+        };
+        values
+            .into_iter()
+            .filter(|e| self.tuple_elem_is_movable_drop_struct_place(e))
+            .filter_map(|e| match &e.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// B-2026-07-30-11 (discarded-temp leg) — BODY-ONLY walk over a
