@@ -594,6 +594,16 @@ pub struct Interpreter<'a> {
     /// distinction: `let Holder { r } = h;` inside a method now fires once,
     /// matching both compiled backends.
     pub(crate) owned_param_frame_is_method: Vec<bool>,
+    /// Per method frame: the owned params THIS FRAME took ownership of, i.e.
+    /// what `method_param_drop_names` admitted. B-2026-08-30-55.
+    ///
+    /// The complement matters as much as the set: an owned param absent from it
+    /// is one the CALLER still fires, which is what licenses a retraction
+    /// inside the frame. `owned_param_frame_is_method` alone cannot answer
+    /// that — it says the frame is a method, not who owns which argument — and
+    /// the two answers stopped coinciding once a method frame began claiming
+    /// fresh-temp arguments.
+    pub(crate) method_frame_owned_params: Vec<Vec<String>>,
     /// Bindings whose WHOLE value moved into a variant constructor
     /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
     /// — own `impl Drop` body and container walks — is silenced; the enum's
@@ -1026,6 +1036,7 @@ impl<'a> Interpreter<'a> {
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
+            method_frame_owned_params: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             cond_move_escaping_sites: HashSet::new(),
             taken_branch_tail: None,

@@ -571,7 +571,7 @@ impl<'a> super::Interpreter<'a> {
                 // `record_conditional_move_tail`. Same channel as the free-fn
                 // seeding in `eval_call`, wider admission — see
                 // `method_param_drop_names`.
-                let param_drop_names = self.method_param_drop_names(&type_name, method);
+                let param_drop_names = self.method_param_drop_names(&type_name, method, args);
                 // B-2026-08-29-11, PARAM LEG — `moved_out_user_drop_bindings` is
                 // keyed by bare NAME with no frame qualifier, and the method
                 // path deliberately does not isolate it (see the note below).
@@ -595,6 +595,11 @@ impl<'a> super::Interpreter<'a> {
                 // caller's pre-existing mark on one of these names is preserved
                 // here exactly, so that shape is untouched. What is undone is
                 // only a mark this frame itself introduced.
+                // B-2026-08-30-55 — the same set, kept for the frame's lifetime
+                // so a retraction inside the body can ask who owns a given
+                // param rather than only whether this is a method frame.
+                self.method_frame_owned_params
+                    .push(param_drop_names.to_vec());
                 self.pending_param_drop_bindings = param_drop_names;
                 // B-2026-08-30-33 — method sibling of the free-fn seeding.
                 let saved_cond_store_params = std::mem::replace(
@@ -694,6 +699,7 @@ impl<'a> super::Interpreter<'a> {
                 self.record_method_arg_moves(&type_name, method, args);
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
+                self.method_frame_owned_params.pop();
                 if pushed_self_mode {
                     self.self_param_stack.pop();
                 }

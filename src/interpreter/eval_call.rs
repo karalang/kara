@@ -2645,7 +2645,12 @@ impl<'a> super::Interpreter<'a> {
     /// Generics are claimed like any other shape, the conditionally-returned
     /// one included since B-2026-08-28-71 gave codegen's mono leg the matching
     /// registration.
-    pub(crate) fn method_param_drop_names(&self, type_name: &str, method: &str) -> Vec<String> {
+    pub(crate) fn method_param_drop_names(
+        &self,
+        type_name: &str,
+        method: &str,
+        args: &[crate::ast::CallArg],
+    ) -> Vec<String> {
         let Some(f) = self.impl_method_ast(type_name, method) else {
             return Vec::new();
         };
@@ -2696,14 +2701,90 @@ impl<'a> super::Interpreter<'a> {
             // sibling applies: a `shared` struct drops through the RC path and
             // never this drain, and the enum-payload channel is a different
             // registration.
-            let Some(Value::Struct { name: tn, .. }) = self.env.get(name) else {
+            //
+            // B-2026-08-30-55 — STRUCT and ENUM params, not structs alone.
+            //
+            // This gate admitted `Value::Struct` only, and a method frame
+            // stands its caller down (B-2026-08-28-70), so an owned ENUM
+            // argument had NO owner on either side: measured,
+            // `t.eat(E.A(R { .. }))` ran zero `Drop` bodies under `--interp` —
+            // neither the enum's own nor its payload's — against two on both
+            // compiled backends. Two controls localize it exactly, and both are
+            // correct on all four surfaces: the FREE-FUNCTION twin of the same
+            // program (whose caller still fires), and a STRUCT param in the
+            // same method (which this arm admits). It is the intersection that
+            // had nobody.
+            // Does the CALLER still own this argument? It fires a NAMED
+            // argument unless `record_method_arg_moves` stood it down, which it
+            // does exactly when the value ESCAPES the callee. The predicate is
+            // spelled the same way here on purpose: the two sides decide one
+            // question between them, and a drift would either double a body or
+            // lose it.
+            //
+            // A FRESH TEMP has no caller binding at all, so nothing on that
+            // side can fire it — which is the hole this row reports.
+            let caller_still_owns = matches!(
+                args.get(i).map(|a| &a.value.kind),
+                Some(ExprKind::Identifier(_))
+            ) && !(crate::ast::fn_returns_param(f, i)
+                || crate::ast::fn_returns_param_payload(f, i)
+                || crate::ast::fn_moves_param_into_outliving_place(f, i));
+            if caller_still_owns {
+                continue;
+            }
+            let Some(value) = self.env.get(name) else {
                 continue;
             };
-            if self.program.drop_method_keys.contains_key(tn.as_str()) {
+            let claims = match value {
+                Value::Struct { name: tn, .. } => {
+                    self.program.drop_method_keys.contains_key(tn.as_str())
+                }
+                Value::EnumVariant { .. } => self.enum_value_runs_user_drop(&value),
+                _ => false,
+            };
+            if claims {
                 out.push(name.to_string());
             }
         }
         out
+    }
+
+    /// Does an owned ENUM value carry user-`Drop` work the frame that owns it
+    /// must run — its own body, or one reachable through its payload?
+    ///
+    /// B-2026-08-30-55. Separate from `value_runs_user_drop`, which answers
+    /// `false` for every non-struct BY DESIGN: its doc records that a bare
+    /// Array/Tuple/Map classifies false at top level so the dedicated container
+    /// walkers stay the sole firers for direct bindings. An enum param is not
+    /// one of those — no other walker reaches it — so it needs its own answer.
+    ///
+    /// Both halves are required. `enum E { A(R), B }` with `impl Drop for E`
+    /// over a `Drop`-bearing `R` runs `dE` AND `dR8` on the compiled backends,
+    /// and an enum with no body of its own still owes its payload's.
+    ///
+    /// Deliberately narrow rather than "register every enum". The firing site
+    /// pushes the binding's name onto `drop_trace` whether or not a body
+    /// actually runs, so admitting an enum that owes nothing would add phantom
+    /// entries to a trace the tests assert on.
+    fn enum_value_runs_user_drop(&self, value: &Value) -> bool {
+        let Value::EnumVariant {
+            enum_name, data, ..
+        } = value
+        else {
+            return false;
+        };
+        if self
+            .program
+            .drop_method_keys
+            .contains_key(enum_name.as_str())
+        {
+            return true;
+        }
+        match data {
+            EnumData::Unit => false,
+            EnumData::Tuple(items) => items.iter().any(|v| self.value_runs_user_drop(v)),
+            EnumData::Struct(fields) => fields.values().any(|v| self.value_runs_user_drop(v)),
+        }
     }
 
     /// B-2026-08-29-11, CALLER leg — a bare-identifier arg passed BY VALUE to a

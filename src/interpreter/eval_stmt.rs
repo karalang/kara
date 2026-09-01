@@ -2016,7 +2016,18 @@ impl<'a> super::Interpreter<'a> {
         // caller-side fire. Bailing keeps every method frame registering its
         // slots; see `owned_param_frame_is_method` for the measurements, the
         // struct leg included.
-        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+        // B-2026-08-30-55 — the `let` spelling of the same question. Was a
+        // blanket method-frame bail; now a frame that CLAIMED an argument holds
+        // its slots (nothing else fires them) while one that claimed none
+        // retracts to the caller, exactly as `record_assign_of_param_view`
+        // does. The two spellings have to agree — that they do is the property
+        // B-2026-08-29-58 restored, and keeping one predicate for both is what
+        // stops them drifting apart again.
+        if self
+            .method_frame_owned_params
+            .last()
+            .is_some_and(|owned| !owned.is_empty())
+        {
             return false;
         }
         // `PatternKind::Tuple` belongs on this list for the same reason
@@ -2180,12 +2191,35 @@ impl<'a> super::Interpreter<'a> {
     /// `let` spelling has the identical residue in the identical frame, and the
     /// two spellings agreeing is exactly the property being restored here.
     fn record_assign_of_param_view(&mut self, target: &str, value: &Expr) {
-        if self.owned_param_frame_is_method.last().copied() == Some(true) {
-            return;
-        }
         let ExprKind::Identifier(src) = &value.kind else {
             return;
         };
+        // B-2026-08-30-55 — this was a blanket "never retract inside a method
+        // frame", and the doc above records exactly why: a method frame's
+        // argument reached no caller-side fire, so its own slot was the ONLY
+        // owner and retracting took the body count to zero.
+        //
+        // That premise is now conditional. A method frame claims the arguments
+        // nobody else can (fresh temps), and leaves the ones the caller still
+        // fires. So ask WHICH: retract where the caller owns the value —
+        // restoring the single-owner count the compiled backends produce — and
+        // hold where this frame owns it, because there the slot really is the
+        // only owner. Measured on both halves: lifting the guard outright fixed
+        // the named spelling and lost the payload body on the fresh-temp one.
+        // Asked at FRAME granularity, not per param, and deliberately so. The
+        // source here is routinely a VIEW of the argument rather than the
+        // argument itself — `match b { E.A(r) => { out = r; } }` assigns `r`,
+        // which four separate sites propagate view-ness onto — so a per-name
+        // test answers "not owned" for exactly the case the guard exists to
+        // catch. A frame that claimed nothing has a caller firing every
+        // argument, which is the licence the retraction needs.
+        if self
+            .method_frame_owned_params
+            .last()
+            .is_some_and(|owned| !owned.is_empty())
+        {
+            return;
+        }
         let src_is_view = self
             .owned_param_names_stack
             .last()
