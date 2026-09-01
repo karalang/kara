@@ -66303,4 +66303,123 @@ fn main() {
             "b30-16-freshtemp-shared-enum-scrutinee-release",
         );
     }
+
+    /// B-2026-09-01-29 — a fresh-temp `Option`/`Result` argument handed to a
+    /// callee that STORES it must not also be owned by the caller.
+    ///
+    /// `track_optres_arg_temp` (B-2026-08-12-1) gives the caller ownership of a
+    /// fresh temp on the reasoning that the callee entry-copies the param and
+    /// frees only its own copy. That reasoning holds only while the callee
+    /// actually copies, and it does not: the entry copy (functions.rs) fires
+    /// solely for a param in `nonescaping_param_names`, and a param the callee
+    /// pushes into a `mut ref` accumulator is escaping by that analysis's own
+    /// definition. So for a STORING callee the caller owned a buffer the
+    /// container also owns, and the program aborted:
+    ///
+    ///     fn sink(acc: mut ref Vec[Option[String]], x: Option[String]) { acc.push(x) }
+    ///     sink(mut acc, Some(mks(i)))     ASAN: attempting double-free
+    ///
+    /// The `let`-bound spelling of the same value is clean, because an
+    /// identifier argument is not a temp and never reached the ownership at
+    /// all — which is what isolates this to the fresh-temp path.
+    ///
+    /// LEAK DETECTION IS OFF HERE, DELIBERATELY, and that is the honest shape
+    /// of this fix rather than a convenience. Standing the caller's owner down
+    /// leaves NOBODY freeing the buffer, because the callee did not copy it and
+    /// its own param slot registers no cleanup for an escaping param either.
+    /// The result is a leak where there was a double free — strictly safer, and
+    /// strictly incomplete. Asserting `success()` under `detect_leaks=0` pins
+    /// exactly what changed (the memory error is gone) without claiming the
+    /// balance this row's remaining half is about. When the leak half lands,
+    /// this fixture should move to `assert_clean_asan_run`.
+    ///
+    /// Three call shapes, because each reaches a DIFFERENT ownership site with
+    /// its own copy of the gate: a free function (`call_dispatch.rs`), a method
+    /// (`method_call.rs`), and an associated function (`assoc_call.rs`).
+    #[test]
+    fn asan_stored_optres_temp_arg_has_one_owner() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "free fn",
+                r#"
+fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
+fn sink(acc: mut ref Vec[Option[String]], x: Option[String]) { acc.push(x); }
+fn main() {
+    let mut acc: Vec[Option[String]] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        sink(mut acc, Some(mks(i)));
+        println(f"{acc.len()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            ),
+            (
+                "method",
+                r#"
+struct Bag { xs: Vec[Option[String]] }
+impl Bag {
+    fn sink(mut ref self, x: Option[String]) { self.xs.push(x); }
+    fn size(ref self) -> i64 { return self.xs.len(); }
+}
+fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    let mut i = 0;
+    while i < 3 {
+        b.sink(Some(mks(i)));
+        println(f"{b.size()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            ),
+            (
+                "assoc fn",
+                r#"
+struct Bag { xs: Vec[Option[String]] }
+impl Bag {
+    fn fill(acc: mut ref Vec[Option[String]], x: Option[String]) { acc.push(x); }
+}
+fn mks(n: i64) -> String { return f"payloadpayload{n}"; }
+fn main() {
+    let mut acc: Vec[Option[String]] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        Bag.fill(mut acc, Some(mks(i)));
+        println(f"{acc.len()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            ),
+        ];
+        for (label, src) in cases {
+            if !asan_available() {
+                eprintln!("[{label}] ASAN unavailable on this host — skipping");
+                return;
+            }
+            let Some((stdout, stderr, status)) =
+                run_under_asan_no_leak_check(src, "b29-stored-optres-temp")
+            else {
+                eprintln!("[{label}] setup failed — skipping");
+                return;
+            };
+            assert!(
+                status.success(),
+                "[{label}] the stored temp must have exactly one owner; ASAN \
+                 exited {:?}. stderr was: {stderr:?}",
+                status.code(),
+            );
+            assert_eq!(
+                stdout.lines().collect::<Vec<_>>(),
+                vec!["1", "2", "3", "done"],
+                "[{label}] output must be unchanged"
+            );
+        }
+    }
 }

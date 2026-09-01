@@ -2353,7 +2353,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 // is suppressed for this shape, still fires at scope exit.
                 // Identifier args are excluded for exactly that reason — owning
                 // one here would be the double free the zero used to prevent.
-                if let Some(param_te) = callee_entry_copies.clone() {
+                // B-2026-09-01-29 — a callee that MOVES the argument into a
+                // place outliving the call (`fn sink(acc: mut ref Vec[Option[
+                // String]], x: Option[String]) { acc.push(x) }`) hands
+                // ownership to that place, so a caller-side owner here is a
+                // SECOND one and the pair is a double free, not a leak.
+                //
+                // Measured on an unmodified tree: `sink(mut acc, Some(mks(i)))`
+                // aborts under ASAN with `attempting double-free`, and the same
+                // program with the argument bound to a `let` first is clean —
+                // the fresh temp is the only spelling that reaches the
+                // ownership registered below.
+                //
+                // The gate is exact for this route rather than conservative:
+                // the callee cannot both store the argument and entry-copy it.
+                // The entry copy (functions.rs) fires only for a param in
+                // `nonescaping_param_names`, and a param pushed into a `mut
+                // ref` accumulator is escaping by that analysis's own
+                // definition. So this never stands down an owner that was
+                // balancing a copy.
+                //
+                // `call_arg_flows_into_return` guards this whole block for the
+                // RETURN direction already; this is the STORE direction. A
+                // THIRD route — the callee pushing the argument into a LOCAL it
+                // then returns inside an aggregate — is covered by neither and
+                // is a live double free on `main`; it is filed separately
+                // rather than papered over here, because catching it needs an
+                // escape analysis neither predicate performs.
+                let callee_stores_arg = self.call_arg_moves_into_outliving_place(&name, i, false);
+                if let Some(param_te) = callee_entry_copies.clone().filter(|_| !callee_stores_arg) {
                     // Two independent ownership questions about one temp — the
                     // `{ptr,len,cap}` payload buffer and the boxed field
                     // envelope — with different freshness rules and so

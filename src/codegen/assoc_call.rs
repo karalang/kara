@@ -3306,7 +3306,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // temp. `optres_arg_is_unowned_temp` fires only where no
                     // binding exists, so this half cannot double-free an owner
                     // that is already registered somewhere.
-                    if let Some(param_te) = self.callee_optres_param_entry_copied(&qualified, i) {
+                    // B-2026-09-01-29 — the ASSOC-fn twin of the free-fn
+                    // store gate. This site has no `call_arg_flows_into_return`
+                    // guard of its own, so the store route is the only one it
+                    // can close; the returned-aggregate route stays open here
+                    // and is filed separately.
+                    let callee_stores_arg =
+                        self.call_arg_moves_into_outliving_place(&qualified, i, false);
+                    if let Some(param_te) = self
+                        .callee_optres_param_entry_copied(&qualified, i)
+                        .filter(|_| !callee_stores_arg)
+                    {
                         let own_payload = self.optres_arg_is_unowned_temp(&a.value);
                         let own_envelope = self.optres_arg_mints_field_envelope(&a.value);
                         if own_payload || own_envelope {
