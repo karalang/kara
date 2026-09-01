@@ -50559,9 +50559,11 @@ fn test_method_fresh_temp_arg_handed_back_runs_one_body() {
     // flip that `fn_conditionally_returns_param_bare` has for the bare
     // form. Filed separately.
     //
-    // (b) `t.keep(..)`, whose arm binds the payload but returns a SCALAR,
-    // runs no body at all on the interpreter against one compiled — the
-    // opposite direction, and a different defect. Filed separately.
+    // (b) WAS a pinned divergence — `t.keep(..)`, whose arm binds the payload
+    // but returns a SCALAR, ran no body at all here against one compiled. Fixed
+    // by B-2026-08-31-47 and now asserted as CORRECT below, agreeing with both
+    // compiled backends. The disarm it tripped over is a hand-off, and a method
+    // frame reached with a fresh temp has nobody to hand to.
     let hdr2 = "struct R { id: i64, name: String }\n\
                 impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") } }\n\
                 fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
@@ -50594,10 +50596,12 @@ fn test_method_fresh_temp_arg_handed_back_runs_one_body() {
              let n = t.keep(Box2.Full(mk(7)));\n\
              println(f\"n{{n}}\");\n}}\n"
         )),
-        // THIS backend LOSES the body (compiled runs one); opposite
-        // direction to (a), and its own defect.
-        "n7\n",
-        "[pinned DIVERGENCE (b): compiled runs the body the interpreter loses]"
+        // B-2026-08-31-47 — now correct, and identical to both compiled
+        // backends. The arm binds the payload out of an owned param and
+        // returns a SCALAR, so nothing escapes and this frame is the only
+        // owner; the payload walk therefore stays armed.
+        "drop 7 h7\nn7\n",
+        "[B-2026-08-31-47: enum temp whose arm binds a payload it does not return]"
     );
 }
 

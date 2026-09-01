@@ -2803,6 +2803,55 @@ impl<'a> super::Interpreter<'a> {
         })
     }
 
+    /// The owned params of this method call for which THIS FRAME is the only
+    /// owner of the payload bodies — nobody else will run them.
+    ///
+    /// B-2026-08-31-47. Two conditions, and both are load-bearing:
+    ///
+    /// * the CALLER is not firing the argument (a fresh temp has no binding to
+    ///   fire), which is `method_frame_caller_retains_args`' per-argument test;
+    /// * the payload does not ESCAPE through the return. `fn take(b: Box2) -> R
+    ///   { match b { Box2.Full(r) => return r, .. } }` hands the payload back,
+    ///   so the caller's RESULT binding owns it. Measured: without this half
+    ///   the body ran twice — once from the frame's walk and once from the
+    ///   result — against one on both compiled backends, which is what
+    ///   `test_method_fresh_temp_arg_handed_back_runs_one_body` pins.
+    pub(crate) fn method_frame_sole_owned_params(
+        &self,
+        type_name: &str,
+        method: &str,
+        args: &[crate::ast::CallArg],
+    ) -> Vec<String> {
+        let Some(f) = self.impl_method_ast(type_name, method) else {
+            return Vec::new();
+        };
+        f.params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                if matches!(
+                    p.ty.kind,
+                    crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+                ) {
+                    return None;
+                }
+                let caller_fires = matches!(
+                    args.get(i).map(|a| &a.value.kind),
+                    Some(ExprKind::Identifier(_))
+                ) && !crate::ast::fn_always_returns_param(f, i)
+                    && !crate::ast::fn_conditionally_returns_param_bare(f, i);
+                if caller_fires
+                    || crate::ast::fn_returns_param(f, i)
+                    || crate::ast::fn_returns_param_payload(f, i)
+                    || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                {
+                    return None;
+                }
+                p.name().map(str::to_string)
+            })
+            .collect()
+    }
+
     /// Does an owned ENUM value carry user-`Drop` work the frame that owns it
     /// must run — its own body, or one reachable through its payload?
     ///

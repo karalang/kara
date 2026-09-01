@@ -608,6 +608,9 @@ pub struct Interpreter<'a> {
     /// `method_frame_caller_retains_args` for why this is not the same question
     /// as "did the frame register any drop slots".
     pub(crate) method_frame_caller_retains_args: Vec<bool>,
+    /// Per method frame: the owned params whose payload bodies only THIS FRAME
+    /// can run. B-2026-08-31-47 — see `method_frame_sole_owned_params`.
+    pub(crate) method_frame_sole_owned: Vec<Vec<String>>,
     /// Bindings whose WHOLE value moved into a variant constructor
     /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
     /// — own `impl Drop` body and container walks — is silenced; the enum's
@@ -1041,6 +1044,7 @@ impl<'a> Interpreter<'a> {
             owned_param_names_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
             method_frame_caller_retains_args: Vec::new(),
+            method_frame_sole_owned: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             cond_move_escaping_sites: HashSet::new(),
             taken_branch_tail: None,

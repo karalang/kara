@@ -6179,6 +6179,27 @@ impl<'a> super::Interpreter<'a> {
                                 if self.user_method_returns_owned_type(method, &tn) {
                                     if self.program.drop_method_keys.contains_key(&tn) {
                                         self.run_user_drop_body_on_value(&tn, discarded);
+                                    } else if tn == "Option" || tn == "Result" {
+                                        // B-2026-08-31-47 — `Option`/`Result`
+                                        // take the SHARED discard walker, not
+                                        // the declared-type payload walk beside
+                                        // it. They are built-ins with no
+                                        // source-level `EnumDef`, and that walk
+                                        // is declared-type driven, so it
+                                        // silently answers nothing for them:
+                                        // `k.f(mk(4), true);` ran NO body while
+                                        // `let _ = k.f(mk(4), true);` — which
+                                        // reaches the shared walker's own
+                                        // value-driven `Option`/`Result` arm —
+                                        // ran one. Two spellings of one discard
+                                        // disagreeing, with the bare one silent.
+                                        //
+                                        // The user-enum sibling is correct on
+                                        // both spellings and stays on its
+                                        // existing path; only the built-ins
+                                        // move, which is the whole of the
+                                        // difference measured.
+                                        self.run_discarded_value_user_drops(discarded);
                                     } else {
                                         self.run_enum_payload_user_drops_value(&discarded);
                                     }

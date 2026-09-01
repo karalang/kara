@@ -601,6 +601,8 @@ impl<'a> super::Interpreter<'a> {
                 // a method frame.
                 self.method_frame_caller_retains_args
                     .push(self.method_frame_caller_retains_args(&type_name, method, args));
+                let sole = self.method_frame_sole_owned_params(&type_name, method, args);
+                self.method_frame_sole_owned.push(sole);
                 self.pending_param_drop_bindings = param_drop_names;
                 // B-2026-08-30-33 — method sibling of the free-fn seeding.
                 let saved_cond_store_params = std::mem::replace(
@@ -701,6 +703,7 @@ impl<'a> super::Interpreter<'a> {
                 self.owned_param_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 self.method_frame_caller_retains_args.pop();
+                self.method_frame_sole_owned.pop();
                 if pushed_self_mode {
                     self.self_param_stack.pop();
                 }

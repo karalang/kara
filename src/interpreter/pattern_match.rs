@@ -443,7 +443,9 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         let enum_name = enum_name.clone();
-        if self.match_disarms_payload_walk(&enum_name, arms) {
+        if self.match_disarms_payload_walk(&enum_name, arms)
+            && !self.frame_is_sole_owner_of_param(&name)
+        {
             self.moved_out_enum_payload_bindings.insert(name);
         }
     }
@@ -543,7 +545,7 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         let enum_name = enum_name.clone();
-        if takes_payload(self, &enum_name) {
+        if takes_payload(self, &enum_name) && !self.frame_is_sole_owner_of_param(&name) {
             self.moved_out_enum_payload_bindings.insert(name);
         }
     }
@@ -612,6 +614,28 @@ impl<'a> super::Interpreter<'a> {
                 _ => return false,
             }
         }
+    }
+
+    /// Is `name` an owned parameter of a method frame that the CALLER is not
+    /// firing — i.e. is this frame the value's only owner?
+    ///
+    /// B-2026-08-31-47. Disarming a scrutinee's payload walk is a HAND-OFF: the
+    /// arm binds the payload out and its new owner runs the body. In a method
+    /// frame reached with a FRESH TEMP there is no such owner. The arm defers
+    /// (`scrutinee_expr_is_consuming` answers false for an owned param, the
+    /// caller-retains carve-out), the caller has no binding to defer TO, and
+    /// with the walk disarmed as well the body ran nowhere: measured,
+    /// `t.keep(Box2.Full(mk(7)))` printed nothing under `--interp` against one
+    /// body on both compiled backends.
+    ///
+    /// The two neighbouring shapes stay disarmed and were both correct
+    /// throughout — a method whose arm binds nothing (`Box2.Full(_)`) and one
+    /// that never matches at all — which is what localizes this to the
+    /// binding arm.
+    fn frame_is_sole_owner_of_param(&self, name: &str) -> bool {
+        self.method_frame_sole_owned
+            .last()
+            .is_some_and(|sole| sole.iter().any(|n| n == name))
     }
 
     pub(super) fn scrutinee_expr_is_consuming(&self, e: &Expr) -> bool {
