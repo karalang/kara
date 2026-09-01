@@ -10420,12 +10420,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     // inner-element drop".
                     let lhs_is_tracked_vec =
                         self.var_types.vec_elem_types.contains_key(name.as_str());
+                    // B-2026-08-30-13 — classify the RHS through a
+                    // VALUE-POSITION BLOCK wrapper. `s = { t };` stores `t`'s
+                    // buffer into `s` exactly as the bare `s = t;` spelling
+                    // does, but both predicates below matched on `value.kind`
+                    // directly, so the block spelling was neither a self- nor a
+                    // moved-alias, `trigger_eager_free` never fired, and the
+                    // displaced old buffer was orphaned (15 B for a String, 40 B
+                    // for a `Vec[i64]`, unbounded in a loop). It reads as a
+                    // missing mechanism and is not one: `rhs_yields_fresh_ref`
+                    // ALREADY peels these wrappers, which is why `s = { mkB(n) }`
+                    // was clean and only the alias spelling leaked. This brings
+                    // the two classifications back into agreement.
+                    //
+                    // BOTH predicates are peeled together, and the pairing is the
+                    // load-bearing half: widening `rhs_is_moved_alias` alone would
+                    // make `s = { s };` free the very buffer it is about to store
+                    // back, trading a leak for a use-after-free. `s = { s };` is
+                    // clean today and is pinned as a control alongside the leak
+                    // fixture for exactly that reason.
+                    //
+                    // `block_tail_expr` peels `Block` / `Seq` / `Unsafe` only —
+                    // never a `LabeledBlock`, whose value can also arrive from a
+                    // `break`-with-value that the tail expression does not name,
+                    // so its tail is not the sole answer to "what gets stored".
+                    let rhs_tail = Self::block_tail_expr(value);
                     let rhs_is_self_alias = matches!(
-                        &value.kind,
+                        &rhs_tail.kind,
                         ExprKind::Identifier(rhs_name) if rhs_name == name
                     );
                     let rhs_is_moved_alias = matches!(
-                        &value.kind,
+                        &rhs_tail.kind,
                         ExprKind::Identifier(rhs_name) if rhs_name != name
                             && self.var_types.vec_elem_types.contains_key(rhs_name.as_str())
                     );

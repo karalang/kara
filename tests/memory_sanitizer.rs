@@ -65850,4 +65850,88 @@ fn main() {
         let expect_refs: Vec<&str> = expect.iter().map(|s| s.as_str()).collect();
         assert_clean_asan_run_min_allocs(src, &expect_refs, "b21-discarded-shared-literal", 80);
     }
+
+    /// B-2026-08-30-13 — an assignment whose RHS is a VALUE-POSITION BLOCK did
+    /// not free the value it overwrote. `s = { t };` stores `t`'s buffer into
+    /// `s` exactly as the bare `s = t;` spelling does, but the Assign arm's two
+    /// alias predicates matched on the RHS `ExprKind` directly, so a block
+    /// wrapper made the statement neither a self- nor a moved-alias and
+    /// `trigger_eager_free` never fired.
+    ///
+    /// The reason it is one RHS SHAPE rather than a missing mechanism, and the
+    /// reason the fix is three lines: `rhs_yields_fresh_ref` ALREADY peels the
+    /// same wrappers, so `s = { mkB(n) }` was clean the whole time and only the
+    /// alias spelling leaked. The neighbours `s = mkB(n)` and `s = t` are both
+    /// clean at both opt levels and are pinned below so a fix that widens the
+    /// wrong way is caught here rather than in a kata.
+    ///
+    /// `s3 = { s3 }` IS THE LOAD-BEARING CASE, and it is a control, not a leak:
+    /// widening the moved-alias predicate through the block WITHOUT widening the
+    /// self-alias predicate alongside it frees the very buffer the statement is
+    /// about to store back — a use-after-free traded for a leak, and the one way
+    /// this fix can go wrong. It is clean before and after; only a half-fix
+    /// breaks it.
+    ///
+    /// COVERAGE, stated because it is narrower than the assertion looks:
+    /// measured against the pre-fix compiler this leaks **138 B in 7 blocks** at
+    /// `KARAC_OPT_LEVEL=0` (30 allocs / 23 frees) — 15 B for the displaced
+    /// `s1`, 40 B for the displaced `s2`, and 83 B across the loop's five
+    /// displaced generations — and is CLEAN at the default `-O2` BOTH before and
+    /// after, where the optimizer folds every one of those allocations away (20
+    /// allocs, 20 frees, identical on both compilers). The loop was added
+    /// specifically to try to defeat that fold and does not: an opaque loop
+    /// bound was tried too and LLVM still constant-folds the whole thing. So the
+    /// memory half of this fixture is carried ENTIRELY by the `-O0` leg
+    /// (`scripts/asan-o0-leg.sh`, B-2026-08-04-17); at `-O2` it asserts only the
+    /// accumulated output, which still catches a leak traded for a wrong value
+    /// or for a use-after-free.
+    #[test]
+    fn asan_block_rhs_assignment_frees_the_value_it_overwrites() {
+        assert_clean_asan_run(
+            r#"
+fn mkA(n: i64) -> String { return f"AAAAAAAAAAAAAA{n}"; }
+fn mkB(n: i64) -> String { return f"BBBBBBBBBBBBBB{n}"; }
+
+fn main() {
+    let t1 = mkB(1);
+    let mut s1 = mkA(2);
+    s1 = { t1 };
+    println(f"s1={s1}");
+
+    let t2: Vec[i64] = vec![10, 20, 30];
+    let mut s2: Vec[i64] = vec![1, 2, 3, 4, 5];
+    s2 = { t2 };
+    println(f"s2len={s2.len()} s2head={s2[0]}");
+
+    let mut s3 = mkA(3);
+    s3 = { s3 };
+    println(f"s3={s3}");
+
+    let mut s4 = mkA(4);
+    s4 = mkB(4);
+    let t5 = mkB(5);
+    let mut s5 = mkA(5);
+    s5 = t5;
+    println(f"s4={s4} s5={s5}");
+
+    let mut acc = mkA(0);
+    let mut i = 1;
+    while i < 6 {
+        let ti = mkA(i * 100);
+        acc = { ti };
+        i = i + 1;
+    }
+    println(f"acc={acc}");
+}
+"#,
+            &[
+                "s1=BBBBBBBBBBBBBB1",
+                "s2len=3 s2head=10",
+                "s3=AAAAAAAAAAAAAA3",
+                "s4=BBBBBBBBBBBBBB4 s5=BBBBBBBBBBBBBB5",
+                "acc=AAAAAAAAAAAAAA500",
+            ],
+            "b30-13-block-rhs-assign-old-value-free",
+        );
+    }
 }
