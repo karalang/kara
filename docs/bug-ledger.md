@@ -98,9 +98,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 192 | 0 |
 | double-free | 162 | 0 |
 | codegen-gap | 159 | 1 |
-| diagnostics | 115 | 0 |
+| diagnostics | 116 | 1 |
 | false-positive | 102 | 0 |
-| soundness | 95 | 3 |
+| soundness | 95 | 2 |
 | perf | 87 | 0 |
 | other | 69 | 1 |
 | crash | 67 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1351 | 32 |
+| codegen | 1351 | 31 |
 | interp | 314 | 15 |
-| typecheck | 285 | 0 |
-| ownership | 72 | 1 |
+| typecheck | 286 | 1 |
+| ownership | 72 | 0 |
 | other | 70 | 0 |
 | cli | 70 | 2 |
 | autopar | 55 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced · 34 open · 1897 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1965 surfaced · 34 open · 1898 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (34)
 
@@ -160,10 +160,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 | B-2026-09-01-34 | 2026-09-01 | codegen | medium | A DISCARDED enum STRUCT-VARIANT literal in a TWO-TAIL `if` or a `match` arm emits NO `Drop` body at all on the compiled backends -- not even the enum's OWN -- while the same literal as a direct producer, a block tail, or a no-`else` `if` tail runs both; the tuple-variant spelling is uniform across all five | — |
 | B-2026-09-01-36 | 2026-09-01 | cli+codegen | medium | A REPL CELL BINDING WHOSE OWN TYPE IS `shared` CANNOT JOIN THE JIT SNAPSHOT TIER: admitted, `s.n` reads the POINTER'S OWN BITS instead of the field (two different garbage values from the same expression where `--interp` prints `3`), because `register_var_from_type_expr` -- the registrar the snapshot replay path defers to -- re-registers a shared name as an INLINE struct; the OWNERSHIP half is fine (retracting the queued `RcDec` HOLDS the reference), and `shared` as a COMPONENT (`struct W { s: S }`, `Vec[S]`) round-trips correctly | — |
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
-| B-2026-09-01-38 | 2026-09-01 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's `drop` body RUNS ON THE ZEROED FIELD -- `match h { H { r, .. } }` prints `dR[d:3] dH dR[:0]` on both compiled backends | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
 | B-2026-09-01-41 | 2026-09-01 | codegen | medium | A STRUCT'S `Vec` FIELD IS NEVER FREED when the struct is declared OUTSIDE a loop, the field is pushed to INSIDE it, and the loop body also makes a heap TEMPORARY -- all three needed, the element type is irrelevant, and the whole Vec leaks | — |
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
+| B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
 
 ### Relocated (4)
 
@@ -198,9 +198,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 
 </details>
 
-### Fixed (1897)
+### Fixed (1898)
 
-<details><summary>1897 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1898 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2100,6 +2100,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 | B-2026-09-01-28 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program r… | 213f847 |
 | B-2026-09-01-31 | interp | medium | A DISCARDED enum STRUCT-VARIANT literal loses its PAYLOAD's `Drop` body under `--interp` -- `let _ = Sv.Hold { inner: R { . | edaca15 |
 | B-2026-09-01-35 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape… | b3dbcee |
+| B-2026-09-01-38 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's… | 960e840 |
 | B-2026-09-01-40 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFAC… | cf75c62 |
 
 </details>

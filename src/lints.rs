@@ -286,7 +286,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              `--features llvm` fixtures are written in this shape, and each is the regression \
              test for a bug FIXED in it (B-2026-08-28-21's family among them), so denying today \
              would delete the coverage that keeps those fixes honest. Promotion to `Deny` is \
-             tracked as its own row. B-2026-09-01-38.",
+             tracked as B-2026-09-01-43. B-2026-09-01-38.",
     },
     LintInfo {
         name: "chained_field_receiver",
