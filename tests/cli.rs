@@ -835,6 +835,52 @@ fn test_check_type_error() {
     assert!(stderr.contains("expected 2 argument(s), found 3"));
 }
 
+/// B-2026-09-01-8 — a codegen failure carries a source position and a caret.
+///
+/// Codegen's error channel was a bare `String`, so all ~248 of its messages
+/// printed as a sentence with no file, line, column or caret, against a front
+/// end that gives all four. This pins the whole rendered shape, not just that a
+/// position appears somewhere.
+///
+/// THE LINE NUMBER IS THE ASSERTION THAT MATTERS. The fixture puts two
+/// statements before the failing one on purpose. `let r = ref m[1];` is
+/// rejected in `compile_stmt`, BEFORE its right-hand side is walked, so the
+/// expression-level span cursor still points at the previous statement — the
+/// first draft of this feature reported line 3 for an error on line 4, putting
+/// a confident caret on unrelated source, which is worse than the bare sentence
+/// it replaced. A regression there would still print a position, still print a
+/// caret, and still be wrong; only checking the number catches it.
+///
+/// The `error: codegen failed: ` prefix is asserted too: it distinguishes a
+/// backend bail from a front-end rejection, over a hundred assertions in this
+/// suite depend on the phrase, and it must survive the position being added
+/// around it.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_codegen_error_carries_a_span_and_caret() {
+    let out = karac_bin()
+        .args(["build", "tests/snapshots/codegen_error_span.kara"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "build should exit nonzero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error: codegen failed: "),
+        "the backend-bail prefix must survive; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("codegen_error_span.kara:13:5:"),
+        "the failure is on line 13 — the `ref` binding, not either `println` \
+         before it. A wrong line here is the span cursor tracking the last \
+         EXPRESSION compiled instead of the statement that failed. got: {stderr}"
+    );
+    assert!(
+        stderr.contains("let r = ref m[1];") && stderr.contains("^^^"),
+        "expected the source line and a caret under it, as every front-end \
+         diagnostic renders; got: {stderr}"
+    );
+}
+
 // `Pipeline::has_fatal_errors` includes typecheck errors so `karac build`
 // stops at the typechecker's diagnostic instead of proceeding into
 // codegen and emitting a misleading "no handler for method 'unwrap'"

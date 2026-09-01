@@ -1,0 +1,15 @@
+// B-2026-09-01-8 — a codegen-only bail, used to pin that `karac build`
+// reports it with a source position and a caret like every front-end
+// diagnostic. Type-checks clean; `compile_stmt` rejects the `ref` binding.
+//
+// The two statements before the failing one are load-bearing: they give the
+// expression span cursor somewhere ELSE to be pointing, which is exactly the
+// bug the statement-level cursor fixes.
+fn main() {
+    println("one");
+    println("two");
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 2);
+    let r = ref m[1];
+    println(r);
+}
