@@ -94,9 +94,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 345 | 7 |
 | run-vs-build | 292 | 15 |
-| leak | 251 | 7 |
+| leak | 252 | 8 |
 | missing-feature | 192 | 0 |
-| double-free | 162 | 1 |
+| double-free | 162 | 0 |
 | codegen-gap | 159 | 1 |
 | diagnostics | 115 | 0 |
 | false-positive | 102 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1349 | 34 |
+| codegen | 1350 | 34 |
 | interp | 313 | 15 |
 | typecheck | 285 | 0 |
 | ownership | 72 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1962 surfaced · 36 open · 1894 fixed · 11 wontfix · 3 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1963 surfaced · 36 open · 1895 fixed · 11 wontfix · 3 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (36)
 
@@ -160,12 +160,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1962 surfaced
 | B-2026-09-01-32 | 2026-09-01 | interp+codegen | medium | The UNQUALIFIED enum struct-variant literal `Hold { .. }` loses BOTH `Drop` bodies on ALL FOUR surfaces, while the unqualified TUPLE-variant spelling `A(r)` is correct on all four | — |
 | B-2026-09-01-33 | 2026-09-01 | codegen | medium | A PRODUCER-FN argument loses the enum payload's `Drop` body on BOTH compiled backends -- `eat(mk(5))` runs `dSv` against the interpreter's `dSv dR5`, for the tuple-variant spelling equally; routing the same value through a NAMED LOCAL is correct everywhere | — |
 | B-2026-09-01-34 | 2026-09-01 | codegen | medium | A DISCARDED enum STRUCT-VARIANT literal in a TWO-TAIL `if` or a `match` arm emits NO `Drop` body at all on the compiled backends -- not even the enum's OWN -- while the same literal as a direct producer, a block tail, or a no-`else` `if` tail runs both; the tuple-variant spelling is uniform across all five | — |
-| B-2026-09-01-35 | 2026-09-01 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape guard sees that route, and it blocks B-2026-09-01-29's leak fix | — |
 | B-2026-09-01-36 | 2026-09-01 | cli+codegen | medium | A REPL CELL BINDING WHOSE OWN TYPE IS `shared` CANNOT JOIN THE JIT SNAPSHOT TIER: admitted, `s.n` reads the POINTER'S OWN BITS instead of the field (two different garbage values from the same expression where `--interp` prints `3`), because `register_var_from_type_expr` -- the registrar the snapshot replay path defers to -- re-registers a shared name as an INLINE struct; the OWNERSHIP half is fine (retracting the queued `RcDec` HOLDS the reference), and `shared` as a COMPONENT (`struct W { s: S }`, `Vec[S]`) round-trips correctly | — |
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
 | B-2026-09-01-38 | 2026-09-01 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's `drop` body RUNS ON THE ZEROED FIELD -- `match h { H { r, .. } }` prints `dR[d:3] dH dR[:0]` on both compiled backends | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
 | B-2026-09-01-40 | 2026-09-01 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFACE -- `let h = H { r: R { .. }, n: 4 }; let q = h.n;` is `dH dR3` under `--interp` and `dR3 dH dR3` on jit/build/no-auto-par, with the field fully LIVE in both bodies; the same read spelled INLINE (`println(f"{h.n}")`) agrees | — |
+| B-2026-09-01-41 | 2026-09-01 | codegen | medium | A `Vec[Option[String]]` STRUCT FIELD never frees its elements, while the identical `Vec` held as a LOCAL is clean -- 173 B in 4 allocations over three pushes, no generics and no `Drop` impl | — |
 
 ### Relocated (3)
 
@@ -199,9 +199,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1962 surfaced
 
 </details>
 
-### Fixed (1894)
+### Fixed (1895)
 
-<details><summary>1894 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1895 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2099,6 +2099,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1962 surfaced
 | B-2026-09-01-25 | codegen | medium | THE MEMORY HALF OF B-2026-09-01-21: a DISCARDED aggregate whose fields/elements MIX a live-local source with anything else runs every `Drop` BODY onc… | f909f9a |
 | B-2026-09-01-28 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program r… | 213f847 |
 | B-2026-09-01-31 | interp | medium | A DISCARDED enum STRUCT-VARIANT literal loses its PAYLOAD's `Drop` body under `--interp` -- `let _ = Sv.Hold { inner: R { . | edaca15 |
+| B-2026-09-01-35 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape… | b3dbcee |
 
 </details>
 
