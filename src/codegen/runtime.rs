@@ -8819,6 +8819,75 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-30-16 — the SHARED-enum counterpart of
+    /// [`Self::fire_freshtemp_scrutinee_body_at_exit`]: release a fresh-temp
+    /// `shared enum` scrutinee's transferred ref at the construct's exit, and
+    /// retire the action so the scope-exit drain cannot dec a second time.
+    ///
+    /// design.md § Temporary Lifetime Rules gives the shared flavour the same
+    /// row as the value one ("Match-expression scrutinee | … drops at match
+    /// exit"), but B-2026-08-29-28's fix could not reach it: a VALUE enum's body
+    /// is a standalone `UserDrop` action, while a shared enum's runs from INSIDE
+    /// `__karac_rc_drop_<E>` when the count reaches zero, so the only way to
+    /// move the body is to move the decrement. Measured `v1 s1 s2 dSe` on all
+    /// three compiled surfaces against the interpreter's `v1 dSe s1 s2`.
+    ///
+    /// MOVING A DECREMENT IS NOT THE SAME AS MOVING A BODY, and that is the
+    /// row's own objection: an earlier dec that reaches zero frees the box, so
+    /// anything still aliasing it is a use-after-free rather than a reordering.
+    /// Three things make the merge block the safe point:
+    ///
+    ///  * An arm binding that MOVES a payload out is already excluded —
+    ///    `suppress_shared_enum_payload_move_out` zeroes the consumed field's
+    ///    words in the box, so the binding owns that payload outright and the
+    ///    box no longer references it (B-2026-08-28-74).
+    ///  * An arm binding that merely reads the box holds its own `+1`, taken at
+    ///    the bind and released by the ARM's frame — which drains on the arm's
+    ///    own edge, strictly before the merge block this runs in. A count of 2
+    ///    at the dec leaves 1, and nothing is freed.
+    ///  * An arm that diverges (`return`/`break`) never reaches the merge block
+    ///    and emits its cleanup on its own edge with this action still
+    ///    registered, exactly as the value-enum sibling documents. Retirement
+    ///    happens after every arm is compiled, so it cannot take the action away
+    ///    from a diverging arm that already emitted it.
+    ///
+    /// Firing an `RcDec` at a chosen point is not novel here: `fire_due_user_
+    /// drops` already does it for NAMED shared bindings at their NLL live-range
+    /// end, with the same retire-what-you-fired rule ("retiring an action that
+    /// did not fire is not a retiming, it is a dropped decrement, i.e. a leak").
+    /// This applies it to the one owner that has no name to compute a live range
+    /// from.
+    pub(super) fn fire_freshtemp_shared_scrutinee_dec_at_exit(
+        &mut self,
+        ptr: PointerValue<'ctx>,
+        binding_name: &str,
+    ) {
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_terminator())
+            .is_some()
+        {
+            return;
+        }
+        let mut due = None;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            let idx = frame.iter().position(|a| {
+                matches!(a, CleanupAction::RcDec { name, ptr: p, .. }
+                    if name == binding_name && *p == ptr)
+            });
+            if let Some(i) = idx {
+                if let CleanupAction::RcDec { ptr, heap_type, .. } = frame.remove(i) {
+                    due = Some((ptr, heap_type));
+                }
+                break;
+            }
+        }
+        if let Some((ptr, heap_type)) = due {
+            self.emit_refcount_dec_by_type(heap_type, ptr);
+        }
+    }
+
     /// NLL live-range-end firing for user-`impl Drop` bindings
     /// (B-2026-07-21-1). design.md § Drop ordering: "Destructors fire at
     /// each binding's live-range end, not lexical scope end … a value whose

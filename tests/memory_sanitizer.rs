@@ -65993,4 +65993,64 @@ fn main() {
             "b30-15-freshtemp-struct-scrutinee-payload",
         );
     }
+
+    /// B-2026-08-30-16, the SAFETY half — the row's own objection under ASAN.
+    ///
+    /// Releasing a fresh-temp `shared enum` scrutinee at the match's exit means
+    /// moving a DECREMENT, not just a body, and a dec that reaches zero frees
+    /// the box. The row argued that an arm binding aliasing into it would then
+    /// be a use-after-free rather than a reordering, which is why the value-enum
+    /// fix (B-2026-08-29-28) was not simply extended to this flavour.
+    ///
+    /// So the fixture is built to break if that were true: every arm MOVES its
+    /// heap payload out and the value is read AFTER the match, once through a
+    /// binding and once straight out of the match expression. It is safe because
+    /// `suppress_shared_enum_payload_move_out` already zeroes the consumed
+    /// field's words in the box (B-2026-08-28-74), so the binding owns the
+    /// payload outright and the freed box no longer references it — but that is
+    /// an argument, and this is the measurement.
+    ///
+    /// The loop keeps the boxes independent, so a dec that fired at the wrong
+    /// time shows up as a leak of the iterations that never got one rather than
+    /// a single ambiguous block.
+    ///
+    /// ONE SHAPE IS DELIBERATELY NOT HERE. The same match in a NESTED EXPRESSION
+    /// position — a call argument, or interpolated into an f-string — leaks the
+    /// moved-out payload (15 B), and it does so BOTH before and after this fix,
+    /// on a VALUE enum as well as a shared one, so it is neither this row's
+    /// defect nor shared-specific. It was found while writing this fixture and
+    /// is filed as B-2026-09-01-26; including it here would have pinned an
+    /// unrelated leak to this row and made the fixture fail for a reason that
+    /// has nothing to do with what it tests. The let-bound spelling above is
+    /// clean, which is the contrast that isolated it.
+    #[test]
+    fn asan_freshtemp_shared_enum_scrutinee_release_at_match_exit() {
+        assert_clean_asan_run(
+            r#"
+shared enum Sh { A(String), B }
+impl Drop for Sh { fn drop(mut ref self) { println("dSh"); } }
+fn mkSh(n: i64) -> Sh { return Sh.A(f"payloadpayload{n}"); }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let out = match mkSh(i) { Sh.A(s) => { s } Sh.B => { "none".to_string() } };
+        println(f"w[{out}]");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dSh",
+                "w[payloadpayload0]",
+                "dSh",
+                "w[payloadpayload1]",
+                "dSh",
+                "w[payloadpayload2]",
+                "done",
+            ],
+            "b30-16-freshtemp-shared-enum-scrutinee-release",
+        );
+    }
 }

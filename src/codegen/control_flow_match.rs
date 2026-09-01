@@ -288,6 +288,9 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         // Fresh-temp Option[shared] scrutinee — release the temp's
         // transferred ref (B-2026-07-15-1; see the tracker's doc).
+        // B-2026-08-30-16 — the box this match must release at its OWN exit,
+        // not at the enclosing scope's.
+        let mut freshtemp_shared_enum: Option<PointerValue<'ctx>> = None;
         if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() && freshtemp_inline_res.is_none() {
             let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
             self.track_freshtemp_shared_option_scrutinee(scrutinee, &pats, scrut);
@@ -295,7 +298,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // above. Mutually exclusive with it by value shape: that tracker
             // needs a `StructValue` (the `Option` struct), this one the RC box
             // `PointerValue`, so at most one can fire.
-            self.track_freshtemp_shared_enum_scrutinee(scrutinee, &pats, scrut);
+            freshtemp_shared_enum =
+                self.track_freshtemp_shared_enum_scrutinee(scrutinee, &pats, scrut);
         }
         // Detect borrow-returning scrutinees so pattern bindings don't
         // register a `FreeVecBuffer` against a buffer the container still
@@ -1475,6 +1479,9 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some((alloca, _)) = freshtemp_struct {
                 self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_struct_scrut");
             }
+            if let Some(ptr) = freshtemp_shared_enum {
+                self.fire_freshtemp_shared_scrutinee_dec_at_exit(ptr, "__freshtemp_shared_enum");
+            }
             return Ok(merged);
         }
 
@@ -1483,6 +1490,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some((alloca, _)) = freshtemp_struct {
             self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_struct_scrut");
+        }
+        if let Some(ptr) = freshtemp_shared_enum {
+            self.fire_freshtemp_shared_scrutinee_dec_at_exit(ptr, "__freshtemp_shared_enum");
         }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -12925,46 +12935,47 @@ impl<'ctx> super::Codegen<'ctx> {
     /// No-op for a PLACE scrutinee (an existing binding / field): that value is
     /// owned elsewhere and carries its own dec, so a second one would release
     /// it early. Same freshness gate as every sibling tracker here.
+    ///
+    /// B-2026-08-30-16 — returns the box pointer it registered, so a `match`
+    /// can release it at the construct's exit
+    /// ([`Self::fire_freshtemp_shared_scrutinee_dec_at_exit`]) instead of at the
+    /// enclosing scope's. `None` on every decline path, which is what keeps the
+    /// caller from firing a dec it never registered.
     pub(super) fn track_freshtemp_shared_enum_scrutinee(
         &mut self,
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
-    ) {
+    ) -> Option<PointerValue<'ctx>> {
         if !self.expr_yields_fresh_owned_temp(scrutinee) {
-            return;
+            return None;
         }
         if self.scrutinee_is_borrow_call(scrutinee) {
-            return;
+            return None;
         }
         // A shared enum arrives as the RC box pointer; a value enum arrives as
         // a struct and belongs to `materialize_freshtemp_enum_scrutinee`.
         let BasicValueEnum::PointerValue(ptr) = val else {
-            return;
+            return None;
         };
-        let Some(enum_name) = patterns
+        let enum_name = patterns
             .iter()
-            .find_map(|p| self.variant_pattern_enum_name(p))
-        else {
-            return;
-        };
+            .find_map(|p| self.variant_pattern_enum_name(p))?;
         if !self
             .type_decls
             .enum_layouts
             .get(&enum_name)
             .is_some_and(|l| l.is_shared)
         {
-            return;
+            return None;
         }
-        let Some(heap_type) = self
+        let heap_type = self
             .type_decls
             .shared_types
             .get(&enum_name)
-            .map(|i| i.heap_type)
-        else {
-            return;
-        };
+            .map(|i| i.heap_type)?;
         self.track_rc_var("__freshtemp_shared_enum", ptr, heap_type);
+        Some(ptr)
     }
 
     pub(super) fn track_freshtemp_shared_option_scrutinee(

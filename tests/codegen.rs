@@ -18098,6 +18098,79 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-16 — the SHARED-enum flavour of B-2026-08-29-28's
+    /// scrutinee-lifetime fix, which that row could not reach.
+    ///
+    /// The two enum flavours release through different channels: a VALUE enum's
+    /// `Drop` body is a standalone `UserDrop` action that -28 moved to the
+    /// construct's exit, while a SHARED enum's runs from inside
+    /// `__karac_rc_drop_<E>` when the count reaches zero — so the only way to
+    /// move the body is to move the DECREMENT. Pre-fix, all three compiled
+    /// surfaces printed `v1 s1 s2 dSe` against the interpreter's
+    /// `v1 dSe s1 s2`: the box outlived the match to the enclosing scope's exit,
+    /// the extended lease design.md § Temporary Lifetime Rules forbids.
+    ///
+    /// `escaping-payload` IS THE ROW'S OWN OBJECTION, TURNED INTO A TEST. Moving
+    /// a decrement is not the same as moving a body — a dec that reaches zero
+    /// frees the box, so the row argued an arm binding aliasing into it would be
+    /// a use-after-free rather than a reordering. This row is that shape: the
+    /// arm MOVES the `String` payload out and the match's value is read AFTER
+    /// the dec. It is clean because `suppress_shared_enum_payload_move_out`
+    /// already zeroed the consumed field's words in the box (B-2026-08-28-74),
+    /// so the binding owns the payload outright and the box no longer references
+    /// it. Valgrind agrees at `KARAC_OPT_LEVEL=0` — no invalid read, no leak.
+    ///
+    /// `nested` and `in-loop-body` pin that the release is PER CONSTRUCT rather
+    /// than per function: an inner match must drop its own box before the outer
+    /// arm continues, and a loop must drop each iteration's box at that
+    /// iteration's match exit — the shape where scope-exit placement would
+    /// otherwise pile every iteration's box up until the function returned.
+    #[test]
+    fn e2e_freshtemp_shared_enum_scrutinee_releases_at_construct_exit() {
+        const H: &str = "shared enum Se { A(i64), B }\n\
+             impl Drop for Se { fn drop(mut ref self) { println(\"dSe\") } }\n\
+             shared enum Sh { A(String), B }\n\
+             impl Drop for Sh { fn drop(mut ref self) { println(\"dSh\") } }\n\
+             fn mkSe(n: i64) -> Se { return Se.A(n) }\n\
+             fn mkSh(n: i64) -> Sh { return Sh.A(f\"pay{n}\") }\n";
+        for (label, body, want) in [
+            (
+                "statement-match",
+                "match mkSe(1) { Se.A(n) => { println(f\"v{n}\") } Se.B => {} }\n\
+                 println(\"s1\")\n",
+                "v1\ndSe\ns1\npost\n",
+            ),
+            (
+                "heap-payload",
+                "match mkSh(1) { Sh.A(s) => { println(f\"v[{s}]\") } Sh.B => {} }\n\
+                 println(\"s1\")\n",
+                "v[pay1]\ndSh\ns1\npost\n",
+            ),
+            (
+                "escaping-payload",
+                "let out = match mkSh(2) { Sh.A(s) => { s } Sh.B => { \"none\".to_string() } };\n\
+                 println(f\"out[{out}]\")\n",
+                "dSh\nout[pay2]\npost\n",
+            ),
+            (
+                "nested",
+                "match mkSe(1) { Se.A(n) => { match mkSe(2) { Se.A(m) => { println(f\"i{m}\") } Se.B => {} }\n\
+                 \x20   println(f\"o{n}\") } Se.B => {} }\n",
+                "i2\ndSe\no1\ndSe\npost\n",
+            ),
+            (
+                "in-loop-body",
+                "let mut i = 0;\n\
+                 while i < 2 { match mkSe(i) { Se.A(n) => { println(f\"w{n}\") } Se.B => {} }\n\
+                 \x20   println(\"it\"); i = i + 1; }\n",
+                "w0\ndSe\nit\nw1\ndSe\nit\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-30-14, the compiled ORACLE — the twin of
     /// `interpreter::diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow`.
     ///
