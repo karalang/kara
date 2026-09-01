@@ -778,11 +778,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // it: the first attempt asked only `discarded_match_value_tail` and
         // moved the doubling from the block-wrapped `match` to the
         // block-wrapped CALL one row down.
+        //
+        // B-2026-09-01-22 — and "full" means the predicate the statement site
+        // ACTUALLY calls, which is `discarded_movable_literal_tail`, not the
+        // narrower `discarded_owned_literal_tail` this asked. B-2026-09-01-21
+        // widened the two statement-discard sites to admit a struct literal
+        // whose field moves a live Drop-bearing local (`S { r: t, k: 1 }`) and
+        // left this guard on the old predicate, so the guard answered "the
+        // statement does not own this" about a value the statement had just
+        // taken. Every enclosing block then registered an owner of its own
+        // through the arm-discard leg below, and the count tracked NESTING
+        // DEPTH exactly: `let _ = { { S { r: t, k: 1 } } };` ran `t`'s body
+        // twice and the three-wrapper spelling three times, against one under
+        // `--interp` and one at every depth for the all-fresh literal the old
+        // predicate already admitted. The ONE-wrapper spelling was correct by
+        // coincidence — its tail is the literal itself, which the arm-discard
+        // leg declines for the same freshness reason, so nothing registered.
+        //
+        // Both predicates peel block wrappers, so asking the wider one here
+        // makes the guard agree with the statement site at every depth. This
+        // is the only correct direction: the statement site performs the
+        // source retraction (`discarded_literal_moved_place_sources`) that
+        // makes its single owner safe, and a block-level owner does not — the
+        // asymmetry `discarded_movable_literal_tail`'s own doc records.
         let stmt_owns_block_tail = block.final_expr.as_deref().is_some_and(|t| {
             Self::discarded_owned_temp_tail(t).is_some()
                 || self.discarded_unit_variant_tail(t).is_some()
                 || self.discarded_match_value_tail(t).is_some()
-                || self.discarded_owned_literal_tail(t).is_some()
+                || self.discarded_movable_literal_tail(t).is_some()
         });
         let discarded_value_block = !stmt_owns_block_tail
             && self

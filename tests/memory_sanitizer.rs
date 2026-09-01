@@ -56271,6 +56271,104 @@ fn main() { println(go()); }
         }
     }
 
+    /// B-2026-09-01-22 — a discarded struct literal behind **TWO OR MORE**
+    /// block wrappers registered ONE OWNER PER WRAPPER, so its consumed local's
+    /// heap was freed once per nesting level: a double free at depth 2 and a
+    /// triple at depth 3, on both compiled backends.
+    ///
+    /// `compile_block_with_frame`'s `stmt_owns_block_tail` guard asked
+    /// `discarded_owned_literal_tail` while the two statement-discard sites had
+    /// moved on to the wider `discarded_movable_literal_tail` (B-2026-09-01-21),
+    /// so the guard reported "the statement does not own this" about a value
+    /// the statement had already taken AND retracted the source for. Every
+    /// enclosing block then armed the arm-discard leg over the same value.
+    ///
+    /// Unlike most of this family's rows this is a DOUBLE FREE rather than a
+    /// leak, so it reproduces at every optimization level — the freed buffer is
+    /// live and reachable, not dead code LLVM can delete. That is also why the
+    /// row was found through its `Drop`-body transcript (`dR7 dR7`) before its
+    /// memory: the extra body is the visible half of the extra free.
+    ///
+    /// The one-wrapper depth is the CONTROL and belongs here: it was correct
+    /// throughout, because its tail is the literal itself and the arm-discard
+    /// leg declines a bare literal with a non-fresh field.
+    #[test]
+    fn asan_a_deeply_wrapped_discarded_literal_frees_once() {
+        const H: &str = "struct R { id: i64, s: String }\n\
+             struct S { r: R, k: i64 }\n\
+             struct T2 { r: R, s: R }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str)] = &[
+            (
+                "TWO wrappers, wildcard `let` — the double free",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = { { S { r: t, k: 1 } } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "TWO wrappers, bare statement",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  { { S { r: t, k: 1 } } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "THREE wrappers — a triple free before the fix",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = { { { S { r: t, k: 1 } } } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "TWO wrappers over the TUPLE leg, which shares the predicate",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = { { (t, 20) } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "TWO wrappers, a moved source beside a MINTED sibling",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = { { T2 { r: t, s: mk(9) } } };\n\
+                 \x20  1 }\n",
+            ),
+            // ── controls: already correct, and must stay owned exactly once ──
+            (
+                "control: the ONE-wrapper depth, correct throughout",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = { S { r: t, k: 1 } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "control: an ALL-MINTED literal, two wrappers",
+                "fn go() -> i64 {\n\
+                 \x20  let _ = { { S { r: mk(7), k: 1 } } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "control: a CALL tail, two wrappers",
+                "fn go() -> i64 {\n\
+                 \x20  let _ = { { mk(9) } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: the BOUND `let` still owns its value at depth",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let w = { { S { r: t, k: 1 } } };\n\
+                 \x20  w.k }\n",
+            ),
+            (
+                "guard: a bound `let` reading the minted sibling back, deeper",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let w = { { { T2 { r: t, s: mk(9) } } } };\n\
+                 \x20  w.s.id - 8 }\n",
+            ),
+        ];
+        for (label, body) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), &["1"], label);
+        }
+    }
+
     /// B-2026-09-01-10 (leg 1) — a BLOCK-BODIED arm of a DISCARDED `match`
     /// stranded whatever its tail named.
     ///

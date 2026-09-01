@@ -125727,6 +125727,138 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-22 — A DISCARDED STRUCT LITERAL BEHIND **TWO OR MORE**
+    /// BLOCK WRAPPERS ran its consumed local's `Drop` body ONCE PER WRAPPER on
+    /// both compiled backends, against one under `--interp`.
+    ///
+    /// The body count tracked NESTING DEPTH exactly — two wrappers printed
+    /// `dR7 dR7`, three printed `dR7 dR7 dR7` — which is the shape of the bug
+    /// and the thing that identifies its site. `compile_block_with_frame` asks
+    /// `stmt_owns_block_tail` whether the enclosing STATEMENT already owns this
+    /// block's tail value, and stands down when it does. That guard asked
+    /// `discarded_owned_literal_tail`; B-2026-09-01-21 had widened the two
+    /// statement-discard sites to `discarded_movable_literal_tail`, which also
+    /// admits a field that MOVES a live Drop-bearing local (`S { r: t, k: 1 }`)
+    /// — and left the guard behind. So the guard answered "no owner" about a
+    /// value the statement had just taken, and every enclosing block registered
+    /// one of its own through the arm-discard leg.
+    ///
+    /// The ONE-wrapper spelling was correct by coincidence, which is why the
+    /// family's earlier rows never saw this: its tail is the literal itself,
+    /// and the arm-discard leg declines a bare literal with a non-fresh field
+    /// for that same freshness reason, so nothing extra registered. Only a tail
+    /// that is ITSELF a block reaches the registration.
+    ///
+    /// Both predicates peel block wrappers, so the fix — ask the wider one —
+    /// makes the guard agree with the statement site at every depth. The
+    /// ORACLE is the bound `let`, correct on all four surfaces throughout.
+    #[test]
+    fn e2e_a_deeply_wrapped_discarded_literal_runs_one_body_per_value() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct S { r: R, k: i64 }\n\
+             struct T2 { r: R, s: R }\n\
+             fn mk(n: i64) -> R { return R { id: n }; }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "TWO wrappers, wildcard `let` — the row's spelling",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = { { S { r: t, k: 1 } } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "TWO wrappers, bare statement",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 { { S { r: t, k: 1 } } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "THREE wrappers — the count tracked depth, so depth is pinned",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = { { { S { r: t, k: 1 } } } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "TWO wrappers over the TUPLE leg, which shares the predicate",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = { { (t, 20) } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "TWO wrappers, a moved source beside a MINTED sibling",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = { { T2 { r: t, s: mk(9) } } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+            // ── controls: shapes the OLD guard already admitted, which must
+            //    not have moved. Each of these was correct at every depth
+            //    before the fix, because `discarded_owned_literal_tail` admits
+            //    an all-fresh literal and the guard therefore stood down.
+            (
+                "control: an ALL-MINTED literal, two wrappers",
+                "fn go() -> i64 {\n\
+                 let _ = { { S { r: R { id: 7 }, k: 1 } } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "control: a CALL tail, two wrappers",
+                "fn go() -> i64 {\n\
+                 let _ = { { mk(9) } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\nv=7\n",
+            ),
+            (
+                "control: the ONE-wrapper spelling, correct by coincidence before",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = { S { r: t, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "ORACLE: the BOUND `let` behind two wrappers",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = { { S { r: t, k: 1 } } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "guard: the source is still live under a bound `let`, deeper",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = { { { T2 { r: t, s: mk(9) } } } };\n\
+                 return w.s.id - 2; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR7\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: one body per value, not per wrapper");
+            }
+        }
+    }
+
     /// B-2026-08-31-22 — A DISCARDED BRANCH OF OWN-`Drop` ENUM CONSTRUCTORS
     /// dropped its merged value with NO OWNER on either compiled backend: no
     /// own body, no payload walk, and the payload's heap stranded.
