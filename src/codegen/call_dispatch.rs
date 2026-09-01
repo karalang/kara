@@ -3272,36 +3272,39 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// B-2026-08-29-32 — does a discarded branch tail mint a struct literal
-    /// one of whose fields is initialized from something this site does not
-    /// KNOW to be fresh — a place expression (`V { v: mkv(1).v }`,
-    /// `P { a: t.a }`) or a bare binding moved in (`P { a: s }`)?
+    /// one of whose fields is initialized from a place that STILL HAS AN
+    /// OWNER (`V { v: mkv(1).v }`, `P { a: t.a }`)?
     ///
-    /// Such a field ALIASES a buffer that already has an owner, so handing
-    /// the literal a second owner frees one pointer twice. The aliasing is
-    /// PRE-EXISTING and is not this row's to repair — the `let`-BOUND
-    /// spelling of the same literal (`let w = V { v: mkv(1).v, b: 1 };`)
-    /// already double-frees with no discard anywhere in it. What IS this
-    /// row's business is declining to walk into it: before the registration
-    /// below existed the branch spelling registered nothing and ran clean,
-    /// and trading a 38 B leak for a double free is not a trade worth making.
+    /// Such a field ALIASES a buffer someone else frees, so handing the
+    /// literal a second owner frees one pointer twice. Declining to walk into
+    /// it is what this guard is for: before the registration below existed the
+    /// branch spelling registered nothing and ran clean, and trading a 38 B
+    /// leak for a double free is not a trade worth making.
     ///
-    /// FRESHNESS IS THE TEST, and it is deliberately conservative about what
-    /// counts. An earlier cut of this guard declined only a projection rooted
-    /// at a CALL temp, on the strength of single-statement measurements
-    /// showing `P { a: t.a }` over a local was clean. That was a FALSE
-    /// NEGATIVE: `t` dies at its NLL last use when nothing follows it, so the
-    /// alias and the local's own cleanup never coexist. Add one more
-    /// statement after it and they do — `let t = mkp(9); … t.a …;` followed
-    /// by any second discard double-freed, while the same pair leaked 38 B
-    /// and reported zero errors without the registration. A guard tuned on
-    /// one-statement programs cannot see that, so this one asks the question
-    /// the other way round: admit only initializers whose value is MINTED
-    /// here (a call, a literal, a nested aggregate, an operator result), and
-    /// decline every identifier and every place.
+    /// WHAT COUNTS AS ALIASING HAS BEEN RE-MEASURED TWICE, and both times the
+    /// answer narrowed. The original cut asked the question backwards — admit
+    /// only values MINTED here (a call, a literal, an operator result) and
+    /// decline every identifier and every place — because a matrix of
+    /// ONE-STATEMENT programs had wrongly cleared `P { a: t.a }` over a local:
+    /// `t` dies at its NLL last use when nothing follows it, so the alias and
+    /// the local's own cleanup never coexist. B-2026-08-31-34 then gave FRESH
+    /// TEMPS a real takeover, and B-2026-08-31-44 re-measured the rest and
+    /// found only ONE population still aliasing:
     ///
-    /// This costs the row nothing — its whole population is
-    /// `P { a: payload(), .. }` and arms that are calls — and it is why
-    /// `t.a.clone()` stays admitted: a `.clone()` is a MethodCall, and mints.
+    ///   * a bare binding (`P { a: s }`) and every non-field place (`v[0]`) do
+    ///     NOT — the whole-value move already retracts the source's cleanup,
+    ///     so declining them left NO owner and was itself the leak;
+    ///   * a FIELD PROJECTION off a named local does, and is all this guard
+    ///     still declines.
+    ///
+    /// The surviving hazard is also not the one the paragraph above describes.
+    /// A following statement no longer exposes it — the stacked form is clean
+    /// in both directions now — and what does is a LOOP: `t` declared outside
+    /// it, projected on each iteration, with a retraction that fires once.
+    /// See [`Self::field_init_aliases_a_temp`] for the measurements.
+    ///
+    /// `t.a.clone()` stays admitted throughout: a `.clone()` is a MethodCall,
+    /// and mints.
     fn discard_branch_tail_aliases_a_temp(&self, body: &Expr) -> bool {
         let t = Self::block_tail_expr(body);
         match &t.kind {
@@ -3334,51 +3337,45 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::discard_branch_tail_aliases_a_temp`] for why the test is
     /// freshness rather than root-of-place.
     fn field_init_aliases_a_temp(&self, e: &Expr) -> bool {
-        // B-2026-08-31-34 — a heap field read off a FRESH TEMP no longer
-        // aliases: the aggregate-literal consume sites now call
-        // `consume_freshtemp_field_move`, which zeroes that field in the temp's
-        // slot, so the literal is its SOLE owner and the temp's drop frees only
-        // the unread remainder.
+        // B-2026-08-31-44 — narrowed from "decline every identifier and every
+        // place" to "decline a FIELD PROJECTION". Re-measured against
+        // post-`2b3b9668` `main` with LSan, 18 discard spellings x 3 statement
+        // forms plus 9 risk shapes, and the guard turned out to be declining
+        // two populations for one reason:
         //
-        // The doc comment above declines this shape on the stated ground that
-        // "the aliasing is PRE-EXISTING and is not this row's to repair — the
-        // `let`-BOUND spelling of the same literal already double-frees". That
-        // premise is what B-2026-08-31-34 repaired, so the reason to decline is
-        // gone; keeping the decline instead LEAKS, because this site then
-        // registers no owner while the takeover has already disarmed the temp
-        // (measured: `LeakSanitizer: detected memory leaks, 32 byte(s)` on
+        //   * A BARE BINDING (`P { a: s, b: 1 }`) and every non-field place
+        //     (`v[0]`) no longer alias. The whole-value move already retracts
+        //     the source's cleanup, so declining them registers no owner at
+        //     all and STRANDS the buffer: 38 B per evaluation, and 19x38 B in
+        //     a loop. Every one of those cells is clean once admitted, in all
+        //     three statement forms and in all nine risk shapes — a source read
+        //     after the move, an arm NOT taken, both arms consuming, a `mut`
+        //     source reassigned afterwards, and a nested sibling field.
+        //
+        //   * A FIELD PROJECTION (`P { a: t.a, b: 1 }`) still does alias, and
+        //     admitting it is still a DOUBLE FREE — but only in one shape, and
+        //     not the one the guard's history describes. `t` declared OUTSIDE a
+        //     loop and projected on each iteration frees the same pointer once
+        //     per iteration: clean today, `double-free` when admitted. The move
+        //     retraction there is static and one-shot while the move is not.
+        //
+        // So the STACKED form the guard was written against is now clean either
+        // way — the false negative it was tuned to catch is gone — and the
+        // surviving hazard is the LOOP, which no statement-count matrix reaches.
+        // The field half stays declined and keeps its leak; that remainder is
+        // filed separately, because closing it needs the move takeover
+        // (`consume_freshtemp_field_move`) extended to NAMED LOCALS, which the
+        // `let`-bound spelling needs too: `let p = P { a: t.a, .. }` does not
+        // transfer ownership either — `t` still frees it at scope exit.
+        //
+        // The fresh-temp exception below is B-2026-08-31-34's: that takeover
+        // zeroes the field in the temp's slot, so the literal IS the sole owner
+        // and declining it leaks (measured: 32 B on
         // `asan_discarded_branch_of_body_less_heap_literals_frees_once`).
-        //
-        // Narrowed to EXACTLY what the takeover transfers — a field read whose
-        // object is a fresh owned temp — so a place rooted at a NAMED local
-        // (`P { a: t.a }`) still declines, which is the false-negative the
-        // guard's own history warns about.
-        if let ExprKind::FieldAccess { object, .. } = &e.kind {
-            if self.expr_yields_fresh_owned_temp(object) {
-                return false;
-            }
+        match &e.kind {
+            ExprKind::FieldAccess { object, .. } => !self.expr_yields_fresh_owned_temp(object),
+            _ => false,
         }
-        !matches!(
-            &e.kind,
-            ExprKind::Call { .. }
-                | ExprKind::MethodCall { .. }
-                | ExprKind::StructLiteral { .. }
-                | ExprKind::Integer(..)
-                | ExprKind::Float(..)
-                | ExprKind::CharLit(_)
-                | ExprKind::ByteLit(_)
-                | ExprKind::Bool(_)
-                | ExprKind::StringLit(_)
-                | ExprKind::MultiStringLit(_)
-                | ExprKind::InterpolatedStringLit(_)
-                | ExprKind::ByteStringLit(_)
-                | ExprKind::Binary { .. }
-                | ExprKind::Unary { .. }
-                | ExprKind::ArrayLiteral(_)
-                | ExprKind::MapLiteral(_)
-                | ExprKind::Tuple(_)
-                | ExprKind::Cast { .. }
-        )
     }
 
     pub(super) fn try_track_discarded_user_drop_temp(

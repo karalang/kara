@@ -55314,16 +55314,23 @@ fn main() { println(go()); }
             &["1"],
             "discarded_branch_literal_safe_initializer_kinds_still_owned",
         );
-        // THE DECLINED KINDS, pinned for what they are: a field initialized
-        // from a LOCAL — projected (`t.a`) or moved in whole (`s`) — is NOT
-        // registered, so it still strands 38 B apiece exactly as it did
-        // before this row. That is the guard's admitted cost and it is a
-        // deliberate trade, not an oversight: registering them is what
-        // produced the double free described above, and a leak is the better
-        // half of that pair. ASAN is not the gate for those cells — a leak
-        // would fail this fixture — so they are exercised through a program
-        // whose values ARE freed, to pin that the decline is a decline and
-        // not a corruption. The leak itself is filed separately.
+        // THE DECLINED KINDS, pinned for what they are. As of B-2026-08-31-44
+        // this is the FIELD PROJECTION (`t.a`) alone: it is NOT registered, so
+        // it still strands 38 B exactly as it did before that row, and that
+        // remains a deliberate trade — registering it double-frees when the
+        // local is declared outside a loop and projected on each iteration
+        // (see `asan_discarded_branch_literal_field_over_a_loop_outer_local_declines`),
+        // and a leak is the better half of that pair.
+        //
+        // The WHOLE-VALUE move (`s`) is no longer declined: re-measured, it no
+        // longer aliases, and declining it was itself the leak. It is kept in
+        // this program because the property asserted here is that neither
+        // spelling is CORRUPTED, which holds under either decision.
+        //
+        // ASAN is not the gate for the declined cell — a leak would fail this
+        // fixture — so both are exercised through a program whose values ARE
+        // freed, to pin that the decline is a decline and not a corruption.
+        // The surviving field-projection leak is filed separately.
         assert_clean_asan_run(
             r#"
 struct P { a: String, b: i64 }
@@ -55340,6 +55347,123 @@ fn main() { println(go()); }
 "#,
             &["1"],
             "discarded_branch_literal_declined_kinds_are_not_corrupted",
+        );
+    }
+
+    /// B-2026-08-31-44 — the half of B-2026-08-29-32's freshness guard that
+    /// post-`2b3b9668` `main` no longer needs.
+    ///
+    /// That guard declined EVERY identifier and EVERY place as a possible
+    /// alias. Re-measured under LSan, the population splits in two: a BARE
+    /// BINDING and a non-field place no longer alias — the whole-value move
+    /// already retracts the source's cleanup, so declining them registered no
+    /// owner at all and stranded 38 B per evaluation — while a FIELD
+    /// PROJECTION still does, and stays declined (its leak is filed
+    /// separately). Only the binding/index half is admitted here.
+    ///
+    /// The statement forms are load-bearing, and the guard's own history says
+    /// why: a source dies at its NLL last use when nothing follows it, so a
+    /// one-statement program cannot tell a missing owner from a correct one.
+    /// Each shape is therefore measured SOLO (nothing after), STACKED (a
+    /// second discard after), and in a LOOP. The stacked form turned out to be
+    /// the one already CLEAN before this change — the leak lives in the other
+    /// two — which is the opposite of what the guard was tuned against, and is
+    /// why all three are pinned rather than the stacked one alone.
+    #[test]
+    fn asan_discarded_branch_literal_over_a_binding_frees_once() {
+        // The ADMITTED half, in every discard spelling and all three statement
+        // forms. Each cell stranded 38 B per evaluation before the narrowing —
+        // 722 B over the 19 leaking iterations of the loop cell.
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn go() -> i64 {
+    let s1 = payload();
+    if seed() > 0 { P { a: s1, b: 1 } } else { P { a: payload(), b: 2 } };
+    let s2 = payload();
+    let _ = if seed() > 0 { P { a: s2, b: 1 } } else { P { a: payload(), b: 2 } };
+    let s3 = payload();
+    match seed() { 1 => { P { a: s3, b: 1 } } _ => { P { a: payload(), b: 2 } } };
+    let s4 = payload();
+    let _ = match seed() { 1 => { P { a: s4, b: 1 } } _ => { P { a: payload(), b: 2 } } };
+    let mut v: Vec[String] = Vec.new();
+    v.push(payload());
+    if seed() > 0 { P { a: v[0], b: 1 } } else { P { a: payload(), b: 2 } };
+    let mut i = 0i64;
+    while i < 20i64 {
+        let s = payload();
+        if seed() > 0 { P { a: s, b: 1 } } else { P { a: payload(), b: 2 } };
+        i = i + 1i64;
+    }
+    return 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_literal_over_a_binding_frees_once",
+            40,
+        );
+        // The RISK shapes for the newly-admitted half — every way the
+        // registration could free something someone else still owns or reads.
+        // The arm NOT taken is the sharpest: the source is never consumed, so
+        // its own cleanup has to remain the one that frees it.
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn go() -> i64 {
+    let n = payload();
+    if seed() > 99i64 { P { a: n, b: 1 } } else { P { a: payload(), b: 2 } };
+    let b1 = payload();
+    let b2 = payload();
+    if seed() > 0 { P { a: b1, b: 1 } } else { P { a: b2, b: 2 } };
+    let mut r = payload();
+    if seed() > 0 { P { a: r, b: 1 } } else { P { a: payload(), b: 2 } };
+    r = payload();
+    let outer = payload();
+    let mut i = 0i64;
+    while i < 5i64 {
+        if seed() > 0 { P { a: outer, b: 1 } } else { P { a: payload(), b: 2 } };
+        i = i + 1i64;
+    }
+    return r.len() - r.len() + 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_literal_over_a_binding_risk_shapes",
+            20,
+        );
+        // THE SHAPE THAT KEEPS THE GUARD, and the regression this change is
+        // most able to cause. A FIELD projected off a local declared OUTSIDE a
+        // loop is moved once per iteration, but the move retraction is static
+        // and fires once — so admitting it frees the same pointer five times.
+        // Measured `double-free` the moment the guard is dropped wholesale,
+        // against `clean` here. No statement-count matrix reaches this: the
+        // stacked form the guard was originally tuned on is clean either way.
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct P { a: String, b: i64 }
+fn seed() -> i64 { env.args().len() }
+fn payload() -> String { f"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+fn mkp(n: i64) -> P { return P { a: payload(), b: n }; }
+fn go() -> i64 {
+    let t = mkp(9);
+    let mut i = 0i64;
+    while i < 5i64 {
+        if seed() > 0 { P { a: t.a, b: 1 } } else { P { a: payload(), b: 2 } };
+        i = i + 1i64;
+    }
+    return 1;
+}
+fn main() { println(go()); }
+"#,
+            &["1"],
+            "discarded_branch_literal_field_over_a_loop_outer_local_declines",
+            10,
         );
     }
 
