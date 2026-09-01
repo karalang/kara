@@ -139,10 +139,33 @@ Several agent sessions work this repo in parallel, and the open rows of `docs/bu
 
 **Claim before reading the bug in depth, not after.** The trigger is "I am about to pick an open ledger row to work on" — *including* when the user names a specific bug id, since another session may already hold it.
 
+**Step 0: sync the ledger before you read it.** `git fetch origin main` and
+`git reset --hard origin/main` (or `git rebase origin/main` if you have
+local-only commits) BEFORE listing the open rows. Branch management already
+requires this "before starting a slice"; it is restated here because the
+numbered list below is what a session actually follows when picking a row, and
+a list that omits it invites choosing from a stale `open` set — a row another
+session closed minutes ago, or missing the rows filed since your last fetch.
+Unconditionally, not "if something changed": you cannot know whether the ledger
+moved without fetching, and the fetch costs seconds against work that runs for
+tens of minutes. Note the verb — `git fetch` plus `reset`/`rebase`, never
+`git pull`, per Branch management's cloud-container rule.
+
 1. **Read the board.** `list_sessions({mine: true, limit: 30})` on the `claude-code-remote` MCP server (load the schema via ToolSearch if it isn't in context). Each row carries `tags`, `title`, `session_status`, `updated_at`, and `post_turn_summary`; collect the `kara-bug:<ID>` tags. A tag on a `RUNNING` session — or on an `IDLE` one whose `updated_at` is recent — is a **live claim: pick a different row**. A tag on an `ARCHIVED` session, or one stale by a day or more, is a dead claim and the row is free.
 2. **Stake it.** `get_session()` with no arguments returns your own session id; then `set_session_tags({session_ids: ["<own id>"], add: ["kara-bug:B-2026-08-17-29"]})`. Mirror the id into the title as well (`set_session_title`, e.g. `"bugs group D · B-2026-08-17-29"`) so the claim is legible in the web session list without anyone reading tags.
 3. **Re-read once.** List again after tagging. If another session tagged the same id inside that window, **the session with the older `created_at` keeps it**; the younger removes its tag and picks another row. Deterministic, no negotiation, no message round-trip.
 4. **Release on close.** Drop the tag (`set_session_tags({remove: [...]})`) once the closing commit lands. That commit's `status: "fixed"` is the real release — the tag is only the in-flight signal, so a session that dies mid-fix leaks nothing.
+
+**Re-read the row itself before closing it — a claim does not freeze it.** The
+tag stops another SESSION from picking the row up; it does not stop the owner,
+or a human, from editing that row while you hold it. Measured 2026-09-01:
+`8c152fc` added two new measurements to B-2026-09-01-38 about an hour after it
+was claimed, one of which asked a scope question the in-flight fix had already
+answered. Closing from the copy you read at claim time would have written a
+`fix` that ignored them and left the row's own open question unanswered in its
+closing prose. Step 0's fetch cannot help here — the edit lands mid-flight — so
+`grep '<BUG-ID>' docs/bug-ledger.jsonl` again after the final rebase, when you
+are reading the fix SHA back out of `git log` anyway.
 
 **Why metadata and not a git ref.** The better mechanism would be a custom ref: `git push origin <existing-sha>:refs/claims/<BUG-ID>` pushes zero new objects, and git's ref update is a server-side compare-and-swap — a genuine atomic lock. **The cloud git gateway rejects it with `HTTP 403` on any ref outside `refs/heads/main`** (measured 2026-08-17), and the same goes for notes and orphan branches. Session metadata is the fallback *because* the atomic option is unavailable; don't spend a session re-deriving that.
 
