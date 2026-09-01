@@ -597,12 +597,48 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.drop_rc.scope_cleanup_actions.pop();
         }
+        // B-2026-08-30-17 — the scrutinee temporary's user `Drop` fires PER
+        // EDGE, not at the point where the two edges rejoin.
+        //
+        // It used to be left queued for the enclosing statement's drain, which
+        // sits after `merge_bb` and therefore after the else arm's body. That
+        // put the observable order at `els dE` where design.md § "Scrutinee
+        // temporary scope" specifies `dE els`: "In the **`else` arm of `if
+        // let`**: scrutinee temporaries have already been dropped *before* the
+        // arm body begins." The section says that sentence is what "closes the
+        // lock-held-during-else-branch footgun", so the ordering IS the
+        // feature — a `Lease` whose `Drop` returns a pooled connection must be
+        // back in the pool before the else arm logs and retries.
+        //
+        // Retracted ONCE and emitted on each edge, so every path still runs it
+        // exactly once at runtime: at the end of the then arm (which is where
+        // the spec wants it — "scrutinee temporaries live through the entire
+        // arm body, because pattern-bound names may borrow into them") and at
+        // the TOP of the else arm. The then-arm emission is skipped when that
+        // arm diverges, because a `return` there already drained the frame
+        // through `emit_scope_cleanup` while the action was still queued.
+        let scrut_due = freshtemp_enum
+            .as_ref()
+            .and_then(|(alloca, _)| {
+                self.take_freshtemp_scrutinee_drop(*alloca, "__freshtemp_enum_scrut")
+            })
+            .or_else(|| {
+                freshtemp_struct.as_ref().and_then(|(alloca, _)| {
+                    self.take_freshtemp_scrutinee_drop(*alloca, "__freshtemp_struct_scrut")
+                })
+            });
+        if !then_terminated {
+            self.emit_taken_scrutinee_drop(scrut_due);
+        }
         let then_end = self.builder.get_insert_block().unwrap();
         if !then_terminated {
             self.builder.build_unconditional_branch(merge_bb).unwrap();
         }
 
         self.builder.position_at_end(else_bb);
+        // B-2026-08-30-17 — before ANY of the else arm's own code, per the
+        // bullet quoted above.
+        self.emit_taken_scrutinee_drop(scrut_due);
         let else_tail: Option<&Expr>;
         let mut else_pending = None;
         let mut else_val = if let Some(eb) = else_branch {
@@ -1400,7 +1436,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // its own scope frame; the divergent exit's `emit_scope_cleanup`
         // walks that frame. Guard against a missing terminator defensively —
         // a well-typed program always terminates here.
+        // B-2026-08-30-17 — the `let…else` half of the same rule, and it had
+        // the same shape of error: the scrutinee temporary's `Drop` was left
+        // queued, so on the miss edge the divergent exit's
+        // `emit_scope_cleanup` ran it AFTER the else block. design.md
+        // § "Scrutinee temporary scope", third bullet: "In the **`else` block
+        // of `let...else`**: same rule — scrutinee temporaries are dropped
+        // before the divergent else block runs", and that section's worked
+        // example says of the lease "already released — the error path runs
+        // without it held". Retracted once, emitted on each edge: here at the
+        // top of the else block, and on the match edge at the end of this
+        // function (after every suppressor has zeroed what the pattern moved
+        // out, so the drop frees only what the bindings did not take).
+        let scrut_due = freshtemp_enum
+            .as_ref()
+            .and_then(|(alloca, _)| {
+                self.take_freshtemp_scrutinee_drop(*alloca, "__freshtemp_enum_scrut")
+            })
+            .or_else(|| {
+                freshtemp_struct.as_ref().and_then(|(alloca, _)| {
+                    self.take_freshtemp_scrutinee_drop(*alloca, "__freshtemp_struct_scrut")
+                })
+            });
         self.builder.position_at_end(else_bb);
+        self.emit_taken_scrutinee_drop(scrut_due);
         self.compile_block_with_frame(else_block)?;
         if self
             .builder
@@ -1543,6 +1602,11 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(slot) = refchain_result_clone {
             self.suppress_inline_result_payload_cleanup_at(slot, pattern);
         }
+        // B-2026-08-30-17 — the MATCH edge's half of the retracted drop. Last,
+        // so every suppressor above has already zeroed the caps/tags of what
+        // the pattern moved out; the drop then frees the residue only, which
+        // is what the queued action would have done at the statement drain.
+        self.emit_taken_scrutinee_drop(scrut_due);
         Ok(())
     }
 

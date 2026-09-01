@@ -5555,8 +5555,11 @@ impl<'a> super::Interpreter<'a> {
                     return Err(cf);
                 }
                 // B-2026-07-11-26: run a fresh-temp enum scrutinee's user `Drop`
-                // (both edges), mirroring codegen — on the miss edge AFTER the
-                // else block runs (matching codegen's drop-during-return order).
+                // (both edges), mirroring codegen. B-2026-08-30-17 corrected
+                // the miss-edge ORDER: it used to fire AFTER the else block,
+                // described here as "matching codegen's drop-during-return
+                // order" — which was true of codegen and wrong against
+                // design.md, so both backends moved together.
                 let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
                 let drop_val = scrut_drop.as_ref().map(|_| val.clone());
                 // B-2026-07-31-45 — the `let…else` twin of the match/if-let
@@ -5614,10 +5617,17 @@ impl<'a> super::Interpreter<'a> {
                         self.run_user_drop_body_on_value(&tn, dv);
                     }
                 } else {
-                    let else_result = self.eval_block_inner(else_block);
+                    // B-2026-08-30-17 — BEFORE the else block, not after it.
+                    // design.md § "Scrutinee temporary scope", third bullet:
+                    // "In the **`else` block of `let...else`**: same rule —
+                    // scrutinee temporaries are dropped before the divergent
+                    // else block runs." The worked example in that section is
+                    // explicit that the lease is "already released — the error
+                    // path runs without it held".
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
                         self.run_user_drop_body_on_value(&tn, dv);
                     }
+                    let else_result = self.eval_block_inner(else_block);
                     else_result?;
                 }
             }

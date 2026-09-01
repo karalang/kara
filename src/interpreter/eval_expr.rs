@@ -1022,8 +1022,8 @@ impl<'a> super::Interpreter<'a> {
                 // is bound so the body runs on the scrutinee even on the match
                 // edge; the interpreter is Rust-memory-managed, so the snapshot
                 // clone cannot double-free.
-                let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
-                let drop_val = scrut_drop.as_ref().map(|_| val.clone());
+                let mut scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
+                let mut drop_val = scrut_drop.as_ref().map(|_| val.clone());
                 // B-2026-07-30-11 (enum leg) — the `if let` twin of the `match`
                 // disarm: once this pattern moves a Drop-bearing payload out,
                 // the source binding's payload-body walk must skip it, matching
@@ -1145,10 +1145,36 @@ impl<'a> super::Interpreter<'a> {
                         Ok(v) => v,
                         Err(cf) => self.set_cf(cf),
                     }
-                } else if let Some(ref else_expr) = else_branch {
-                    self.eval_expr_inner(else_expr)
                 } else {
-                    Value::Unit
+                    // B-2026-08-30-17 — the MISS edge fires the scrutinee
+                    // temporary's body BEFORE the `else` arm body, not after
+                    // it. design.md § `if let` and `let...else` > "Scrutinee
+                    // temporary scope": "In the **`else` arm of `if let`**:
+                    // scrutinee temporaries have already been dropped *before*
+                    // the arm body begins ... they fired the moment the match
+                    // decision routed control to the else path." That is the
+                    // sentence which "closes the lock-held-during-else-branch
+                    // footgun", so the order IS the feature: a `Lease` whose
+                    // `Drop` returns a pooled connection must not still be
+                    // checked out while the else arm logs and retries.
+                    //
+                    // The HIT edge keeps its existing placement (after the arm
+                    // body) because the spec asks for exactly that there —
+                    // "scrutinee temporaries live through the entire arm body,
+                    // because pattern-bound names may borrow into them".
+                    //
+                    // `.take()` rather than a second call site: the tail fire
+                    // below still runs for the hit edge, and taking here is
+                    // what makes it a no-op on this path instead of a second
+                    // body.
+                    if let (Some(tn), Some(dv)) = (scrut_drop.take(), drop_val.take()) {
+                        self.run_user_drop_body_on_value(&tn, dv);
+                    }
+                    if let Some(ref else_expr) = else_branch {
+                        self.eval_expr_inner(else_expr)
+                    } else {
+                        Value::Unit
+                    }
                 };
                 if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
                     self.run_user_drop_body_on_value(&tn, dv);

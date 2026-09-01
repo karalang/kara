@@ -18115,6 +18115,100 @@ fn main() {
         );
     }
 
+    /// B-2026-08-30-17 — on an `if let` MISS, the scrutinee temporary's `Drop`
+    /// body fires BEFORE the `else` arm, not after it.
+    ///
+    /// design.md § `if let` and `let...else` > "Scrutinee temporary scope",
+    /// second bullet: "In the **`else` arm of `if let` / `else if let`**:
+    /// scrutinee temporaries have already been dropped *before* the arm body
+    /// begins. The else arm does not see the scrutinee's temporaries — they
+    /// fired the moment the match decision routed control to the else path."
+    /// § Temporary Lifetime Rules repeats it in table form. The section states
+    /// that this is what "closes the lock-held-during-else-branch footgun", so
+    /// the ORDER is the feature: a `Lease` whose `Drop` returns a pooled
+    /// connection must be back in the pool before the else arm logs and
+    /// retries, which is exactly the worked example given there.
+    ///
+    /// WHY THIS NEEDED AN ABSOLUTE EXPECTATION rather than an A/B one: both
+    /// backends printed `els dE`, so the four-surface parity rule reported
+    /// green, nothing leaked or double-freed, and the deviation was from a
+    /// SPEC SENTENCE that no test asserted. Fixing it moved BOTH backends.
+    ///
+    /// The `let…else` rows are here because the same bullet's THIRD entry
+    /// covers them ("same rule — scrutinee temporaries are dropped before the
+    /// divergent else block runs") and they were wrong in the same way; the
+    /// row named only `if let`. The HIT rows are unchanged boundaries — the
+    /// spec asks for the opposite placement there ("scrutinee temporaries live
+    /// through the entire arm body, because pattern-bound names may borrow
+    /// into them"), so a fix that simply moved the drop earlier everywhere
+    /// would break them.
+    #[test]
+    fn e2e_if_let_miss_drops_the_scrutinee_temp_before_the_else_arm() {
+        const H: &str = "struct R { id: i64 }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             fn mkA(n: i64) -> E { return E.A(R { id: n }) }\n\
+             fn mkB() -> E { return E.B }\n";
+        for (label, body, want) in [
+            // The row's own repro.
+            (
+                "if-let-miss",
+                "if let E.A(r) = mkB() { println(f\"v{r.id}\") } else { println(\"els\") }\n",
+                "dE\nels\npost\n",
+            ),
+            // The opposite edge, unchanged: through the arm body, then out.
+            (
+                "if-let-hit",
+                "if let E.A(r) = mkA(7) { println(f\"v{r.id}\") } else { println(\"els\") }\n",
+                "v7\ndE\npost\n",
+            ),
+            // No else arm at all — there is nothing for the drop to precede,
+            // and this row was already correct. It is here so a later edit
+            // cannot "fix" the miss edge by firing twice.
+            (
+                "if-let-miss-no-else",
+                "if let E.A(r) = mkB() { println(f\"v{r.id}\") }\n",
+                "dE\npost\n",
+            ),
+            // The then arm diverges: it fires on its OWN edge, so the else
+            // emission cannot double it.
+            (
+                "if-let-hit-then-returns",
+                "if let E.A(r) = mkA(9) { println(f\"v{r.id}\"); return } else { println(\"els\") }\n",
+                "v9\ndE\n",
+            ),
+            // In a loop: once per iteration, still before the arm.
+            (
+                "if-let-miss-in-a-loop",
+                "let mut i: i64 = 0;\n\
+                 while i < 2 { if let E.A(r) = mkB() { println(f\"v{r.id}\") } else { println(\"els\") } i = i + 1; }\n",
+                "dE\nels\ndE\nels\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+        // `let…else` — the divergent-else sibling, asserted separately because
+        // its else block must terminate, so it cannot share the `post` tail.
+        for (label, body, want) in [
+            (
+                "let-else-miss",
+                "let E.A(r) = mkB() else { println(\"els\"); return };\n\
+                 println(f\"v{r.id}\")\n",
+                "dE\nels\n",
+            ),
+            (
+                "let-else-hit",
+                "let E.A(r) = mkA(4) else { println(\"els\"); return };\n\
+                 println(f\"v{r.id}\")\n",
+                "dE\nv4\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-30-15 — the STRUCT flavour of the fresh-temp scrutinee, which
     /// had no owner at all: `materialize_freshtemp_enum_scrutinee` bails at
     /// `variant_pattern_enum_name` (`None` for a struct pattern) and no sibling

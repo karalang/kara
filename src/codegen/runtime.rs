@@ -8796,7 +8796,29 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let mut due = None;
+        if let Some((ptr, drop_fn)) = self.take_freshtemp_scrutinee_drop(alloca, binding_name) {
+            self.builder.build_call(drop_fn, &[ptr.into()], "").unwrap();
+        }
+    }
+
+    /// B-2026-08-30-17: REMOVE the queued `UserDrop` for a fresh-temp
+    /// scrutinee slot and hand back what it would have emitted.
+    ///
+    /// Split out of `fire_freshtemp_scrutinee_body_at_exit` because that one
+    /// couples "stop the queued drop" to "emit it HERE", and an `if let` needs
+    /// the two apart: the drop has to be emitted on BOTH edges — at the end of
+    /// the then arm and at the START of the else arm — while being retracted
+    /// exactly once. Firing at the single point where the two paths rejoin is
+    /// what put the else arm's body ahead of the drop in the first place.
+    ///
+    /// Scans outward from the innermost frame because the action is queued at
+    /// whichever frame was open when the scrutinee was materialized, which for
+    /// an `if let` is the enclosing statement's frame rather than either arm's.
+    pub(super) fn take_freshtemp_scrutinee_drop(
+        &mut self,
+        alloca: PointerValue<'ctx>,
+        binding_name: &str,
+    ) -> Option<(PointerValue<'ctx>, FunctionValue<'ctx>)> {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             let idx = frame.iter().position(|a| {
                 matches!(a, CleanupAction::UserDrop { binding_name: bn, binding_ptr, .. }
@@ -8809,14 +8831,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     ..
                 } = frame.remove(i)
                 {
-                    due = Some((binding_ptr, drop_fn));
+                    return Some((binding_ptr, drop_fn));
                 }
-                break;
+                return None;
             }
         }
-        if let Some((ptr, drop_fn)) = due {
-            self.builder.build_call(drop_fn, &[ptr.into()], "").unwrap();
+        None
+    }
+
+    /// B-2026-08-30-17: emit a previously-taken fresh-temp scrutinee drop at
+    /// the current insert point, unless the block is already terminated.
+    pub(super) fn emit_taken_scrutinee_drop(
+        &mut self,
+        due: Option<(PointerValue<'ctx>, FunctionValue<'ctx>)>,
+    ) {
+        let Some((ptr, drop_fn)) = due else {
+            return;
+        };
+        if self
+            .builder
+            .get_insert_block()
+            .and_then(|b| b.get_terminator())
+            .is_some()
+        {
+            return;
         }
+        self.builder.build_call(drop_fn, &[ptr.into()], "").unwrap();
     }
 
     /// B-2026-08-30-16 — the SHARED-enum counterpart of
