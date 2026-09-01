@@ -3670,8 +3670,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
                     _ => None,
                 };
-                if matches!(&tail.kind, ExprKind::Call { .. } | ExprKind::Path { .. }) {
-                    if let Some(en) = self.enum_name_of_expr(tail) {
+                // B-2026-08-31-22 — the `let _ =` twin of the same
+                // representative-tail redirect the bare-statement arm takes;
+                // see the comment there for why the construct node cannot
+                // answer the enum question and why the one-unit-arm spelling
+                // accidentally did. Both spellings must redirect or they drift
+                // apart on exactly this shape, which is the drift
+                // B-2026-08-29-20 already had to repair once on this trio.
+                let enum_probe = if self.branch_arms_all_inline_enum_ctors(tail) {
+                    self.first_minting_branch_tail(tail).unwrap_or(tail)
+                } else {
+                    tail
+                };
+                if matches!(
+                    &enum_probe.kind,
+                    ExprKind::Call { .. } | ExprKind::Path { .. }
+                ) {
+                    if let Some(en) = self.enum_name_of_expr(enum_probe) {
                         if en != "Option" && en != "Result" {
                             self.track_inline_owned_aggregate_arg(val, tail, false);
                         }
@@ -9646,8 +9661,50 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n),
                         _ => None,
                     };
-                    if matches!(&tail.kind, ExprKind::Call { .. } | ExprKind::Path { .. }) {
-                        if let Some(en) = self.enum_name_of_expr(tail) {
+                    // B-2026-08-31-22 — ask the enum question of a
+                    // REPRESENTATIVE ARM TAIL, not of the construct.
+                    //
+                    // `tail` here is whatever `discarded_match_value_tail`
+                    // admitted, which for a two-tail `if` or a `match` is the
+                    // CONSTRUCT NODE. That is neither a `Call` nor a `Path`, so
+                    // the gate below refused it and `enum_name_of_expr` would
+                    // have answered `None` anyway: the merged value was dropped
+                    // with no owner at all — no own body, no payload walk, and
+                    // 6 B stranded per evaluation.
+                    //
+                    // It hid behind an ACCIDENT. With exactly one arm a unit
+                    // variant (`else { E.B }`), `discarded_unit_variant_tail`
+                    // runs first and hands back that arm's `Path`, so the gate
+                    // passed and the registration — keyed on the MERGED value
+                    // and dispatched on its tag at runtime — happened to be
+                    // right for whichever arm ran. Give BOTH arms a payload and
+                    // that accident is gone and the whole registration with it,
+                    // which is why `E.A(mk(8)) / E.B` was correct while
+                    // `E.A(mk(8)) / E.A(mk(9))` ran nothing.
+                    //
+                    // `first_minting_branch_tail` is the same representative-tail
+                    // redirect the arg-position registrar performs at its head
+                    // (B-2026-08-30-38), and it resolves to `e` itself for a
+                    // non-branch tail, so the direct spellings are unchanged.
+                    // The construct is still handed to the registrar WHOLE:
+                    // its head performs that redirect again, and the value being
+                    // registered is the phi, not any one arm's.
+                    //
+                    // Registering only when EVERY arm qualifies is already
+                    // guaranteed upstream — `discarded_match_value_tail` returns
+                    // `None` unless each arm tail passes
+                    // `discard_arm_tail_qualifies` — so a mixed branch whose
+                    // other arm hands out a live local never reaches here.
+                    let enum_probe = if self.branch_arms_all_inline_enum_ctors(tail) {
+                        self.first_minting_branch_tail(tail).unwrap_or(tail)
+                    } else {
+                        tail
+                    };
+                    if matches!(
+                        &enum_probe.kind,
+                        ExprKind::Call { .. } | ExprKind::Path { .. }
+                    ) {
+                        if let Some(en) = self.enum_name_of_expr(enum_probe) {
                             if en != "Option" && en != "Result" {
                                 self.track_inline_owned_aggregate_arg(val, tail, false);
                             }
@@ -15482,6 +15539,58 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::first_branch_tail`] restricted to tails that MINT, i.e. the ones
     /// the registrar can name a type from. `None` when every tail hands out a
     /// binding.
+    /// B-2026-08-31-22 — does EVERY arm of this branch construct the enum
+    /// inline (a ctor `Call`, or a fresh unit variant)?
+    ///
+    /// The gate on the representative-tail redirect at the two discard sites.
+    /// The redirect names the enum from ONE arm, but the walk it arms runs over
+    /// whichever arm's value actually arrived, so admitting a construct whose
+    /// other arm produces its enum some other way would run the payload walk
+    /// for a value the direct spelling of that same producer does not walk:
+    /// `let _ = mke(9);` runs the own body alone on every backend, and
+    /// `let _ = if c { E.A(mk(8)) } else { mke(9) };` must not start walking
+    /// the payload just because its sibling arm is a ctor. Requiring every arm
+    /// keeps the branch answering exactly as its arms would on their own.
+    ///
+    /// Deliberately the same rule as the interpreter's
+    /// `discard_producer_runs_payload_walk`, so the two backends admit one
+    /// population rather than two that happen to overlap.
+    fn branch_arms_all_inline_enum_ctors(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::LabeledBlock { body: b, .. } => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.branch_arms_all_inline_enum_ctors(t)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let then_ok = then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.branch_arms_all_inline_enum_ctors(t));
+                match else_branch.as_deref() {
+                    None => then_ok,
+                    Some(el) => then_ok && self.branch_arms_all_inline_enum_ctors(el),
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms
+                        .iter()
+                        .all(|a| self.branch_arms_all_inline_enum_ctors(&a.body))
+            }
+            ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Path { .. }),
+            ExprKind::Path { segments, .. } => segments.len() == 2,
+            ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n).is_some(),
+            _ => false,
+        }
+    }
+
     pub(super) fn first_minting_branch_tail<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
         match &e.kind {
             ExprKind::Block(b)
@@ -16564,7 +16673,29 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Match { .. } | ExprKind::If { .. } => {
                 self.discarded_match_value_tail(tail).is_some()
             }
-            _ => self.expr_yields_fresh_owned_temp(tail),
+            // B-2026-08-31-22 — a fresh UNIT VARIANT arm (`_ => { E.B }`).
+            // `E.B` is a `Path` and a bare `B` an `Identifier`, neither of
+            // which `expr_yields_fresh_owned_temp` calls fresh, so ONE unit arm
+            // declined the whole construct and the discard site registered no
+            // owner for ANY arm — the payload arm's body and its heap included.
+            //
+            // The `if` spelling of the same mix hid it: `discarded_unit_variant_
+            // tail` is tried BEFORE `discarded_match_value_tail` at both discard
+            // sites and peels an `if` to that arm's `Path`, so the construct was
+            // admitted by the unit-variant gate instead and happened to work.
+            // A `match` is not peeled by it, so the mixed `match` had nothing to
+            // fall back on and ran nothing on either compiled backend.
+            //
+            // Reusing `discarded_unit_variant_tail` rather than restating the
+            // test keeps ONE definition of "a fresh unit variant" — it is the
+            // shape B-2026-08-28-41/-43 established, including the rule that a
+            // bare `Identifier` qualifies only when no local shadows the
+            // variant, which is what stops a live enum local being registered a
+            // second time.
+            _ => {
+                self.discarded_unit_variant_tail(tail).is_some()
+                    || self.expr_yields_fresh_owned_temp(tail)
+            }
         }
     }
 

@@ -124312,6 +124312,157 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-22 — A DISCARDED BRANCH OF OWN-`Drop` ENUM CONSTRUCTORS
+    /// dropped its merged value with NO OWNER on either compiled backend: no
+    /// own body, no payload walk, and the payload's heap stranded.
+    ///
+    /// THE ROW'S COMPILED MEASUREMENT WAS STALE and the correction is what
+    /// located the real gate. It recorded `let _ = if c { E.A(mk(8)) } else
+    /// { E.B };` as running NOTHING on jit/aot; that spelling had since become
+    /// correct, and it was correct BY ACCIDENT. `discarded_unit_variant_tail`
+    /// is tried before `discarded_match_value_tail` at both discard sites and
+    /// peels an `if` to a unit arm's `Path`, so a construct with ONE unit arm
+    /// was admitted through the unit-variant gate and registered — keyed on the
+    /// merged value and dispatched on its tag, so right for either arm. Give
+    /// both arms a payload and the accident is gone:
+    ///
+    ///     let _ = if c { E.A(mk(8)) } else { E.B };        dE dR8   (worked)
+    ///     let _ = if c { E.A(mk(8)) } else { E.A(mk(9)) }; (nothing)
+    ///     let _ = match n { 0 => E.A(mk(8)) _ => E.B };    (nothing)
+    ///
+    /// TWO GATES, both fixed here. The enum leg at each discard site asked
+    /// `enum_name_of_expr` about the CONSTRUCT, which is neither a `Call` nor a
+    /// `Path`, so a two-tail branch registered nothing; it now asks a
+    /// representative arm tail, the same redirect the arg-position registrar
+    /// performs at its head. And `discard_arm_tail_qualifies` had no arm for a
+    /// fresh UNIT variant, so one `_ => E.B` declined the whole construct —
+    /// which is why the mixed `match`, with no unit-variant peel to fall back
+    /// on, ran nothing at all.
+    ///
+    /// THE INTERPRETER PEEL IS THE OTHER HALF, and it could not have landed
+    /// first. `discard_producer_expr` deliberately refused to peel a two-tail
+    /// branch, because compiled registered no payload walk there and peeling
+    /// alone would have traded agreement at ONE body for disagreement at TWO.
+    /// Fixing the compiled side is what makes the peel correct, so both land
+    /// together.
+    ///
+    /// ALL ARMS MUST QUALIFY, on both backends, and that is measured rather
+    /// than cautious: the walk is VALUE-driven, so it runs over whichever arm's
+    /// value arrived. An arm handing out a LIVE LOCAL, or producing its enum
+    /// from a CALL, is declined — a call-produced enum runs its own body alone
+    /// in the direct spelling (`let _ = mke(8);`), and a branch must not start
+    /// walking a payload just because a sibling arm is a constructor.
+    #[test]
+    fn e2e_discarded_branch_of_enum_ctors_runs_own_body_and_payload() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\"); } }\n\
+             enum G { A(R), B }\n\
+             fn mk(n: i64) -> R { return R { id: n }; }\n\
+             fn mke(n: i64) -> E { return E.A(mk(n)); }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "the row's repro: one ctor arm, one unit arm",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { E.A(mk(8)) } else { E.B }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "BOTH arms carry a payload",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { E.A(mk(8)) } else { E.A(mk(9)) }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "the else arm runs",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { E.A(mk(8)) } else { E.A(mk(9)) }; return 7; }\n\
+                 fn take() -> i64 { return go(3); }",
+                "dE\ndR9\nv=7\n",
+            ),
+            (
+                "the `match` spelling, mixed arms",
+                "fn go(n: i64) -> i64 { let _ = match n { 0 => { E.A(mk(8)) } _ => { E.B } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "the `match` spelling, both arms payload",
+                "fn go(n: i64) -> i64 { let _ = match n { 0 => { E.A(mk(8)) } _ => { E.A(mk(9)) } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            // The BARE-STATEMENT spelling of each. It reaches a different
+            // dispatch on both backends, and the two statement kinds have
+            // drifted apart on this trio before (B-2026-08-29-20).
+            (
+                "bare statement, both arms payload",
+                "fn go(n: i64) -> i64 { if n == 0 { E.A(mk(8)) } else { E.A(mk(9)) }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "bare statement, `match`, mixed arms",
+                "fn go(n: i64) -> i64 { match n { 0 => { E.A(mk(8)) } _ => { E.B } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "a NESTED branch at the arm tail",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { if n == 0 { E.A(mk(8)) } else { E.B } } else { E.B }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            // CONTROLS. Each was already correct, and together they are what
+            // says the branch — not enums, not discards — was the gap.
+            (
+                "control: the DIRECT spelling",
+                "fn go() -> i64 { let _ = E.A(mk(8)); return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "control: the no-`else` `if`",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { E.A(mk(8)) }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\ndR8\nv=7\n",
+            ),
+            (
+                "control: unit variants in BOTH arms — no payload to walk",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { E.B } else { E.B }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dE\nv=7\n",
+            ),
+            // The two arm kinds the all-arms gate must keep DECLINING. A
+            // call-produced enum runs its own body alone in the direct
+            // spelling, so a branch containing one must not walk its payload.
+            (
+                "control: a CALL arm keeps the direct spelling's answer",
+                "fn go() -> i64 { let _ = mke(8); return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dE\nv=7\n",
+            ),
+            (
+                "control: an enum with NO own `Drop`, payload only",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { G.A(mk(8)) } else { G.B }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR8\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: own body then payload, once each");
+            }
+        }
+    }
+
     /// B-2026-08-31-49 — A `Result[T, E]` RENDERED WITH THE `Option` VARIANT
     /// TABLE. `Ok(7)` printed `Some(7)` and `Err(9)` printed `None`, DROPPING
     /// THE PAYLOAD, silently, on both compiled backends.

@@ -3528,39 +3528,89 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    /// B-2026-08-29-30 — the expression that actually PRODUCED a discarded
-    /// value, for the shape questions asked after a wildcard `let` has
-    /// evaluated its RHS.
+    /// B-2026-08-31-22 — does the DISCARD PRODUCER behind `expr` construct the
+    /// enum inline, so the payload-bodies walk is this site's to run?
     ///
-    /// Peels block wrappers, and then a no-`else` `if` down to its then-tail:
-    /// that arm is the only thing that can have minted the value, since the
-    /// merge yields unit on the other path. `let _ = if n == 1 { E.A(R { .. })
-    /// };` therefore answers "an inline variant construction", the same as the
-    /// direct `let _ = E.A(R { .. })` spelling.
+    /// The `&self` successor to B-2026-08-29-30's `discard_producer_expr`
+    /// (removed with this row — this was its only caller), extended to the
+    /// two-tail `if` and the `match`. Those were deliberately not peeled
+    /// while the compiled statement discard site registered no payload walk for
+    /// a branch of enum ctors — peeling then would have moved this backend from
+    /// agreeing at ONE body to disagreeing at TWO. That site now registers it,
+    /// so the peel is what keeps the backends together.
     ///
-    /// A two-tail `if` and a `match` are deliberately NOT peeled, and the
-    /// asymmetry is measured rather than cautious: on the compiled side those
-    /// yield their merged value to the STATEMENT discard site, whose enum leg
-    /// resolves `enum_name_of_expr` on the construct itself and so registers no
-    /// payload walk. Peeling them here would move this backend from agreeing
-    /// with compiled at one body to disagreeing at two. The no-`else` `if` is
-    /// the one shape compiled owns INSIDE the arm, through the registrar that
-    /// does register that walk.
-    fn discard_producer_expr(expr: &Expr) -> &Expr {
+    /// ALL arms must qualify, which is the same rule codegen's
+    /// `discard_arm_tail_qualifies` enforces and it is load-bearing for the
+    /// same reason: the walk is VALUE-driven, so it runs over whichever arm's
+    /// value actually arrived. Peel a construct with one producing arm and one
+    /// handing out a LIVE LOCAL and the walk would fire over that local's
+    /// payload, which its own binding still owns — a doubled body, not a
+    /// missing one. An `Identifier` arm is therefore admitted only when the
+    /// name no longer resolves, the same liveness test
+    /// `discard_arm_tail_is_ownable` uses a few lines up.
+    ///
+    /// A UNIT-variant arm qualifies without being a construction: it carries no
+    /// payload, so the value-driven walk finds nothing to run for it, and
+    /// refusing it would decline the whole construct — which is precisely how
+    /// the mixed `match n { 0 => E.A(mk(8)) _ => E.B }` came to run nothing on
+    /// either compiled backend before this row.
+    fn discard_producer_runs_payload_walk(&self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
                 .final_expr
                 .as_deref()
-                .map_or(expr, Self::discard_producer_expr),
+                .is_some_and(|t| self.discard_producer_runs_payload_walk(t)),
             ExprKind::If {
                 then_block,
-                else_branch: None,
+                else_branch,
                 ..
-            } => then_block
-                .final_expr
-                .as_deref()
-                .map_or(expr, Self::discard_producer_expr),
-            _ => expr,
+            } => match else_branch.as_deref() {
+                // The no-`else` spelling keeps B-2026-08-29-30's behaviour: one
+                // arm, judged on its own.
+                None => then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.discard_producer_runs_payload_walk(t)),
+                // `arm_tail_expr` on the else branch: it is a BLOCK, and an
+                // unpeeled block matches none of the arms below — which
+                // silently declined `else { E.B }`, the row's own repro.
+                Some(e) => {
+                    then_block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(|t| self.discard_arm_yields_fresh_enum(t))
+                        && self.discard_arm_yields_fresh_enum(Self::arm_tail_expr(e))
+                }
+            },
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms
+                        .iter()
+                        .all(|a| self.discard_arm_yields_fresh_enum(Self::arm_tail_expr(&a.body)))
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { .. } => true,
+                // The bare spelling of the same construction.
+                ExprKind::Identifier(n) => self.find_enum_for_variant(n).is_some(),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// One arm of the all-arms test in
+    /// [`Self::discard_producer_runs_payload_walk`]: a construction, a unit
+    /// variant, or a name that no longer resolves.
+    fn discard_arm_yields_fresh_enum(&self, tail: &Expr) -> bool {
+        if self.discard_producer_runs_payload_walk(tail) {
+            return true;
+        }
+        match &tail.kind {
+            ExprKind::Path { segments, .. } => segments.len() == 2,
+            ExprKind::Identifier(n) => {
+                self.env.get(n).is_none() && self.find_enum_for_variant(n).is_some()
+            }
+            _ => false,
         }
     }
 
@@ -5023,21 +5073,20 @@ impl<'a> super::Interpreter<'a> {
                     // one shape it newly admits.
                     //
                     // ONLY the no-`else` `if` is peeled, for the reason
-                    // `discard_producer_expr` gives: a two-tail `if` or a
-                    // `match` yields its value to the STATEMENT site on the
-                    // compiled side, which registers no payload walk for an
-                    // enum ctor arm — peeling those would move this backend
-                    // from agreeing at one body to disagreeing at two.
-                    let producer = Self::discard_producer_expr(value);
-                    let inline_ctor = match &producer.kind {
-                        ExprKind::Call { callee, .. } => match &callee.kind {
-                            ExprKind::Path { .. } => true,
-                            // The bare spelling of the same construction.
-                            ExprKind::Identifier(n) => self.find_enum_for_variant(n).is_some(),
-                            _ => false,
-                        },
-                        _ => false,
-                    };
+                    // B-2026-08-29-30 gave: a two-tail `if` or a `match`
+                    // yields its value to the STATEMENT site on the compiled
+                    // side, which registered no payload walk for an enum ctor
+                    // arm — peeling those would have moved this backend from
+                    // agreeing at one body to disagreeing at two.
+                    // B-2026-08-31-22 — the two-tail `if` and the `match` are
+                    // peeled TOO, now that the premise above no longer holds.
+                    // The statement discard site on the compiled side used to
+                    // register nothing for a branch of enum ctors, so peeling
+                    // here would have traded agreement at one body for
+                    // disagreement at two; it registers the wrapper AND the
+                    // payload walk as of this commit, so peeling is what keeps
+                    // the two backends together instead of what splits them.
+                    let inline_ctor = self.discard_producer_runs_payload_walk(value);
                     if inline_ctor {
                         if let Value::EnumVariant { enum_name, .. } = &val {
                             if self.program.drop_method_keys.contains_key(enum_name) {
@@ -5686,7 +5735,27 @@ impl<'a> super::Interpreter<'a> {
                                 ExprKind::Identifier(n) if self.env.get(n).is_some())
                         });
                         if !hands_out_live_binding {
+                            let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
+                            // B-2026-08-31-22 — and its PAYLOAD, exactly as the
+                            // `Path`-ctor arm above runs one and for the same
+                            // reason: the shared walker runs the enum's OWN body
+                            // and stops, so a branch of ctors was 1 body here
+                            // against compiled's 2. AFTER the own body, so the
+                            // transcript order matches the direct spelling's
+                            // `dE dR8` rather than inverting it.
+                            //
+                            // Gated on the same all-arms construction test the
+                            // `let _ =` twin uses, so the two statement kinds
+                            // admit one population — the drift B-2026-08-29-20
+                            // had to repair once already on this trio.
+                            if self.discard_producer_runs_payload_walk(shape) {
+                                if let Value::EnumVariant { enum_name, .. } = &payload_src {
+                                    if self.program.drop_method_keys.contains_key(enum_name) {
+                                        self.run_enum_payload_user_drops_value(&payload_src);
+                                    }
+                                }
+                            }
                         }
                     }
                     // B-2026-08-29-25 — the `if` SPELLING of the arm above,
@@ -5741,7 +5810,27 @@ impl<'a> super::Interpreter<'a> {
                             _ => false,
                         };
                         if owns {
+                            let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
+                            // B-2026-08-31-22 — and its PAYLOAD, exactly as the
+                            // `Path`-ctor arm above runs one and for the same
+                            // reason: the shared walker runs the enum's OWN body
+                            // and stops, so a branch of ctors was 1 body here
+                            // against compiled's 2. AFTER the own body, so the
+                            // transcript order matches the direct spelling's
+                            // `dE dR8` rather than inverting it.
+                            //
+                            // Gated on the same all-arms construction test the
+                            // `let _ =` twin uses, so the two statement kinds
+                            // admit one population — the drift B-2026-08-29-20
+                            // had to repair once already on this trio.
+                            if self.discard_producer_runs_payload_walk(shape) {
+                                if let Value::EnumVariant { enum_name, .. } = &payload_src {
+                                    if self.program.drop_method_keys.contains_key(enum_name) {
+                                        self.run_enum_payload_user_drops_value(&payload_src);
+                                    }
+                                }
+                            }
                         }
                     }
                     ExprKind::MethodCall { method, .. }
