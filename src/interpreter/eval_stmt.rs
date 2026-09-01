@@ -4178,13 +4178,12 @@ impl<'a> super::Interpreter<'a> {
             // before and after this arm, and `let _ = a;` over a live binding
             // declines here (the binding holds the other reference) and keeps
             // running through its own path.
-            Value::SharedStruct(ref inner) => {
+            Value::SharedStruct(ref inner)
                 if self.program.drop_method_keys.contains_key(&inner.name)
-                    && std::sync::Arc::strong_count(inner) == 1
-                {
-                    let tn = inner.name.clone();
-                    self.run_user_drop_body_on_value(&tn, val.clone());
-                }
+                    && std::sync::Arc::strong_count(inner) == 1 =>
+            {
+                let tn = inner.name.clone();
+                self.run_user_drop_body_on_value(&tn, val.clone());
             }
             _ => {}
         }
