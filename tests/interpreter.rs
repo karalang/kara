@@ -52750,3 +52750,106 @@ fn method_fresh_temp_enum_arg_arm_binds_payload() {
         assert_eq!(run(&src), want, "{label}");
     }
 }
+
+/// B-2026-08-31-32 — a fresh-temp STRUCT scrutinee's arm bindings own a `Drop`
+/// slot.
+///
+/// The arm-stash gate read `matches!(scrutinee, Value::EnumVariant { .. })`, so
+/// a struct scrutinee registered nothing and `match P { .. } { P { r, .. } => }`
+/// ran NO body against one on both compiled backends. The exact mirror of
+/// B-2026-08-30-55, whose gate was `Value::Struct`-only and missed enums.
+///
+/// Five rows, and the two that must NOT change are the reason the fix is a
+/// gate rather than an unconditional widening:
+///
+/// * `fresh-literal` / `fresh-call` — the reported hole. A value built or
+///   returned AT the scrutinee has no other owner.
+/// * `bound-local` — the control that a naive widening breaks. `p` owns its own
+///   field walk, and stashing beside it printed the body TWICE (measured);
+///   a struct has no `moved_out_enum_payload_bindings` equivalent to retract
+///   that walk with, which is why the enum path can admit a named place here
+///   and this one cannot.
+/// * `no-binding` — a `..`-only arm binds nothing, so there is nothing to stash
+///   and nothing changes. Both backends agree at zero bodies today; pinned so a
+///   later widening cannot quietly make this backend the odd one out.
+/// * `own-drop-struct` — the scrutinee declares its own `Drop`. Included
+///   because it is the shape where a partial move out of a `Drop`-bearing
+///   struct meets this gate, and both backends agree on the field body.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `test_e2e_fresh_temp_struct_scrutinee_arm_binding_runs_its_body`.
+#[test]
+fn fresh_temp_struct_scrutinee_arm_binding_runs_its_body() {
+    const H: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.s}]\") } }\n\
+         struct P { r: R, n: i64 }\n\
+         struct Q { r: R }\n\
+         impl Drop for Q { fn drop(mut ref self) { println(\"dQ\") } }\n\
+         fn mkp(t: String) -> P { return P { r: R { s: t }, n: 1 }; }\n";
+    for (label, body, want) in [
+        (
+            "fresh-literal",
+            "match P { r: R { s: \"a\" }, n: 4 } { P { r, .. } => println(r.s) }",
+            "a\ndR[a]\n",
+        ),
+        (
+            "fresh-call",
+            "match mkp(\"c\") { P { r, .. } => println(r.s) }",
+            "c\ndR[c]\n",
+        ),
+        (
+            "bound-local",
+            "let p = P { r: R { s: \"b\" }, n: 4 };\n\
+             match p { P { r, .. } => println(r.s) }",
+            "b\ndR[b]\n",
+        ),
+        (
+            "no-binding",
+            "match P { r: R { s: \"d\" }, n: 4 } { P { .. } => println(\"nb\") }",
+            "nb\n",
+        ),
+        (
+            "own-drop-struct",
+            "match Q { r: R { s: \"e\" } } { Q { r } => println(r.s) }",
+            "e\ndR[e]\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}
+
+/// B-2026-08-31-32 — the `if let` spelling moves with `match`.
+///
+/// Both reach one shared place test rather than a second copy, because this
+/// family has had to close a spelling-dependent split twice already
+/// (B-2026-08-28-63, B-2026-08-29-17). The `bound-local` row is the same
+/// double-fire guard as in the `match` fixture.
+#[test]
+fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
+    const H: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.s}]\") } }\n\
+         struct P { r: R, n: i64 }\n";
+    for (label, body, want) in [
+        (
+            "fresh-literal",
+            "if let P { r, .. } = P { r: R { s: \"a\" }, n: 1 } { println(r.s) }",
+            "a\ndR[a]\n",
+        ),
+        (
+            "bound-local",
+            "let p = P { r: R { s: \"b\" }, n: 1 };\n\
+             if let P { r, .. } = p { println(r.s) }",
+            "b\ndR[b]\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}

@@ -98526,6 +98526,58 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-08-31-32 — compiled twin of `tests/interpreter.rs`'s
+    /// `fresh_temp_struct_scrutinee_arm_binding_runs_its_body`, same programs
+    /// and expectations.
+    ///
+    /// This backend was correct on every row; the interpreter ran no body for
+    /// the two fresh-temp ones. The twin exists because the property is that
+    /// the two AGREE — and because `bound-local` and `no-binding` are the rows a
+    /// later widening on either side would break silently.
+    #[test]
+    fn test_e2e_fresh_temp_struct_scrutinee_arm_binding_runs_its_body() {
+        const H: &str = "struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR[{self.s}]\") } }\n\
+             struct P { r: R, n: i64 }\n\
+             struct Q { r: R }\n\
+             impl Drop for Q { fn drop(mut ref self) { println(\"dQ\") } }\n\
+             fn mkp(t: String) -> P { return P { r: R { s: t }, n: 1 }; }\n";
+        for (label, body, want) in [
+            (
+                "fresh-literal",
+                "match P { r: R { s: \"a\" }, n: 4 } { P { r, .. } => println(r.s) }",
+                "a\ndR[a]\n",
+            ),
+            (
+                "fresh-call",
+                "match mkp(\"c\") { P { r, .. } => println(r.s) }",
+                "c\ndR[c]\n",
+            ),
+            (
+                "bound-local",
+                "let p = P { r: R { s: \"b\" }, n: 4 };\n\
+                 match p { P { r, .. } => println(r.s) }",
+                "b\ndR[b]\n",
+            ),
+            (
+                "no-binding",
+                "match P { r: R { s: \"d\" }, n: 4 } { P { .. } => println(\"nb\") }",
+                "nb\n",
+            ),
+            (
+                "own-drop-struct",
+                "match Q { r: R { s: \"e\" } } { Q { r } => println(r.s) }",
+                "e\ndR[e]\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-08-31-47 — compiled twin of `tests/interpreter.rs`'s
     /// `method_fresh_temp_enum_arg_arm_binds_payload`, same programs and
     /// expectations.
