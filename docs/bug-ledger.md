@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 345 | 7 |
+| miscompile | 345 | 6 |
 | run-vs-build | 293 | 15 |
 | leak | 252 | 8 |
 | missing-feature | 192 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1351 | 33 |
+| codegen | 1351 | 32 |
 | interp | 314 | 15 |
 | typecheck | 285 | 0 |
 | ownership | 72 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced · 35 open · 1897 fixed · 11 wontfix · 3 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced · 34 open · 1897 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (35)
+### Open (34)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
-| B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | — |
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
@@ -166,14 +165,15 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 | B-2026-09-01-41 | 2026-09-01 | codegen | medium | A STRUCT'S `Vec` FIELD IS NEVER FREED when the struct is declared OUTSIDE a loop, the field is pushed to INSIDE it, and the loop body also makes a heap TEMPORARY -- all three needed, the element type is irrelevant, and the whole Vec leaks | — |
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 
-### Relocated (3)
+### Relocated (4)
 
-<details><summary>3 relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
+<details><summary>4 relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | implementation_checklist/phase-5-diagnostics.md#fn-type-effect-row-deferred |
 | B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | docs/roadmap.md § Phase 7.3 stdlib — the `StringSlice` item (zero-copy parsing/splitting), expanded in 5858a19 to carry the measured state, the v1/v2 blocker, and the open cursor-vs-split decision |
+| B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | B-2026-09-01-38 |
 | B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | B-2026-09-01-38 |
 
 </details>
