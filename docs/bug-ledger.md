@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 342 | 6 |
 | run-vs-build | 281 | 22 |
-| leak | 245 | 8 |
+| leak | 245 | 7 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 158 | 3 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1328 | 39 |
-| interp | 304 | 25 |
+| codegen | 1328 | 38 |
+| interp | 304 | 24 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1934 surfaced · 47 open · 1856 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1934 surfaced · 46 open · 1857 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (47)
+### Open (46)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -153,7 +153,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1934 surfaced
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
 | B-2026-08-31-16 | 2026-08-31 | codegen | low | THE DERIVED-Display REFUSAL FOR AN UNSUPPORTED FIELD TYPE DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr — spans and byte offsets included — INTO USER-FACING OUTPUT, running to hundreds of characters for a one-line source construct and never naming the type in source syntax; the refusal itself is correct, and what it needs is a TypeExpr-to-source formatter this file lacks | — |
-| B-2026-08-31-21 | 2026-08-31 | interp+codegen | medium | A DISCARDED `shared` STRUCT LITERAL RUNS NO `Drop` BODY AND LEAKS ITS RC BOX ON ALL THREE BACKENDS -- `let _ = S { .. };`, `S { .. };` and the branch spellings are all silent and strand 41 B, while the same value BOUND (`let s = S { .. };`) is correct at one body and clean everywhere. | — |
 | B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
 | B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | — |
 | B-2026-08-31-32 | 2026-08-31 | interp | medium | THE INTERPRETER RUNS NO `Drop` BODY AT ALL FOR A FRESH-TEMP STRUCT SCRUTINEE THAT AN ARM DESTRUCTURES -- `match H { .. } { H { r, .. } => .. }`; both compiled backends run it once | — |
@@ -209,9 +208,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1934 surfaced
 
 </details>
 
-### Fixed (1856)
+### Fixed (1857)
 
-<details><summary>1856 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1857 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2054,6 +2053,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1934 surfaced
 | B-2026-08-31-19 | codegen | medium | `Array[T, N]` HAS NO Display UNDER CODEGEN AT ANY DEPTH, AND THE QUIET HALF IS THE PLAIN ONE -- nested (a `Vec` element, a struct field, a tuple fiel… | c48c0fb |
 | B-2026-08-31-17 | codegen | medium | AN `Option`/`Result` CALL RESULT INTERPOLATED IN AN F-STRING LEAKS ITS PAYLOAD ONCE PER EVALUATION -- `f"{mk(n)}"` where `mk` returns `Option[String]… | 4a58370 |
 | B-2026-08-31-20 | interp | medium | THE INTERPRETER DOES NOT NARROW A FLOAT LITERAL TO THE ANNOTATED PAYLOAD WIDTH INSIDE `Option.Some(...)` -- `let q: Option[f16] = Option.Some(0.1)` p… | f632ce30 |
+| B-2026-08-31-21 | interp+codegen | medium | A DISCARDED `shared` STRUCT LITERAL RUNS NO `Drop` BODY AND LEAKS ITS RC BOX ON ALL THREE BACKENDS -- `let _ = S { . | 964832d |
 | B-2026-08-31-22 | interp+codegen | medium | A DISCARDED `if`/`else` WHOSE ARMS ARE OWN-`Drop` ENUM CTORS RUNS ONE BODY ON THE INTERPRETER AND NONE ON EITHER COMPILED BACKEND -- `let _ = if c {… | a139cc1 |
 | B-2026-08-31-23 | codegen | high | A NESTED `match` ARM THAT MOVES A HEAP LEAF OUT OF A WHOLE-BOUND *BOXED* `Option` PAYLOAD DOUBLE FREES -- the TRANSFER-path twin of B-2026-08-30-52 (… | f6059cf |
 | B-2026-08-31-24 | codegen | high | EVERY ACCESS TO A `Vec[Vector[T, N]]` ELEMENT BUFFER IS EMITTED AT THE VECTOR'S NATURAL ALIGNMENT AGAINST `malloc` MEMORY, SO IT FAULTS ON `vmovaps`… | 33f43c4 |
