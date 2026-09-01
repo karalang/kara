@@ -47671,3 +47671,127 @@ fn comparison_methods_on_a_primitive_receiver_are_typed_not_poisoned() {
          fn main() { let a: i64 = 1; let b: i64 = 2; let s: String = a.lt(b); println(s); }",
     );
 }
+
+/// B-2026-09-01-12 — a literal suffix naming a width WIDER than the
+/// destination is rejected, at every position where the destination is known.
+///
+/// This is not a new rule. design.md's implicit-widening table already says
+/// narrowing needs an explicit `as`, and both halves of it are enforced:
+/// `let d: f32 = c` with `c: f64` and `let d: i32 = c` with `c: i64` are hard
+/// errors. A suffixed literal walked past the float half because
+/// `check_float_narrowing_coercion` exempted every compile-time-constant float
+/// expression, and the exemption's own reasoning — an unsuffixed literal is
+/// inferred AT the destination's width, so it never narrows — is exactly what a
+/// suffix undoes.
+///
+/// What that cost, measured before the fix: `let d: f32 = 16777217.0f64` held
+/// 16777217 on all four surfaces, a value no `f32` can represent, so the
+/// annotation was not merely overridden but falsified. And through an `Option`
+/// payload the two backends did not even agree —
+/// `let d: Option[f32] = Option.Some(0.1f64)` printed `Some(0.1)` under
+/// `--interp` and `Some(0.10000000149011612)` compiled — because the seeded
+/// generic-call site had an integer narrowing gate and no float one.
+///
+/// The positions are enumerated rather than sampled because they reach the
+/// gate by two different routes: `let`/arg/field/element/return funnel through
+/// `check_expr`, while an `Option`/`Result` payload is a slot the EXPECTATION
+/// seeded and is checked at the generic-call site instead. A fix to one route
+/// says nothing about the other.
+#[test]
+fn a_literal_suffix_wider_than_its_destination_is_rejected() {
+    let rejects = |src: &str| {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.message.contains("is wider than the")),
+            "expected a contradicting-suffix rejection from: {src}\ngot: {errs:?}"
+        );
+    };
+    // `check_expr` route.
+    rejects("fn main() { let d: f32 = 0.1f64; println(d); }");
+    rejects("fn main() { let d: f32 = -0.1f64; println(d); }");
+    rejects("fn main() { let d: f16 = 0.1f32; println(d); }");
+    rejects("fn f(x: f32) -> f32 { return x; } fn main() { println(f(0.1f64)); }");
+    rejects("fn f() -> f32 { return 0.1f64; } fn main() { println(f()); }");
+    rejects("struct S { f: f32 }\nfn main() { let s = S { f: 0.1f64 }; println(s.f); }");
+    rejects("fn main() { let mut v: Vec[f32] = Vec.new(); v.push(0.1f64); println(v[0]); }");
+    rejects("fn main() { let a: Array[f32, 2] = [0.1f64, 0.2]; println(a[0]); }");
+    // Expectation-seeded route — the row's own program.
+    rejects("fn main() { let d: Option[f32] = Option.Some(0.1f64); println(f\"{d}\"); }");
+    rejects("fn main() { let d: Result[f32, i64] = Result.Ok(0.1f64); println(f\"{d}\"); }");
+    // A suffix inside constant arithmetic pins that leaf's width just as
+    // firmly, and the fold carries it into the slot.
+    rejects("fn main() { let d: f32 = 0.1f64 * 2.0; println(d); }");
+
+    // NOT rejected, and each for its own reason.
+    //
+    // Widening is lossless and stays implicit — design.md's table says so, and
+    // `test_float_literal_width_respects_f64_slots_and_suffixes` pins that the
+    // f32 VALUE survives the widening rather than being re-read at f64.
+    typecheck_ok("fn main() { let w: f64 = 0.1f32; println(w); }");
+    typecheck_ok("fn main() { let w: Option[f64] = Option.Some(0.1f32); println(f\"{w}\"); }");
+    // A matching suffix names the width the slot already has.
+    typecheck_ok("fn main() { let d: f32 = 0.1f32; println(d); }");
+    // An unsuffixed literal is inferred AT the destination's width, which is
+    // the case the exemption exists for and must keep covering — including
+    // through arithmetic, where `Tensor.from([-1.0, 2.0])` at `Tensor[f32]`
+    // and `0.0 * (0.0 - 1.0)` at a `bf16` field were the measured shapes.
+    typecheck_ok("fn main() { let d: f32 = 0.1; println(d); }");
+    typecheck_ok("fn main() { let d: f32 = 0.0 * (0.0 - 1.0); println(d); }");
+    typecheck_ok("fn main() { let d: Option[f32] = Option.Some(0.1); println(f\"{d}\"); }");
+    // The `as` the diagnostic offers must actually be accepted.
+    typecheck_ok("fn main() { let d: f32 = 0.1f64 as f32; println(d); }");
+}
+
+/// B-2026-09-01-12's second defect: the `redundant_suffix` lint is WITHDRAWN
+/// when the same literal is rejected for contradicting its destination.
+///
+/// The lint fires on a suffix naming the DEFAULT type and never consults the
+/// destination, so on `let d: f32 = 0.1f64` it read "redundant `f64` suffix:
+/// f64 is the default type for this literal" — a claim about the program that
+/// is false. The suffix is not redundant there; deleting it changes the
+/// literal's width and therefore its value. Worse, the lint carries a
+/// machine-applicable fix that deletes the suffix, justified by exactly the
+/// redundancy that does not hold, so `karac fix` would have applied it on the
+/// strength of a wrong premise.
+///
+/// The deletion happens to be the right edit now — it is what the error
+/// recommends — so the fix survives and only the misleading warning goes. One
+/// diagnostic, not a correct one beside a false one.
+#[test]
+fn a_contradicting_suffix_withdraws_the_redundant_suffix_warning() {
+    let warnings_of = |src: &str| {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "parse errors in: {src}");
+        let resolved = resolve(&parsed.program);
+        let result = typecheck(&parsed.program, &resolved);
+        result
+            .warnings
+            .iter()
+            .filter(|w| w.kind == TypeErrorKind::RedundantSuffix)
+            .count()
+    };
+    assert_eq!(
+        warnings_of("fn main() { let d: f32 = 0.1f64; println(d); }"),
+        0,
+        "the contradicting case must not also be called redundant"
+    );
+    assert_eq!(
+        warnings_of("fn main() { let d: f32 = -0.1f64; println(d); }"),
+        0,
+        "the negated spelling too — the gate's span is the unary expression \
+         and the lint's is the literal inside it, so the withdrawal has to \
+         match by containment"
+    );
+    assert_eq!(
+        warnings_of("fn main() { let d: Option[f32] = Option.Some(0.1f64); println(f\"{d}\"); }"),
+        0,
+        "and on the expectation-seeded route"
+    );
+    // The genuinely redundant cases keep the lint: the suffix names the type
+    // the literal would have had anyway, which is the trigger design.md words.
+    assert_eq!(
+        warnings_of("fn main() { let a: f64 = 0.1f64; println(a); }"),
+        1
+    );
+    assert_eq!(warnings_of("fn main() { let b = 0.1f64; println(b); }"), 1);
+}

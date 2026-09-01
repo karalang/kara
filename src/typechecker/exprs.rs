@@ -2179,6 +2179,21 @@ impl<'a> super::TypeChecker<'a> {
                     {
                         self.check_int_widening_coercion(&arg.value, &resolved, arg_ty);
                     }
+                    // B-2026-09-01-12 — the FLOAT sibling of the line above,
+                    // which had no counterpart at all: `seeded_arg_narrows` is
+                    // integer-only (it reasons in `int_signed_width`), so a
+                    // float flowing into a slot the EXPECTATION fixed reached
+                    // no gate. `Option[f32] = Option.Some(0.1f64)` therefore
+                    // typechecked and then printed the f64 under `--interp` and
+                    // the rounded f32 on every compiled backend — a run==build
+                    // split on a program the plain spelling (`let d: f32 =
+                    // 0.1f64`) already rejects. No `seeded_arg_narrows`
+                    // pre-filter is needed here: the gate answers "nothing to
+                    // do" itself for a non-float, an equal width, a widening,
+                    // and for a constant that names no width of its own.
+                    if seeded_from_expectation {
+                        self.check_float_narrowing_coercion(&arg.value, &resolved, arg_ty);
+                    }
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, arg_ty);
                     }
@@ -3991,9 +4006,6 @@ impl<'a> super::TypeChecker<'a> {
         if *actual == Type::Error {
             return;
         }
-        if Self::float_expr_is_compile_time_constant(expr) {
-            return;
-        }
         let peel = |t: &Type| -> Type {
             match t {
                 Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
@@ -4014,6 +4026,59 @@ impl<'a> super::TypeChecker<'a> {
         if source_rank < target_rank {
             return;
         }
+        // B-2026-09-01-12 — the constant exemption above used to run FIRST and
+        // unconditionally, which let a literal keep a width its destination
+        // cannot hold. Its justification is that an unsuffixed literal is
+        // inferred AT the destination's width (B-2026-08-14-11), so it never
+        // narrows; a SUFFIXED one is the opposite — the width is pinned, and
+        // pinned wider than the slot is exactly the narrowing this gate exists
+        // to catch. Measured before the fix: `let d: f32 = 16777217.0f64` held
+        // 16777217 on all four backends, a value no `f32` can represent, and
+        // `Option[f32] = Option.Some(0.1f64)` printed the f64 under `--interp`
+        // and the rounded f32 compiled. So the exemption now covers a constant
+        // only while none of its float leaves names a width wider than the
+        // destination.
+        if Self::float_const_names_wider_width(expr, target_rank) {
+            // RETRACT the `redundant_suffix` warning this literal already drew
+            // (B-2026-09-01-12's second defect). That lint fires on a suffix
+            // naming the DEFAULT type, without consulting the destination, so
+            // on `let d: f32 = 0.1f64` it reported "redundant `f64` suffix:
+            // f64 is the default type for this literal" — a statement about
+            // the program that is false, since dropping the suffix changes the
+            // literal's width and therefore its value. Its fix-it (delete the
+            // suffix) is right and is what the error below recommends; only
+            // the claim of redundancy is wrong, so the warning is withdrawn
+            // rather than reworded and the reader gets one diagnostic instead
+            // of a correct one beside a misleading one. Matched by
+            // CONTAINMENT, not equality: on `-0.1f64` the gate's span is the
+            // whole unary expression and the lint's is the literal inside it.
+            let lo = expr.span.offset;
+            let hi = expr.span.offset + expr.span.length;
+            self.warnings.retain(|w| {
+                !(matches!(w.kind, TypeErrorKind::RedundantSuffix)
+                    && w.span.offset >= lo
+                    && w.span.offset + w.span.length <= hi)
+            });
+            self.type_error(
+                format!(
+                    "literal suffix '{}' is wider than the '{}' it initializes, \
+                     so the value would have to be rounded to reach the \
+                     destination. Drop the suffix — '{}' already types the \
+                     literal — or write an explicit 'as {}' if the rounding is \
+                     intended",
+                    type_display(&source),
+                    type_display(&target),
+                    type_display(&target),
+                    type_display(&target),
+                ),
+                expr.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
+        }
+        if Self::float_expr_is_compile_time_constant(expr) {
+            return;
+        }
         self.type_error(
             format!(
                 "implicit coercion from '{}' to '{}' would lose precision; the \
@@ -4027,6 +4092,41 @@ impl<'a> super::TypeChecker<'a> {
             expr.span,
             TypeErrorKind::TypeMismatch,
         );
+    }
+
+    /// B-2026-09-01-12 — does this compile-time-constant float expression
+    /// contain a literal whose SUFFIX names a width wider than `target_rank`?
+    ///
+    /// The companion of [`float_expr_is_compile_time_constant`], and it walks
+    /// the same shapes for the same reason: a suffix on any leaf of
+    /// `-0.1f64` or `0.1f64 * 2.0` pins that leaf's width just as firmly as it
+    /// does on a bare literal, and the fold then carries the pinned width into
+    /// the destination. An unsuffixed leaf answers `false` — it is inferred at
+    /// the destination's width and cannot narrow.
+    fn float_const_names_wider_width(expr: &Expr, target_rank: u8) -> bool {
+        let suffix_rank = |sfx: &crate::token::FloatSuffix| -> u8 {
+            match sfx {
+                crate::token::FloatSuffix::F16 | crate::token::FloatSuffix::BF16 => 0,
+                crate::token::FloatSuffix::F32 => 1,
+                crate::token::FloatSuffix::F64 => 2,
+            }
+        };
+        match &expr.kind {
+            ExprKind::Float(_, Some(sfx)) => suffix_rank(sfx) > target_rank,
+            ExprKind::Float(_, None) => false,
+            ExprKind::Unary { op, operand } => {
+                matches!(op, UnaryOp::Neg)
+                    && Self::float_const_names_wider_width(operand, target_rank)
+            }
+            ExprKind::Binary { op, left, right } => {
+                matches!(
+                    op,
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+                ) && (Self::float_const_names_wider_width(left, target_rank)
+                    || Self::float_const_names_wider_width(right, target_rank))
+            }
+            _ => false,
+        }
     }
 
     /// B-2026-08-14-12 — is this expression a float value the compiler already

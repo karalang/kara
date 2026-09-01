@@ -108227,6 +108227,49 @@ fn main() {
         assert_eq!(run_program(&src), Some(want));
     }
 
+    /// B-2026-09-01-12 — the two repairs the contradicting-suffix diagnostic
+    /// offers both agree across every backend.
+    ///
+    /// The row's own program (`Option[f32] = Option.Some(0.1f64)`) is now a type
+    /// error, so there is nothing left to run for it — which is the point: the
+    /// backends disagreed only on programs the checker can reject. What still has
+    /// to hold is that the fix-it does not trade a silent narrowing for a
+    /// run-vs-build split, the same obligation
+    /// `test_float_narrowing_as_cast_rounds_to_the_target_width` states for the
+    /// `as` the earlier gate recommends.
+    ///
+    /// So both recommended spellings are pinned — drop the suffix and let the
+    /// destination type the literal, or keep it and add `as f32` — together with
+    /// the widening case that stays legal. `16777217` is there because it is not
+    /// representable in f32: before the fix `let c: f32 = 16777217.0f64` bound it
+    /// unrounded on all four surfaces, so the value doubles as the witness that
+    /// the annotation is now honoured rather than merely agreed upon.
+    /// Verified byte-identical under `karac run --interp`, `karac run`,
+    /// `karac build`, and `KARAC_AUTO_PAR=0 karac build`.
+    #[test]
+    fn test_e2e_contradicting_suffix_repairs_agree_across_backends() {
+        assert_eq!(
+            run_program(
+                r#"fn main() {
+    let a: Option[f32] = Option.Some(0.1);
+    println(f"{a}");
+    let b: Option[f32] = Option.Some(0.1f64 as f32);
+    println(f"{b}");
+    let c: f32 = 16777217.0;
+    println(f"{c}");
+    let d: f32 = 16777217.0f64 as f32;
+    println(f"{d}");
+    let w: f64 = 0.1f32;
+    println(f"{w}");
+}
+"#
+            ),
+            Some(
+                "Some(0.10000000149011612)\nSome(0.10000000149011612)\n16777216\n16777216\n0.10000000149011612\n".to_string()
+            )
+        );
+    }
+
     #[test]
     fn test_e2e_vector_unary_math_lane_width_matches_the_interpreter() {
         // The COMPILED half of the oracle pair for B-2026-08-29-40. The bug was
