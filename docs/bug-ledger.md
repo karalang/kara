@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 342 | 6 |
 | run-vs-build | 278 | 22 |
-| leak | 242 | 8 |
+| leak | 243 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 157 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1321 | 38 |
+| codegen | 1322 | 38 |
 | interp | 301 | 25 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1926 surfaced · 47 open · 1848 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1927 surfaced · 47 open · 1849 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (47)
 
@@ -169,7 +169,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1926 surfaced
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-42 | 2026-08-31 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a param or a return; the wasm ABI decomposes the struct into fields, so the `bfloat` field is promoted exactly as a bare param was, and B-2026-08-30-42's signature rewrite does not reach it. `ref self` builds (a pointer is not decomposed) and is a real workaround | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
-| B-2026-08-31-44 | 2026-08-31 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE -- a discarded branch whose arm literal initializes a field from a LOCAL (`P { a: t.a, b: 1 }`, projected, or `P { a: s, b: 1 }`, moved in whole) still registers NO memory, because the guard that declines it was written against an aliasing double free that B-2026-08-31-34 has now fixed | — |
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
 | B-2026-08-31-47 | 2026-08-31 | interp | medium | THE INTERPRETER LOSES A `Drop` BODY THAT BOTH COMPILED BACKENDS RUN, IN TWO METHOD-ARG SHAPES -- a fresh enum temp whose payload an arm BINDS but does not return (`t.keep(Box2.Full(mk(7)))` over `fn keep(..) -> i64 { match b { Box2.Full(r) => { return r.id; } .. } }`) prints nothing under `--interp` against one body compiled; and the BARE-STATEMENT discard of a method call returning `Option[R]` loses the body where the `let _ =` spelling of the same call keeps it | — |
 | B-2026-08-31-50 | 2026-08-31 | interp+codegen | medium | AN ENUM-CONSTRUCTOR MIXED WRAP LOSES ITS SLOT MASK ACROSS A WHOLE-VALUE REBIND, AND CODEGEN CANNOT INHERIT IT BECAUSE IT STORES NOTHING PER VARIABLE -- `let w = W2.Two(r, mk(2)); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, on all three backends; the STRUCT and TUPLE spellings of the same rebind were fixed by B-2026-08-29-44 and this one could not be, because `enum_ctor_param_view_payload_slots` derives the masked slots from the ctor EXPRESSION at the `let` and keeps no per-var record for a rebind to copy | — |
@@ -177,6 +176,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1926 surfaced
 | B-2026-09-01-2 | 2026-09-01 | interp | medium | THE INTERPRETER LOSES A MIXED WRAP'S FRESH FIELD BODY WHEN THE VIEW FIELD IS MOVED OUT -- `let s = S3 { a: r, b: mk(2) }; let x = s.a;` prints `dR1` against every compiled backend's due `dR2 dR1`, because the COARSE whole-walk disarm short-circuits the per-field mask the same statement also registers | none |
 | B-2026-09-01-3 | 2026-09-01 | interp+codegen | medium | THE TUPLE SPELLING OF B-2026-08-29-47 STILL DOUBLES A PARAM VIEW'S `Drop` BODY -- `let t = (r, 5); let x = t.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-field param-view record that fix added has no tuple peer | none |
 | B-2026-09-01-4 | 2026-09-01 | codegen | medium | READING A NON-`Copy` FIELD OUT OF A `ref` PARAM MINTS AN IMPLICIT DEEP COPY -- silently allocating and running a user `Drop` body the source never wrote, which is exactly what `enum_payload_clone_is_faithful` refuses to do one level down | — |
+| B-2026-09-01-5 | 2026-09-01 | codegen | low | A DISCARDED BRANCH LITERAL WHOSE FIELD IS A PROJECTION OFF A NAMED LOCAL STILL STRANDS 38 B -- `P { a: t.a, b: 1 }` is the half of B-2026-08-29-32's guard that B-2026-08-31-44 could NOT admit, because the aggregate-literal move takeover does not extend to named locals and admitting it double-frees in a loop | — |
 
 ### Relocated (2)
 
@@ -209,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1926 surfaced
 
 </details>
 
-### Fixed (1848)
+### Fixed (1849)
 
-<details><summary>1848 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1849 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2060,6 +2060,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1926 surfaced
 | B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
 | B-2026-08-31-34 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b:… | 2b3b966 |
 | B-2026-08-31-41 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[… | c5b5f6a |
+| B-2026-08-31-44 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE… | 1b5c026 |
 | B-2026-08-31-45 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
 | B-2026-08-31-48 | codegen | high | TWO INSTANTIATIONS OF ONE GENERIC FN AT DIFFERENT `Array`/`Slice`/`Vector` TYPE ARGS COLLIDE ON ONE MONO SYMBOL AND FAIL MODULE VERIFICATION -- `fn i… | 007c279 |
 | B-2026-08-31-49 | codegen | high | A GENERIC `Result[T, E]` RENDERS WITH THE `Option` VARIANT TABLE WHEN A GENERIC `Option[T]` DISPLAY IS EMITTED FIRST -- `Ok(7)` prints `Some(7)` and… | e5fd34f |
