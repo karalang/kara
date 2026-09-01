@@ -230,6 +230,54 @@ fn main() {
     );
 }
 
+/// B-2026-08-30-22 — an ASSOCIATED callee that hands its argument straight
+/// back runs ONE `Drop` body, not two.
+///
+/// `run_fresh_temp_arg_drops` fires a fresh-temp argument's body as the call
+/// returns, and suppresses that when the callee can RETURN the parameter — the
+/// value flows out and the result binding owns it. Both of its guards searched
+/// `Item::Function`, i.e. FREE functions only, and `Value::Function` carries
+/// just the bare name, so `H.id(...)` arrived as `id`, matched nothing, and the
+/// temp's body ran at the call AND the binding's at scope exit.
+///
+/// All three dispatch routes are asserted together because the asymmetry is the
+/// evidence: the free-function and METHOD routes were already correct (the
+/// method path claims arguments through the callee frame instead), so the
+/// associated arm was a genuine third case rather than a variant of either —
+/// which is what B-2026-08-29-46's fix note had already recorded about this
+/// three-way split.
+///
+/// The compiled backends are the oracle here, unusually for this family: they
+/// agreed with the free spelling throughout and valgrind was clean, so the
+/// duplicate was this backend's alone.
+#[test]
+fn test_assoc_fn_passthrough_arg_runs_one_drop_body() {
+    let hdr = "struct R { id: i64, s: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> String { return f\"pay-{i}\" }\n";
+    let assoc = run(&format!(
+        "{hdr}struct H {{ n: i64 }}\n\
+         impl H {{ fn id(a: R) -> R {{ return a }} }}\n\
+         fn main() {{ let x = H.id(R {{ id: 1, s: mk(1) }}); println(f\"x={{x.id}}\") }}"
+    ));
+    let free = run(&format!(
+        "{hdr}fn idf(a: R) -> R {{ return a }}\n\
+         fn main() {{ let x = idf(R {{ id: 1, s: mk(1) }}); println(f\"x={{x.id}}\") }}"
+    ));
+    let method = run(&format!(
+        "{hdr}struct H {{ n: i64 }}\n\
+         impl H {{ fn idm(ref self, a: R) -> R {{ return a }} }}\n\
+         fn main() {{ let h = H {{ n: 0 }}; let x = h.idm(R {{ id: 1, s: mk(1) }}); \
+         println(f\"x={{x.id}}\") }}"
+    ));
+    assert_eq!(free, "x=1\ndR1\n", "the free-function oracle itself moved");
+    assert_eq!(method, "x=1\ndR1\n", "the method route itself moved");
+    assert_eq!(
+        assoc, free,
+        "an associated passthrough must run exactly one body, as the free spelling does"
+    );
+}
+
 /// B-2026-08-30-20 — the interpreter twin of `tests/codegen.rs`'s
 /// `e2e_assoc_call_produced_argument_owns_its_value`.
 ///

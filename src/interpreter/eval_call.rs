@@ -2968,6 +2968,58 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// The `Function` a bare callee name denotes, for the ownership guards in
+    /// [`Self::run_fresh_temp_arg_drops`] (B-2026-08-30-22).
+    ///
+    /// Those guards searched `Item::Function` — FREE functions only. An
+    /// ASSOCIATED fn lives in an `ImplBlock` as an `ImplItem::Method`, and
+    /// `Value::Function` carries only the bare name, so `H.id(...)` arrives
+    /// here as `id` and matched nothing: the passthrough guard never fired and
+    /// a fresh temp handed straight back out had its body run at the call AND
+    /// again at the result binding's scope exit. Two bodies for one object,
+    /// against one on every compiled backend.
+    ///
+    /// STRICTLY ADDITIVE. A free function of that name still wins, exactly as
+    /// before, so no existing resolution changes; an inherent-impl method is
+    /// consulted only when no free function claims the name AND exactly one
+    /// impl offers it. Ambiguity yields `None`, which leaves the guards at
+    /// today's answer rather than guessing — suppressing against the wrong
+    /// candidate would strand the body instead of duplicating it, trading a
+    /// double-run for a leak.
+    ///
+    /// Trait-impl methods are excluded: they are dispatched through the trait,
+    /// not reachable as the `Type.method` callee this resolves.
+    fn callee_fn_for_ownership_guard(&self, name: &str) -> Option<&crate::ast::Function> {
+        if let Some(f) = self.program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == name => Some(f),
+            _ => None,
+        }) {
+            return Some(f);
+        }
+        let mut found: Option<&crate::ast::Function> = None;
+        for item in &self.program.items {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            if imp.trait_name.is_some() {
+                continue;
+            }
+            for m in imp.items.iter().filter_map(|it| match it {
+                crate::ast::ImplItem::Method(f) => Some(f),
+                _ => None,
+            }) {
+                if m.name != name {
+                    continue;
+                }
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(m);
+            }
+        }
+        found
+    }
+
     fn run_fresh_temp_arg_drops(
         &mut self,
         callee_name: &str,
@@ -3003,17 +3055,23 @@ impl<'a> super::Interpreter<'a> {
             // this parameter, the temp flows out and the RESULT's consumer
             // owns the drop; firing here too double-ran the body
             // (`let x = pass(Guard { id: 7 })` printed twice, probe f6).
-            if self.program.items.iter().any(|item| {
-                matches!(item, crate::ast::Item::Function(f)
-                if f.name == callee_name
-                    && (crate::ast::fn_returns_param(f, i)
+            // B-2026-08-30-22 — resolved through `callee_fn_for_ownership_guard`
+            // rather than an inline `Item::Function` scan, so an ASSOCIATED
+            // callee is seen too. `H.id(a: R) -> R` is a passthrough exactly as
+            // its free-function twin is, and missing it here is what ran the
+            // body twice.
+            if self
+                .callee_fn_for_ownership_guard(callee_name)
+                .is_some_and(|f| {
+                    crate::ast::fn_returns_param(f, i)
                         // B-2026-08-28-62 — the FORWARDING route, the twin of
                         // codegen's `call_arg_flows_into_return`: the callee
                         // hands the argument to another call whose result it
                         // returns, so the value is still travelling out when
                         // this walk would fire its body.
-                        || crate::ast::fn_returns_param_via_call(self.program, f, i)))
-            }) {
+                        || crate::ast::fn_returns_param_via_call(self.program, f, i)
+                })
+            {
                 continue;
             }
             // B-2026-08-26-9 escape guard — the twin of codegen's
@@ -3027,11 +3085,10 @@ impl<'a> super::Interpreter<'a> {
             // the container's drain, on this backend and on AOT alike (both
             // wrong, so unlike the `PriorityQueue` method shape it produced no
             // run-vs-build divergence to notice).
-            if self.program.items.iter().any(|item| {
-                matches!(item, crate::ast::Item::Function(f)
-                    if f.name == callee_name
-                        && crate::ast::fn_moves_param_into_outliving_place(f, i))
-            }) {
+            if self
+                .callee_fn_for_ownership_guard(callee_name)
+                .is_some_and(|f| crate::ast::fn_moves_param_into_outliving_place(f, i))
+            {
                 continue;
             }
             // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose

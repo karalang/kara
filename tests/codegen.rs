@@ -45316,10 +45316,13 @@ fn main() {
     /// below are the ones that pin this; `distinct-shape` is why they are not
     /// simply "assoc calls are broken".
     ///
-    /// Compiled expectations only, stated as the FREE-FUNCTION oracle's answer
-    /// (`free-fn` below). The interpreter runs an EXTRA body for this shape —
-    /// B-2026-08-30-22, filed, open, and measured identical before this fix —
-    /// so twinning these against `--interp` would pin that defect's output.
+    /// Compiled expectations only, stated as the FREE-FUNCTION oracle's answer.
+    /// When this landed, `--interp` ran an EXTRA body for the shape
+    /// (B-2026-08-30-22), so twinning would have pinned that defect's output;
+    /// -22 is fixed now and all four surfaces agree, but the expectations stay
+    /// written as the compiled oracle's because that is what this row is about.
+    /// `tests/interpreter.rs`'s `test_assoc_fn_passthrough_arg_runs_one_drop_body`
+    /// is where the interpreter half is pinned.
     #[test]
     fn e2e_assoc_call_result_binds_its_return_type() {
         let drop_impl = "impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
