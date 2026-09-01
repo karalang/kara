@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 344 | 6 |
-| run-vs-build | 289 | 17 |
-| leak | 250 | 6 |
+| run-vs-build | 289 | 16 |
+| leak | 251 | 7 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
 | codegen-gap | 159 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1343 | 30 |
-| interp | 312 | 18 |
+| codegen | 1344 | 31 |
+| interp | 312 | 17 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1955 surfaced · 34 open · 1890 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1956 surfaced · 34 open · 1891 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (34)
 
@@ -161,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1955 surfaced
 | B-2026-09-01-26 | 2026-09-01 | codegen | medium | A `match` OVER A FRESH-TEMP ENUM IN A NESTED EXPRESSION POSITION LEAKS THE HEAP PAYLOAD ITS ARM MOVED OUT -- `println(f"out[{match mkVe(9) { Ve.A(s) => { s } .. }}]")` loses 15 B at BOTH opt levels while the let-bound spelling of the same match is clean; both enum flavours, and clean for a scalar payload | — |
 | B-2026-09-01-29 | 2026-09-01 | codegen | medium | AN `Option` WHOSE PAYLOAD OWNS HEAP LEAKS THAT HEAP WHENEVER THE VALUE IS PASSED AS A FUNCTION ARGUMENT -- under BOTH parameter modes, by value AND `ref`, generic AND non-generic; the `let`-bound spelling of the identical value is clean | — |
 | B-2026-09-01-30 | 2026-09-01 | codegen | medium | A BARE-`T` BY-VALUE GENERIC PARAM'S OWNERSHIP CONVENTION DEPENDS ON THE COMPILER NOT KNOWING ITS ELEMENT TYPE, so a better-informed monomorph strands the caller's temporary (leak) and the obvious caller-side compensation double-frees a match-arm return | — |
-| B-2026-09-01-31 | 2026-09-01 | interp | medium | A DISCARDED enum STRUCT-VARIANT literal loses its PAYLOAD's `Drop` body under `--interp` -- `let _ = Sv.Hold { inner: R { .. } }` runs `dSv` against `dSv dR1` on all three compiled surfaces; the tuple-variant spelling of the identical program is correct everywhere | — |
 | B-2026-09-01-32 | 2026-09-01 | interp+codegen | medium | The UNQUALIFIED enum struct-variant literal `Hold { .. }` loses BOTH `Drop` bodies on ALL FOUR surfaces, while the unqualified TUPLE-variant spelling `A(r)` is correct on all four | — |
 | B-2026-09-01-33 | 2026-09-01 | codegen | medium | A PRODUCER-FN argument loses the enum payload's `Drop` body on BOTH compiled backends -- `eat(mk(5))` runs `dSv` against the interpreter's `dSv dR5`, for the tuple-variant spelling equally; routing the same value through a NAMED LOCAL is correct everywhere | — |
+| B-2026-09-01-34 | 2026-09-01 | codegen | medium | A DISCARDED enum STRUCT-VARIANT literal in a TWO-TAIL `if` or a `match` arm emits NO `Drop` body at all on the compiled backends -- not even the enum's OWN -- while the same literal as a direct producer, a block tail, or a no-`else` `if` tail runs both; the tuple-variant spelling is uniform across all five | — |
 
 ### Relocated (2)
 
@@ -196,9 +196,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1955 surfaced
 
 </details>
 
-### Fixed (1890)
+### Fixed (1891)
 
-<details><summary>1890 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1891 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2092,6 +2092,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1955 surfaced
 | B-2026-09-01-24 | codegen | medium | A DISCARDED ALL-MINTED STRUCT LITERAL WITH ONE FIELD THAT IS A SCALAR FIELD READ OF A LIVE LOCAL LEAKS EVERY MINTED OBJECT ON BOTH COMPILED BACKENDS… | 7ef82d3 |
 | B-2026-09-01-25 | codegen | medium | THE MEMORY HALF OF B-2026-09-01-21: a DISCARDED aggregate whose fields/elements MIX a live-local source with anything else runs every `Drop` BODY onc… | f909f9a |
 | B-2026-09-01-28 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program r… | 213f847 |
+| B-2026-09-01-31 | interp | medium | A DISCARDED enum STRUCT-VARIANT literal loses its PAYLOAD's `Drop` body under `--interp` -- `let _ = Sv.Hold { inner: R { . | edaca15 |
 
 </details>
 
