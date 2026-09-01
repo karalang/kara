@@ -888,7 +888,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // separately; it needs the interpreter side, and a shared
                     // value can be aliased, so "run the body at the discard"
                     // is a question that deserves its own measurement.
-                    if self.expr_yields_fresh_owned_temp(owned_tail) {
+                    // B-2026-08-31-21 — the ADMITTED tail, not a re-asked
+                    // freshness predicate. `expr_yields_fresh_owned_temp`
+                    // recognizes only `Call`/`MethodCall`, so a `shared` struct
+                    // LITERAL arm was declined here and its RC box was dropped
+                    // with no owner: no `Drop` body on any backend and 41 B
+                    // stranded per evaluation. The admission gate above already
+                    // required an all-fresh literal, which is exactly the
+                    // freshness this function's contract asks of its callers,
+                    // so the tail it admitted can be handed over directly.
+                    //
+                    // The aggregate registrar below cannot cover this: it
+                    // returns early on a bare pointer, and a `shared` value IS
+                    // one. The two legs stay disjoint — this one owns the RC
+                    // box, that one the struct/enum kinds.
+                    if self.expr_yields_fresh_owned_temp(owned_tail)
+                        || self.shared_struct_literal_type(owned_tail).is_some()
+                    {
                         self.materialize_owned_temp(
                             v,
                             (owned_tail.span.offset, owned_tail.span.length),
@@ -3754,6 +3770,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // gained the bodies leg in the param-tuple (A-shape) fix,
                 // so it is the single owner for both call-arg and discard
                 // positions (registering bodies here too double-fired).
+                // B-2026-08-31-21 — a `shared` literal is a bare RC pointer,
+                // which the aggregate registrar returns early on, so this arm
+                // registered nothing for it and the box was stranded. Own it
+                // through the RC leg instead; the two are disjoint by
+                // construction, so running both is safe and only one claims
+                // any given value.
+                if self.shared_struct_literal_type(&tail).is_some() {
+                    self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+                }
                 self.track_inline_owned_aggregate_arg(val, &tail, false);
                 // B-2026-08-01-8: the registrar's internal bodies leg is
                 // gated ALL-FRESH (shared with the call-arg position, where
@@ -9729,6 +9754,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     // registers its element bodies here instead (the moved
                     // place element's source was retracted above, making this
                     // walk its single owner).
+                    // B-2026-08-31-21 — the bare-statement twin of the RC leg
+                    // in the `let _ =` literal arm; see the note there.
+                    if self.shared_struct_literal_type(lt).is_some() {
+                        self.materialize_owned_temp(val, (lt.span.offset, lt.span.length));
+                    }
                     self.track_inline_owned_aggregate_arg(val, lt, false);
                     if let ExprKind::Tuple(elems) = &lt.kind {
                         let any_place = elems
@@ -15589,6 +15619,27 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n).is_some(),
             _ => false,
         }
+    }
+
+    /// B-2026-08-31-21 — the type name of a `shared` struct LITERAL, or `None`
+    /// for anything else.
+    ///
+    /// A `shared` value is a bare RC pointer, which is exactly the kind the
+    /// aggregate registrar returns early on and exactly the kind
+    /// `materialize_owned_temp` owns (through `owned_temp_drops`). So a
+    /// discarded `shared` literal fell between the two legs and got no owner
+    /// at all: silent on every backend, 41 B stranded per evaluation, while
+    /// the same literal BOUND is correct — which is what says the discard site
+    /// is the unit rather than `shared` types generally.
+    fn shared_struct_literal_type(&self, e: &Expr) -> Option<String> {
+        let ExprKind::StructLiteral { path, .. } = &e.kind else {
+            return None;
+        };
+        let name = path.last()?;
+        self.type_decls
+            .shared_types
+            .contains_key(name.as_str())
+            .then(|| name.clone())
     }
 
     pub(super) fn first_minting_branch_tail<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {

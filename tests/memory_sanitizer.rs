@@ -65043,4 +65043,43 @@ fn main() {
             assert_clean_asan_run_min_allocs_auto_par(&body, &want, label, 1);
         }
     }
+    /// B-2026-08-31-21 — the LEAK half. A discarded `shared` struct literal got
+    /// no owner at any discard site, so its RC box and the `String` inside it
+    /// were stranded: 41 B in 2 allocations per evaluation, on every backend.
+    ///
+    /// Measured at `KARAC_OPT_LEVEL=0` in the row, because at the default `-O2`
+    /// the allocation is dead and LLVM removes it — which is why this ran clean
+    /// in ordinary testing and why the loop below matters more than the count:
+    /// it makes the stranded box reachable work the optimizer cannot fold away.
+    ///
+    /// The allocation floor keeps the cell honest — a build that stopped
+    /// allocating would otherwise pass vacuously.
+    #[test]
+    fn asan_discarded_shared_literal_frees_its_rc_box() {
+        let src = "shared struct S { id: i64, name: String }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+             fn mks(n: i64) -> S { return S { id: n, name: f\"n{n}\" }; }\n\
+             fn main() {\n\
+                 let mut i = 0i64;\n\
+                 while i < 20i64 {\n\
+                     let _ = S { id: i, name: f\"a{i}\" };\n\
+                     S { id: i + 100i64, name: f\"b{i}\" };\n\
+                     let _ = if i % 2i64 == 0i64 { S { id: i + 200i64, name: f\"c{i}\" } } else { S { id: i + 300i64, name: f\"d{i}\" } };\n\
+                     let _ = mks(i + 400i64);\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 println(\"done\");\n\
+             }\n";
+        // 20 iterations x 4 discards, each printing its own body, then `done`.
+        let mut expect: Vec<String> = Vec::new();
+        for i in 0..20i64 {
+            expect.push(format!("dS{i}"));
+            expect.push(format!("dS{}", i + 100));
+            expect.push(format!("dS{}", if i % 2 == 0 { i + 200 } else { i + 300 }));
+            expect.push(format!("dS{}", i + 400));
+        }
+        expect.push("done".to_string());
+        let expect_refs: Vec<&str> = expect.iter().map(|s| s.as_str()).collect();
+        assert_clean_asan_run_min_allocs(src, &expect_refs, "b21-discarded-shared-literal", 80);
+    }
 }

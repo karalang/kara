@@ -124489,6 +124489,130 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-21 — A DISCARDED `shared` STRUCT LITERAL ran no `Drop` body
+    /// on ANY backend and stranded its RC box, while the same literal BOUND was
+    /// correct — which is what says the discard SITE was the unit, not `shared`
+    /// types generally.
+    ///
+    /// A `shared` value is a bare RC pointer, and that is exactly the kind the
+    /// aggregate registrar returns early on and exactly the kind
+    /// `materialize_owned_temp` owns. So a discarded `shared` literal fell
+    /// BETWEEN the two legs at every discard site and got no owner at all.
+    ///
+    /// THE ALIASING QUESTION THE ROW WAS HELD OPEN FOR IS ANSWERED BY THE
+    /// MODEL THAT ALREADY EXISTED. The bound spelling fires the body at the
+    /// refcount 0-transition: `Env::drop_target` hands
+    /// `invoke_user_drop_if_applicable` an `Arc::strong_count` and it fires at
+    /// `== 1`. The discard legs use the same test, so "run the body at the
+    /// discard" is not a new rule — a value reached with one reference is one
+    /// nothing else can observe. Measured: an ALIASED shared value still runs
+    /// exactly one body at the end of its scope, and `let _ = a;` over a
+    /// still-live binding declines in the new legs (the binding holds the other
+    /// reference) and keeps running through its own path, unchanged.
+    ///
+    /// THE COUNT MUST BE READ BEFORE THE VALUE IS CLONED, which is the one
+    /// subtlety: the interpreter's discard walker takes its argument by value
+    /// and three callers hand it a clone, bumping the `Arc` and defeating the
+    /// test — the same hazard `Env::drop_target`'s own doc records for `get`.
+    /// Those callers ask `run_discarded_shared_user_drop` first instead.
+    #[test]
+    fn e2e_discarded_shared_literal_runs_its_drop_body() {
+        const PRELUDE: &str = "shared struct S { id: i64, name: String }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+             shared struct T { id: i64 }\n\
+             fn mks(n: i64) -> S { return S { id: n, name: f\"n{n}\" }; }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "the row's repro: `let _ =` over a shared literal",
+                "fn go() -> i64 { let _ = S { id: 1, name: f\"a\" }; return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS1\nv=7\n",
+            ),
+            (
+                "the bare-statement spelling",
+                "fn go() -> i64 { S { id: 2, name: f\"b\" }; return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS2\nv=7\n",
+            ),
+            (
+                "a no-`else` `if` arm",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { S { id: 11, name: f\"k\" } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dS11\nv=7\n",
+            ),
+            (
+                "a two-tail `if`",
+                "fn go(n: i64) -> i64 { let _ = if n == 0 { S { id: 12, name: f\"m\" } } else { S { id: 13, name: f\"n\" } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dS12\nv=7\n",
+            ),
+            (
+                "the `match` spelling",
+                "fn go(n: i64) -> i64 { let _ = match n { 0 => { S { id: 15, name: f\"q\" } } _ => { S { id: 16, name: f\"r\" } } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dS15\nv=7\n",
+            ),
+            (
+                "a bare-statement branch",
+                "fn go(n: i64) -> i64 { if n == 0 { S { id: 14, name: f\"p\" } }; return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dS14\nv=7\n",
+            ),
+            (
+                "the value arrives from a CALL",
+                "fn go() -> i64 { let _ = mks(7); return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS7\nv=7\n",
+            ),
+            // CONTROLS — the shapes that were already correct, and the ones
+            // that pin the last-reference rule.
+            (
+                "control: the BOUND spelling",
+                "fn go() -> i64 { let s = S { id: 3, name: f\"c\" }; return s.id + 4; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS3\nv=7\n",
+            ),
+            (
+                "control: an ALIASED binding still runs ONE body",
+                "fn go() -> i64 { let a = S { id: 5, name: f\"x\" }; let b = a; return b.id + 2; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS5\nv=7\n",
+            ),
+            (
+                "control: `let _ = a;` over a live binding is unchanged",
+                "fn go() -> i64 { let a = S { id: 9, name: f\"z\" }; let _ = a; return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS9\nv=7\n",
+            ),
+            (
+                "control: a live alias is NOT dropped by a sibling discard",
+                "fn go() -> i64 { let a = S { id: 30, name: f\"w\" }; let b = a;\n\
+                 let _ = S { id: 31, name: f\"v\" };\n\
+                 return b.id - 23; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dS31\ndS30\nv=7\n",
+            ),
+            (
+                "control: a shared type with NO `impl Drop` stays silent",
+                "fn go() -> i64 { let _ = T { id: 21 }; return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "v=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: body at the RC 0-transition");
+            }
+        }
+    }
+
     /// B-2026-08-31-49 — A `Result[T, E]` RENDERED WITH THE `Option` VARIANT
     /// TABLE. `Ok(7)` printed `Some(7)` and `Err(9)` printed `None`, DROPPING
     /// THE PAYLOAD, silently, on both compiled backends.

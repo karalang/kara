@@ -4021,8 +4021,53 @@ impl<'a> super::Interpreter<'a> {
                     self.run_enum_payload_user_drops_value(&val);
                 }
             }
+            // B-2026-08-31-21 — a `shared` value fell to `_ => {}`, so every
+            // discard spelling of a `shared` literal was silent on this backend
+            // while the same value BOUND ran its body correctly.
+            //
+            // FIRED ON THE LAST REFERENCE, which is the model the bound
+            // spelling already uses (`Env::drop_target` hands
+            // `invoke_user_drop_if_applicable` an `Arc::strong_count` and it
+            // fires at `== 1`). That is what settles the aliasing question this
+            // row was held open for: a value reached here with one reference is
+            // one nothing else can observe, so running the body IS the
+            // 0-transition rather than a guess about aliases. Measured:
+            // `let a = S { .. }; let b = a;` runs ONE body at scope end both
+            // before and after this arm, and `let _ = a;` over a live binding
+            // declines here (the binding holds the other reference) and keeps
+            // running through its own path.
+            Value::SharedStruct(ref inner) => {
+                if self.program.drop_method_keys.contains_key(&inner.name)
+                    && std::sync::Arc::strong_count(inner) == 1
+                {
+                    let tn = inner.name.clone();
+                    self.run_user_drop_body_on_value(&tn, val.clone());
+                }
+            }
             _ => {}
         }
+    }
+
+    /// B-2026-08-31-21 — the `shared` leg of a discard, asked BEFORE the value
+    /// is cloned into [`Self::run_discarded_value_user_drops`].
+    ///
+    /// That walker takes its argument by value and several callers hand it a
+    /// CLONE, which bumps the `Arc` and defeats the last-reference test its
+    /// `SharedStruct` arm performs — the same hazard `Env::drop_target`'s doc
+    /// records for `get`. Callers that still hold the value ask this first, so
+    /// the count they are judged on is the live one. Returns whether a body ran.
+    fn run_discarded_shared_user_drop(&mut self, val: &Value) -> bool {
+        let Value::SharedStruct(inner) = val else {
+            return false;
+        };
+        if !self.program.drop_method_keys.contains_key(&inner.name)
+            || std::sync::Arc::strong_count(inner) != 1
+        {
+            return false;
+        }
+        let tn = inner.name.clone();
+        self.run_user_drop_body_on_value(&tn, val.clone());
+        true
     }
 
     /// Move-suppression for `forget(x);` statements (design.md § Exported
@@ -5086,6 +5131,12 @@ impl<'a> super::Interpreter<'a> {
                     // disagreement at two; it registers the wrapper AND the
                     // payload walk as of this commit, so peeling is what keeps
                     // the two backends together instead of what splits them.
+                    // B-2026-08-31-21 — the `shared` leg, asked before the
+                    // clone below so the last-reference test sees the live
+                    // count. A `shared` literal discarded here holds the only
+                    // reference; one that came off a still-live binding
+                    // (`let _ = a;`) does not, and keeps its own path.
+                    self.run_discarded_shared_user_drop(&val);
                     let inline_ctor = self.discard_producer_runs_payload_walk(value);
                     if inline_ctor {
                         if let Value::EnumVariant { enum_name, .. } = &val {
@@ -5636,6 +5687,12 @@ impl<'a> super::Interpreter<'a> {
                             // `let _ =` twin: a `Path` callee in statement
                             // position IS the inline construction, and a value
                             // arriving from a call takes the `Identifier` arm.
+                            // B-2026-08-31-21 — before the clone, which would
+                            // bump the `Arc` and defeat the walker's
+                            // last-reference test; see
+                            // `run_discarded_shared_user_drop`. Inert for the
+                            // enum shapes these arms are otherwise about.
+                            self.run_discarded_shared_user_drop(&discarded);
                             let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
                             if let Value::EnumVariant { enum_name, .. } = &payload_src {
@@ -5735,6 +5792,12 @@ impl<'a> super::Interpreter<'a> {
                                 ExprKind::Identifier(n) if self.env.get(n).is_some())
                         });
                         if !hands_out_live_binding {
+                            // B-2026-08-31-21 — before the clone, which would
+                            // bump the `Arc` and defeat the walker's
+                            // last-reference test; see
+                            // `run_discarded_shared_user_drop`. Inert for the
+                            // enum shapes these arms are otherwise about.
+                            self.run_discarded_shared_user_drop(&discarded);
                             let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
                             // B-2026-08-31-22 — and its PAYLOAD, exactly as the
@@ -5810,6 +5873,12 @@ impl<'a> super::Interpreter<'a> {
                             _ => false,
                         };
                         if owns {
+                            // B-2026-08-31-21 — before the clone, which would
+                            // bump the `Arc` and defeat the walker's
+                            // last-reference test; see
+                            // `run_discarded_shared_user_drop`. Inert for the
+                            // enum shapes these arms are otherwise about.
+                            self.run_discarded_shared_user_drop(&discarded);
                             let payload_src = discarded.clone();
                             self.run_discarded_value_user_drops(discarded);
                             // B-2026-08-31-22 — and its PAYLOAD, exactly as the
