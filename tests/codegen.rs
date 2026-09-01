@@ -99103,9 +99103,13 @@ fn main() {
     /// `producer-call` matters most here: it is the row that pins what this
     /// backend does NOT do, and the interpreter had to be left matching it.
     ///
-    /// The two-tail `if` and `match` spellings are absent for the reason the
-    /// interpreter fixture gives -- this backend emits no body at all for them,
-    /// so there is no agreed expectation to share.
+    /// `two-tail-if` and `match` are the rows B-2026-09-01-34 added. This
+    /// backend used to emit no body at all for a struct-variant literal in
+    /// those positions -- two declines at once, since neither the
+    /// representative-tail redirect nor the type-name battery admitted the
+    /// spelling -- so there was no agreed expectation to share and the
+    /// interpreter carried an exclusion to avoid deepening the gap. Both are
+    /// asserted on both sides now.
     #[test]
     fn test_e2e_discarded_enum_struct_variant_literal_runs_its_payload_body() {
         const H: &str = "struct R { id: i64 }\n\
@@ -99146,6 +99150,21 @@ fn main() {
                 "producer-call (control: own body alone)",
                 "let _ = mk(6); println(\"d\")",
                 "dSv\nd\n",
+            ),
+            (
+                "two-tail-if",
+                "let c = true; let _ = if c { Sv.Hold { inner: R { id: 7 } } } else { Sv.Nil }; println(\"d\")",
+                "dSv\ndR7\nd\n",
+            ),
+            (
+                "match",
+                "let n = 1; let _ = match n { 1 => { Sv.Hold { inner: R { id: 8 } } } _ => { Sv.Nil } }; println(\"d\")",
+                "dSv\ndR8\nd\n",
+            ),
+            (
+                "two-tail-if, tuple variant (control)",
+                "let c = true; let _ = if c { Tv.A(R { id: 9 }) } else { Tv.Nil }; println(\"d\")",
+                "dTv\ndR9\nd\n",
             ),
         ] {
             assert_eq!(

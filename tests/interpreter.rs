@@ -53350,12 +53350,14 @@ fn moving_one_field_out_leaves_the_others_their_drop_bodies() {
 /// the enum's own body ALONE for `let _ = mk(6)`, and firing the payload here
 /// would be a fresh divergence rather than a fix.
 ///
-/// The two-tail `if` and `match` spellings are deliberately ABSENT. The
-/// compiled backends emit NO body at all for a struct-variant literal in those
-/// positions -- not even the enum's own -- so this backend's `dSv` already
-/// disagrees, and widening it to `dSv dR` would disagree at two bodies instead
-/// of one. `discard_arm_yields_fresh_enum` excludes the shape for exactly that
-/// reason; codegen's inconsistency there is filed on its own.
+/// `two-tail-if` and `match` were ABSENT here until B-2026-09-01-34 landed, and
+/// their history is the point. The compiled backends used to emit NO body at
+/// all for a struct-variant literal in those positions -- not even the enum's
+/// own -- so this backend's `dSv` already disagreed, and widening it to
+/// `dSv dR` would have disagreed at TWO bodies instead of one.
+/// `discard_arm_yields_fresh_enum` carried an explicit exclusion to hold that
+/// line. -34 gave codegen the owner it was missing, so the exclusion came out
+/// and both rows are now asserted on both sides.
 #[test]
 fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
     const H: &str = "struct R { id: i64 }\n\
@@ -53396,6 +53398,21 @@ fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
             "producer-call (control: own body alone)",
             "let _ = mk(6); println(\"d\")",
             "dSv\nd\n",
+        ),
+        (
+            "two-tail-if",
+            "let c = true; let _ = if c { Sv.Hold { inner: R { id: 7 } } } else { Sv.Nil }; println(\"d\")",
+            "dSv\ndR7\nd\n",
+        ),
+        (
+            "match",
+            "let n = 1; let _ = match n { 1 => { Sv.Hold { inner: R { id: 8 } } } _ => { Sv.Nil } }; println(\"d\")",
+            "dSv\ndR8\nd\n",
+        ),
+        (
+            "two-tail-if, tuple variant (control)",
+            "let c = true; let _ = if c { Tv.A(R { id: 9 }) } else { Tv.Nil }; println(\"d\")",
+            "dTv\ndR9\nd\n",
         ),
     ] {
         assert_eq!(

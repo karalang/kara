@@ -3739,7 +3739,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if matches!(
                     &enum_probe.kind,
-                    ExprKind::Call { .. } | ExprKind::Path { .. }
+                    ExprKind::Call { .. }
+                        | ExprKind::Path { .. }
+                        // B-2026-09-01-34 — `E.V { field: .. }`. The redirect
+                        // above can now hand back a struct-variant literal, and
+                        // `enum_name_of_expr` already resolves one (its
+                        // `path[len - 2]` arm); this gate was the last place
+                        // that did not admit the spelling, so the probe was
+                        // discarded before the resolver ever saw it.
+                        | ExprKind::StructLiteral { .. }
                 ) {
                     if let Some(en) = self.enum_name_of_expr(enum_probe) {
                         if en != "Option" && en != "Result" {
@@ -9815,7 +9823,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     if matches!(
                         &enum_probe.kind,
-                        ExprKind::Call { .. } | ExprKind::Path { .. }
+                        ExprKind::Call { .. }
+                        | ExprKind::Path { .. }
+                        // B-2026-09-01-34 — `E.V { field: .. }`. The redirect
+                        // above can now hand back a struct-variant literal, and
+                        // `enum_name_of_expr` already resolves one (its
+                        // `path[len - 2]` arm); this gate was the last place
+                        // that did not admit the spelling, so the probe was
+                        // discarded before the resolver ever saw it.
+                        | ExprKind::StructLiteral { .. }
                     ) {
                         if let Some(en) = self.enum_name_of_expr(enum_probe) {
                             if en != "Option" && en != "Result" {
@@ -16212,6 +16228,36 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Path { .. }),
             ExprKind::Path { segments, .. } => segments.len() == 2,
             ExprKind::Identifier(n) => self.fresh_bare_unit_variant_enum(n).is_some(),
+            // B-2026-09-01-34 — `E.V { field: .. }`, the STRUCT-VARIANT
+            // spelling of the same inline construction. It is an
+            // `ExprKind::StructLiteral`, so it matched no arm above and this
+            // predicate answered `false` for any branch containing one.
+            //
+            // That left the shape with NO OWNER on either compiled backend, by
+            // two declines at once: this `false` keeps the representative-tail
+            // redirect (`enum_probe`) from taking it, and the battery that
+            // would otherwise own it resolves its type through
+            // `discard_branch_tail_type_name`, whose `StructLiteral` arm
+            // answers `path.last()` -- the VARIANT name for this spelling, a
+            // type that does not exist. Neither half claimed the value, so
+            // `let _ = if c { E.V { .. } } else { E.Nil }` emitted no body at
+            // all, not even the enum's own, against the interpreter's `dSv`.
+            //
+            // The TUPLE twin `E.A(r)` is a `Call` through a `Path`, matches the
+            // arm above, takes the redirect, and was correct in both the
+            // two-tail `if` and the `match` spelling -- which is what puts the
+            // axis on the struct-variant literal rather than on the branch.
+            //
+            // Gated on the path naming an enum we have a layout for, so a plain
+            // struct literal (`P { .. }`, whose own-`Drop` battery owns it
+            // elsewhere) keeps answering `false`.
+            ExprKind::StructLiteral { path, .. } => {
+                path.len() >= 2
+                    && self
+                        .type_decls
+                        .enum_layouts
+                        .contains_key(path[path.len() - 2].as_str())
+            }
             _ => false,
         }
     }

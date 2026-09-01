@@ -124,6 +124,39 @@ mod memory_sanitizer_tests {
     ) -> Option<(String, String, std::process::ExitStatus)> {
         run_under_asan_opts(src, label, false, false, true)
     }
+    /// B-2026-09-01-34 — a discarded struct-variant literal in a two-tail `if`
+    /// or a `match` arm, under ASAN + LSan.
+    ///
+    /// This row was filed `leak` on STRUCTURAL grounds rather than a
+    /// measurement: the compiled backends emitted no body at all for the shape,
+    /// not even the enum's OWN, which means the value reached its death with no
+    /// owner registered -- and an unowned aggregate is how heap goes
+    /// unreclaimed. The row said the heap half still needed measuring.
+    ///
+    /// This case is that measurement, in the direction that matters now: with
+    /// the owner registered the payload's `String` and `Vec` are reclaimed and
+    /// LSan is clean on Linux. The transcript is asserted alongside so a
+    /// regression that drops the registration again fails here on output even
+    /// where a leak alone might not trip the checker.
+    #[test]
+    fn asan_discarded_branch_struct_variant_literal_owns_its_payload() {
+        assert_clean_asan_run(
+            "struct R { id: i64, s: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.s}:{self.xs.len()}\") } }\n\
+             enum Sv { Hold { inner: R }, Nil }\n\
+             impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+             fn main() {\n\
+             \x20   let c = true;\n\
+             \x20   let _ = if c { Sv.Hold { inner: R { id: 7, s: \"pay\", xs: [1, 2, 3] } } } else { Sv.Nil };\n\
+             \x20   let n = 1;\n\
+             \x20   let _ = match n { 1 => { Sv.Hold { inner: R { id: 8, s: \"pay2\", xs: [4, 5] } } } _ => { Sv.Nil } };\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &["dSv", "dR7:pay:3", "dSv", "dR8:pay2:2", "end"],
+            "b34-discarded-branch-struct-variant",
+        );
+    }
+
     /// B-2026-09-01-33 — the heap-carrying producer-call argument under
     /// ASAN + LSan.
     ///
