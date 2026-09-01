@@ -2586,7 +2586,7 @@ impl Session {
                 // capture, cell N+1 re-evaluated the RHS, so `let mut v =
                 // Vec.new(); v.push(7)` read back EMPTY. Dropping it is
                 // what makes the container tier work at all.
-                if matches!(kind, crate::codegen::SnapshotPrimKind::ByValue) {
+                if kind.needs_value_type() {
                     value_types.insert(
                         name.clone(),
                         crate::typechecker::TypeChecker::type_to_type_expr(ty),

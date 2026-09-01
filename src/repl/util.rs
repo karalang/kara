@@ -993,6 +993,10 @@ pub(super) fn snapshot_kind_for_type(
             Type::Float(FloatSize::F64) => Some(SnapshotPrimKind::Vec(VecElemKind::F64)),
             Type::Bool => Some(SnapshotPrimKind::Vec(VecElemKind::Bool)),
             Type::Char => Some(SnapshotPrimKind::Vec(VecElemKind::Char)),
+            // B-2026-08-30-7: `Vec[String]` — the row's own headline
+            // measurement. See `VecElemKind::String` for why an element
+            // that owns heap is still a complete shallow transfer.
+            Type::Str => Some(SnapshotPrimKind::Vec(VecElemKind::String)),
             _ => None,
         },
         // Slice c-repl.B.5.3b: Map[K, V] for primitive K and V. The
@@ -1010,6 +1014,13 @@ pub(super) fn snapshot_kind_for_type(
                 Type::Float(FloatSize::F64) => Some(VecElemKind::F64),
                 Type::Bool => Some(VecElemKind::Bool),
                 Type::Char => Some(VecElemKind::Char),
+                // B-2026-08-30-7: `Map[String, i64]` — the row's other
+                // headline measurement. Suppression for Map is by
+                // skipping `track_map_var` entirely, so no
+                // `FreeMapHandle` is queued and the per-entry key/value
+                // drop walk inside it never runs: the same wholesale
+                // transfer the Vec arm gets from `cap == 0`.
+                Type::Str => Some(VecElemKind::String),
                 _ => None,
             };
             let key = kind_for(&args[0])?;
@@ -1028,6 +1039,8 @@ pub(super) fn snapshot_kind_for_type(
             Type::Float(FloatSize::F64) => Some(SnapshotPrimKind::Set(VecElemKind::F64)),
             Type::Bool => Some(SnapshotPrimKind::Set(VecElemKind::Bool)),
             Type::Char => Some(SnapshotPrimKind::Set(VecElemKind::Char)),
+            // B-2026-08-30-7: `Set[String]`, same argument as the Map arm.
+            Type::Str => Some(SnapshotPrimKind::Set(VecElemKind::String)),
             _ => None,
         },
         // B-2026-08-30-7: everything else that is BY VALUE — no heap and

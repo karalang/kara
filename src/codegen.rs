@@ -445,8 +445,7 @@ pub enum SnapshotPrimKind {
 /// port. Limited to primitives that round-trip cleanly through one
 /// `{ ptr, len, cap }` triple — i.e., the element drop is a no-op so
 /// the global can take buffer ownership without leaving dangling
-/// per-element references. `Vec[String]` and `Vec[<user struct>]`
-/// need per-element ref/drop accounting and are deferred.
+/// per-element references.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VecElemKind {
     /// `Vec[i64]`.
@@ -460,6 +459,56 @@ pub enum VecElemKind {
     Bool,
     /// `Vec[char]` — elements stored as i32 (Unicode scalar value).
     Char,
+    /// `Vec[String]`, and a `String` key or value of a snapshotted
+    /// `Map`/`Set` (B-2026-08-30-7). Each element is itself a
+    /// `{ ptr, len, cap }` triple owning its own buffer, so unlike the
+    /// four scalar variants above this one has heap BELOW the element.
+    ///
+    /// That is not the obstacle it looks like, and the reason is worth
+    /// stating because the deferral rested on the opposite reading.
+    /// Capture suppresses the slot's cleanup WHOLESALE — it zeroes the
+    /// `{ptr,len,cap}` triple's `cap`, and the drain's entire
+    /// per-element walk sits inside that same `cap > 0` branch (see the
+    /// `FreeVecBuffer` arm in `runtime.rs`, whose own comment notes "a
+    /// moved-out Vec skips per-element drops too"). So the transfer to
+    /// the snapshot global is COMPLETE for the whole tree, buffer and
+    /// elements alike: there is no second owner and nothing is freed.
+    /// Per-element drop accounting is what FREEING would need; the
+    /// established policy here is to leak into the JITDylib until it is
+    /// torn down, which is what `String` and `Vec[i64]` already do.
+    String,
+}
+
+impl SnapshotPrimKind {
+    /// B-2026-08-30-7: does this kind's REPLAY need the binding's
+    /// `TypeExpr`, rather than the hand-written side-table pokes the four
+    /// bespoke container kinds carry?
+    ///
+    /// Yes for two families, for the same underlying reason — the shape is
+    /// open-ended, so no fixed set of pokes reconstructs it:
+    ///
+    ///   - [`SnapshotPrimKind::ByValue`], whose class spans every scalar
+    ///     width, `Option`/`Result`, tuples and user aggregates.
+    ///   - any container over [`VecElemKind::String`]. The scalar-element
+    ///     pokes register the element's LLVM TYPE and nothing else, which
+    ///     is all a `Vec[i64]` needs; a `String` element additionally needs
+    ///     its element `TypeExpr` in `var_elem_type_exprs` before
+    ///     `println(v)` or `v[0]` can dispatch. Rather than add a fifth
+    ///     hand-written poke — the pattern this replay path keeps
+    ///     re-learning the cost of — the arm defers to
+    ///     `register_var_from_type_expr`, the registrar an ordinary `let`
+    ///     uses, so a replayed binding is INDISTINGUISHABLE from a
+    ///     freshly-bound one instead of approximately so.
+    pub(crate) fn needs_value_type(self) -> bool {
+        match self {
+            SnapshotPrimKind::ByValue => true,
+            SnapshotPrimKind::Vec(e) | SnapshotPrimKind::Set(e) => e == VecElemKind::String,
+            SnapshotPrimKind::Map { key, val } => {
+                key == VecElemKind::String || val == VecElemKind::String
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Slice c-repl.B.4: REPL-cell codegen entry for the JIT path.

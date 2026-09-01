@@ -488,7 +488,15 @@ fn repl_jit_snapshot_write_back_chains_across_cells() {
 fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
     let mut s = Session::new();
     enable_jit(&mut s);
-    let r = s.evaluate_cell_captured("let mut v: Vec[String] = Vec.new();");
+    // The subject used to be `Vec[String]`, which the heap-element widening
+    // later moved INTO the tier — so this now uses a shape that is still on
+    // pass-through. `Vec[Vec[i64]]` is deferred for the reason `Vec[String]`
+    // no longer is: its elements own buffers whose OWN elements own nothing,
+    // but the snapshot global would have to carry a nested triple whose
+    // suppression the one-level `cap = 0` does not reach. Any shape outside
+    // `snapshot_kind_for_type` serves; what this test pins is the note's
+    // CONTENT and its once-per-binding firing, not the choice of shape.
+    let r = s.evaluate_cell_captured("let mut v: Vec[Vec[i64]] = Vec.new();");
     assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
     let note = r
         .notes
@@ -496,7 +504,7 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
         .find(|n| n.contains("repl-jit-no-snapshot"))
         .unwrap_or_else(|| panic!("expected a no-snapshot note; notes: {:?}", r.notes));
     assert!(
-        note.contains("`v`") && note.contains("Vec[String]"),
+        note.contains("`v`") && note.contains("Vec[Vec[i64]]"),
         "the note must name the binding and its type; got: {note}",
     );
     assert!(
@@ -506,7 +514,7 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
 
     // Second cell mutates it. No repeat — the note is a property of the
     // binding, not of every cell that touches it.
-    let r2 = s.evaluate_cell_captured("v.push(f\"a\");");
+    let r2 = s.evaluate_cell_captured("v.push(Vec.new());");
     assert!(r2.errors.is_empty(), "mutate cell: {:?}", r2.errors);
     assert!(
         !r2.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
@@ -524,7 +532,9 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
 fn repl_jit_passthrough_side_effecting_initializer_warns() {
     let mut s = Session::new();
     enable_jit(&mut s);
-    let r = s.evaluate_cell_captured("fn mk() -> Vec[String] { Vec.new() }");
+    // Same shape migration as the test above: `Vec[String]` is now in the
+    // tier, so the pass-through subject is a still-deferred one.
+    let r = s.evaluate_cell_captured("fn mk() -> Vec[Vec[i64]] { Vec.new() }");
     assert!(r.errors.is_empty(), "items cell: {:?}", r.errors);
     let r = s.evaluate_cell_captured("let cfg = mk();");
     assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
@@ -760,6 +770,195 @@ fn repl_jit_by_value_tier_excludes_a_drop_carrying_struct() {
         "a Drop-carrying struct must stay on pass-through; notes: {:?}",
         r.notes,
     );
+}
+
+/// B-2026-08-30-7, the HEAP-ELEMENT half of the container tier —
+/// `Vec[String]`, `Map[String, V]`, `Map[K, String]` and `Set[String]` must
+/// carry a mutation made in a LATER cell, exactly as their primitive-element
+/// siblings already do.
+///
+/// `Vec[String]` and `Map[String, i64]` are the row's own two headline
+/// measurements: both read back their initializer on the JIT lane while
+/// `--interp` answered correctly, because an element type outside the
+/// four primitives fell off `snapshot_kind_for_type` into pass-through and
+/// the next cell rebuilt the binding from its RHS.
+///
+/// The deferral's stated reason was that these shapes "need per-element drop
+/// accounting the shallow handle transfer can't carry". That is the reason
+/// FREEING would need it. Capture does not free: it suppresses the slot's
+/// cleanup WHOLESALE — `cap = 0` for Vec, and for Map/Set by retracting the
+/// queued `FreeMapHandle` — and the drain's entire per-element walk sits
+/// inside the branch that suppression turns off. So the transfer covers the
+/// whole tree, elements included, with no second owner to reconcile; the
+/// buffers outlive the cell and are reclaimed when the JITDylib is torn
+/// down, which is the policy `String` and `Vec[i64]` have always followed.
+///
+/// Each row also asserts NO `repl-jit-no-snapshot` note fires: the note keys
+/// on `snapshot_kind_for_type` returning `None`, so it must narrow exactly as
+/// the tier widens. A fix that snapshotted the value but left the warning
+/// standing would be telling the user to switch lanes for no reason.
+#[test]
+fn repl_jit_heap_element_container_carries_a_later_cell_mutation() {
+    for (decl, mutate, read, want) in [
+        (
+            "let mut v: Vec[String] = Vec.new();",
+            "v.push(f\"a\");",
+            "println(f\"{v.len()}\");",
+            "1",
+        ),
+        // Reads the ELEMENT back, not just the length — the length alone
+        // would pass on a snapshot that transferred the outer triple and
+        // lost the element buffers.
+        (
+            "let mut v2: Vec[String] = Vec.new();",
+            "v2.push(f\"hi\");",
+            "println(v2[0]);",
+            "hi",
+        ),
+        (
+            "let mut m: Map[String, i64] = Map.new();",
+            "m.insert(f\"k\", 7);",
+            "println(f\"{m.len()}\");",
+            "1",
+        ),
+        // A String on the VALUE side as well as the key, so the widening is
+        // pinned on both halves of `kind_for` rather than only the first.
+        (
+            "let mut m2: Map[String, String] = Map.new();",
+            "m2.insert(f\"k\", f\"v\");",
+            "let g = m2.get(f\"k\"); println(f\"{g}\");",
+            "Some(v)",
+        ),
+        (
+            "let mut st: Set[String] = Set.new();",
+            "st.insert(f\"x\");",
+            "println(f\"{st.len()}\");",
+            "1",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "{decl} reaches the snapshot tier, so the pass-through note must \
+             not fire; notes: {:?}",
+            r.notes,
+        );
+        let r = s.evaluate_cell_captured(mutate);
+        assert!(r.errors.is_empty(), "{mutate}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(read);
+        assert!(r.errors.is_empty(), "{read}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.trim(),
+            want,
+            "a mutation made in the cell AFTER the declaring one must survive \
+             the boundary for `{decl}`; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7, the SIDE-EFFECT half for a heap-element container.
+///
+/// Same distinction the by-value pair draws: the mutation loss comes from
+/// cell N+1 rebuilding the binding, the re-execution from that rebuild
+/// running the RHS. A fix that replayed the value but still emitted the RHS
+/// passes the test above and fails this one. Measured pre-fix at three
+/// executions across four cells, against `--interp`'s one.
+#[test]
+fn repl_jit_heap_element_container_initializer_runs_once_across_cells() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s
+        .evaluate_cell_captured("fn mkv() -> Vec[String] { println(f\"SIDE EFFECT\"); Vec.new() }");
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let mut v: Vec[String] = mkv();");
+    assert!(r.errors.is_empty(), "declare: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.matches("SIDE EFFECT").count(),
+        1,
+        "the declaring cell runs the initializer exactly once; stdout: {:?}",
+        r.stdout,
+    );
+    for cell in ["println(f\"two\");", "println(f\"three\");"] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.matches("SIDE EFFECT").count(),
+            0,
+            "a later cell must not re-run the initializer; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7 — a snapshotted `Map`/`Set` whose initializer is NOT a
+/// literal `Map.new()` / `Set.new()` must still survive the cell boundary.
+///
+/// Map/Set cleanup is queue-driven rather than sentinel-driven, and its
+/// snapshot suppression used to live at the two CONSTRUCTOR functions
+/// (`compile_map_new_stmt` / `compile_set_new_stmt` skip `track_map_var` for
+/// a captured name). That keyed the suppression on the initializer's SHAPE,
+/// and only one shape reaches those functions: a map returned from a session
+/// function was tracked like an ordinary local, so the handle the snapshot
+/// global pointed at was freed at end of cell and the next cell loaded a
+/// dangling pointer — the JIT runner died mid-cell where `--interp` printed
+/// the map's size.
+///
+/// The `Map[i64, i64]` row is deliberately included and deliberately first:
+/// that shape was ALREADY in the tier before this row widened it, so the
+/// hole predates the widening rather than arriving with it, and this pins
+/// the pre-existing half against regression too. Suppression now happens at
+/// capture, keyed on the fact that the handle has just been handed to a
+/// global, which covers every initializer shape at once.
+#[test]
+fn repl_jit_snapshotted_map_from_a_function_survives_the_cell_boundary() {
+    for (items, decl, mutate, read, want) in [
+        (
+            "fn mkm() -> Map[i64, i64] { let mut m: Map[i64, i64] = Map.new(); \
+             m.insert(1, 1); m }",
+            "let mut m: Map[i64, i64] = mkm();",
+            "m.insert(2, 2);",
+            "println(f\"{m.len()}\");",
+            "2",
+        ),
+        (
+            "fn mkms() -> Map[String, i64] { let mut m: Map[String, i64] = Map.new(); \
+             m.insert(f\"a\", 1); m }",
+            "let mut ms: Map[String, i64] = mkms();",
+            "ms.insert(f\"b\", 2);",
+            "let g = ms.get(f\"a\"); println(f\"{g}\");",
+            "Some(1)",
+        ),
+        (
+            "fn mkss() -> Set[String] { let mut s: Set[String] = Set.new(); \
+             s.insert(f\"a\"); s }",
+            "let mut ss: Set[String] = mkss();",
+            "ss.insert(f\"b\");",
+            "println(f\"{ss.len()}\");",
+            "2",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        let r = s.evaluate_cell_captured(items);
+        assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(mutate);
+        assert!(r.errors.is_empty(), "{mutate}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(read);
+        assert!(r.errors.is_empty(), "{read}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.trim(),
+            want,
+            "a handle handed to the snapshot global must not be freed at end \
+             of cell for `{decl}`; stdout: {:?}",
+            r.stdout,
+        );
+    }
 }
 
 #[test]

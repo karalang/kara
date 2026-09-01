@@ -15034,7 +15034,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // metadata only and never queues a cleanup action, so it cannot
         // schedule a free of storage the snapshot global owns. (It owns
         // nothing here anyway — a by-value type has no heap behind it.)
-        if matches!(kind, super::SnapshotPrimKind::ByValue) {
+        //
+        // B-2026-08-30-7 (heap-element widening): a container over
+        // `VecElemKind::String` takes this same route, ON TOP OF its own
+        // arm above rather than instead of it. The arm registers the
+        // element's LLVM TYPE, which is all a `Vec[i64]` needs; a String
+        // element additionally needs its element `TypeExpr` in
+        // `var_elem_type_exprs` before `println(v)` / `v[0]` can dispatch,
+        // and that is precisely what the registrar writes. Running both is
+        // safe because they agree on `vec_elem_types` (the registrar
+        // derives the same `vec_struct_type` the arm hardcodes) and the
+        // registrar adds only metadata neither of them owns cleanup for.
+        if kind.needs_value_type() {
             if let Some(te) = self.snapshot_value_types.get(name).cloned() {
                 self.register_var_from_type_expr(name, &te);
             }
@@ -15186,17 +15197,64 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.zero_vec_alloca_cap(slot.ptr);
             }
         }
-        // Slice c-repl.B.5.3b/B.5.3c: no slot-suppression for Map or
-        // Set. Unlike Vec/String which use a cap=0 sentinel in the
-        // slot's struct triple, Map/Set cleanup is queue-driven
-        // (`FreeMapHandle` is pushed to `scope_cleanup_actions` from a
-        // known set of sites). Suppression happens at the registration
-        // site instead — `compile_map_new_stmt` / `compile_set_new_stmt`
-        // skip `track_map_var` when
-        // `snapshot_capture.contains_key(var_name)`. The slot keeps
-        // the live handle so same-cell `m.insert(...)` / `m.get(...)`
-        // / `s.insert(...)` / `s.contains(...)` still find the Map/Set;
-        // no nulling required.
+        // Slice c-repl.B.5.3b/B.5.3c: Map/Set cleanup is queue-driven
+        // rather than sentinel-driven — `FreeMapHandle` is pushed to
+        // `scope_cleanup_actions`, so there is no `cap` to zero. It used
+        // to be suppressed at the REGISTRATION site instead:
+        // `compile_map_new_stmt` / `compile_set_new_stmt` skip
+        // `track_map_var` when the name is in `snapshot_capture`.
+        //
+        // B-2026-08-30-7: that keyed the suppression on the INITIALIZER's
+        // SHAPE, and only one shape reaches those two functions. A binding
+        // whose initializer is anything else — `let mut m: Map[K, V] =
+        // mkm();`, a map returned from a session function — got tracked
+        // like an ordinary local, so the handle the snapshot global now
+        // points at was freed at end of cell and the NEXT cell loaded a
+        // dangling pointer. Measured: the JIT runner dies mid-cell where
+        // `--interp` prints the map's size, on `Map[i64, i64]` — i.e. on
+        // the tier as it stood before this row widened it, so the hole
+        // predates the widening rather than arriving with it.
+        //
+        // Suppressing HERE instead keys on the thing that actually
+        // matters — that this slot's handle has just been handed to a
+        // global — and so covers every initializer shape at once. Retract
+        // by ALLOCA rather than by name because that is what the action
+        // carries, and it is the same identity the drain would have used.
+        // The registration-site skips above are left in place: they are
+        // now redundant for the shapes they cover, and harmless, since
+        // never queueing an action and retracting it reach the same state.
+        if matches!(
+            kind,
+            super::SnapshotPrimKind::Map { .. } | super::SnapshotPrimKind::Set(_)
+        ) {
+            self.retract_map_handle_cleanup(slot.ptr);
+        }
+    }
+
+    /// B-2026-08-30-7: drop any queued `FreeMapHandle` for `map_alloca`
+    /// from every live cleanup frame.
+    ///
+    /// The REPL snapshot-capture counterpart to `zero_vec_alloca_cap`.
+    /// Called at END OF CELL, after the handle has been stored into the
+    /// snapshot global, so the value outlives the frame that would
+    /// otherwise free it — ownership passes to the JITDylib and is
+    /// reclaimed when that is torn down (runner death / `:reset` /
+    /// cross-cell shadow), exactly the policy String and Vec follow.
+    ///
+    /// Scans every frame rather than the innermost one because the action
+    /// is queued at the frame that was open when the binding was tracked,
+    /// which for a top-level REPL `let` is `main`'s outermost frame but is
+    /// not guaranteed to be the frame current at capture time.
+    fn retract_map_handle_cleanup(&mut self, map_alloca: inkwell::values::PointerValue<'ctx>) {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| {
+                !matches!(
+                    action,
+                    super::state::CleanupAction::FreeMapHandle { map_alloca: a, .. }
+                        if *a == map_alloca
+                )
+            });
+        }
     }
 
     /// LLVM storage type for a snapshot global. Distinct from the
@@ -15249,6 +15307,11 @@ impl<'ctx> super::Codegen<'ctx> {
             super::VecElemKind::F64 => self.context.f64_type().into(),
             super::VecElemKind::Bool => self.context.bool_type().into(),
             super::VecElemKind::Char => self.context.i32_type().into(),
+            // B-2026-08-30-7: a `String` element IS a `{ptr,len,cap}`
+            // triple stored inline in the outer buffer — the same struct
+            // a top-level String binding occupies — so the element stride
+            // and the GEPs the Vec surface emits are the vec-struct's.
+            super::VecElemKind::String => self.vec_struct_type().into(),
         }
     }
 
@@ -15263,6 +15326,10 @@ impl<'ctx> super::Codegen<'ctx> {
             super::VecElemKind::F64 => "f64",
             super::VecElemKind::Bool => "bool",
             super::VecElemKind::Char => "char",
+            // Matches `mangled_type_name`'s head-segment result for a
+            // `String` key, which is what `extract_map_key_name` would
+            // have produced from a `Map[String, V]` annotation.
+            super::VecElemKind::String => "String",
         }
     }
 
