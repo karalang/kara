@@ -2583,6 +2583,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     // through to the generic Display error is correct there;
                     // rendering as the wrong enum is not.
                     self.var_types.var_result_payload_te.remove(var_name);
+                    // B-2026-08-31-39 — and retract THIS map too, for the same
+                    // reason and by the same argument. B-2026-08-31-49 closed
+                    // the cross-kind half (a stale `Result` entry answering for
+                    // an `Option` name); the same-kind half stayed open, and it
+                    // is the one that segfaults. These tables are keyed by
+                    // BINDING NAME and outlive the function that registered
+                    // them, so when the payload below is declined, the entry a
+                    // previous same-named binding left behind answers instead —
+                    // rendering this payload's words at the PREVIOUS payload's
+                    // type. Two monomorphs of one generic fn share their
+                    // parameter's name, which is how a declined `Option[T]`
+                    // came to render as the `String` an earlier instantiation
+                    // registered. Falling through to the generic Display error
+                    // is correct; inheriting an unrelated payload type is not.
+                    self.var_types.var_option_payload_te.remove(var_name);
                     // Only register inline-representable payloads — the display
                     // synthesizer reconstructs the payload from ≤3 words, which
                     // is invalid for a boxed/wide payload (its word is a
@@ -2610,6 +2625,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the Ok type param unresolved, the registration below is
                     // declined, and the stale Option entry answered.
                     self.var_types.var_option_payload_te.remove(var_name);
+                    // B-2026-08-31-39 — same-kind retraction, see the Option arm.
+                    self.var_types.var_result_payload_te.remove(var_name);
                     if let Some((ok, err)) = Self::result_payload_tes(te) {
                         let ok = Self::peel_scalar_ref_display_payload(&ok);
                         let err = Self::peel_scalar_ref_display_payload(&err);

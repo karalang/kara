@@ -12713,6 +12713,149 @@ fn main() { println(f"{mk()}"); }
         );
     }
 
+    /// B-2026-08-31-39 (the unsound half) — a DECLINED `Option`/`Result`
+    /// payload must not inherit the payload type a previous SAME-NAMED binding
+    /// registered. `var_option_payload_te` / `var_result_payload_te` are keyed
+    /// by BINDING NAME and outlive the function that registered them, so a
+    /// declined registration used to leave the earlier entry standing, and the
+    /// Display path then rendered THIS payload's words at the PREVIOUS
+    /// payload's type.
+    ///
+    /// Two monomorphs of one generic fn share their parameter's name, which is
+    /// what made this reachable: `show(Some(7))` registers `x -> i64`, then the
+    /// `Array`/`Vec`/`Slice` instantiation is declined and inherits it. The
+    /// symptoms were ORDER-DEPENDENT and ranged from a wrong scalar to a
+    /// SEGFAULT — measured pre-fix, all with the interpreter printing the right
+    /// answer:
+    ///
+    ///     i64 then Vec       Some(94432365992720)   raw pointer word as i64
+    ///     i64 then Array     Some(1)                first element
+    ///     String then Vec    Some()                 control block as a String
+    ///     String then Array  <no output, rc=139>    SEGFAULT
+    ///     Result, i64 then Vec        Ok(94527773793040)
+    ///     generic METHOD, i64 then Vec   1:Some(93889133488912)
+    ///
+    /// Reversing the order (aggregate FIRST) refused cleanly, which is the tell
+    /// that the stale entry — not the declined shape — was doing the damage.
+    ///
+    /// This is the same hole B-2026-08-31-49 closed for the CROSS-kind case (a
+    /// stale `Result` entry answering for an `Option` name); the SAME-kind half
+    /// stayed open and is the one that segfaults. Retracting unconditionally
+    /// restores the clean refusal that `codegen_declined_option_payload_names_
+    /// its_shape` pins.
+    ///
+    /// NOTE ON SCOPE: this does NOT make the aggregate instantiations render —
+    /// that is -39's still-open half, and these rows assert a REFUSAL, not an
+    /// answer. If a later change teaches codegen to render them, these
+    /// `codegen_error` calls are the ones to convert to `run_program`
+    /// assertions against the interpreter's output quoted above.
+    ///
+    /// The last two cases are the controls, and they are the reason the fix is
+    /// a retraction rather than a blanket clear: two DIFFERENT scalar
+    /// instantiations in one program must still both render (the second
+    /// registration legitimately succeeds and must win), and B-2026-08-31-49's
+    /// own case must still pass.
+    #[test]
+    fn codegen_declined_option_payload_does_not_inherit_a_stale_same_named_entry() {
+        // Each row: a scalar instantiation FIRST, then an aggregate one that
+        // must be declined rather than rendered at the scalar's type.
+        let poisoned: &[(&str, &str)] = &[
+            (
+                "i64 then Vec",
+                r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    show(Some(7));
+    let v: Vec[i64] = vec![1];
+    show(Some(v));
+}
+"#,
+            ),
+            (
+                "String then Array",
+                r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    show(Some("hi"));
+    let a: Array[i64, 2] = [1, 2];
+    show(Some(a));
+}
+"#,
+            ),
+            (
+                "i64 then Slice",
+                r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    show(Some(7));
+    let v: Vec[i64] = vec![1, 2];
+    show(Some(v.as_slice()));
+}
+"#,
+            ),
+            (
+                "Result, i64 then Vec",
+                r#"fn mk1() -> Result[i64, i64] { return Ok(7); }
+fn mk2() -> Result[Vec[i64], i64] { return Ok(vec![1]); }
+fn showr[T: Display, E: Display](x: Result[T, E]) { println(f"{x}"); }
+fn main() {
+    showr(mk1());
+    showr(mk2());
+}
+"#,
+            ),
+            (
+                "generic method, i64 then Vec",
+                r#"struct H { n: i64 }
+impl H {
+    fn show[T: Display](ref self, x: Option[T]) { println(f"{self.n}:{x}"); }
+}
+fn main() {
+    let h = H { n: 1 };
+    h.show(Some(7));
+    let v: Vec[i64] = vec![1];
+    h.show(Some(v));
+}
+"#,
+            ),
+        ];
+        for (label, src) in poisoned {
+            let err = codegen_error(src);
+            assert!(
+                err.contains("is not yet supported under codegen"),
+                "{label}: a declined payload must take the structured refusal, \
+                 not inherit the earlier binding's type; got: {err}"
+            );
+        }
+
+        // Control 1 — two DIFFERENT scalar instantiations still both render.
+        // The retraction must not clear an entry the current binding is about
+        // to register successfully.
+        let Some(out) = run_program(
+            r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    show(Some(7));
+    show(Some("hi"));
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "Some(7)\nSome(hi)\n");
+
+        // Control 2 — B-2026-08-31-49's own case, the cross-kind direction.
+        let Some(out) = run_program(
+            r#"fn mkerr() -> Result[i64, i64] { return Err(9); }
+fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn showr[T: Display, E: Display](x: Result[T, E]) { println(f"{x}"); }
+fn main() {
+    show(Some(3));
+    showr(mkerr());
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "Some(3)\nErr(9)\n");
+    }
+
     /// B-2026-07-31-38 (enum sibling) — a plain value enum whose walker
     /// action was retracted by a move (whole-value `let c = b;`, or a match
     /// arm's payload move-out) gets it RE-ARMED on reassign, so the fresh
