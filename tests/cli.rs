@@ -35684,6 +35684,14 @@ fn ref_binding_codegen_gap_explains_itself() {
 /// `codegen_declined_option_payload_names_its_shape`, whose doc says to delete
 /// its generic assertion when -39 is properly fixed — that is still the right
 /// instruction, and this test is not it.
+///
+/// B-2026-09-01-14 — `#[cfg(feature = "llvm")]`, like the 98 other tests in
+/// this file that shell out to a `karac build` whose OUTPUT they assert. The
+/// refusal (`!status.success()` and "not yet supported under codegen") comes
+/// from CODEGEN; on the default leg `karac` has none, so `karac build`
+/// type-checks, prints "note: karac build requires the llvm feature; falling
+/// back to type check" and exits zero, and the assertion cannot hold there.
+#[cfg(feature = "llvm")]
 #[test]
 fn generic_option_vec_instantiation_refuses_without_ice() {
     let tmp = std::env::temp_dir();
@@ -35740,6 +35748,14 @@ fn generic_option_vec_instantiation_refuses_without_ice() {
 ///
 /// The `--interp` sentence is asserted too, because a diagnostic that promises
 /// a workaround should be checked against the workaround actually working.
+///
+/// B-2026-09-01-14 — `#[cfg(feature = "llvm")]`, like the 98 other tests in
+/// this file that shell out to a `karac build` whose OUTPUT they assert. The
+/// refusal and the `--interp` sentence come from CODEGEN; on the default leg
+/// `karac` has none, so `karac build` type-checks, prints "note: karac build
+/// requires the llvm feature; falling back to type check" and exits zero, and
+/// the assertion cannot hold there.
+#[cfg(feature = "llvm")]
 #[test]
 fn derived_display_refusal_names_the_field_type_in_source_syntax() {
     let tmp = std::env::temp_dir();
