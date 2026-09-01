@@ -162,10 +162,53 @@ impl<'a> super::Interpreter<'a> {
                     }
                     _ => false,
                 };
+                // B-2026-08-31-32 — a STRUCT scrutinee is admitted here too.
+                //
+                // This test read `matches!(scrutinee, Value::EnumVariant { .. })`,
+                // so `match P { r: R { .. }, n: 4 } { P { r, .. } => .. }` — a
+                // fresh struct TEMPORARY that an arm destructures — registered
+                // no slot for `r` and ran NO body, against one on both compiled
+                // backends. The `let`-bound spelling of the same match is
+                // correct everywhere, which is what puts the axis on the
+                // temporary rather than on the pattern.
+                //
+                // The enum-only shape of the gate is why B-2026-08-31-27's fix
+                // did not reach this: a struct literal never becomes a
+                // `Value::EnumVariant`, so it never met the widened payload
+                // test at all.
                 let consuming_scrutinee = !arm_reads_through
-                    && matches!(scrutinee, Value::EnumVariant { .. })
+                    && matches!(scrutinee, Value::EnumVariant { .. } | Value::Struct { .. })
                     && scrutinee_place.is_none_or(|sp| self.scrutinee_expr_is_consuming(sp));
                 if consuming_scrutinee {
+                    // A STRUCT scrutinee has no variant payload to enumerate,
+                    // so its candidates are the pattern's own bindings; the
+                    // `is_drop_binding` test below then decides which of them
+                    // actually owe a body, exactly as it does for an enum's.
+                    // ...and only where NOBODY ELSE owns it. A struct
+                    // scrutinee has no `moved_out_enum_payload_bindings`
+                    // equivalent to retract a named binding's field walk with,
+                    // so stashing for `let p = P { .. }; match p { P { r, .. } }`
+                    // fires beside `p`'s own walk: measured `dR[b] dR[b]`
+                    // against one compiled. A fresh temp is the shape with no
+                    // other owner, and it is the shape this row reports.
+                    if matches!(scrutinee, Value::Struct { .. })
+                        && scrutinee_place.is_none_or(Self::struct_scrutinee_has_no_other_owner)
+                    {
+                        for n in arm.pattern.binding_names() {
+                            let is_drop_binding = match self.env.get(&n) {
+                                Some(v @ Value::Struct { .. }) => self.value_runs_user_drop(&v),
+                                Some(Value::EnumVariant { enum_name: en, .. })
+                                    if en != "Option" && en != "Result" =>
+                                {
+                                    self.type_name_runs_user_drop(&en, &mut Vec::new())
+                                }
+                                _ => false,
+                            };
+                            if is_drop_binding {
+                                self.pending_arm_drop_bindings.push(n);
+                            }
+                        }
+                    }
                     if let Value::EnumVariant { enum_name, .. } = scrutinee {
                         for n in self.arm_moved_user_drop_payload_bindings(enum_name, &arm.pattern)
                         {
@@ -663,6 +706,10 @@ impl<'a> super::Interpreter<'a> {
                 .last()
                 .is_some_and(|params| params.contains(n.as_str())),
             ExprKind::Call { .. } => true,
+            // B-2026-08-31-32 — a struct LITERAL scrutinee is as ownerless as a
+            // call result: `match P { r: R { .. }, n: 4 } { .. }` builds the
+            // value at the match and nothing else can free it.
+            ExprKind::StructLiteral { .. } => true,
             ExprKind::SelfValue => matches!(
                 self.self_param_stack.last(),
                 Some(crate::ast::SelfParam::Owned)
@@ -764,6 +811,26 @@ impl<'a> super::Interpreter<'a> {
     /// That is the same "the two decisions live in different places" failure the
     /// row records for the first attempt at this fix, reached from the other
     /// side.
+    /// B-2026-08-31-32 — does a STRUCT scrutinee at this place have no owner
+    /// other than the match/`if let` itself?
+    ///
+    /// A struct has no `moved_out_enum_payload_bindings` equivalent, so there
+    /// is nothing to retract a NAMED binding's field walk with: stashing the
+    /// arm's bindings for `let p = P { .. }; match p { P { r, .. } => .. }`
+    /// fires beside `p`'s own walk and runs the body twice (measured). A value
+    /// built or returned AT the scrutinee has no such binding, and is the shape
+    /// that otherwise runs no body at all.
+    ///
+    /// Shared by the `match`, `if let` and `while let` sites so the three
+    /// spellings cannot answer differently — the split this family has had to
+    /// close before (B-2026-08-28-63, B-2026-08-29-17).
+    pub(super) fn struct_scrutinee_has_no_other_owner(place: &Expr) -> bool {
+        matches!(
+            place.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StructLiteral { .. }
+        )
+    }
+
     pub(super) fn place_walk_is_retractable(place: &Expr) -> bool {
         match &place.kind {
             ExprKind::Identifier(_) | ExprKind::SelfValue => true,

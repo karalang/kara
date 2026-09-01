@@ -1065,11 +1065,29 @@ impl<'a> super::Interpreter<'a> {
                         }
                         _ => false,
                     };
+                    // B-2026-08-31-32 — a STRUCT scrutinee joins the enum one,
+                    // on the same terms the `match` site admits it: only where
+                    // nothing else owns the value. Without this the `if let`
+                    // spelling of `P { r: R { .. }, n: 1 }` ran no body while
+                    // the `match` spelling (fixed by this row) ran one — the
+                    // spelling-dependent split this family keeps having to
+                    // close.
                     let consuming_scrutinee = !reads_through
-                        && matches!(val, Value::EnumVariant { .. })
-                        && self.scrutinee_expr_is_consuming(value);
+                        && matches!(val, Value::EnumVariant { .. } | Value::Struct { .. })
+                        && self.scrutinee_expr_is_consuming(value)
+                        && (matches!(val, Value::EnumVariant { .. })
+                            || Self::struct_scrutinee_has_no_other_owner(value));
                     let stash_names: Vec<String> = if consuming_scrutinee {
-                        if let Value::EnumVariant { ref enum_name, .. } = val {
+                        if matches!(val, Value::Struct { .. }) {
+                            // Unfiltered: the loop below decides which of these
+                            // actually owe a body, and it runs AFTER
+                            // `bind_pattern`. Filtering here consults `env`
+                            // before the names exist, so every candidate
+                            // answers `None` and the stash comes out empty —
+                            // measured, the first draft of this fix changed
+                            // nothing for that reason.
+                            pattern.binding_names()
+                        } else if let Value::EnumVariant { ref enum_name, .. } = val {
                             self.arm_moved_user_drop_payload_bindings(enum_name, pattern)
                         } else {
                             Vec::new()
