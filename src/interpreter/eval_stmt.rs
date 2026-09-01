@@ -286,6 +286,16 @@ impl<'a> super::Interpreter<'a> {
             self.mask_param_view_enum_ctor_slots(stmt);
             // B-2026-08-29-24 — and the tuple sibling: `let t = (r, 5);`.
             self.mask_param_view_tuple_literal_elems(stmt);
+            // B-2026-08-29-44 — a whole-value REBIND (`let s2 = s;`) inherits
+            // the source binding's masks. Every mask above is keyed on the
+            // BINDING, and a rebind gives the destination a fresh unmasked
+            // walk, so the view's body ran again. The ALL-VIEWS case has no
+            // such hole — it marks the binding a param view and view-ness
+            // already propagates — so only the MIXED case loses its mask.
+            // Codegen's twin is `transfer_move_masks_on_rebind`, called at the
+            // same `let`; the two land together because masking on one backend
+            // alone turns this agreed defect into a run-vs-build divergence.
+            self.transfer_move_masks_on_rebind(stmt);
             // B-2026-08-29-45 — the ARRAY / `Vec`-literal sibling of the three
             // masks above. Codegen's twin is the
             // `container_literal_elems_are_all_param_views` gate at the same
@@ -1568,6 +1578,56 @@ impl<'a> super::Interpreter<'a> {
     /// field value, because that is exactly what
     /// `drop_user_drop_fields_of_binding` will visit — each backend asking the
     /// question its OWN walker asks, the pairing B-2026-08-29-19 established.
+    /// B-2026-08-29-44 — carry a binding's move-out masks across a WHOLE-VALUE
+    /// REBIND. Copies rather than moves: the source is still live for its own
+    /// walk and must stay masked too. Codegen's twin is the identically-named
+    /// helper in `control_flow_match.rs`.
+    fn transfer_move_masks_on_rebind(&mut self, stmt: &Stmt) {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(dst) = &pattern.kind else {
+            return;
+        };
+        let ExprKind::Identifier(src) = &value.kind else {
+            return;
+        };
+        if src == dst {
+            return;
+        }
+        let (src, dst) = (src.clone(), dst.clone());
+        let fields: Vec<String> = self
+            .moved_out_struct_field_bodies
+            .iter()
+            .filter(|(n, _)| n == &src)
+            .map(|(_, f)| f.clone())
+            .collect();
+        for f in fields {
+            self.moved_out_struct_field_bodies.insert((dst.clone(), f));
+        }
+        let elems: Vec<usize> = self
+            .moved_out_tuple_elem_bodies
+            .iter()
+            .filter(|(n, _)| n == &src)
+            .map(|(_, i)| *i)
+            .collect();
+        for i in elems {
+            self.moved_out_tuple_elem_bodies.insert((dst.clone(), i));
+        }
+        // The ENUM-CTOR slot mask is DELIBERATELY NOT transferred, and this is
+        // the one line of this fix that had to be measured rather than
+        // reasoned. Copying it here works — the interpreter prints the due
+        // `dR2 dR1` for `let w = W2.Two(r, mk(2)); let w2 = w;`. But codegen
+        // CANNOT follow: it derives a constructor's view slots from the ctor
+        // EXPRESSION at the `let` and stores nothing per variable, so a rebind
+        // there has no mask to inherit and keeps its double. Transferring only
+        // here therefore turns an AGREED defect into a run-vs-build divergence
+        // — measured, `dR2 dR1` against `dR1 dR2 dR1` — which is the worse of
+        // the two and the trade this row's family keeps refusing. The enum
+        // spelling needs a per-var store on the codegen side first; it is
+        // filed separately and stays agreed-but-wrong until then.
+    }
+
     fn mask_param_view_struct_literal_fields(&mut self, stmt: &Stmt) {
         let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
             return;

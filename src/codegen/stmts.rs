@@ -8019,8 +8019,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // the caller runs; mask that element out.
                                     // Per element, so `(r, R { id: 2 })` keeps
                                     // the fresh one's body.
-                                    let view_elems: std::collections::HashSet<u32> =
+                                    // B-2026-08-29-44 — record this literal's
+                                    // masked elements PER VAR and inherit the
+                                    // source's on a rebind. The literal path
+                                    // computed the set from the expression and
+                                    // stored nothing, so `let t2 = t;` had
+                                    // nothing to inherit and re-armed the walk.
+                                    let mut view_elems: std::collections::HashSet<u32> =
                                         self.tuple_literal_param_view_elems(value);
+                                    if let ExprKind::Identifier(src) = &value.kind {
+                                        let src = src.clone();
+                                        self.transfer_move_masks_on_rebind(&src, var_name);
+                                    }
+                                    if let Some(v) = self.tuple_moved_elem_bodies.get(var_name) {
+                                        view_elems.extend(v.iter().copied());
+                                    }
+                                    if !view_elems.is_empty() {
+                                        self.tuple_moved_elem_bodies
+                                            .entry(var_name.clone())
+                                            .or_default()
+                                            .extend(view_elems.iter().copied());
+                                    }
                                     if let Some(bodies) = self
                                         .emit_tuple_elem_user_drop_bodies_fn_skipping(
                                             agg_ty,
@@ -9081,9 +9100,49 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .as_ref()
                                     .map(|i| self.generic_struct_subst_from_inst(&struct_name, i))
                                     .unwrap_or_default();
-                                if let Some(bodies_fn) =
+                                // B-2026-08-29-44 — a whole-value REBIND
+                                // (`let s2 = s;`) inherits the source's
+                                // move-out masks, then registers a walker
+                                // BUILT masked. Registering full and disarming
+                                // afterwards does not work at a `let`: the
+                                // disarm helpers re-register rather than
+                                // replace, so the destination ends up with two
+                                // walkers and the body count goes UP.
+                                // ONLY on an actual rebind. These mask maps are
+                                // keyed by NAME and accumulate across the whole
+                                // function, so consulting them for every `let`
+                                // makes a FRESH binding inherit a stale mask
+                                // from an earlier move-out of the same name —
+                                // measured: three existing move-out tests lost
+                                // a body that way. A bare-identifier RHS is the
+                                // only shape whose masks are genuinely the
+                                // destination's to keep.
+                                let rebind_src = match &value.kind {
+                                    ExprKind::Identifier(src) => Some(src.clone()),
+                                    _ => None,
+                                };
+                                let bodies_fn = if let Some(src) = rebind_src {
+                                    self.transfer_move_masks_on_rebind(&src, var_name);
+                                    let here: std::collections::BTreeSet<usize> = self
+                                        .type_decls
+                                        .struct_moved_field_bodies
+                                        .get(var_name)
+                                        .map(|s| s.iter().copied().collect())
+                                        .unwrap_or_default();
+                                    let skip = self.field_skip_tree_for_var(var_name, here);
+                                    if skip.is_empty() {
+                                        self.emit_user_drop_field_bodies_fn(&struct_name, &subst)
+                                    } else {
+                                        self.emit_user_drop_field_bodies_fn_skipping(
+                                            &struct_name,
+                                            &subst,
+                                            &skip,
+                                        )
+                                    }
+                                } else {
                                     self.emit_user_drop_field_bodies_fn(&struct_name, &subst)
-                                {
+                                };
+                                if let Some(bodies_fn) = bodies_fn {
                                     self.track_user_drop_var_with_fn(
                                         &struct_name,
                                         var_name,

@@ -9187,6 +9187,64 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`w.s.e`) would need the mask threaded through `FieldSkipTree::nested`
     /// against the intermediate field's walker, and it keeps today's behaviour
     /// until something measures it.
+    /// B-2026-08-29-44 — carry a binding's move-out masks across a WHOLE-VALUE
+    /// REBIND (`let s2 = s;`).
+    ///
+    /// Every mask in this family is keyed on the BINDING, and a rebind
+    /// registers the destination afresh — so the walk the source had withheld
+    /// came back, and the param view's body ran a second time. The ALL-VIEWS
+    /// case has no such hole because it marks the binding a param view and
+    /// view-ness already propagates (B-2026-08-01-15); only the MIXED case,
+    /// whose binding is not a view, loses its mask.
+    ///
+    /// Copies rather than moves: the source binding is still live for its own
+    /// scope-exit walk, which must stay masked too.
+    pub(super) fn transfer_move_masks_on_rebind(&mut self, src: &str, dst: &str) {
+        if src == dst {
+            return;
+        }
+        if let Some(v) = self.type_decls.struct_moved_field_bodies.get(src).cloned() {
+            self.type_decls
+                .struct_moved_field_bodies
+                .entry(dst.to_string())
+                .or_default()
+                .extend(v);
+        }
+        if let Some(v) = self
+            .type_decls
+            .struct_moved_field_payload_bodies
+            .get(src)
+            .cloned()
+        {
+            self.type_decls
+                .struct_moved_field_payload_bodies
+                .entry(dst.to_string())
+                .or_default()
+                .extend(v);
+        }
+        if let Some(v) = self
+            .type_decls
+            .struct_moved_nested_field_bodies
+            .get(src)
+            .cloned()
+        {
+            let e = self
+                .type_decls
+                .struct_moved_nested_field_bodies
+                .entry(dst.to_string())
+                .or_default();
+            for (outer, inner) in v {
+                e.entry(outer).or_default().extend(inner);
+            }
+        }
+        if let Some(v) = self.tuple_moved_elem_bodies.get(src).cloned() {
+            self.tuple_moved_elem_bodies
+                .entry(dst.to_string())
+                .or_default()
+                .extend(v);
+        }
+    }
+
     /// The COMPLETE field-skip tree for `var_name`, given this level's
     /// whole-field mask.
     ///
@@ -9199,7 +9257,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// wholesale — so a site that assembles only its own row's half silently
     /// drops the other's, depending on which arm compiled last. One builder,
     /// used by all three sites, is what makes that unrepresentable.
-    fn field_skip_tree_for_var(
+    pub(super) fn field_skip_tree_for_var(
         &self,
         var_name: &str,
         here: std::collections::BTreeSet<usize>,

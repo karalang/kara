@@ -50323,6 +50323,106 @@ fn test_method_fresh_temp_arg_handed_back_runs_one_body() {
 /// row below pins BOTH halves — the view fires once, the fresh field fires
 /// once — and the boundary rows (all-views, all-fresh, no-own-`Drop`) pin
 /// that the neighbouring paths did not move.
+/// B-2026-08-29-44 — interpreter twin of
+/// `codegen::e2e_whole_value_rebind_inherits_the_wrap_mask`, same shapes in the
+/// same order. Both backends' transfers landed in ONE commit; this file is
+/// what proves they moved together, and the pinned enum row is what proves
+/// the one shape they deliberately did NOT move stays agreed.
+///
+/// A WHOLE-VALUE REBIND (`let s2 = s;`) after a MIXED
+/// wrap re-armed the walk the wrap's mask had just withheld.
+///
+/// Every mask in this family is keyed on the BINDING, and a rebind
+/// registers the destination afresh — so the param view's body ran a
+/// second time. The ALL-VIEWS case has no such hole: it marks the binding
+/// a param view and view-ness already propagates (B-2026-08-01-15), which
+/// is why only the MIXED spellings lost their mask.
+///
+/// Registering full and disarming afterwards does NOT work at a `let` —
+/// the disarm helpers re-register rather than replace, leaving the
+/// destination with two walkers and MORE bodies. The fix inherits the
+/// source's masks first and builds the walker already masked.
+#[test]
+fn test_whole_value_rebind_inherits_the_wrap_mask() {
+    let hdr = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n\
+               enum W2 { Two(R, R), None2 }\n\
+               struct S3 { a: R, b: R }\n\
+               struct S1 { r: R }\n";
+    for (label, fns, main, want) in [
+        (
+            "struct literal MIXED, then rebind",
+            "fn take(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; let s2 = s; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "tuple MIXED, then rebind",
+            "fn take(r: R) -> i64 { let t = (r, 5); let t2 = t; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "rebound twice — the mask survives the chain",
+            "fn take(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; let s2 = s; let s3 = s2; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        // CONTROLS: the same wraps WITHOUT a rebind were always correct,
+        // which is what isolates the rebind as the trigger; and the
+        // all-views wrap WITH one was correct through view-ness
+        // propagation, the mechanism the mixed case lacks.
+        (
+            "control: struct MIXED, no rebind",
+            "fn take(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "control: tuple MIXED, no rebind",
+            "fn take(r: R) -> i64 { let t = (r, 5); return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "control: ALL-VIEWS struct, then rebind",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; let s2 = s; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "control: enum ctor MIXED, no rebind",
+            "fn take(r: R) -> i64 { let w = W2.Two(r, mk(2)); return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+    ] {
+        let src = format!("{hdr}{fns}\nfn main() {{ {main} }}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+    // PINNED AT THE DEFECT, and deliberately so. The ENUM-CTOR spelling
+    // still doubles, on BOTH backends, so it stays an agreed gap rather
+    // than a divergence. The interpreter CAN fix it alone — transferring
+    // `moved_out_enum_payload_slots` on the rebind makes it print the due
+    // `dR2 dR1` — but codegen cannot follow: it derives a constructor's
+    // view slots from the ctor EXPRESSION at the `let` and stores nothing
+    // per variable, so a rebind has no mask to inherit. Landing the
+    // interpreter half alone was MEASURED here during this fix and gave
+    // `dR2 dR1` against `dR1 dR2 dR1` — an agreed defect turned into a
+    // run-vs-build split, the trade this family keeps refusing. Filed
+    // separately; it needs a per-var store on the codegen side first.
+    let enum_rebind = format!(
+        "{hdr}fn take(r: R) -> i64 {{ let w = W2.Two(r, mk(2)); let w2 = w; return 7; }}\n\
+         fn main() {{ let v = take(mk(1)); println(f\"v={{v}}\"); }}\n"
+    );
+    assert_eq!(
+        run(&enum_rebind),
+        "dR1\ndR2\ndR1\nv=7\n",
+        "[pinned DEFECT: enum ctor MIXED then rebind — agreed, awaiting a codegen per-var store]"
+    );
+}
+
 #[test]
 fn test_mixed_owndrop_literal_masks_only_the_view_body() {
     let hdr = "struct R { id: i64, name: String }\n\
