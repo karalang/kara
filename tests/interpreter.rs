@@ -52854,6 +52854,105 @@ fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
     }
 }
 
+/// B-2026-08-31-8 — an enum STRUCT-VARIANT literal passed as a fresh-temp
+/// argument runs its `Drop` bodies.
+///
+/// `eat(Sv.Hold { inner: R { .. } })` is spelled as a struct literal whose path
+/// ends in the VARIANT, so the fresh-temp argument classifier's
+/// `find_struct_def(path.last())` answered `None` and the walk claimed no owner
+/// at all: NEITHER the enum's own body nor its payload's ran, against both
+/// compiled backends running both. A `Drop` that closes a handle or releases a
+/// lock simply never fired on this backend.
+///
+/// `tuple-variant` is the control that localizes it, and it is the whole point
+/// of the row: the identical program spelled `Tv.A(R { .. })` is an
+/// `ExprKind::Call` whose callee path resolves through the enum, and was
+/// correct throughout. The spelling was the only variable.
+///
+/// `named-local` is the row a later widening would break: it already had an
+/// owner, and claiming one here too would double the body.
+///
+/// The PRODUCER-FN spelling (`eat(mk(4))`) is deliberately absent. It diverges
+/// the other way on this header — the interpreter runs `dSv dR4`, both compiled
+/// backends run `dSv` alone — so pinning it here would assert one side of a
+/// live disagreement. Filed as its own row; when it closes, it belongs in this
+/// table and its twin.
+///
+/// `two-fresh` pins the ORDER as well as the count — argument temps are
+/// introduced left to right and pop right to left (B-2026-08-29-46), so a fix
+/// that fired them forward would agree on the count and diverge on the order,
+/// which no count-only assertion could see.
+#[test]
+fn fresh_temp_struct_variant_arg_runs_its_drop_bodies() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Sv { Hold { inner: R }, Nil }\n\
+         impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+         enum Tv { A(R), Nil }\n\
+         impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+         fn eat(v: Sv) { println(\"e\") }\n\
+         fn eatt(v: Tv) { println(\"e\") }\n\
+         fn eat2(v: Sv, w: Sv) { println(\"e2\") }\n\
+         fn mk(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; }\n";
+    for (label, body, want) in [
+        (
+            "struct-variant fresh temp",
+            "eat(Sv.Hold { inner: R { id: 1 } })",
+            "e\ndSv\ndR1\n",
+        ),
+        (
+            "tuple-variant fresh temp (control)",
+            "eatt(Tv.A(R { id: 2 }))",
+            "e\ndTv\ndR2\n",
+        ),
+        (
+            "named-local (control)",
+            "let a = Sv.Hold { inner: R { id: 3 } }; eat(a)",
+            "e\ndSv\ndR3\n",
+        ),
+        (
+            "two-fresh, reverse order",
+            "eat2(Sv.Hold { inner: R { id: 5 } }, Sv.Hold { inner: R { id: 6 } })",
+            "e2\ndSv\ndR6\ndSv\ndR5\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+
+    // The shape the row was FILED as: a callee that `match`es the owned param.
+    // The match machinery reached the identical decisions for both spellings
+    // (measured), so the loss was always the caller-side classifier — with and
+    // without the arm's rebind, and with the tuple-variant twin beside it.
+    const M: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Sv { Hold { inner: R }, Nil }\n\
+         impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+         fn s2(v: Sv) { match v { Sv.Hold { inner } => { let m = inner; println(f\"b{m.id}\") } Sv.Nil => { } } }\n\
+         fn s2b(v: Sv) { match v { Sv.Hold { inner } => { println(f\"b{inner.id}\") } Sv.Nil => { } } }\n";
+    for (label, body, want) in [
+        (
+            "match, with rebind",
+            "s2(Sv.Hold { inner: R { id: 7 } })",
+            "b7\ndSv\ndR7\n",
+        ),
+        (
+            "match, no rebind",
+            "s2b(Sv.Hold { inner: R { id: 8 } })",
+            "b8\ndSv\ndR8\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{M}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}
+
 /// B-2026-09-01-28 — `match`, `if let` and `while let` agree on a payload
 /// struct whose `Drop` is only in a FIELD.
 ///

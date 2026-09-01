@@ -124,6 +124,55 @@ mod memory_sanitizer_tests {
     ) -> Option<(String, String, std::process::ExitStatus)> {
         run_under_asan_opts(src, label, false, false, true)
     }
+    /// B-2026-08-31-8 — a heap-carrying enum STRUCT-VARIANT payload passed as a
+    /// fresh-temp argument is neither leaked nor double-freed.
+    ///
+    /// The row was measured on a scalar payload and asked for a heap-carrying
+    /// one before the memory side was assumed balanced. This is that
+    /// measurement — and it is worth being exact about what it can see.
+    ///
+    /// The fix was INTERPRETER-only, and ASAN never runs the interpreter, so
+    /// this case was already green before it. What it pins is the COMPILED
+    /// reference the interpreter now has to match, with a `String` and a `Vec`
+    /// in the payload: that the three shapes each free exactly once here is
+    /// what makes the twinned output fixtures' expectations the right ones to
+    /// have matched. `named` and `tuple` are the two that already had an owner,
+    /// and a later widening on THIS backend that reached them would surface
+    /// here as a double free rather than as a wrong line of output.
+    #[test]
+    fn asan_fresh_temp_struct_variant_arg_payload_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String, buf: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.buf.len()}") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+enum Tv { A(R), Nil }
+impl Drop for Tv { fn drop(mut ref self) { println("dTv") } }
+
+fn mkr(n: i64) -> R {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 32 { v.push(i + n); i = i + 1; }
+    return R { id: n, tag: "t", buf: v };
+}
+
+fn eat(v: Sv) { println("e"); }
+fn eatt(v: Tv) { println("t"); }
+
+fn main() {
+    eat(Sv.Hold { inner: mkr(1) });
+    let a = Sv.Hold { inner: mkr(2) };
+    eat(a);
+    eatt(Tv.A(mkr(3)));
+}
+"#,
+            &[
+                "e", "dSv", "dR1:32", "e", "dSv", "dR2:32", "t", "dTv", "dR3:32",
+            ],
+            "fresh_temp_struct_variant_arg_payload_is_balanced",
+        );
+    }
 
     /// A container-element heap read handed out of a BRANCH VALUE gets an owner
     /// at the merge (B-2026-08-28-44).

@@ -98653,6 +98653,83 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-08-31-8 — compiled twin of `tests/interpreter.rs`'s
+    /// `fresh_temp_struct_variant_arg_runs_its_drop_bodies`, same programs and
+    /// expectations.
+    ///
+    /// This backend was correct on every row; the interpreter ran NO body for
+    /// the struct-variant fresh temp. The twin is what makes "the two spellings
+    /// and the two backends all agree" a property a test holds, rather than one
+    /// only the fixed side asserts — and `two-fresh` pins the argument-temp
+    /// order, which is this backend's cleanup-frame LIFO and was the reference
+    /// the interpreter's walk had to match.
+    #[test]
+    fn test_e2e_fresh_temp_struct_variant_arg_runs_its_drop_bodies() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum Sv { Hold { inner: R }, Nil }\n\
+             impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+             enum Tv { A(R), Nil }\n\
+             impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+             fn eat(v: Sv) { println(\"e\") }\n\
+             fn eatt(v: Tv) { println(\"e\") }\n\
+             fn eat2(v: Sv, w: Sv) { println(\"e2\") }\n\
+             fn mk(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; }\n";
+        for (label, body, want) in [
+            (
+                "struct-variant fresh temp",
+                "eat(Sv.Hold { inner: R { id: 1 } })",
+                "e\ndSv\ndR1\n",
+            ),
+            (
+                "tuple-variant fresh temp (control)",
+                "eatt(Tv.A(R { id: 2 }))",
+                "e\ndTv\ndR2\n",
+            ),
+            (
+                "named-local (control)",
+                "let a = Sv.Hold { inner: R { id: 3 } }; eat(a)",
+                "e\ndSv\ndR3\n",
+            ),
+            (
+                "two-fresh, reverse order",
+                "eat2(Sv.Hold { inner: R { id: 5 } }, Sv.Hold { inner: R { id: 6 } })",
+                "e2\ndSv\ndR6\ndSv\ndR5\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+
+        const M: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum Sv { Hold { inner: R }, Nil }\n\
+             impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+             fn s2(v: Sv) { match v { Sv.Hold { inner } => { let m = inner; println(f\"b{m.id}\") } Sv.Nil => { } } }\n\
+             fn s2b(v: Sv) { match v { Sv.Hold { inner } => { println(f\"b{inner.id}\") } Sv.Nil => { } } }\n";
+        for (label, body, want) in [
+            (
+                "match, with rebind",
+                "s2(Sv.Hold { inner: R { id: 7 } })",
+                "b7\ndSv\ndR7\n",
+            ),
+            (
+                "match, no rebind",
+                "s2b(Sv.Hold { inner: R { id: 8 } })",
+                "b8\ndSv\ndR8\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{M}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-09-01-28 — compiled twin of `tests/interpreter.rs`'s
     /// `pattern_spellings_agree_on_a_field_only_drop_payload`, same programs
     /// and expectations.
