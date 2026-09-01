@@ -21467,6 +21467,24 @@ fn main() {
     let vv: Vec[i64] = [7, 8, 9];
     let gc = ref vv[1];
     println(f"vec {gc}");
+
+    let sv: Vec[i64] = [10, 20, 30];
+    let sl: Slice[i64] = sv.as_slice();
+    let gs = ref sl[2];
+    println(f"slice {gs}");
+    let ssum: i64 = gs + 5;
+    println(f"slicearith {ssum}");
+
+    let pv: Vec[P] = [P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let pl: Slice[P] = pv.as_slice();
+    let gsp = ref pl[1];
+    println(f"slicestruct {gsp.a} {gsp.b}");
+
+    let mut mv: Vec[i64] = [1, 2, 3];
+    let ml: Slice[i64] = mv.as_slice();
+    let gsa = ref ml[0];
+    mv[0] = 77;
+    println(f"slicealias {gsa}");
 }
 "#;
 
@@ -21504,13 +21522,26 @@ fn main() {
     /// Twin of `tests/interpreter.rs`'s `test_ref_binding_over_an_array_base`,
     /// pinned to the same string. The interpreter was correct throughout, which
     /// is what made this a run-vs-build divergence rather than a design gap.
+    ///
+    /// B-2026-08-31-36 added the four `slice*` lines, and there the backends
+    /// were the other way round: codegen read the element correctly while the
+    /// INTERPRETER bound the whole container, so `ref s[2]` printed
+    /// `[10, 20, 30]` under `--interp` against `30` everywhere else. `slicearith`
+    /// is the line that makes the binding's TYPE observable rather than just its
+    /// rendering — it failed with "operator 'Add' is not defined for operands of
+    /// type 'Slice' and 'Int'" while the compiled backends returned 35.
+    /// `slicealias` pins the same live-borrow contract the `alias` line pins for
+    /// an Array: a write through the parent `Vec` is visible through the borrow,
+    /// which is what a slice element being an element OF THAT VEC means.
     #[test]
     fn e2e_ref_binding_over_an_array_base_reads_the_element() {
         let Some(out) = run_program(ARRAY_REF_BINDING_SRC) else {
             return;
         };
         assert_eq!(
-            out, "scalar 30\nvector 10\nstruct 3 4\nalias 99\nvec 8\n",
+            out,
+            "scalar 30\nvector 10\nstruct 3 4\nalias 99\nvec 8\n\
+             slice 30\nslicearith 35\nslicestruct 3 4\nslicealias 77\n",
             "a `ref` binding over an Array base must read the element; got: {out:?}"
         );
     }

@@ -130,6 +130,16 @@ fn main() {
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_ref_binding_over_an_array_base_reads_the_element`, pinned to the same
 /// string.
+///
+/// B-2026-08-31-36 added the four `slice*` lines, and this file is the half
+/// that was WRONG for them — the reverse of the Array case above. `ref s[2]`
+/// bound the whole `Slice` rather than the element, so it printed
+/// `[10, 20, 30]` here against `30` on all three compiled surfaces, and
+/// `slicearith` failed outright with "operator 'Add' is not defined for
+/// operands of type 'Slice' and 'Int'". A slice element IS an element of the
+/// backing array, so the fix binds the same `Value::ElemRef` the Vec path
+/// binds, with the index shifted by the window's start — which is why
+/// `slicealias` holds without any new machinery.
 #[test]
 fn test_ref_binding_over_an_array_base() {
     assert_eq!(
@@ -157,9 +167,28 @@ fn main() {
     let vv: Vec[i64] = [7, 8, 9];
     let gc = ref vv[1];
     println(f"vec {gc}");
+
+    let sv: Vec[i64] = [10, 20, 30];
+    let sl: Slice[i64] = sv.as_slice();
+    let gs = ref sl[2];
+    println(f"slice {gs}");
+    let ssum: i64 = gs + 5;
+    println(f"slicearith {ssum}");
+
+    let pv: Vec[P] = [P { a: 1, b: 2 }, P { a: 3, b: 4 }];
+    let pl: Slice[P] = pv.as_slice();
+    let gsp = ref pl[1];
+    println(f"slicestruct {gsp.a} {gsp.b}");
+
+    let mut mv: Vec[i64] = [1, 2, 3];
+    let ml: Slice[i64] = mv.as_slice();
+    let gsa = ref ml[0];
+    mv[0] = 77;
+    println(f"slicealias {gsa}");
 }
 "#),
-        "scalar 30\nvector 10\nstruct 3 4\nalias 99\nvec 8\n"
+        "scalar 30\nvector 10\nstruct 3 4\nalias 99\nvec 8\n\
+             slice 30\nslicearith 35\nslicestruct 3 4\nslicealias 77\n"
     );
 }
 

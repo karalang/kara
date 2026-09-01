@@ -2393,7 +2393,70 @@ impl<'a> super::Interpreter<'a> {
                     idx: *i as usize,
                 };
             }
-            return obj;
+            // B-2026-08-29-47's neighbour, B-2026-08-31-36 — a `Slice` base.
+            // The arm above matched `Value::Array` alone, so a slice fell to
+            // the `return obj` below and BOUND THE WHOLE CONTAINER: `let g =
+            // ref s[2]` printed `[10, 20, 30]` under `--interp` against every
+            // compiled backend's `30`, and `g + 5` failed with "operator 'Add'
+            // is not defined for operands of type 'Slice' and 'Int'" where the
+            // compiled backends gave 35. The typechecker is not involved — it
+            // types `g` as `i64` and agrees with codegen.
+            //
+            // A slice element IS an element of the backing array, so `ElemRef`
+            // represents it exactly: same storage, index shifted by the
+            // window's start. That equivalence is why this needs no new Value
+            // variant and why writes through the binding land in the parent
+            // `Vec`, which the compiled backends already do.
+            if let (
+                Value::Slice {
+                    storage,
+                    start,
+                    len,
+                    ..
+                },
+                Value::Int(i),
+            ) = (&obj, &iv)
+            {
+                // The window's length, NOT the backing store's. The old path
+                // bounds-checked nothing at all for a slice — `ref s[7]` on a
+                // 2-element slice returned the container while both compiled
+                // backends panicked with "slice index out of bounds" — so the
+                // check is as much of the fix as the element read is.
+                if *i < 0 || (*i as usize) >= *len {
+                    return self.record_runtime_error(
+                        format!("ref s[i]: index {} out of bounds (len {})", i, len),
+                        span,
+                    );
+                }
+                return Value::ElemRef {
+                    arr: storage.clone(),
+                    idx: start + *i as usize,
+                };
+            }
+            // Any other container class: there is no element PLACE to bind, so
+            // handing back the container was silently wrong rather than
+            // conservative. A `Map` base printed `{1: 42}` for `ref m[1]`, and
+            // `SortedMap` the same — while codegen DECLINES both, so the
+            // interpreter was the only backend that accepted the spelling and
+            // it accepted it with the wrong value.
+            //
+            // Declining here is what keeps the two backends agreed. Returning
+            // the map's VALUE would read plausibly (`m[1]` alone is 42 on every
+            // backend) but would be a `ref` that does not alias: nothing writes
+            // back through it, and codegen would still refuse to build the
+            // program. An agreed refusal beats a divergence in which one
+            // backend invents a non-aliasing reference.
+            return self.record_runtime_error(
+                format!(
+                    concat!(
+                        "a `ref` binding over an element of a `{}` is not supported ",
+                        "(the compiled backends decline it too); ",
+                        "index it directly to read the value"
+                    ),
+                    obj.variant_name(),
+                ),
+                span,
+            );
         }
         self.eval_expr_inner(operand)
     }
