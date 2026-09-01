@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 289 | 16 |
 | leak | 251 | 7 |
 | missing-feature | 192 | 0 |
-| double-free | 161 | 0 |
+| double-free | 162 | 1 |
 | codegen-gap | 159 | 1 |
 | diagnostics | 115 | 0 |
 | false-positive | 102 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1344 | 31 |
+| codegen | 1345 | 32 |
 | interp | 312 | 17 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1956 surfaced · 34 open · 1891 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1957 surfaced · 35 open · 1891 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (34)
+### Open (35)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -164,6 +164,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1956 surfaced
 | B-2026-09-01-32 | 2026-09-01 | interp+codegen | medium | The UNQUALIFIED enum struct-variant literal `Hold { .. }` loses BOTH `Drop` bodies on ALL FOUR surfaces, while the unqualified TUPLE-variant spelling `A(r)` is correct on all four | — |
 | B-2026-09-01-33 | 2026-09-01 | codegen | medium | A PRODUCER-FN argument loses the enum payload's `Drop` body on BOTH compiled backends -- `eat(mk(5))` runs `dSv` against the interpreter's `dSv dR5`, for the tuple-variant spelling equally; routing the same value through a NAMED LOCAL is correct everywhere | — |
 | B-2026-09-01-34 | 2026-09-01 | codegen | medium | A DISCARDED enum STRUCT-VARIANT literal in a TWO-TAIL `if` or a `match` arm emits NO `Drop` body at all on the compiled backends -- not even the enum's OWN -- while the same literal as a direct producer, a block tail, or a no-`else` `if` tail runs both; the tuple-variant spelling is uniform across all five | — |
+| B-2026-09-01-35 | 2026-09-01 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape guard sees that route, and it blocks B-2026-09-01-29's leak fix | — |
 
 ### Relocated (2)
 
