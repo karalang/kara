@@ -94,13 +94,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 343 | 5 |
 | run-vs-build | 287 | 16 |
-| leak | 249 | 5 |
+| leak | 250 | 6 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
 | codegen-gap | 159 | 1 |
 | diagnostics | 115 | 0 |
 | false-positive | 102 | 0 |
-| soundness | 93 | 1 |
+| soundness | 94 | 2 |
 | perf | 87 | 0 |
 | other | 69 | 2 |
 | crash | 67 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1339 | 26 |
+| codegen | 1341 | 28 |
 | interp | 310 | 17 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced · 30 open · 1889 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1952 surfaced · 32 open · 1889 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (30)
+### Open (32)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -160,6 +160,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1950 surfaced
 | B-2026-09-01-23 | 2026-09-01 | codegen | low | THE BRANCH ARM-OWNER SLOT IS ONE PER CONSTRUCT AND RESET EACH PASS, so a branch inside a loop whose owner frame lives OUTSIDE the loop frees only the LAST pass's escaping value -- `while i < 3 { let k = if i > 0 { mkA(n) } else { t }.contains("aaa"); }` strands `iterations - 1` of them (42 B in 2 blocks at 3 iterations, 72 B in 4 at 5); the same branch with the sibling binding declared INSIDE the loop body is clean, which isolates the frame CHOICE rather than the slot as the cause | — |
 | B-2026-09-01-27 | 2026-09-01 | interp | low | A FRESH-TEMP owned argument DESTRUCTURED inside a method runs the right Drop bodies in the WRONG ORDER -- the payload's body fires before the enum shell's under `--interp` and after it on both compiled backends, so the counts agree and the sequence does not | — |
 | B-2026-09-01-26 | 2026-09-01 | codegen | medium | A `match` OVER A FRESH-TEMP ENUM IN A NESTED EXPRESSION POSITION LEAKS THE HEAP PAYLOAD ITS ARM MOVED OUT -- `println(f"out[{match mkVe(9) { Ve.A(s) => { s } .. }}]")` loses 15 B at BOTH opt levels while the let-bound spelling of the same match is clean; both enum flavours, and clean for a scalar payload | — |
+| B-2026-09-01-29 | 2026-09-01 | codegen | medium | AN `Option` WHOSE PAYLOAD OWNS HEAP LEAKS THAT HEAP WHENEVER THE VALUE IS PASSED AS A FUNCTION ARGUMENT -- under BOTH parameter modes, by value AND `ref`, generic AND non-generic; the `let`-bound spelling of the identical value is clean | — |
+| B-2026-09-01-30 | 2026-09-01 | codegen | medium | A BARE-`T` BY-VALUE GENERIC PARAM'S OWNERSHIP CONVENTION DEPENDS ON THE COMPILER NOT KNOWING ITS ELEMENT TYPE, so a better-informed monomorph strands the caller's temporary (leak) and the obvious caller-side compensation double-frees a match-arm return | — |
 
 ### Relocated (2)
 
