@@ -470,6 +470,47 @@ pub enum SnapshotPrimKind {
     /// whose cleanup is a struct-drop fn rather than the overlay
     /// (`ok_payload_struct_drop`), whose retraction has not been measured.
     InlineEnvelope,
+    /// B-2026-08-30-7: the GENERAL case beneath the eight kinds above — any
+    /// type whose entire cleanup is a set of actions keyed on the binding's own
+    /// slot, so retracting those actions is the whole ownership handshake.
+    ///
+    /// This is what closes the row's remaining list rather than adding a ninth
+    /// bespoke kind for each of `Vec[Vec[i64]]`, `SortedSet`, a closure, a
+    /// `shared` binding, a `Vec` of user structs, `Ordering`. The framing this
+    /// tier was deferred under — "each of those types would need its own
+    /// cross-cell ownership story" — asked the wrong question. The question is
+    /// not what a type's cleanup DOES, it is whether the cleanup is REACHABLE
+    /// FROM THE SLOT; and every action that frees a local's value is registered
+    /// by a `track_*` call taking that local's slot, which `cleanup_action_slot`
+    /// now states as an exhaustive match rather than as a convention.
+    ///
+    /// So capture is a plain `store` plus `retract_all_cleanup_for_slot`, and
+    /// replay a plain `load` plus `register_var_from_type_expr` — the same
+    /// shape `ByValue` and `InlineEnvelope` already use, with the retraction
+    /// generalized from "the one variant this kind knows about" to "whatever is
+    /// queued for this slot".
+    ///
+    /// It SUBSUMES those two rather than replacing them, and the ordering in
+    /// `snapshot_kind_for_type` keeps them ahead of it on purpose. `ByValue`
+    /// carries a stronger proof (no heap anywhere, so nothing to retract and
+    /// nothing to leak) and `InlineEnvelope` a narrower one (a fixed-width
+    /// envelope whose single overlay action is named); both are measured, and a
+    /// global written by a cell that classified a binding under one of them
+    /// stays readable by a cell that would classify it here.
+    ///
+    /// Eligibility is a WHITELIST, for the reason the by-value walk is one: a
+    /// named type must be declared in the session's own source, or be one of a
+    /// curated set of stdlib data types. Several baked stdlib types are opaque
+    /// handles or hold an OS resource whose release is observable (a file
+    /// close, a channel drop), and for those "leak until JITDylib teardown" is
+    /// not a policy anyone chose. Inverting to a blacklist would make
+    /// correctness depend on that list being exhaustive; a whitelist fails
+    /// closed, back to pass-through.
+    ///
+    /// A user `impl Drop` anywhere inside the type is excluded here as it is
+    /// everywhere in this tier: retraction means the destructor never runs,
+    /// which trades this row's divergence for a new one.
+    SlotTransfer,
 }
 
 /// Slice c-repl.B.5.3: Vec element kinds eligible for the v1 snapshot
@@ -532,7 +573,9 @@ impl SnapshotPrimKind {
     ///     freshly-bound one instead of approximately so.
     pub(crate) fn needs_value_type(self) -> bool {
         match self {
-            SnapshotPrimKind::ByValue | SnapshotPrimKind::InlineEnvelope => true,
+            SnapshotPrimKind::ByValue
+            | SnapshotPrimKind::InlineEnvelope
+            | SnapshotPrimKind::SlotTransfer => true,
             SnapshotPrimKind::Vec(e) | SnapshotPrimKind::Set(e) => e == VecElemKind::String,
             SnapshotPrimKind::Map { key, val } => {
                 key == VecElemKind::String || val == VecElemKind::String

@@ -488,15 +488,20 @@ fn repl_jit_snapshot_write_back_chains_across_cells() {
 fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
     let mut s = Session::new();
     enable_jit(&mut s);
-    // The subject used to be `Vec[String]`, which the heap-element widening
-    // later moved INTO the tier — so this now uses a shape that is still on
-    // pass-through. `Vec[Vec[i64]]` is deferred for the reason `Vec[String]`
-    // no longer is: its elements own buffers whose OWN elements own nothing,
-    // but the snapshot global would have to carry a nested triple whose
-    // suppression the one-level `cap = 0` does not reach. Any shape outside
-    // `snapshot_kind_for_type` serves; what this test pins is the note's
-    // CONTENT and its once-per-binding firing, not the choice of shape.
-    let r = s.evaluate_cell_captured("let mut v: Vec[Vec[i64]] = Vec.new();");
+    // The subject has been migrated TWICE — `Vec[String]`, then
+    // `Vec[Vec[i64]]` — because each widening of the tier moved the previous
+    // choice into it and turned this test red. So it is now a shape the tier
+    // will never admit rather than one it has not reached yet: a `Vec` of a
+    // type with a user `impl Drop`. That exclusion is structural, not a
+    // deferral — admitting it would hand the value to a global nobody tears
+    // down, so the destructor would never run. What this test pins is the
+    // note's CONTENT and its once-per-binding firing, and picking a
+    // permanently-excluded subject is what stops it chasing the frontier.
+    let r = s.evaluate_cell_captured(
+        "struct D { n: i64 }\nimpl Drop for D { fn drop(mut ref self) { println(f\"dD\"); } }\nfn mkd() -> D { D { n: 1 } }",
+    );
+    assert!(r.errors.is_empty(), "items cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let mut v: Vec[D] = Vec.new();");
     assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
     let note = r
         .notes
@@ -504,7 +509,7 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
         .find(|n| n.contains("repl-jit-no-snapshot"))
         .unwrap_or_else(|| panic!("expected a no-snapshot note; notes: {:?}", r.notes));
     assert!(
-        note.contains("`v`") && note.contains("Vec[Vec[i64]]"),
+        note.contains("`v`") && note.contains("Vec[D]"),
         "the note must name the binding and its type; got: {note}",
     );
     assert!(
@@ -514,7 +519,11 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
 
     // Second cell mutates it. No repeat — the note is a property of the
     // binding, not of every cell that touches it.
-    let r2 = s.evaluate_cell_captured("v.push(Vec.new());");
+    // Through a helper rather than `v.push(D { n: 1 });`: a struct literal as
+    // a call argument, alone in a cell, resolves as `undefined name 'v'` on
+    // BOTH backends — an unrelated REPL cell-classification bug, filed as
+    // B-2026-09-01-32.
+    let r2 = s.evaluate_cell_captured("v.push(mkd());");
     assert!(r2.errors.is_empty(), "mutate cell: {:?}", r2.errors);
     assert!(
         !r2.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
@@ -532,9 +541,11 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
 fn repl_jit_passthrough_side_effecting_initializer_warns() {
     let mut s = Session::new();
     enable_jit(&mut s);
-    // Same shape migration as the test above: `Vec[String]` is now in the
-    // tier, so the pass-through subject is a still-deferred one.
-    let r = s.evaluate_cell_captured("fn mk() -> Vec[Vec[i64]] { Vec.new() }");
+    // Same subject migration as the test above, and for the same reason: a
+    // permanently-excluded shape rather than a not-yet-reached one.
+    let r = s.evaluate_cell_captured(
+        "struct D { n: i64 }\nimpl Drop for D { fn drop(mut ref self) { println(f\"dD\"); } }\nfn mk() -> Vec[D] { Vec.new() }",
+    );
     assert!(r.errors.is_empty(), "items cell: {:?}", r.errors);
     let r = s.evaluate_cell_captured("let cfg = mk();");
     assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
@@ -1803,48 +1814,325 @@ fn repl_jit_inline_envelope_initializer_runs_once_across_cells() {
     }
 }
 
-/// B-2026-08-30-7 — the inline-envelope tier must stay OUT of the payload
-/// shapes whose cleanup is not the retractable overlay.
+// B-2026-08-30-7: `repl_jit_inline_envelope_tier_excludes_aggregate_and_shared_
+// payloads` lived here. It asserted that an `Option[<user struct>]` and an
+// `Option[<shared>]` stay on pass-through, which was true when the
+// `InlineEnvelope` kind was the deepest tier and is FALSE now — the general
+// `SlotTransfer` kind admits both, and they are covered by
+// `repl_jit_slot_transfer_tier_carries_the_remaining_shapes` and
+// `repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding`.
+// Removed rather than retargeted: what it really pinned was an internal
+// choice of KIND, which has no observable outside the tier it was measuring.
+
+/// B-2026-08-30-7 — the GENERAL `SlotTransfer` tier: everything the row's
+/// remaining list named, closed by one kind rather than six.
 ///
-/// Each of these is a deliberate exclusion with its own reason, recorded on
-/// `inline_envelope_payload_class`: an AGGREGATE payload can reach a
-/// struct-drop or per-element aggregate drop and can hold a refcount behind a
-/// field; a `shared` payload holds one directly, and retracting an rc-dec is
-/// not a transfer — a second owner could drop the last reference while the
-/// global still points at the object. Both stay on pass-through, which is
-/// wrong-but-bounded, and both keep warning.
+/// The framing this tier was deferred under — "each of those types would need
+/// its own cross-cell ownership story" — asked the wrong question. The question
+/// is not what a type's cleanup DOES, it is whether the cleanup is reachable
+/// from the binding's SLOT; and every action that frees a local's value is
+/// registered by a `track_*` call taking that local's slot. So one
+/// `retract_all_cleanup_for_slot` at capture covers a nested container, a
+/// `SortedMap`, a closure and a stdlib value enum alike.
 ///
-/// The assertion is the WARNING rather than the divergence: the note keys on
-/// `snapshot_kind_for_type` returning `None`, so it is the exact observable of
-/// "this shape did not enter the tier", and it stays true if a later slice
-/// makes the divergence itself go away for some other reason.
-///
-/// GREEN on pre-fix `main` too — a boundary pin rather than a regression test.
-/// What it catches is a LATER slice widening the class past what the retraction
-/// argument covers, which is the direction this tier has drifted twice.
+/// Each row's mutation is in the cell AFTER the declaring one — the row's own
+/// table shape, and the one that exercises the write-back on a REPLAYED
+/// binding rather than only on a first one. A row with an empty `mutate` has
+/// nothing to mutate (a closure) and reads twice instead.
 #[test]
-fn repl_jit_inline_envelope_tier_excludes_aggregate_and_shared_payloads() {
-    for (items, decl) in [
+fn repl_jit_slot_transfer_tier_carries_the_remaining_shapes() {
+    for (items, decl, mutate, read, want) in [
+        // Nested containers — the `Vec[Vec[i64]]` the row named. The
+        // deferral said the one-level `cap = 0` "does not reach a nested
+        // triple's suppression"; it does not need to, because retraction
+        // removes the whole walk that would have reached it.
         (
-            "struct H { n: String }",
-            "let mut o: Option[H] = Option.None;",
+            "",
+            "let mut v: Vec[Vec[i64]] = Vec.new();",
+            "v.push(Vec.new());",
+            "println(f\"{v.len()}\");",
+            "1",
         ),
         (
-            "shared struct S { n: i64 }",
-            "let mut o: Option[S] = Option.None;",
+            "",
+            "let mut m: Map[i64, Vec[i64]] = Map.new();",
+            "m.insert(1, Vec.new());",
+            "println(f\"{m.len()}\");",
+            "1",
+        ),
+        // A container over a user struct that owns heap.
+        (
+            "struct H { n: String }\nfn mkh() -> H { H { n: f\"x\" } }",
+            "let mut v: Vec[H] = Vec.new();",
+            "v.push(mkh());",
+            "println(f\"{v.len()}\");",
+            "1",
+        ),
+        // `SortedSet` / `SortedMap` — B-tree-backed, so they could not
+        // piggyback on the Map/Set handle story and were listed separately.
+        (
+            "",
+            "let mut s: SortedSet[i64] = SortedSet.new();",
+            "s.insert(3);",
+            "println(f\"{s.len()}\");",
+            "1",
+        ),
+        (
+            "",
+            "let mut m: SortedMap[String, i64] = SortedMap.new();",
+            "m.insert(f\"k\", 4);",
+            "println(f\"{m.len()}\");",
+            "1",
+        ),
+        // A stdlib VALUE enum. The by-value tier measured `Ordering` as
+        // genuinely by-value and still kept it out, because its
+        // session-declared rule could not tell a stdlib value type from a
+        // stdlib opaque handle. The whitelist is that answer.
+        (
+            "",
+            "let mut o: Ordering = Ordering.Less;",
+            "o = Ordering.Greater;",
+            "println(f\"{o == Ordering.Greater}\");",
+            "true",
+        ),
+        // An AGGREGATE `Option` payload — declined by `InlineEnvelope`,
+        // whose overlay does not own a struct payload's cleanup.
+        (
+            "struct H { n: String }\nfn mkh() -> H { H { n: f\"x\" } }",
+            "let mut o: Option[H] = Option.None;",
+            "o = Option.Some(mkh());",
+            "println(f\"{o.is_some()}\");",
+            "true",
+        ),
+        // A nested envelope.
+        (
+            "",
+            "let mut o: Option[Option[String]] = Option.None;",
+            "o = Option.Some(Option.Some(f\"deep\"));",
+            "println(f\"{o.is_some()}\");",
+            "true",
+        ),
+        // A tuple with a heap element — the by-value tuple arm requires
+        // every element by-value, so this fell through to pass-through.
+        (
+            "",
+            "let mut t: (i64, String) = (1, f\"a\");",
+            "t = (2, f\"b\");",
+            "println(f\"{t.0}\");",
+            "2",
+        ),
+        // A closure: a fat `{fn_ptr, env_ptr}` whose environment is freed by
+        // one `FreeClosureEnv` on the slot.
+        (
+            "",
+            "let cf = |x: i64| { x + 1 };",
+            "",
+            "println(f\"{cf(7)}\");",
+            "8",
         ),
     ] {
         let mut s = Session::new();
         enable_jit(&mut s);
-        let r = s.evaluate_cell_captured(items);
-        assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        if !items.is_empty() {
+            let r = s.evaluate_cell_captured(items);
+            assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        }
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "{decl} must reach the snapshot tier; notes: {:?}",
+            r.notes,
+        );
+        if !mutate.is_empty() {
+            let r = s.evaluate_cell_captured(mutate);
+            assert!(r.errors.is_empty(), "{mutate}: {:?}", r.errors);
+        }
+        let r = s.evaluate_cell_captured(read);
+        assert!(r.errors.is_empty(), "{read}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.trim(),
+            want,
+            "a mutation made in the cell AFTER the declaring one must survive \
+             the boundary for `{decl}`; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7 — a snapshotted `SlotTransfer` binding must survive being
+/// READ repeatedly across cells, not merely written once.
+///
+/// This is the guard the previous half of this row taught. There, retraction
+/// alone let a consuming `match` arm free a payload the snapshot global still
+/// owned: cell 2 printed the right thing and cell 3 killed the runner. A tier
+/// test that reads once cannot see that, because the first read is what frees.
+/// Three reads is the minimum that can.
+///
+/// The shapes here are the ones where a read reaches THROUGH the transferred
+/// storage — an element of a nested container, a field of a struct element, an
+/// aggregate payload bound out by an arm — rather than just its length.
+#[test]
+fn repl_jit_slot_transfer_repeated_reads_do_not_free_the_snapshot() {
+    for (items, setup, read, want) in [
+        (
+            "",
+            &[
+                "let mut v: Vec[Vec[i64]] = Vec.new();",
+                "let mut i: Vec[i64] = Vec.new();",
+                "i.push(7);",
+                "v.push(i);",
+            ][..],
+            "println(f\"{v[0][0]}\");",
+            "7",
+        ),
+        (
+            "struct H { n: String }\nfn mkh() -> H { H { n: f\"x\" } }",
+            &["let mut v: Vec[H] = Vec.new();", "v.push(mkh());"][..],
+            "println(v[0].n);",
+            "x",
+        ),
+        (
+            "struct H { n: String }\nfn mkh() -> H { H { n: f\"deep\" } }",
+            &["let mut o: Option[H] = Option.Some(mkh());"][..],
+            "match o { Option.Some(h) => println(h.n), Option.None => println(f\"none\") }",
+            "deep",
+        ),
+        (
+            "",
+            &["let mut t: (i64, String) = (1, f\"a\");"][..],
+            "println(t.1);",
+            "a",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        if !items.is_empty() {
+            let r = s.evaluate_cell_captured(items);
+            assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        }
+        for cell in setup {
+            let r = s.evaluate_cell_captured(cell);
+            assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        }
+        for round in 1..=3 {
+            let r = s.evaluate_cell_captured(read);
+            assert!(r.errors.is_empty(), "{read} round {round}: {:?}", r.errors);
+            assert_eq!(
+                r.stdout.trim(),
+                want,
+                "round {round} of `{read}`: a transferred value must stay \
+                 readable — the global owns it and nothing in the cell may \
+                 free it; stdout: {:?}",
+                r.stdout,
+            );
+        }
+    }
+}
+
+/// B-2026-08-30-7 — the `SlotTransfer` tier's exclusions, which are what keep
+/// the generality honest.
+///
+/// Three kinds of decline, each for its own reason:
+///   - a user `impl Drop` ANYWHERE inside the type, including behind a field
+///     of an element. Retraction means the destructor never runs, where
+///     `--interp` keeps a real `Value` and drops it — trading this row's
+///     divergence for a new one. The nested rows are the load-bearing ones: a
+///     shallow "does this type have a Drop impl" check passes them.
+///   - a stdlib name outside `SLOT_TRANSFER_STDLIB_TYPES`. `DataFrame` and
+///     `Interner` are opaque handles whose declared shape is a lie about their
+///     storage; others hold an OS resource whose release is observable. The
+///     guard is a whitelist so an unlisted name fails CLOSED, back to
+///     pass-through.
+///   - a binding whose own type is `shared`. The transfer argument holds for
+///     it (retracting the dec HOLDS the reference), but REPLAY does not:
+///     `register_var_from_type_expr` re-registers the name as an inline
+///     struct, so `s.n` GEPs the slot and reads the pointer's own bits.
+///     Measured garbage where `--interp` printed `3`. Tracked as B-2026-09-01-31.
+#[test]
+fn repl_jit_slot_transfer_tier_declines_drop_bearing_and_unlisted_types() {
+    let drop_impl =
+        "struct D { n: i64 }\nimpl Drop for D { fn drop(mut ref self) { println(f\"dD\"); } }";
+    for (items, decl) in [
+        (drop_impl.to_string(), "let mut v: Vec[D] = Vec.new();"),
+        // Drop one level down, behind a wrapper's field.
+        (
+            format!("{drop_impl}\nstruct W {{ d: D }}"),
+            "let mut v: Vec[W] = Vec.new();",
+        ),
+        (
+            format!("{drop_impl}\nstruct W {{ d: D }}"),
+            "let mut o: Option[W] = Option.None;",
+        ),
+        (drop_impl.to_string(), "let mut m: Map[i64, D] = Map.new();"),
+        // Opaque stdlib handles — not on the whitelist.
+        (String::new(), "let mut d = DataFrame.new();"),
+        (String::new(), "let mut i = Interner.new();"),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        if !items.is_empty() {
+            let r = s.evaluate_cell_captured(&items);
+            assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        }
         let r = s.evaluate_cell_captured(decl);
         assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
         assert!(
             r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
-            "{decl} must stay on pass-through — its payload's cleanup is not \
-             the retractable overlay; notes: {:?}",
+            "{decl} must stay on pass-through; notes: {:?}",
             r.notes,
+        );
+    }
+}
+
+/// B-2026-08-30-7 — a `shared` binding is declined at the TOP LEVEL ONLY; as a
+/// component it rides the tier correctly.
+///
+/// Worth its own test because the distinction is easy to lose on a later edit,
+/// and losing it in either direction is a regression: widening it back to a
+/// direct `shared` binding reintroduces the garbage reads, and narrowing it to
+/// exclude `shared` as a component would silently drop `struct W { s: S }` and
+/// `Vec[S]` — both measured correct — back to pass-through.
+#[test]
+fn repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding() {
+    let items = "shared struct S { n: i64 }\nstruct W { s: S }\nfn mks() -> S { S { n: 6 } }";
+    // Component: admitted.
+    for decl in [
+        "let mut v: Vec[S] = Vec.new();",
+        "let mut vw: Vec[W] = Vec.new();",
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        let r = s.evaluate_cell_captured(items);
+        assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "`shared` as a COMPONENT must reach the tier for `{decl}`; notes: {:?}",
+            r.notes,
+        );
+    }
+    // Binding: declined. Asserted on the VALUE rather than the note, because
+    // an immutable binding with a constructor-shaped initializer deliberately
+    // does not warn — and the value is what the decline is protecting.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("shared struct S { n: i64 }");
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let sv: S = S { n: 3 };");
+    assert!(r.errors.is_empty(), "decl: {:?}", r.errors);
+    for round in 1..=2 {
+        let r = s.evaluate_cell_captured("println(f\"{sv.n}\");");
+        assert!(r.errors.is_empty(), "read round {round}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.trim(),
+            "3",
+            "round {round}: a direct `shared` binding must stay on \
+             pass-through, which re-evaluates the initializer and reads `3` — \
+             admitting it to the tier printed a pointer's bits (B-2026-09-01-31); \
+             stdout: {:?}",
+            r.stdout,
         );
     }
 }

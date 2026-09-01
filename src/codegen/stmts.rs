@@ -15071,7 +15071,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if kind.needs_value_type() {
             if let Some(te) = self.snapshot_value_types.get(name).cloned() {
                 self.register_var_from_type_expr(name, &te);
-                if matches!(kind, super::SnapshotPrimKind::InlineEnvelope) {
+                if matches!(
+                    kind,
+                    super::SnapshotPrimKind::InlineEnvelope | super::SnapshotPrimKind::SlotTransfer
+                ) {
                     self.register_replayed_inline_envelope_payload(name, &te);
                 }
             }
@@ -15234,7 +15237,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // halves untouched.
         if matches!(
             kind,
-            super::SnapshotPrimKind::ByValue | super::SnapshotPrimKind::InlineEnvelope
+            super::SnapshotPrimKind::ByValue
+                | super::SnapshotPrimKind::InlineEnvelope
+                | super::SnapshotPrimKind::SlotTransfer
         ) && slot.ty != self.snapshot_storage_type(name, kind)
         {
             return;
@@ -15320,6 +15325,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // corrupted length AND an unsuppressed free.
         if matches!(kind, super::SnapshotPrimKind::InlineEnvelope) {
             self.retract_inline_envelope_payload_cleanup(slot.ptr);
+        }
+        // B-2026-08-30-7: the general kind retracts WHATEVER is queued for the
+        // slot, which is what lets one kind cover the whole remainder of the
+        // tier instead of a variant per container shape. See
+        // `SnapshotPrimKind::SlotTransfer`.
+        if matches!(kind, super::SnapshotPrimKind::SlotTransfer) {
+            self.retract_all_cleanup_for_slot(slot.ptr);
         }
     }
 
@@ -15426,7 +15438,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // aggregate, so the global's storage question has the same answer.
             // The two kinds diverge only at capture, where this one retracts
             // the payload overlay.
-            super::SnapshotPrimKind::ByValue | super::SnapshotPrimKind::InlineEnvelope => self
+            super::SnapshotPrimKind::ByValue
+            | super::SnapshotPrimKind::InlineEnvelope
+            // B-2026-08-30-7: the general kind stores its slot verbatim too.
+            | super::SnapshotPrimKind::SlotTransfer => self
                 .snapshot_value_types
                 .get(name)
                 .map(|te| self.llvm_type_for_type_expr(te))
@@ -15494,7 +15509,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::ByValue
             // B-2026-08-30-7: identity for the same reason — the global's
             // type IS the slot's type for an inline envelope too.
-            | super::SnapshotPrimKind::InlineEnvelope => Ok(loaded),
+            | super::SnapshotPrimKind::InlineEnvelope
+            | super::SnapshotPrimKind::SlotTransfer => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -15531,7 +15547,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::ByValue
             // B-2026-08-30-7: identity for the same reason — the global's
             // type IS the slot's type for an inline envelope too.
-            | super::SnapshotPrimKind::InlineEnvelope => Ok(loaded),
+            | super::SnapshotPrimKind::InlineEnvelope
+            | super::SnapshotPrimKind::SlotTransfer => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -15627,7 +15644,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // `emit_free_vec_buffer_body` checks before freeing. So an
             // uncaptured envelope global consumed by accident frees nothing on
             // either shape.
-            super::SnapshotPrimKind::ByValue | super::SnapshotPrimKind::InlineEnvelope => {
+            super::SnapshotPrimKind::ByValue
+            | super::SnapshotPrimKind::InlineEnvelope
+            // B-2026-08-30-7: and for the general kind, whose zero is a null
+            // handle / a `cap == 0` triple / a zero tag depending on the type —
+            // each of which is the same "frees nothing" sentinel the arms above
+            // rely on.
+            | super::SnapshotPrimKind::SlotTransfer => {
                 g.set_initializer(&Self::const_zero_of(ty));
             }
         }

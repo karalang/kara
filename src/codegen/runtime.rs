@@ -10836,6 +10836,91 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_cleanup_action(action_ref, fn_val, vec_ty, ptr_ty, i64_t);
     }
 
+    /// B-2026-08-30-7: the SLOT a cleanup action would free, or `None` for an
+    /// action that frees no value bound to a slot.
+    ///
+    /// Two consumers, deliberately sharing one match rather than each writing
+    /// its own. `record_drop_obs` needs it to name the place it records;
+    /// `retract_all_cleanup_for_slot` needs it to decide what a REPL snapshot
+    /// capture is transferring away. The second use is a CORRECTNESS one — a
+    /// variant this match forgets is a buffer freed out from under a snapshot
+    /// global — so it is exhaustive with no `_` arm, and adding a
+    /// `CleanupAction` variant is a compile error here until its slot is
+    /// declared.
+    ///
+    /// The four `None` arms are not omissions: a user `defer` / `errdefer`
+    /// block, a provider-stack pop, and a mutex release each run at scope exit
+    /// without owning a value the binding could hand to a global. That is also
+    /// the structural fact the snapshot transfer rests on — every action that
+    /// frees a LOCAL's value is registered by a `track_*` call that takes that
+    /// local's slot, so "retract everything keyed on this slot" is the whole
+    /// handshake rather than an approximation of it.
+    fn cleanup_action_slot(action: &CleanupAction<'ctx>) -> Option<PointerValue<'ctx>> {
+        match action {
+            CleanupAction::FreeVecBuffer { vec_alloca, .. } => Some(*vec_alloca),
+            CleanupAction::StructDrop { struct_alloca, .. } => Some(*struct_alloca),
+            CleanupAction::EnumDrop { enum_alloca, .. } => Some(*enum_alloca),
+            CleanupAction::FreeMapHandle { map_alloca, .. } => Some(*map_alloca),
+            CleanupAction::FreeTensor { tensor_alloca } => Some(*tensor_alloca),
+            CleanupAction::FreeColumn { column_alloca, .. } => Some(*column_alloca),
+            CleanupAction::FreeDataFrame { df_alloca } => Some(*df_alloca),
+            CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(*soa_alloca),
+            CleanupAction::FreeFileHandle { file_alloca } => Some(*file_alloca),
+            CleanupAction::FreeMapIter { iter_alloca } => Some(*iter_alloca),
+            CleanupAction::ReleaseLazyExpr { alloca }
+            | CleanupAction::ReleaseLazyPlan { alloca }
+            | CleanupAction::ReleaseLazyGroupBy { alloca } => Some(*alloca),
+            CleanupAction::FreeGpuBuffer { buf_alloca } => Some(*buf_alloca),
+            CleanupAction::FreeOnceHandle { once_alloca, .. } => Some(*once_alloca),
+            CleanupAction::FreeInternerHandle { interner_alloca } => Some(*interner_alloca),
+            CleanupAction::FreeArenaHandle { arena_alloca } => Some(*arena_alloca),
+            CleanupAction::FreeClosureEnv { fat_alloca } => Some(*fat_alloca),
+            CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(*chan_alloca),
+            CleanupAction::FreeInlineOptionPayload { option_slot, .. } => Some(*option_slot),
+            CleanupAction::FreeInlineResultPayload { result_slot, .. } => Some(*result_slot),
+            CleanupAction::FreeInlineOptionMapPayload { option_slot, .. } => Some(*option_slot),
+            CleanupAction::RcDec { ptr, .. } => Some(*ptr),
+            CleanupAction::RcDecOption { option_slot, .. } => Some(*option_slot),
+            CleanupAction::BoxedEnumDrop { enum_slot, .. }
+            | CleanupAction::NestedBoxedEnumDrop { enum_slot, .. } => Some(*enum_slot),
+            CleanupAction::FreeSharedElided { ptr, .. } => Some(*ptr),
+            CleanupAction::FreeClusterWalk { ptr, .. } => Some(*ptr),
+            CleanupAction::FreeClusterWalkOption { option_slot, .. } => Some(*option_slot),
+            CleanupAction::UserDrop { binding_ptr, .. } => Some(*binding_ptr),
+            CleanupAction::UserDefer(_)
+            | CleanupAction::ProviderPop
+            | CleanupAction::UserErrDefer { .. }
+            | CleanupAction::ReleaseMutex { .. } => None,
+        }
+    }
+
+    /// B-2026-08-30-7: drop EVERY queued cleanup action keyed on `slot` from
+    /// every live cleanup frame.
+    ///
+    /// The general form of `retract_map_handle_cleanup` and
+    /// `retract_inline_envelope_payload_cleanup`, which each retract one
+    /// variant. Those two exist because their kinds landed before the shared
+    /// `cleanup_action_slot` accessor did; this one is what a new snapshot kind
+    /// should reach for, because it needs no per-type knowledge of WHICH action
+    /// a value's cleanup happens to use.
+    ///
+    /// Called at END OF CELL, after the value has been stored into the snapshot
+    /// global, so what it owns outlives the frame that would otherwise free it
+    /// — ownership passes to the JITDylib and is reclaimed when that is torn
+    /// down (runner death / `:reset` / cross-cell shadow), the policy String
+    /// and Vec have followed since B.5.2.
+    ///
+    /// Scans every frame rather than the innermost, for the reason its two
+    /// predecessors do: the action is queued at whichever frame was open when
+    /// the binding was tracked, which for a top-level REPL `let` is `main`'s
+    /// outermost frame but is not guaranteed to be the frame current at
+    /// capture time.
+    pub(super) fn retract_all_cleanup_for_slot(&mut self, slot: PointerValue<'ctx>) {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| Self::cleanup_action_slot(action) != Some(slot));
+        }
+    }
+
     /// Read-only drop-observability tap (ownership-model-mechanization Slice 4
     /// down-payment — see `src/codegen/drop_obs.rs`). Records the `(function,
     /// place)` of each *compiler-internal* heap drop this funnel emits, so the
@@ -10869,38 +10954,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             p.get_name().to_str().unwrap_or("").to_string()
         };
+        // B-2026-08-30-7: the slot comes from the shared `cleanup_action_slot`
+        // accessor rather than a second copy of the same match. The name-
+        // carrying variants keep their own arm below, because for those the
+        // action's recorded `name` is a BETTER answer than a reverse lookup:
+        // it is the binding name the tracker saw, and it survives the binding
+        // going out of `variables`.
         let place: Option<String> = match action {
-            CleanupAction::ProviderPop => None,
-            CleanupAction::FreeVecBuffer { vec_alloca, .. } => Some(name_of(*vec_alloca)),
-            CleanupAction::StructDrop { struct_alloca, .. } => Some(name_of(*struct_alloca)),
-            CleanupAction::EnumDrop { enum_alloca, .. } => Some(name_of(*enum_alloca)),
-            CleanupAction::FreeMapHandle { map_alloca, .. } => Some(name_of(*map_alloca)),
-            CleanupAction::FreeTensor { tensor_alloca } => Some(name_of(*tensor_alloca)),
-            CleanupAction::FreeColumn { column_alloca, .. } => Some(name_of(*column_alloca)),
-            CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
-            CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
-            CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
-            CleanupAction::FreeMapIter { iter_alloca } => Some(name_of(*iter_alloca)),
-            CleanupAction::ReleaseLazyExpr { alloca }
-            | CleanupAction::ReleaseLazyPlan { alloca }
-            | CleanupAction::ReleaseLazyGroupBy { alloca } => Some(name_of(*alloca)),
-            CleanupAction::FreeGpuBuffer { buf_alloca } => Some(name_of(*buf_alloca)),
-            CleanupAction::FreeOnceHandle { once_alloca, .. } => Some(name_of(*once_alloca)),
-            CleanupAction::FreeInternerHandle { interner_alloca } => {
-                Some(name_of(*interner_alloca))
-            }
-            CleanupAction::FreeArenaHandle { arena_alloca } => Some(name_of(*arena_alloca)),
-            CleanupAction::FreeClosureEnv { fat_alloca } => Some(name_of(*fat_alloca)),
-            CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(name_of(*chan_alloca)),
-            CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
-                Some(name_of(*option_slot))
-            }
-            CleanupAction::FreeInlineResultPayload { result_slot, .. } => {
-                Some(name_of(*result_slot))
-            }
-            CleanupAction::FreeInlineOptionMapPayload { option_slot, .. } => {
-                Some(name_of(*option_slot))
-            }
             CleanupAction::RcDec { name, .. }
             | CleanupAction::RcDecOption { name, .. }
             | CleanupAction::BoxedEnumDrop { name, .. }
@@ -10909,9 +10969,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | CleanupAction::FreeClusterWalk { name, .. }
             | CleanupAction::FreeClusterWalkOption { name, .. } => Some(name.clone()),
             CleanupAction::UserDrop { binding_name, .. } => Some(binding_name.clone()),
-            CleanupAction::UserDefer(_)
-            | CleanupAction::UserErrDefer { .. }
-            | CleanupAction::ReleaseMutex { .. } => None,
+            other => Self::cleanup_action_slot(other).map(name_of),
         };
         if let Some(place) = place {
             let fn_name = fn_val.get_name().to_str().unwrap_or("");

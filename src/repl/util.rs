@@ -968,10 +968,84 @@ pub(super) fn parse_let_binding_names(let_src: &str) -> std::collections::HashSe
 /// need its own cross-cell ownership story (the global holds a
 /// heap pointer; who runs the destructor? when?), which is a
 /// dedicated slice of work each.
+/// Slice c-repl.B.5.1: classify a typechecker `Type` as snapshot-eligible.
+///
+/// Four tiers, tried in order, each narrower-but-better-proven than the next:
+///   1. the six BESPOKE kinds (`bespoke_snapshot_kind`) — hand-written storage
+///      and suppression per shape, and the ones whose globals predate the
+///      later tiers, so they keep first claim on a type.
+///   2. `InlineEnvelope` — an `Option`/`Result` over a `{ptr,len,cap}` payload.
+///   3. `ByValue` — no heap and no refcount anywhere inside.
+///   4. `SlotTransfer` — the general case: whatever cleanup is queued for the
+///      binding's slot is retracted wholesale.
+///
+/// The ORDER is load-bearing in one direction only: a type must not fall to a
+/// later tier than the one a previous session's cell classified it under, or a
+/// global written at one width would be read at another. Falling THROUGH is
+/// the fix this dispatcher exists for — the bespoke `Vec`/`Map`/`Set` arms used
+/// to be reached as `match` arms whose inner classification could fail, and a
+/// failed inner match still consumed the outer arm and returned `None`. That is
+/// why `Vec[Vec[i64]]` stayed on pass-through even after a general kind existed
+/// to take it: nothing was wrong with the general rule, the type never reached
+/// it. Asking each tier a question that can be answered `None` and then
+/// continuing is what makes tiers compose.
 #[cfg(feature = "llvm")]
 pub(super) fn snapshot_kind_for_type(
     ty: &crate::typechecker::Type,
     by_value: &ByValueCtx<'_>,
+) -> Option<crate::codegen::SnapshotPrimKind> {
+    use crate::codegen::SnapshotPrimKind;
+    if let Some(kind) = bespoke_snapshot_kind(ty) {
+        return Some(kind);
+    }
+    if inline_envelope_payload_class(ty, by_value) {
+        return Some(SnapshotPrimKind::InlineEnvelope);
+    }
+    if by_value.is_by_value(ty, 0) {
+        return Some(SnapshotPrimKind::ByValue);
+    }
+    // B-2026-08-30-7: a binding whose OWN type is `shared` / `Rc` / `Arc` is
+    // declined, and only at the top level — as a COMPONENT each is fine and is
+    // measured so (`struct W { s: S }` and `Vec[shared S]` both round-trip
+    // correctly through `SlotTransfer`).
+    //
+    // The transfer argument holds for these: retracting the `RcDec` HOLDS the
+    // reference rather than dropping it, so the global owns one and nothing can
+    // free the object under it — the dangle this tier feared comes from copying
+    // the pointer WITHOUT retracting, which is the opposite move. What does not
+    // hold is REPLAY. A direct `shared` binding's slot is a pointer to the RC
+    // object and its field reads go through the shared dispatch channel;
+    // `register_var_from_type_expr` re-registers the name as an INLINE struct,
+    // so `s.n` GEPs the slot itself and reads the pointer's own bits. Measured:
+    // `shared struct S { n: i64 }; let s = S { n: 3 };` then `println(s.n)` in
+    // two later cells printed `43825771313` and `94568180881400` where
+    // `--interp` printed `3` twice. That is a WORSE failure than the
+    // pass-through divergence it would replace (which prints the initializer —
+    // wrong, but a plausible number), so the shape stays out until the replay
+    // registration it needs exists. Tracked as its own row rather than buried
+    // here; see B-2026-09-01-31.
+    //
+    // `Rc[T]` / `Arc[T]` ride along because they are the same handshake, and
+    // because neither is reachable as a REPL surface type today (`Rc.new(...)`
+    // is an undefined name), so admitting them would be shipping an unmeasured
+    // claim.
+    if matches!(
+        ty,
+        crate::typechecker::Type::Shared(_)
+            | crate::typechecker::Type::Rc(_)
+            | crate::typechecker::Type::Arc(_)
+    ) {
+        return None;
+    }
+    if by_value.is_slot_transfer(ty, 0) {
+        return Some(SnapshotPrimKind::SlotTransfer);
+    }
+    None
+}
+
+#[cfg(feature = "llvm")]
+fn bespoke_snapshot_kind(
+    ty: &crate::typechecker::Type,
 ) -> Option<crate::codegen::SnapshotPrimKind> {
     use crate::codegen::{SnapshotPrimKind, VecElemKind};
     use crate::typechecker::{FloatSize, IntSize, Type};
@@ -1043,35 +1117,46 @@ pub(super) fn snapshot_kind_for_type(
             Type::Str => Some(SnapshotPrimKind::Set(VecElemKind::String)),
             _ => None,
         },
-        // B-2026-08-30-7: an `Option` / `Result` whose payload owns a
-        // `{ptr,len,cap}` buffer. The slot is the seeded inline
-        // `{ tag, w0, w1, w2 }` envelope — a fixed 32-byte constant, so the
-        // global's width is stable across cells the way the by-value arm
-        // needs — and the payload buffer's ENTIRE cleanup is one queued
-        // `FreeInline{Option,Result}Payload` on that slot, which capture
-        // retracts. See `SnapshotPrimKind::InlineEnvelope`.
-        //
-        // Ordered BEFORE the by-value arm only for readability: the two
-        // classes are disjoint by construction, since `is_by_value` is false
-        // for any payload this arm accepts.
-        other if inline_envelope_payload_class(other, by_value) => {
-            Some(SnapshotPrimKind::InlineEnvelope)
-        }
-        // B-2026-08-30-7: everything else that is BY VALUE — no heap and
-        // no RC pointer anywhere inside — snapshots with a plain
-        // store/load and no ownership handshake at all. See
-        // `is_by_value_snapshot_type` for the exact class and
-        // `SnapshotPrimKind::ByValue` for why it needs no handshake.
-        //
-        // Ordered LAST so the six bespoke kinds above keep their own
-        // arms: `i64` stays `I64` rather than becoming `ByValue`, which
-        // keeps their storage widths and their capture-side suppression
-        // exactly as measured, and keeps a global written by a
-        // pre-B-2026-08-30-7 cell readable by a post one.
-        other if by_value.is_by_value(other, 0) => Some(SnapshotPrimKind::ByValue),
         _ => None,
     }
 }
+
+/// B-2026-08-30-7: stdlib type names the general `SlotTransfer` kind admits.
+///
+/// A WHITELIST, and the reason is the one the by-value walk gives for its
+/// session-declared rule: several baked stdlib types are opaque handles whose
+/// declared shape is a lie about their storage (`DataFrame`, `Interner`), and
+/// others hold an OS or device resource whose release is OBSERVABLE rather
+/// than a buffer anyone is content to leak until JITDylib teardown — a `File`
+/// that never closes, a channel end that never drops, a GPU buffer that never
+/// frees. "Retract the cleanup and let the JITDylib reclaim it" is a policy
+/// that fits memory and does not fit those.
+///
+/// Inverting this to a blacklist of the unsafe names would make correctness
+/// depend on that list being exhaustive, and a name nobody remembered to add
+/// would fail OPEN — a dangling handle or a leaked fd. This fails closed,
+/// back to pass-through, which is wrong-but-bounded and still warns.
+///
+/// `Ordering` is here specifically: the by-value tier measured it as
+/// genuinely by-value yet kept it out, because its session-declared rule
+/// could not tell a stdlib VALUE type from a stdlib opaque handle. Naming it
+/// is that answer.
+#[cfg(feature = "llvm")]
+const SLOT_TRANSFER_STDLIB_TYPES: &[&str] = &[
+    // Containers whose entire storage hangs off one slot-keyed action.
+    "Vec",
+    "VecDeque",
+    "Map",
+    "Set",
+    "SortedMap",
+    "SortedSet",
+    // Generic built-in envelopes.
+    "Option",
+    "Result",
+    // Stdlib VALUE enums — no heap, no handle, admitted by name because the
+    // session-declared rule cannot see they are safe.
+    "Ordering",
+];
 
 /// B-2026-08-30-7: is `ty` an `Option` / `Result` whose lowered slot is the
 /// seeded inline envelope and whose heap-carrying payload is one the
@@ -1269,6 +1354,114 @@ impl ByValueCtx<'_> {
                             VariantTypeInfo::Struct(fields) => {
                                 fields.iter().all(|(_, t)| self.is_by_value(t, depth + 1))
                             }
+                        });
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-08-30-7: is `ty` a type whose ENTIRE cleanup is reachable from
+    /// the binding's own slot, so that retracting every action keyed on that
+    /// slot hands the whole value to the snapshot global?
+    ///
+    /// That is the eligibility rule for
+    /// [`crate::codegen::SnapshotPrimKind::SlotTransfer`], and it is a
+    /// different question from [`Self::is_by_value`]'s. That one asks whether
+    /// there is any heap AT ALL (a yes means nothing to transfer); this one
+    /// asks whether the heap there is has exactly one owner to retract. Most
+    /// of this row's remaining list turned out to be the second question
+    /// answered yes, not the first answered no — which is why it closes as one
+    /// kind rather than six.
+    ///
+    /// Members: `String`; the whitelisted stdlib containers over eligible
+    /// arguments (`Vec[Vec[i64]]`, `Map[K, Vec[V]]`, `Set[<user struct>]`,
+    /// `SortedMap`/`SortedSet`); `Option`/`Result` over eligible payloads,
+    /// including the AGGREGATE payloads the `InlineEnvelope` kind declines;
+    /// tuples and arrays of eligible elements; `Rc`/`Arc`/`shared` over
+    /// eligible pointees; a closure; a session-declared `struct`/`enum` whose
+    /// every field / variant payload is eligible; and the whitelisted stdlib
+    /// value enums.
+    ///
+    /// Non-members, each because retraction would NOT be a complete transfer
+    /// or would trade this row's divergence for a worse one:
+    ///   - a user `impl Drop` anywhere inside: capture hands the value to a
+    ///     global nobody tears down, so the destructor would never run, where
+    ///     `--interp` keeps a real `Value` and drops it.
+    ///   - a BORROW — `ref`/`mut ref`/`Slice`/`Pointer`/`Weak`. The referent is
+    ///     owned by a DIFFERENT slot, so there is nothing here to retract and
+    ///     the global would hold a pointer whose owner dies at end of cell.
+    ///     This is the one shape where the transfer argument fails outright
+    ///     rather than merely being unproven.
+    ///   - a GENERIC type: no single lowered layout to size a global with.
+    ///   - any stdlib name outside `SLOT_TRANSFER_STDLIB_TYPES` — see that
+    ///     list for why the guard is a whitelist.
+    ///
+    /// `depth` bounds the recursion for the reason `is_by_value` does: a user
+    /// `struct` may reference another by name and a declaration cycle would
+    /// otherwise walk forever.
+    pub(super) fn is_slot_transfer(&self, ty: &crate::typechecker::Type, depth: u32) -> bool {
+        use crate::typechecker::{Type, VariantTypeInfo};
+        if depth > 8 {
+            return false;
+        }
+        let ok = |t: &Type| self.is_slot_transfer(t, depth + 1);
+        match ty {
+            Type::Str => true,
+            // Every by-value shape is trivially slot-transferable (there is
+            // nothing queued to retract). Reached only as a COMPONENT here —
+            // a whole binding of one takes the `ByValue` arm first.
+            t if self.is_by_value(t, depth) => true,
+            Type::Tuple(elems) => !elems.is_empty() && elems.iter().all(ok),
+            Type::Array { element, .. } => ok(element),
+            // A closure is a fat `{fn_ptr, env_ptr}` whose environment is freed
+            // by a single `FreeClosureEnv` on the slot.
+            Type::Function { .. } | Type::OnceFunction { .. } => true,
+            // An RC pointee: retracting the dec HOLDS the reference rather than
+            // dropping it, so the global owns one and the object cannot be
+            // freed under it. The dangle this tier feared comes from copying
+            // the pointer WITHOUT retracting, which is the opposite move.
+            Type::Rc(inner) | Type::Arc(inner) => ok(inner),
+            Type::Shared(name) => {
+                if self.drop_types.contains(name) || !self.user_declared.contains(name) {
+                    return false;
+                }
+                match self.structs.get(name) {
+                    Some(si) => {
+                        si.generic_params.is_empty()
+                            && !si.defining_stdlib_origin
+                            && si.fields.iter().all(|(_, fty, _)| ok(fty))
+                    }
+                    None => false,
+                }
+            }
+            Type::Named { name, args } => {
+                if self.drop_types.contains(name) {
+                    return false;
+                }
+                if super::util::SLOT_TRANSFER_STDLIB_TYPES.contains(&name.as_str()) {
+                    return args.iter().all(ok);
+                }
+                if !self.user_declared.contains(name) {
+                    return false;
+                }
+                if let Some(si) = self.structs.get(name) {
+                    return !si.is_par
+                        && !si.defining_stdlib_origin
+                        && si.generic_params.is_empty()
+                        && args.is_empty()
+                        && si.fields.iter().all(|(_, fty, _)| ok(fty));
+                }
+                if let Some(ei) = self.enums.get(name) {
+                    return !ei.is_par
+                        && !ei.defining_stdlib_origin
+                        && ei.generic_params.is_empty()
+                        && args.is_empty()
+                        && ei.variants.iter().all(|(_, v)| match v {
+                            VariantTypeInfo::Unit => true,
+                            VariantTypeInfo::Tuple(tys) => tys.iter().all(ok),
+                            VariantTypeInfo::Struct(fields) => fields.iter().all(|(_, t)| ok(t)),
                         });
                 }
                 false
