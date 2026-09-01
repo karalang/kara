@@ -2510,14 +2510,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     if te.map(|t| self.display_field_is_leaf(t)).unwrap_or(false) {
                         parts.push(P::Expr(Box::new(field_expr), None));
                     } else {
+                        // B-2026-08-31-16 — render the field's type in SOURCE
+                        // syntax. This was a Rust `{:?}` of the `TypeExpr`,
+                        // spans and byte offsets included, running to several
+                        // hundred characters for a one-line construct and never
+                        // once naming `Vec[i64]` in a form the author wrote.
+                        //
+                        // The row supposed a formatter had to be written for
+                        // this. It did not: `crate::formatter::render_type_expr`
+                        // already existed and was already used TWICE in this
+                        // file, a few hundred lines up, for exactly this job.
                         let tdesc = te
-                            .map(|t| format!("{:?}", t.kind))
+                            .map(crate::formatter::render_type_expr)
                             .unwrap_or_else(|| "<unknown>".to_string());
                         return Err(format!(
-                            "Display codegen for struct '{type_name}': field '{fname}' has a \
-                             type ({tdesc}) whose Display is not yet supported under `karac build` \
+                            "Display codegen for struct '{type_name}': field '{fname}' has type \
+                             `{tdesc}`, whose Display is not yet supported under `karac build` \
                              (only primitives, String, and nested Display structs are supported; \
-                             Vec/Map/Set/enum/tuple fields are tracked as subtask 5 follow-on)"
+                             Vec/Map/Set/enum/tuple fields are tracked as subtask 5 follow-on). \
+                             The tree-walk backend (`karac run --interp`) renders it."
                         ));
                     }
                 }

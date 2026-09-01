@@ -35719,3 +35719,69 @@ fn generic_option_vec_instantiation_refuses_without_ice() {
         "expected the structured Display refusal its `Array`/`Slice` siblings get:\n{stderr}"
     );
 }
+
+/// B-2026-08-31-16 — a derived-`Display` refusal names the field's type in
+/// SOURCE syntax, not as a Rust `{:?}` of its `TypeExpr`.
+///
+/// The message used to emit the AST Debug — spans and byte offsets included —
+/// running to several hundred characters for a one-line construct and never
+/// once naming `Vec[i64]` in a form the author wrote.
+///
+/// THE ROW SUPPOSED A FORMATTER HAD TO BE WRITTEN. It did not:
+/// `crate::formatter::render_type_expr` already existed and was already used
+/// TWICE in the same file, a few hundred lines above this site. The row also
+/// named a sibling message in `expr_ops.rs` that does not exist — the four
+/// `{:?}` uses there are on `BinaryOp`, a small enum, not a type.
+///
+/// The REFUSAL is not what changed and is still correct: `Vec`/`Map`/`Set`/
+/// tuple fields of a derived-Display struct are the subtask-5 follow-on the
+/// message names. Asserted per shape because the row measured three and left
+/// `Set` unprobed; it behaves identically.
+///
+/// The `--interp` sentence is asserted too, because a diagnostic that promises
+/// a workaround should be checked against the workaround actually working.
+#[test]
+fn derived_display_refusal_names_the_field_type_in_source_syntax() {
+    let tmp = std::env::temp_dir();
+    let cases: [(&str, &str, &str); 4] = [
+        ("vec", "Vec[i64]", "[1, 2]"),
+        ("map", "Map[String, i64]", "Map.new()"),
+        ("tuple", "(i64, i64)", "(1, 2)"),
+        ("set", "Set[i64]", "Set.new()"),
+    ];
+    for (label, ty, init) in cases {
+        let name = format!("karac_dd_{label}.kara");
+        let f = tmp.join(&name);
+        let src = format!(
+            "#[derive(Display)]\nstruct Holder {{ n: i64, f: {ty} }}\n\
+             fn main() {{ let h: Holder = Holder {{ n: 1, f: {init} }}; println(f\"{{h}}\") }}\n"
+        );
+        if std::fs::write(&f, src).is_err() {
+            return;
+        }
+        let out = match karac_bin()
+            .current_dir(&tmp)
+            .args(["build", &name])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return,
+        };
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "[{label}] the refusal itself is unchanged and must still fire:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("has type `{ty}`")),
+            "[{label}] expected the field type in source syntax:\n{stderr}"
+        );
+        // The AST Debug's unmistakable fingerprints.
+        for leaked in ["PathExpr", "TypeExpr", "generic_args", "offset:"] {
+            assert!(
+                !stderr.contains(leaked),
+                "[{label}] AST Debug fragment `{leaked}` reached the user:\n{stderr}"
+            );
+        }
+    }
+}
