@@ -124797,6 +124797,30 @@ fn main() {
                  fn take() -> i64 { return go(0); }",
                 "dR7\ndR8\nv=7\n",
             ),
+            // B-2026-09-01-7 — the NO-`else` spelling, which was the one cell
+            // of this family where the backends DISAGREED: the interpreter ran
+            // two bodies where both compiled backends ran one, so an A/B gate
+            // would have caught it while its two-tail siblings (doubling
+            // everywhere) slipped past as an agreed gap. Closed by the same
+            // change, because the interpreter's bare-statement `If` arm reaches
+            // the taken-arm disarm exactly as the two-tail spelling does.
+            // Measured at `e49a85f^`: interp `dR7 dR7`, AOT `dR7`.
+            (
+                "DISCARDED no-`else` `if`, arm literal consumes a local",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 if n == 0 { S { r: t, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "DISCARDED no-`else` `if`, arm NOT taken: the local dies on its own",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 if n == 0 { S { r: t, k: 1 } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(3); }",
+                "dR7\nv=7\n",
+            ),
             (
                 "DISCARDED, ELSE taken: the unconsumed source dies on its own",
                 "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
