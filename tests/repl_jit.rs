@@ -522,7 +522,7 @@ fn repl_jit_passthrough_binding_warns_at_the_declaring_cell() {
     // Through a helper rather than `v.push(D { n: 1 });`: a struct literal as
     // a call argument, alone in a cell, resolves as `undefined name 'v'` on
     // BOTH backends — an unrelated REPL cell-classification bug, filed as
-    // B-2026-09-01-32.
+    // B-2026-09-01-37.
     let r2 = s.evaluate_cell_captured("v.push(mkd());");
     assert!(r2.errors.is_empty(), "mutate cell: {:?}", r2.errors);
     assert!(
@@ -2048,7 +2048,7 @@ fn repl_jit_slot_transfer_repeated_reads_do_not_free_the_snapshot() {
 ///     it (retracting the dec HOLDS the reference), but REPLAY does not:
 ///     `register_var_from_type_expr` re-registers the name as an inline
 ///     struct, so `s.n` GEPs the slot and reads the pointer's own bits.
-///     Measured garbage where `--interp` printed `3`. Tracked as B-2026-09-01-31.
+///     Measured garbage where `--interp` printed `3`. Tracked as B-2026-09-01-36.
 #[test]
 fn repl_jit_slot_transfer_tier_declines_drop_bearing_and_unlisted_types() {
     let drop_impl =
@@ -2130,7 +2130,7 @@ fn repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding() {
             "3",
             "round {round}: a direct `shared` binding must stay on \
              pass-through, which re-evaluates the initializer and reads `3` — \
-             admitting it to the tier printed a pointer's bits (B-2026-09-01-31); \
+             admitting it to the tier printed a pointer's bits (B-2026-09-01-36); \
              stdout: {:?}",
             r.stdout,
         );

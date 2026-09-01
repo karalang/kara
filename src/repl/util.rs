@@ -1023,7 +1023,7 @@ pub(super) fn snapshot_kind_for_type(
     // pass-through divergence it would replace (which prints the initializer —
     // wrong, but a plausible number), so the shape stays out until the replay
     // registration it needs exists. Tracked as its own row rather than buried
-    // here; see B-2026-09-01-31.
+    // here; see B-2026-09-01-36.
     //
     // `Rc[T]` / `Arc[T]` ride along because they are the same handshake, and
     // because neither is reachable as a REPL surface type today (`Rc.new(...)`
