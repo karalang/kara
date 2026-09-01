@@ -3211,9 +3211,16 @@ impl<'a> super::Interpreter<'a> {
                     // authoritative filter).
                     self.user_fn_return_type_name(v)
                 }),
+                // B-2026-08-30-20 — a qualified callee is EITHER a unit
+                // variant (`Sig.B`) or an ASSOCIATED FN (`H.mkr(1)`). Only the
+                // first was recognised, so an argument produced by an
+                // associated call carried no owner: no `Drop` body on any
+                // backend and 76 bytes leaked at `-O0`, while the free-function
+                // producer one spelling over was correct.
                 ExprKind::Path { segments, .. } if segments.len() == 2 => self
                     .qualified_enum_variant_is_unit(&segments[0], &segments[1])
-                    .map(|_| segments[0].clone()),
+                    .map(|_| segments[0].clone())
+                    .or_else(|| self.assoc_fn_return_type_name(&segments[0], &segments[1])),
                 _ => None,
             },
             // Unit variant in path form (`consume(Sig.B)`).
@@ -3449,6 +3456,59 @@ impl<'a> super::Interpreter<'a> {
             return None;
         }
         Some(name)
+    }
+
+    /// Declared return-type HEAD name of an ASSOCIATED fn (`Type.method`),
+    /// for the same fn-returned Drop temp classification as
+    /// [`Self::user_fn_return_type_name`] (B-2026-08-30-20).
+    ///
+    /// The qualified spelling reached the classifier's `Path` arm, which
+    /// recognised only a qualified UNIT VARIANT — so `s1(H.mkr(1))` was
+    /// classified as carrying no user `Drop` and its argument had no owner on
+    /// ANY backend, where the free-function producer `s1(mkr(1))` was fine.
+    /// All backends agreeing on the omission is why no A/B parity gate could
+    /// see it; only an absolute expectation against the free spelling can.
+    ///
+    /// FAIL-CLOSED on an ambiguous name, matching the sibling lookups in this
+    /// file: an impl whose target type is not a plain path, or two impls
+    /// offering the same `Type.method`, yields `None` and leaves ownership
+    /// exactly as it was. Guessing here would run a `Drop` body against the
+    /// wrong type, which is worse than the leak it would be papering over.
+    pub(crate) fn assoc_fn_return_type_name(&self, ty: &str, method: &str) -> Option<String> {
+        let mut found: Option<String> = None;
+        for item in &self.program.items {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            // Inherent impls only: a TRAIT impl's method is dispatched on the
+            // trait, not reachable as `Type.method` in this position.
+            if imp.trait_name.is_some() {
+                continue;
+            }
+            let crate::ast::TypeKind::Path(tp) = &imp.target_type.kind else {
+                continue;
+            };
+            if tp.segments.last().map(|s| s.as_str()) != Some(ty) {
+                continue;
+            }
+            for m in imp.items.iter().filter_map(|it| match it {
+                crate::ast::ImplItem::Method(f) => Some(f),
+                _ => None,
+            }) {
+                if m.name != method {
+                    continue;
+                }
+                let ret = m.return_type.as_ref().and_then(|te| match &te.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                })?;
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(ret);
+            }
+        }
+        found
     }
 
     /// Declared return-type HEAD name of a user free function, for the

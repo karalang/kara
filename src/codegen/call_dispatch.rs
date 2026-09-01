@@ -4031,7 +4031,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // walk). Shared types stay with the rc machinery; the passthrough
         // guard at the call sites already skipped flow-through args.
         if let ExprKind::Call { callee, .. } = &arg.kind {
-            if let ExprKind::Identifier(fn_name) = &callee.kind {
+            // B-2026-08-30-21's sibling, B-2026-08-30-20 — accept BOTH callee
+            // spellings. This matched a bare `ExprKind::Identifier` only, so a
+            // free producer (`s1(mkr(1))`) was owned and the ASSOCIATED one
+            // (`s1(H.mkr(1))`, a 2-segment `Path` callee) matched nothing and
+            // was classified as carrying no user `Drop`: no body on any
+            // backend, and 76 bytes definitely lost at `-O0`.
+            //
+            // `declare_function` keys impl fns as `Type.method`, which is the
+            // same table this already reads — only the KEY had to be built
+            // from the qualified spelling.
+            let fn_key: Option<String> = match &callee.kind {
+                ExprKind::Identifier(n) => Some(n.clone()),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    Some(format!("{}.{}", segments[0], segments[1]))
+                }
+                _ => None,
+            };
+            if let Some(fn_name) = fn_key.as_ref() {
                 if let Some(ret_ty_name) = self.fn_sig.fn_return_type_names.get(fn_name).cloned() {
                     let has_user_drop = self
                         .program_snapshot

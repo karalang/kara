@@ -6167,11 +6167,73 @@ impl<'ctx> super::Codegen<'ctx> {
                                         {
                                             Some("Option".to_string())
                                         } else {
-                                            match self.type_decls.struct_types.get(target) {
-                                                Some(target_st) if *target_st == st => {
-                                                    Some(target.clone())
+                                            // B-2026-08-30-21 — ask what the
+                                            // callee RETURNS, not what type it
+                                            // is declared on.
+                                            //
+                                            // `segments[0]` is the holder, and
+                                            // it equals the return type only for
+                                            // a CONSTRUCTOR (`Type.new()`). For
+                                            // any other associated fn --
+                                            // `impl H { fn id(a: R) -> R }` --
+                                            // the two are unrelated, so the
+                                            // shape test below is a COINCIDENCE
+                                            // filter: it passes exactly when the
+                                            // holder and the real return type
+                                            // happen to share an LLVM layout,
+                                            // and then records the binding as
+                                            // the HOLDER. `let x = H.id(R { id:
+                                            // 1 })` bound `x: H`, so `x.id` died
+                                            // on "cannot resolve field 'id' on
+                                            // this receiver" -- with `H { n:
+                                            // i64 }` and `R { id: i64 }` both
+                                            // `{i64}`, which is how the repro is
+                                            // written. Give `H` an `f64` field
+                                            // instead and the same program
+                                            // builds, which is what makes this
+                                            // look like a property of `R`.
+                                            //
+                                            // The qualified entry is
+                                            // authoritative when it exists
+                                            // (`declare_function` keys impl fns
+                                            // as `Type.method`), so consult it
+                                            // first and keep the holder guess
+                                            // only for callees that never reach
+                                            // that table -- the compiler
+                                            // builtins, of which `Stats.*` above
+                                            // is one.
+                                            let key =
+                                                format!("{}.{}", segments[0], segments[1]);
+                                            let shape_ok = |n: &String| {
+                                                matches!(
+                                                    self.type_decls.struct_types.get(n.as_str()),
+                                                    Some(t) if *t == st
+                                                ) || matches!(
+                                                    self.type_decls.enum_layouts.get(n.as_str()),
+                                                    Some(l) if l.llvm_type == st
+                                                )
+                                            };
+                                            match self.fn_sig.fn_return_type_names.get(&key) {
+                                                // Declared return type wins. If
+                                                // its shape does NOT match, fall
+                                                // through to None rather than to
+                                                // the holder: an unregistered
+                                                // binding fails loudly at the use
+                                                // site, where guessing the holder
+                                                // miscompiles silently.
+                                                Some(ret) => {
+                                                    Some(ret.clone()).filter(shape_ok)
                                                 }
-                                                _ => None,
+                                                None => match self
+                                                    .type_decls
+                                                    .struct_types
+                                                    .get(target)
+                                                {
+                                                    Some(target_st) if *target_st == st => {
+                                                        Some(target.clone())
+                                                    }
+                                                    _ => None,
+                                                },
                                             }
                                         }
                                     } else {

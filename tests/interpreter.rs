@@ -230,6 +230,38 @@ fn main() {
     );
 }
 
+/// B-2026-08-30-20 — the interpreter twin of `tests/codegen.rs`'s
+/// `e2e_assoc_call_produced_argument_owns_its_value`.
+///
+/// This side had the SAME hole as codegen, one arm over: the fn-returned
+/// Drop-temp classifier recognised a qualified UNIT VARIANT (`Sig.B`) but not
+/// an associated fn (`H.mkr(1)`), so an argument produced by one carried no
+/// owner here either. All four surfaces agreeing on the omission is exactly
+/// what made the defect invisible to every A/B parity gate in the tree — the
+/// only thing that can see it is an absolute expectation against the
+/// free-function producer, which is what this asserts.
+#[test]
+fn test_assoc_call_produced_argument_owns_its_value() {
+    let hdr = "struct R { id: i64, s: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> String { return f\"pay-{i}-aaaa\" }\n\
+               fn s1(a: R) -> i64 { return 7 }\n";
+    let assoc = run(&format!(
+        "{hdr}struct H {{ n: i64 }}\n\
+         impl H {{ fn mkr(i: i64) -> R {{ return R {{ id: i, s: mk(i) }} }} }}\n\
+         fn main() {{ let v = s1(H.mkr(1)); println(f\"v={{v}}\") }}"
+    ));
+    let free = run(&format!(
+        "{hdr}fn mkr2(i: i64) -> R {{ return R {{ id: i, s: mk(i) }} }}\n\
+         fn main() {{ let v = s1(mkr2(1)); println(f\"v={{v}}\") }}"
+    ));
+    assert_eq!(free, "dR1\nv=7\n", "the free-function oracle itself moved");
+    assert_eq!(
+        assoc, free,
+        "an associated-call producer must own its argument exactly as a free one does"
+    );
+}
+
 /// B-2026-08-26-36 — `let r = ref v[i]` is a LIVE BORROW, not a snapshot.
 ///
 /// The aliasing is the contract, not an optimisation. Codegen compiles the

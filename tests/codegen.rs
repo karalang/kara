@@ -45293,6 +45293,148 @@ fn main() {
         }
     }
 
+    /// B-2026-08-30-21 — a `let` bound to an ASSOCIATED call binds the callee's
+    /// RETURN type, not the type the callee is declared on.
+    ///
+    /// The UFCS arm of the let-binding type hint read `segments[0]` — the
+    /// HOLDER — and accepted it whenever the holder's LLVM shape matched the
+    /// value's. That is a CONSTRUCTOR assumption (`Type.new()` does return
+    /// `Type`); for `impl H { fn id(a: R) -> R }` the two are unrelated, so the
+    /// shape test was a coincidence filter. When it passed, the binding was
+    /// recorded as `H` and a field read died on the loud "cannot resolve field
+    /// 'id' on this receiver"; when it failed, nothing was recorded and the
+    /// binding's own `Drop` body was silently lost.
+    ///
+    /// THE ROW CALLED THE GATE "ALL-SCALAR", AND IT IS NOT. Measured: the gate
+    /// is an LLVM-SHAPE COLLISION between the returned struct and any other
+    /// registered struct. `R { id: i64 }` fails beside `H { n: i64 }` and
+    /// SUCCEEDS beside `H { n: f64 }` — same `R`, same all-scalar-ness. A
+    /// two-scalar `R` fails just as hard when `H` matches its shape, and an
+    /// `f64` pair fails too, so it is neither about scalars nor about field
+    /// count. The row's "give `R` a heap field and it vanishes" worked only
+    /// because that changed `R`'s shape away from `H`'s. The `collide-*` cases
+    /// below are the ones that pin this; `distinct-shape` is why they are not
+    /// simply "assoc calls are broken".
+    ///
+    /// Compiled expectations only, stated as the FREE-FUNCTION oracle's answer
+    /// (`free-fn` below). The interpreter runs an EXTRA body for this shape —
+    /// B-2026-08-30-22, filed, open, and measured identical before this fix —
+    /// so twinning these against `--interp` would pin that defect's output.
+    #[test]
+    fn e2e_assoc_call_result_binds_its_return_type() {
+        let drop_impl = "impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n";
+        let cases: [(&str, String, &str); 5] = [
+            // Symptom 1: a HARD build failure before the fix.
+            (
+                "collide-field-read",
+                format!(
+                    "struct R {{ id: i64 }}\n{drop_impl}\
+                     struct H {{ n: i64 }}\n\
+                     impl H {{ fn id(a: R) -> R {{ return a }} }}\n\
+                     fn main() {{ let x = H.id(R {{ id: 1 }}); println(f\"x={{x.id}}\") }}"
+                ),
+                "x=1\ndR1\n",
+            ),
+            // Symptom 2: SILENT — no body at all before the fix.
+            (
+                "collide-lost-body",
+                format!(
+                    "struct R {{ id: i64 }}\n{drop_impl}\
+                     struct H {{ n: i64 }}\n\
+                     impl H {{ fn id(a: R) -> R {{ return a }} }}\n\
+                     fn main() {{ let x = H.id(R {{ id: 1 }}); println(\"mid\") }}"
+                ),
+                "dR1\nmid\n",
+            ),
+            // Same `R`, holder shape changed: this ALWAYS worked, and is what
+            // proves the gate is the collision rather than anything about `R`.
+            (
+                "distinct-shape",
+                format!(
+                    "struct R {{ id: i64 }}\n{drop_impl}\
+                     struct H {{ n: f64 }}\n\
+                     impl H {{ fn id(a: R) -> R {{ return a }} }}\n\
+                     fn main() {{ let x = H.id(R {{ id: 1 }}); println(f\"x={{x.id}}\") }}"
+                ),
+                "x=1\ndR1\n",
+            ),
+            // Two scalars, colliding: kills the "all-scalar"/"single-field"
+            // readings in one line.
+            (
+                "collide-two-scalars",
+                format!(
+                    "struct R {{ id: i64, k: i64 }}\n{drop_impl}\
+                     struct H {{ p: i64, q: i64 }}\n\
+                     impl H {{ fn id(a: R) -> R {{ return a }} }}\n\
+                     fn main() {{ let x = H.id(R {{ id: 1, k: 2 }}); println(f\"x={{x.id}}\") }}"
+                ),
+                "x=1\ndR1\n",
+            ),
+            // The oracle, and the CONSTRUCTOR case the old holder heuristic
+            // existed for — `P.new() -> P` must keep resolving.
+            (
+                "constructor-still-resolves",
+                format!(
+                    "struct R {{ id: i64 }}\n{drop_impl}\
+                     struct P {{ v: i64 }}\n\
+                     impl P {{ fn new(v: i64) -> P {{ return P {{ v: v }} }} }}\n\
+                     fn main() {{ let p = P.new(5); println(f\"v={{p.v}}\") }}"
+                ),
+                "v=5\n",
+            ),
+        ];
+        for (label, src, want) in cases {
+            let Some(out) = run_program(&src) else {
+                return;
+            };
+            assert_eq!(
+                out, want,
+                "[{label}] assoc-call result bound the wrong type"
+            );
+        }
+    }
+
+    /// B-2026-08-30-20 — an argument PRODUCED BY an associated call has an
+    /// owner, so its `Drop` body runs and its buffer is freed.
+    ///
+    /// `track_inline_owned_aggregate_arg` matched a bare `ExprKind::Identifier`
+    /// callee only, so `s1(H.mkr(1))` — a two-segment `Path` callee — was
+    /// classified as carrying no user `Drop`. The interpreter's classifier had
+    /// the same hole one arm over, recognising a qualified UNIT VARIANT but not
+    /// an associated fn, so ALL FOUR surfaces agreed on the omission. That is
+    /// why this is an absolute expectation against the free-function producer
+    /// rather than an A/B parity check: with every backend wrong in the same
+    /// way, no cross-backend comparison could see it, and the leak is
+    /// `-O0`-only (at `-O2` the callee ignores its parameter and LLVM deletes
+    /// the allocation, the same masking that mis-graded B-2026-08-29-54).
+    #[test]
+    fn e2e_assoc_call_produced_argument_owns_its_value() {
+        let hdr = "struct R { id: i64, s: String }\n\
+                   impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   fn mk(i: i64) -> String { return f\"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+                   fn s1(a: R) -> i64 { return 7 }\n";
+        // Associated producer — the row's shape.
+        let Some(assoc) = run_program(&format!(
+            "{hdr}struct H {{ n: i64 }}\n\
+             impl H {{ fn mkr(i: i64) -> R {{ return R {{ id: i, s: mk(i) }} }} }}\n\
+             fn main() {{ let v = s1(H.mkr(1)); println(f\"v={{v}}\") }}"
+        )) else {
+            return;
+        };
+        // Free producer — the oracle, correct throughout.
+        let Some(free) = run_program(&format!(
+            "{hdr}fn mkr2(i: i64) -> R {{ return R {{ id: i, s: mk(i) }} }}\n\
+             fn main() {{ let v = s1(mkr2(1)); println(f\"v={{v}}\") }}"
+        )) else {
+            return;
+        };
+        assert_eq!(free, "dR1\nv=7\n", "the free-function oracle itself moved");
+        assert_eq!(
+            assoc, free,
+            "an associated-call producer must own its argument exactly as a free one does"
+        );
+    }
+
     /// B-2026-08-29-17's guard rails — the shapes where the arm binding really
     /// IS the only owner, and whose body the view propagation must not silence.
     ///
