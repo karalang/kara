@@ -902,12 +902,15 @@ fn main() {
     /// single-level fixture would have missed it. The promising lead is the
     /// SIBLING binding arm's frame, which by construction outlives the branch.
     ///
-    /// A BLOCK-LOCAL TAIL (`m3`) is declined by construction: the owner replaces
-    /// a cleanup in a still-live frame and there is none. That is also the shape
-    /// every codegen-internal desugar synthesizes, so admitting it double-freed
-    /// 23 tests — see `asan_branch_tail_binding_handout_frees_once`'s `i*` rows.
-    /// Unlike the other two it has no dangling hazard, because the source cannot
-    /// be read again; it is the consuming GATE's to widen, not this owner's.
+    /// The BLOCK-LOCAL TAIL row (`m3`) that used to sit here is GONE: fixed by
+    /// B-2026-08-30-12 and moved to `asan_block_local_tail_frees_once`, which
+    /// asserts it is clean rather than pinning it. The reasoning recorded here
+    /// was right about the OWNER and right about where the fix belonged — it is
+    /// still declined by construction (the owner replaces a cleanup in a
+    /// still-live frame and a drained block has none, which is what
+    /// `asan_branch_tail_binding_handout_frees_once`'s `i*` rows keep pinned),
+    /// and it was indeed "the consuming GATE's to widen, not this owner's".
+    /// Widening the seven gates is all it took.
     #[test]
     fn asan_branch_tail_declined_shapes_do_not_double_free() {
         if !asan_available() {
@@ -929,9 +932,6 @@ fn main() {
     let rm2 = match n { 1 => mkA(n), _ => m2 }.contains("aaa");
     println(f"m2={rm2} {m2}");
 
-    let m3 = mkB(n);
-    let rm3 = { let t = mkA(n); t }.contains("aaa");
-    println(f"m3={rm3} {m3}");
 }
 "#;
         let Some((stdout, _stderr, status)) =
@@ -950,13 +950,88 @@ fn main() {
         for want in [
             "m1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
             "m2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
-            "m3=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
         ] {
             assert!(
                 stdout.contains(want),
                 "[asan_branch_tail_declined_shapes] missing {want:?}\nstdout:\n{stdout}"
             );
         }
+    }
+
+    /// B-2026-08-30-12 — a value-position block whose tail names a binding IT
+    /// DECLARED is a minting tail, and the seven consuming gates now free it.
+    ///
+    /// `suppress_block_tail_cleanup` disarms the local before the block's frame
+    /// drains, which is required — the frame is about to free it and the value
+    /// must survive to its consumer — and nothing then owned it unless the
+    /// consumer did. So a READ-ONLY consumer stranded the buffer while the
+    /// OWNING spelling was clean. Measured (valgrind, one fixture per row,
+    /// `KARAC_OPT_LEVEL=0` and `2` identical):
+    ///
+    /// | shape | pre |
+    /// |---|---|
+    /// | `{ let t = mkB(n); t }.contains("bbb")` | 27 B |
+    /// | `println({ let u = mkB(n); u })` | 27 B |
+    /// | `{ let t = mkB(n); t }.len()` | 27 B |
+    /// | `let s = { let t = mkB(n); t }` (OWNING) | clean |
+    ///
+    /// WHY THE GATES AND NOT B-2026-08-30-2'S OWNER. That owner registers a
+    /// replacement in the frame that held the SOURCE's cleanup, and here that
+    /// frame has already drained — see
+    /// `asan_branch_tail_declined_shapes_do_not_double_free`, where this shape
+    /// used to be pinned as a leak. The gates work instead because a
+    /// block-local binding has NO LATER READER: the block ends at the tail, so
+    /// the immediate free those gates emit cannot dangle. That is the whole
+    /// difference from the outer-binding tail the predicate still declines, and
+    /// `o1` below is the control for it — `loc` is read AFTER the wrapper hands
+    /// it out, and must still print.
+    ///
+    /// `s1` is the tripwire for the shape the row warned about: a
+    /// codegen-internal desugar builds exactly this block
+    /// (`Vec.sorted()` lowers to `{ let mut __srt = recv.clone(); __srt.sort();
+    /// __srt }`) and arranges its own ownership at the producer, so a second
+    /// owner here would be a double free rather than a leak. Both the read-only
+    /// and the owning spelling are exercised.
+    #[test]
+    fn asan_block_local_tail_frees_once() {
+        assert_clean_asan_run(
+            r#"
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+
+fn main() {
+    let n: i64 = env.args().len();
+
+    let r1 = { let t = mkB(n); t }.contains("bbb");
+    println(f"r1={r1}");
+    println({ let u = mkB(n); u });
+    let r3 = { let t = mkB(n); t }.len();
+    println(f"r3={r3}");
+
+    let e1 = { let t = mkB(n); t };
+    println(f"e1={e1}");
+
+    let loc = mkB(n);
+    let o1 = { loc }.contains("bbb");
+    println(f"o1={o1} {loc}");
+
+    let v: Vec[i64] = vec![3, 1, 2];
+    let s1 = v.sorted().len();
+    println(f"s1={s1}");
+    let s2: Vec[i64] = v.sorted();
+    println(f"s2={s2[0]}");
+}
+"#,
+            &[
+                "r1=true",
+                "B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "r3=27",
+                "e1=B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "o1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+                "s1=3",
+                "s2=1",
+            ],
+            "asan_block_local_tail",
+        );
     }
 
     /// B-2026-08-30-3 — an f-string ARM TAIL is a minting tail, and every

@@ -15582,16 +15582,35 @@ impl<'ctx> super::Codegen<'ctx> {
     /// merged value and cannot tell which produced it, so ONE tail handing back
     /// storage someone else owns disqualifies the construct. The reason is
     /// sharper than the usual "conservative by design", and it is measured: a
-    /// tail that hands out a BINDING leaves that binding READABLE afterwards —
-    /// `let a = { loc }.contains("p"); println(loc)` still prints `loc`
-    /// correctly, because the wrapper disarms its cleanup without ending its
-    /// lifetime. Several of the gates that hold this predicate free IMMEDIATELY
-    /// at the use site (`free_str_vec_buffer_if_heap` at the receiver sites,
-    /// `free_fresh_owned_str_arg` at the operand chokepoint), so admitting such
-    /// a tail would DANGLE that later read: a use-after-free, strictly worse
-    /// than the leak it replaces. A MINTED temp cannot have a later reader,
-    /// which is exactly what this tests for. The binding-tail class is tracked
-    /// separately rather than left implicit.
+    /// tail that hands out an OUTER BINDING leaves that binding READABLE
+    /// afterwards — `let a = { loc }.contains("p"); println(loc)` still prints
+    /// `loc` correctly, because the wrapper disarms its cleanup without ending
+    /// its lifetime. Several of the gates that hold this predicate free
+    /// IMMEDIATELY at the use site (`free_str_vec_buffer_if_heap` at the
+    /// receiver sites, `free_fresh_owned_str_arg` at the operand chokepoint),
+    /// so admitting such a tail would DANGLE that later read: a use-after-free,
+    /// strictly worse than the leak it replaces.
+    ///
+    /// B-2026-08-30-12 — "MINTED" therefore includes a tail naming a binding
+    /// THE BLOCK ITSELF DECLARED, which is what `…_local` adds. The
+    /// fail-closed reasoning above is entirely about a binding declared
+    /// OUTSIDE the wrapper; one the wrapper declares has no later reader by
+    /// construction, because the block ends at the tail. So the hazard the
+    /// rule exists to prevent cannot arise, and declining was pure leak:
+    /// `{ let t = mkB(n); t }.contains("bbb")`, the `println` spelling and the
+    /// `.len()` spelling each stranded 27 B at both `KARAC_OPT_LEVEL=0` and
+    /// `2`, while the owning spelling (`let s = { let t = mkB(n); t }`) was
+    /// clean. All three are clean now, and the outer-binding control still
+    /// prints `loc` after the wrapper — the distinction is what
+    /// `block_local_binding_tail_rhs` decides, and it is why the widening is
+    /// not simply "admit an identifier tail".
+    ///
+    /// This wrapper used to have a narrow twin, kept so these seven callers
+    /// stayed byte-identical when B-2026-08-30-38 needed the widened form for
+    /// `fresh_owned_branch_tail_repr`. Measuring the seven closed that
+    /// question, so there is one wrapper again; the narrow INNER predicate
+    /// [`Self::branch_tail_mints_fresh_owned_temp`] stays, because its three
+    /// other callers ask a different question.
     ///
     /// SEPARATE from the general predicate on purpose, the same choice
     /// [`Self::expr_is_fresh_owned_array_temp`] documents: that one is asked by
@@ -15607,22 +15626,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Call` is already the general predicate's job, and every site chains the
     /// two with `||`.
     pub(super) fn expr_is_fresh_owned_branch_tail(&self, expr: &Expr) -> bool {
-        matches!(
-            &expr.kind,
-            ExprKind::Block(_)
-                | ExprKind::Seq(_)
-                | ExprKind::Unsafe(_)
-                | ExprKind::LabeledBlock { .. }
-                | ExprKind::If { .. }
-                | ExprKind::Match { .. }
-        ) && self.branch_tail_mints_fresh_owned_temp(expr)
-    }
-
-    /// [`Self::expr_is_fresh_owned_branch_tail`] over the block-local-tail
-    /// widening (B-2026-08-30-38). Same wrapper kinds, same fail-closed rule on
-    /// the tails; the one difference is that a block handing out a binding IT
-    /// declares counts as minting.
-    pub(super) fn expr_is_fresh_owned_branch_tail_local(&self, expr: &Expr) -> bool {
         matches!(
             &expr.kind,
             ExprKind::Block(_)
@@ -15659,10 +15662,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// ends at the tail, the move disarms the local's own cleanup, and the
     /// value reaches the consumer owned by nobody.
     ///
-    /// Kept behind a flag rather than folded into the shared predicate so
-    /// B-2026-08-29-27's callers are byte-identical. Widening them looks right
-    /// — `{ let t = mk(5); t }.contains("x")` still strands its buffer — but
-    /// that is a leak at seven sites with their own frees, measured separately.
+    /// Kept as a separate INNER predicate because
+    /// [`Self::branch_tail_mints_fresh_owned_temp`] has three callers that
+    /// still want the narrow rule. Its wrapper twin is gone: B-2026-08-30-12
+    /// measured the seven B-2026-08-29-27 gates on the widened form — the
+    /// leak this comment predicted (`{ let t = mk(5); t }.contains("x")`
+    /// stranding its buffer) is closed, with no double free and no dangling
+    /// read, so `expr_is_fresh_owned_branch_tail` now routes here.
     pub(super) fn branch_tail_mints_fresh_owned_temp_local(&self, e: &Expr) -> bool {
         self.branch_tail_mints_fresh_owned_temp_inner(e, true)
     }
@@ -15861,7 +15867,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding's own drop, so admitting a mixed construct would run one body
     /// TWICE — a double free rather than the leak that predicate was closing.
     pub(super) fn fresh_owned_branch_tail_repr<'e>(&self, expr: &'e Expr) -> Option<&'e Expr> {
-        if !self.expr_is_fresh_owned_branch_tail_local(expr) {
+        if !self.expr_is_fresh_owned_branch_tail(expr) {
             return None;
         }
         self.first_branch_tail(expr)
