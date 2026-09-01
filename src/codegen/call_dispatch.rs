@@ -979,6 +979,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-07-28-4: by-value struct arg whose param declined
                     // the entry copy — move it, don't leave both sides owning it.
                     self.move_declined_copy_struct_arg(&arg.value);
+                    // B-2026-08-29-63: …and the same retraction for a param the
+                    // prepass proved transfer-safe, whose callee now takes these
+                    // buffers instead of copying them.
+                    self.move_transferred_struct_arg(&arg.value, &name, i);
                 }
                 let slice_elem = slice_elems.get(i).copied().flatten();
                 let val: BasicValueEnum<'ctx> = if is_ref {
@@ -1195,6 +1199,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // B-2026-07-28-4: by-value struct arg whose param declined
                     // the entry copy — move it, don't leave both sides owning it.
                     self.move_declined_copy_struct_arg(&arg.value);
+                    // B-2026-08-29-63: …and the same retraction for a param the
+                    // prepass proved transfer-safe, whose callee now takes these
+                    // buffers instead of copying them.
+                    self.move_transferred_struct_arg(&arg.value, &name, i);
                 }
                 let slice_elem = slice_elems.get(i).copied().flatten();
 
@@ -1480,6 +1488,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-07-28-4: by-value struct arg whose param declined the
                 // entry copy — move it, don't leave both sides owning it.
                 self.move_declined_copy_struct_arg(&a.value);
+                // B-2026-08-29-63: …and the same retraction for a param the
+                // prepass proved transfer-safe, whose callee now takes these
+                // buffers instead of copying them.
+                self.move_transferred_struct_arg(&a.value, &name, i);
             }
             if is_ref {
                 // `ref Slice[T]` / `mut ref Slice[T]` param fed an `Array[T, N]`:
@@ -2127,7 +2139,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     inner_struct.as_deref(),
                 );
             }
-            if !flows_into_return
+            // B-2026-08-29-63 — a param the prepass proved TRANSFER-safe has no
+            // caller-side temp to own. Every registration below rests on the
+            // callee entry-copying, so that "this caller temp is an INDEPENDENT
+            // buffer and its drop frees a distinct heap — never the callee's"
+            // (the own-`Drop` arm says so in as many words). Under transfer
+            // there is no copy and the two buffers are the same one: the arm
+            // that materializes an `__owned_agg_tmp` and hangs the full
+            // `karac_drop_<T>` wrapper off it then frees what the callee has
+            // already freed. Measured as `double free detected in tcache 2`,
+            // 11 allocs / 12 frees, on `fn eatf(r: Res) -> i64` over a `Res`
+            // with a `Drop` impl — the ONE of the eight probe shapes that the
+            // caller's own drop retraction does not cover, because this slot is
+            // not the binding's and the retraction is keyed by binding.
+            //
+            // Method and assoc-call sites need no such gate: the prepass keys
+            // on free-function names only, so a method param is never admitted.
+            let arg_transfers = self.transfer_struct_params.contains(&(name.clone(), i))
+                && matches!(&a.value.kind, ExprKind::Identifier(_))
+                && self
+                    .arg_struct_type_name(&a.value)
+                    .is_some_and(|tn| self.struct_param_transfer_eligible(&tn));
+            if !arg_transfers
+                && (!flows_into_return
                 || self.arg_is_entry_copied_heap_struct(&a.value)
                 // B-2026-08-01-14 — enum ctor args are entry-copied too:
                 // a passthrough callee returns the COPY, so the original
@@ -2140,7 +2174,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // registrar AT ALL on the escape path — not a gate that
                 // declined inside it, an admission test that excluded it —
                 // so the caller's orphaned original leaked 48 bytes.
-                || self.arg_is_entry_copied_heap_tuple(&a.value, &name, i)
+                || self.arg_is_entry_copied_heap_tuple(&a.value, &name, i))
             {
                 let escaping_parts = self.callee_returned_param_parts(&name, i);
                 self.track_inline_owned_aggregate_arg_parts(
@@ -7281,6 +7315,78 @@ impl<'ctx> super::Codegen<'ctx> {
     /// only for an Identifier argument of a non-shared user struct that the
     /// copy-support analysis rejects — every copy-supported struct keeps the
     /// existing entry-copy behaviour untouched.
+    /// B-2026-08-29-63 — the caller half of the by-value struct TRANSFER, held
+    /// in lockstep with the callee's [`Self::make_aggregate_param_callee_owned_transfer`].
+    ///
+    /// When the whole-program prepass ([`super::param_transfer`]) admitted
+    /// `(callee, idx)`, the callee's prologue no longer deep-copies this
+    /// parameter's heap fields — it takes the caller's buffers outright. So the
+    /// caller must give up its own struct drop, or both frames free the same
+    /// buffer. That is the same bargain, and the same failure mode, as the
+    /// copy-UNSUPPORTED retraction directly below; this arm just reaches types
+    /// that *could* have been copied and no longer need to be.
+    ///
+    /// Deliberately narrow, and every condition is load-bearing:
+    ///
+    ///   * `Identifier` only. The prepass admits nothing else, so a fresh temp
+    ///     or a field place never reaches here — their caller-side cleanup
+    ///     (`track_inline_owned_aggregate_arg`, the parent's drop) stays exactly
+    ///     as it is, which is why this slice leaves those shapes on the copy.
+    ///   * A non-shared user STRUCT that is copy-supported. The other three
+    ///     type classes keep their entry copy, so retracting here would strand
+    ///     a buffer nobody frees.
+    ///   * NOT a `struct_owns_shared_field` type — copy-support already declines
+    ///     a direct `shared` field, so this is belt-and-braces against the
+    ///     B-2026-08-05-32 shape reaching the transfer path by another route.
+    ///
+    /// The retraction is a no-op when no struct drop was registered for the
+    /// binding, which is the honest answer for a name the prepass admitted but
+    /// this frame does not actually own a cleanup for.
+    /// The declared type name of an `Identifier` argument, when codegen has one
+    /// recorded. Lets a site with no parameter declaration to hand still ask
+    /// [`Self::struct_param_transfer_eligible`] about the ARGUMENT.
+    pub(super) fn arg_struct_type_name(&self, arg: &Expr) -> Option<String> {
+        let ExprKind::Identifier(var) = &arg.kind else {
+            return None;
+        };
+        self.var_types.var_type_names.get(var.as_str()).cloned()
+    }
+
+    pub(super) fn move_transferred_struct_arg(&mut self, arg: &Expr, callee: &str, idx: usize) {
+        if !self
+            .transfer_struct_params
+            .contains(&(callee.to_string(), idx))
+        {
+            return;
+        }
+        let ExprKind::Identifier(var) = &arg.kind else {
+            return;
+        };
+        let Some(type_name) = self.var_types.var_type_names.get(var.as_str()).cloned() else {
+            return;
+        };
+        // The SAME predicate the callee prologue gates on. Sharing it is the
+        // whole safety argument: a condition that drifted between the two sites
+        // would leave one frame freeing a buffer the other had taken, or — as
+        // measured while building this — the caller retracting a `Drop` body the
+        // callee had declined to adopt, losing it entirely.
+        if !self.struct_param_transfer_eligible(&type_name) {
+            return;
+        }
+        let var = var.clone();
+        self.suppress_struct_cleanup_for_tail_identifier(&var);
+        // …and the user-`Drop` action with it. Under TRANSFER the callee owns
+        // the value outright — body, fields AND memory — so every one of the
+        // caller's cleanups has to go, not just the field walk.
+        //
+        // This is the half a `StructDrop`-only retraction misses, and it misses
+        // it silently: for a type with an `impl Drop` the caller's action is a
+        // `UserDrop`, which the scan above does not match. Measured as a
+        // `double free detected in tcache 2` (11 allocs / 12 frees) on
+        // `fn eatf(r: Res) -> i64` over a `Res` carrying a `Drop` impl.
+        self.suppress_user_drop_for_var(&var);
+    }
+
     pub(super) fn move_declined_copy_struct_arg(&mut self, arg: &Expr) {
         // B-2026-08-22-18 follow-up — an owned `Array[T, N]` binding/param passed
         // BY VALUE into a callee transfers ownership (the callee frees it,

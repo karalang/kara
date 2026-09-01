@@ -2214,9 +2214,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             .enum_inst_var_types
                             .get(&param_name)
                             .cloned();
+                        // B-2026-08-29-63 — may this param be owned by TRANSFER
+                        // rather than by entry copy? True only when the
+                        // whole-program prepass found every call site handing it
+                        // a binding the caller owns and never reads again, which
+                        // is what makes the caller's matching retraction
+                        // (`move_transferred_struct_arg`) safe at all of them.
+                        // A monomorph body carries a MANGLED `func.name` that is
+                        // not a key in that set, so it simply misses and keeps
+                        // the copy — a lost optimisation, never an unsound one.
+                        let param_transfer = self
+                            .transfer_struct_params
+                            .contains(&(func.name.clone(), i))
+                            .then(|| param_name.clone());
                         if matches!(&param.ty.kind, TypeKind::Path(_))
-                            && self.make_aggregate_param_callee_owned_inst(
-                                type_name, alloca, param_inst,
+                            && self.make_aggregate_param_callee_owned_transfer(
+                                type_name,
+                                alloca,
+                                param_inst,
+                                param_transfer.as_deref(),
                             )
                         {
                             // #17 gap 1 — the param is now a callee-owned local:

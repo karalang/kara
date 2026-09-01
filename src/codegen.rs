@@ -121,6 +121,7 @@ mod mono_state;
 mod once;
 mod par_blocks;
 mod param_own;
+mod param_transfer;
 mod pattern_binding;
 mod pattern_state;
 mod payload_vars;
@@ -1657,6 +1658,19 @@ pub(super) struct Codegen<'ctx> {
     /// (for the per-key emission helpers). Always populated for the
     /// duration of `compile_program`; left `None` outside that scope.
     pub(crate) program_snapshot: Option<Rc<Program>>,
+    /// B-2026-08-29-63 — `(function name, param index)` of every by-value
+    /// struct parameter that may be owned by TRANSFER instead of by ENTRY COPY,
+    /// because EVERY call site in the program hands it a binding it owns and
+    /// never reads again. Computed once per module by
+    /// [`param_transfer::compute_transferable_struct_params`].
+    ///
+    /// Read by exactly two places, which must agree or both frames free the same
+    /// buffer: the callee prologue (`make_aggregate_param_callee_owned_inst`,
+    /// which then skips `deep_copy_struct_heap_fields_in_place`) and the
+    /// caller's retraction (`move_transferred_struct_arg`, which then gives up
+    /// its own struct drop). Empty under `KARAC_MOVE_STRUCT_PARAMS=0`, which
+    /// restores the unconditional entry copy.
+    pub(crate) transfer_struct_params: rustc_hash::FxHashSet<(String, usize)>,
     /// Names of user struct/enum types whose `karac_cmp_<T>` ordering fn is
     /// mid-emission, so a self-referential field (`S { next: Vec[S] }`) that
     /// recurses back into the same type returns `None` (unorderable — the sort
@@ -6038,6 +6052,7 @@ impl<'ctx> Codegen<'ctx> {
                 coro_spawn_slot: None,
             },
             program_snapshot: None,
+            transfer_struct_params: rustc_hash::FxHashSet::default(),
             cmp_fn_in_progress: std::collections::HashSet::new(),
             display: Display {
                 baked_display_enum_names: HashSet::new(),
@@ -7281,6 +7296,18 @@ impl<'ctx> Codegen<'ctx> {
         } else {
             crate::codegen::bce_interproc::compute_interproc_converging_skips(program)
         };
+        // By-value struct params that may be owned by TRANSFER rather than by
+        // entry copy (param_transfer.rs, B-2026-08-29-63). Whole-PROGRAM for
+        // the same reason `bce_interproc` above is: one body is emitted per
+        // callee, so the fact has to hold at EVERY call site before the single
+        // prologue may act on it. Runs here, after `uam_consume_sites` is
+        // seeded by `load_rc_fallback` (the reused-binding sites it must
+        // exclude live there) and before any function compiles.
+        let transferable = crate::codegen::param_transfer::compute_transferable_struct_params(
+            program,
+            &self.span_tables.uam_consume_sites,
+        );
+        self.transfer_struct_params = transferable;
         // Level 2 crash diagnostics — Part 2: stand up DWARF debug-info state
         // before any function compiles (no-op unless KARAC_DEBUG_INFO is set and
         // a source filename was threaded in via set_source_filename, which runs

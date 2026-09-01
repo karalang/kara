@@ -164,6 +164,133 @@ mod memory_sanitizer_tests {
     /// Both `p[0].word` and `p[1].word` stay readable at the end, which is what
     /// keeps "the read cloned" honest: if the read ever stopped cloning, these
     /// would turn into a use-after-free instead of quietly passing.
+    /// B-2026-08-29-63 — a by-value own-heap struct param is owned by TRANSFER,
+    /// not by an entry COPY, wherever every call site in the program hands it a
+    /// binding the caller owns and never reads again.
+    ///
+    /// The fixture calls three such callees 40 times each — a param that dies
+    /// inside, one handed straight back, and one forwarded through a second hop.
+    /// Pre-fix each call deep-copied the 32-element `Vec[i64]` field, so the
+    /// program allocated ~120 buffers nothing ever read; post-fix it allocates
+    /// none of them. The ceiling is what makes this a regression test rather
+    /// than a restatement: the pre-fix compiler runs this fixture correctly and
+    /// cleanly, just at nearly twice the allocations. Measured under ASAN —
+    /// **251 malloc calls with the transfer off, 131 with it on**, a flat 120
+    /// (3 per iteration) that were pure copy. The 180 ceiling sits between them
+    /// with headroom on both sides, so it neither flakes nor passes vacuously;
+    /// `KARAC_MOVE_STRUCT_PARAMS=0` reproduces the pre-fix number exactly and is
+    /// how this was RED-verified.
+    #[test]
+    fn asan_by_value_struct_param_is_owned_by_transfer_not_entry_copy() {
+        assert_clean_asan_run_max_allocs(
+            r#"
+struct Res { id: i64, buf: Vec[i64] }
+
+fn mk(n: i64) -> Res {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 32 { v.push(i + n); i = i + 1; }
+    return Res { id: n, buf: v };
+}
+
+fn eat(r: Res) -> i64 { return r.buf[1]; }
+fn hand(r: Res) -> Res { return r; }
+fn inner(r: Res) -> i64 { return r.buf[2]; }
+fn outer(r: Res) -> i64 { return inner(r); }
+
+fn main() {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 40 {
+        let a = mk(k);
+        total = total + eat(a);
+        let b = mk(k);
+        let hb = hand(b);
+        total = total + hb.buf[1];
+        let c = mk(k);
+        total = total + outer(c);
+        k = k + 1;
+    }
+    println(f"total={total}");
+}
+"#,
+            &["total=2500"],
+            "b63-by-value-struct-param-transfer",
+            180,
+        );
+    }
+
+    /// B-2026-08-29-63, the other direction — the four shapes the transfer must
+    /// DECLINE still behave exactly as they did, and still allocate the copy.
+    ///
+    /// Each is a distinct reason, and each was a measured double free or
+    /// use-after-free on a prototype that transferred unconditionally:
+    ///
+    ///   * `readf` is called once with a FIELD place (`h.r`) and once with a
+    ///     fresh temp, so the whole-program prepass disqualifies the param and
+    ///     BOTH sites keep the copy — one body is emitted, so one fact has to
+    ///     cover every site.
+    ///   * `peek`'s argument is READ AGAIN after the move. Use-after-move is a
+    ///     non-fatal warning on this surface (B-2026-08-29-64), and the entry
+    ///     copy is the mechanism that keeps the reuse safe; the prepass
+    ///     excludes exactly the sites `use_after_move_consume_sites` names.
+    ///   * `guard_eat` takes a type with a user `impl Drop`. Transfer moves the
+    ///     value's death into the callee, which would move the BODY earlier than
+    ///     the interpreter runs it — a run-vs-build divergence rather than a
+    ///     trade — so a `Drop`-bearing type is declined outright.
+    ///
+    /// `guard=71` printing after `drop 70` is the pre-existing ordering, and is
+    /// the assertion that would break first if the `Drop` exclusion were lifted.
+    #[test]
+    fn asan_by_value_struct_param_transfer_declines_reuse_places_temps_and_drop() {
+        assert_clean_asan_run(
+            r#"
+struct Res { id: i64, buf: Vec[i64] }
+struct Guard { id: i64, buf: Vec[i64] }
+impl Drop for Guard { fn drop(mut ref self) { println(f"drop {self.id}") } }
+struct Holder { r: Res }
+
+fn mk(n: i64) -> Res {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(i + n); i = i + 1; }
+    return Res { id: n, buf: v };
+}
+fn mkg(n: i64) -> Guard {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(i + n); i = i + 1; }
+    return Guard { id: n, buf: v };
+}
+
+fn readf(r: Res) -> i64 { return r.buf[3]; }
+fn peek(r: Res) -> i64 { return r.buf[4]; }
+fn guard_eat(g: Guard) -> i64 { return g.buf[1]; }
+
+fn main() {
+    let h = Holder { r: mk(40) };
+    let rf = readf(h.r);
+    println(f"field={rf}");
+    let rt = readf(mk(50));
+    println(f"temp={rt}");
+
+    let e = mk(60);
+    let rp = peek(e);
+    println(f"peek={rp}");
+    println(f"reuse={e.buf[5]}");
+
+    let g = mkg(70);
+    let rg = guard_eat(g);
+    println(f"guard={rg}");
+}
+"#,
+            &[
+                "field=43", "temp=53", "peek=64", "reuse=65", "drop 70", "guard=71",
+            ],
+            "b63-transfer-declines",
+        );
+    }
+
     #[test]
     fn asan_branch_value_owns_the_container_element_clone_it_hands_out() {
         assert_clean_asan_run(
@@ -3945,6 +4072,55 @@ fn main() { let t = (Bag { xs: ["x", "y"] }, 7); println(f"{takes(t)}"); }
     ///
     /// B-2026-08-08-15. See `run_under_asan_opts`'s `auto_par` doc for why this
     /// is a separate entry point and not the default.
+    /// B-2026-08-29-63 — like [`assert_clean_asan_run_min_allocs_auto_par`] but
+    /// asserting a CEILING, because the defect this guards is a cost rather than
+    /// a crash.
+    ///
+    /// Passing an own-heap struct BY VALUE used to deep-copy its heap fields at
+    /// every call even though the argument was MOVED, so the fixture below
+    /// allocated one extra element buffer per call. Correctness cannot catch
+    /// that — the pre-fix program was clean, balanced and printed the right
+    /// answer — so the regression test has to be a count. The ceiling is what
+    /// fails on the pre-fix compiler.
+    ///
+    /// The clean-exit and stdout assertions come along for the opposite reason:
+    /// they are what fails if the transfer is ever widened past the shapes the
+    /// whole-program prepass admits. Both directions matter, so both are here.
+    fn assert_clean_asan_run_max_allocs(
+        src: &str,
+        expected_stdout: &[&str],
+        label: &str,
+        max_allocs: u64,
+    ) {
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, stderr, status)) = run_under_asan_opts(src, label, true, true, false)
+        else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}). See stderr above — \
+             a `double-free` here means the caller and the callee both own the transferred \
+             buffer; a `LeakSanitizer` report means neither does.",
+            status.code()
+        );
+        let got: Vec<&str> = stdout.trim().lines().collect();
+        assert_eq!(got, expected_stdout, "[{label}] stdout mismatch");
+        if let Some(allocs) = asan_malloc_calls(&stderr) {
+            assert!(
+                allocs <= max_allocs,
+                "[{label}] {allocs} malloc calls, over the {max_allocs} ceiling — the by-value \
+                 struct param is still being ENTRY-COPIED at each call. Check that \
+                 `param_transfer::compute_transferable_struct_params` still admits the callee \
+                 and that `struct_param_transfer_eligible` still admits the type."
+            );
+        }
+    }
+
     fn assert_clean_asan_run_min_allocs_auto_par(
         src: &str,
         expected_stdout: &[&str],

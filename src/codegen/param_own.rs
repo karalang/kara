@@ -127,6 +127,42 @@ impl<'ctx> super::Codegen<'ctx> {
         slot: PointerValue<'ctx>,
         inst: Option<TypeExpr>,
     ) -> bool {
+        self.make_aggregate_param_callee_owned_transfer(type_name, slot, inst, None)
+    }
+
+    /// [`Self::make_aggregate_param_callee_owned_inst`] plus the B-2026-08-29-63
+    /// transfer decision.
+    ///
+    /// `transfer_param` is `Some(param name)` when the whole-program prepass
+    /// ([`super::param_transfer`]) proved that EVERY call site hands this
+    /// parameter a binding the caller owns and never reads again, so there is no
+    /// original left to protect and the entry copy is pure cost — measured at
+    /// the full heap content of the argument, and 1.96x wall-clock on a hot
+    /// by-value loop. The NAME rides along because a transferred param that
+    /// carries a user `Drop` registers its wrapper under that name, and the
+    /// existing move-out retractions (`suppress_user_drop_for_var`) are
+    /// name-keyed.
+    ///
+    /// It reaches ONLY the copy-supported struct arm. The other arms are
+    /// unaffected on purpose: own-by-transfer is already what the
+    /// copy-UNSUPPORTED arm does (B-2026-08-05-33), and the enum arm keeps its
+    /// payload copy because its caller-side predicates
+    /// (`arg_is_entry_copied_heap_enum` and the Option/Result family) still
+    /// reason from "the callee's copy is independent" and are not part of this
+    /// slice.
+    pub(super) fn make_aggregate_param_callee_owned_transfer(
+        &mut self,
+        type_name: &str,
+        slot: PointerValue<'ctx>,
+        inst: Option<TypeExpr>,
+        transfer_param: Option<&str>,
+    ) -> bool {
+        // The prepass's permission is about call-site SHAPES; this is the TYPE
+        // half, and both must hold. Keeping them in one predicate is what lets
+        // the caller's retraction and this prologue agree without re-deriving
+        // the conditions separately.
+        let transfer = transfer_param.is_some() && self.struct_param_transfer_eligible(type_name);
+        let transfer_param = if transfer { transfer_param } else { None };
         // #17 — the seeded std.tracing builder value types (`LogEvent` / `Span`
         // / `SpanField`) used to be name-excluded here. Their chained builder
         // methods (`info(..).with_field(..).with_field(..).in_span(..)`) move
@@ -213,10 +249,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // symmetric with the combined drop's per-element rc-dec (a copy-supported
             // struct can carry a shared handle buried in a `Vec[struct]` element /
             // nested struct — `FnDefNode.params[].ty`, `FnDefNode.body`).
-            let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
-            self.drop_rc.deep_copy_rc_inc_bare_shared = true;
-            self.deep_copy_struct_heap_fields_in_place(slot, type_name);
-            self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
+            //
+            // B-2026-08-29-63 — SKIP the copy entirely when the prepass proved
+            // every call site transfers. The rc-inc above is skipped with it,
+            // and that stays balanced for the same reason the copy does: the
+            // caller retracted its own drop, so its rc-dec is gone and the drop
+            // registered below is the handle's only release. This is exactly
+            // the copy-unsupported arm's own-by-transfer bargain, applied to a
+            // type that merely *could* have been copied.
+            if !transfer {
+                let saved = self.drop_rc.deep_copy_rc_inc_bare_shared;
+                self.drop_rc.deep_copy_rc_inc_bare_shared = true;
+                self.deep_copy_struct_heap_fields_in_place(slot, type_name);
+                self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
+            }
             // B-2026-08-25-14 — register the drop at the param's declared
             // INSTANTIATION, exactly as the copy-unsupported branch above
             // already does. This branch discarded `inst` and keyed the drop by
@@ -235,6 +281,27 @@ impl<'ctx> super::Codegen<'ctx> {
             // selected from the binding's recorded instantiation, and `self`'s
             // drop is then cap/len-zeroed by the move-suppression — so the
             // erased drop was reached only when nothing moved out of `self`.
+            // B-2026-08-29-63 — under TRANSFER the callee owns the value
+            // OUTRIGHT: body, fields and memory. `track_struct_var_inst`
+            // registers the field walk alone (`__karac_drop_struct_<T>`), which
+            // is the right half while the CALLER still holds the value's own
+            // `karac_drop_<T>` wrapper and runs the body — the split every
+            // non-transfer call relies on. Transfer retracts the caller's half,
+            // so registering only the field walk here loses the body entirely:
+            // measured as `impl Drop for Res` printing nothing at all on a
+            // `fn eatf(r: Res) -> i64` that had printed `drop 41` before.
+            //
+            // Register the wrapper INSTEAD, never as well — it calls
+            // `__karac_drop_struct_<T>` internally, so both would double-walk
+            // the fields. `track_user_drop_var` no-ops for a type with no
+            // validated wrapper, which is exactly the types that want the plain
+            // field walk.
+            if let Some(pname) = transfer_param {
+                if self.drop_rc.user_drop_wrapper_fns.contains_key(type_name) {
+                    self.track_user_drop_var(type_name, pname, slot);
+                    return true;
+                }
+            }
             self.track_struct_var_inst(type_name, slot, inst);
             return true;
         }
@@ -588,6 +655,121 @@ impl<'ctx> super::Codegen<'ctx> {
                     return self.struct_owns_shared_field(head, stack);
                 }
                 false
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-08-29-63 — the single eligibility predicate for owning a by-value
+    /// struct param by TRANSFER instead of by ENTRY COPY.
+    ///
+    /// Consulted by all three sites that must agree — the callee prologue
+    /// ([`Self::make_aggregate_param_callee_owned_transfer`]), the caller's drop
+    /// retraction (`move_transferred_struct_arg`) and the caller's fresh-temp
+    /// registrar gate — so that "who owns this buffer" cannot be answered two
+    /// ways for one call. A whole-program permission from
+    /// [`super::param_transfer`] is necessary but NOT sufficient: it answers a
+    /// question about call-site SHAPES, and this answers the one about the TYPE.
+    ///
+    /// A USER `Drop` ANYWHERE IN THE TYPE DECLINES, and that exclusion is about
+    /// observable ORDER, not about memory. Transfer moves the value's death from
+    /// the caller's frame into the callee's, so a `Drop` body that used to run
+    /// after the call returns now runs before it. That is invisible for a type
+    /// whose drop only frees, and visible for one whose drop PRINTS:
+    /// `println(f"eat={eat(a)}")` over a `Res` with an `impl Drop` printed
+    /// `eat=11` then `drop 10` under the entry copy — and the interpreter agrees
+    /// with the entry copy — while transfer printed them the other way round.
+    /// Both orderings are defensible; only one of them is what `karac run`
+    /// does, and a compiled backend that reorders a user-visible side effect
+    /// away from the interpreter is a run-vs-build divergence, which this repo
+    /// treats as a compiler bug rather than a trade.
+    ///
+    /// So the win is taken only where it is unobservable. That costs nothing
+    /// measured: the cost this row is about is the field-buffer memcpy, and a
+    /// `Drop`-free struct pays it identically (the row measured the same
+    /// `N * 8` delta "with or without a `Drop` impl"). Making the ordering itself
+    /// safe to move is a separate question about where a moved-from value's body
+    /// belongs, and it needs the interpreter to move with it.
+    ///
+    /// The `Drop` test is TRANSITIVE and conservative in the declining
+    /// direction: an unresolvable field type answers "has a drop", because the
+    /// cost of a wrong `false` is a reordered side effect and the cost of a
+    /// wrong `true` is only a missed optimisation.
+    pub(super) fn struct_param_transfer_eligible(&self, struct_name: &str) -> bool {
+        if !self.type_decls.struct_types.contains_key(struct_name)
+            || self.type_decls.shared_types.contains_key(struct_name)
+        {
+            return false;
+        }
+        if !self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new()) {
+            return false;
+        }
+        if self.struct_owns_shared_field(struct_name, &mut Vec::new())
+            || self.struct_is_self_referential(struct_name)
+        {
+            return false;
+        }
+        !self.struct_reaches_user_drop(struct_name, &mut Vec::new())
+    }
+
+    /// Does `struct_name`, or any type reachable through its declared fields,
+    /// carry a user `impl Drop`? See
+    /// [`Self::struct_param_transfer_eligible`] for why this declines rather
+    /// than approximates.
+    fn struct_reaches_user_drop(&self, struct_name: &str, stack: &mut Vec<String>) -> bool {
+        if stack.iter().any(|s| s == struct_name) {
+            return false;
+        }
+        let has_own = self
+            .program_snapshot
+            .as_deref()
+            .map(|p| p.drop_method_keys.contains_key(struct_name))
+            // No snapshot means no way to tell — decline.
+            .unwrap_or(true);
+        if has_own {
+            return true;
+        }
+        let Some(ftes) = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+        else {
+            return false;
+        };
+        stack.push(struct_name.to_string());
+        let reaches = ftes
+            .iter()
+            .any(|fte| self.field_reaches_user_drop(fte, stack));
+        stack.pop();
+        reaches
+    }
+
+    /// Field-level half of [`Self::struct_reaches_user_drop`]. Walks tuples and
+    /// every generic argument, so a `Vec[Guard]` / `Option[Guard]` /
+    /// `Map[K, Guard]` field is caught as readily as a bare one.
+    fn field_reaches_user_drop(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
+        match &fte.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.field_reaches_user_drop(e, stack)),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                let head_drops = self
+                    .program_snapshot
+                    .as_deref()
+                    .map(|pr| pr.drop_method_keys.contains_key(head))
+                    .unwrap_or(true);
+                if head_drops {
+                    return true;
+                }
+                if self.type_decls.struct_field_type_exprs.contains_key(head)
+                    && self.struct_reaches_user_drop(head, stack)
+                {
+                    return true;
+                }
+                p.generic_args.iter().flatten().any(|ga| match ga {
+                    crate::ast::GenericArg::Type(t) => self.field_reaches_user_drop(t, stack),
+                    _ => false,
+                })
             }
             _ => false,
         }
