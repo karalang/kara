@@ -14254,6 +14254,56 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Let` arms to compile it — the typechecker has already restricted `ref`
     /// to an index operand, so the only shapes reaching that fallback are
     /// container classes this lowering has no layout for.
+    /// B-2026-08-31-37 — what a `let g = ref c[i]` says when codegen has no
+    /// element address to bind.
+    ///
+    /// The two cases need DIFFERENT advice, which is the whole reason this is a
+    /// function rather than one string:
+    ///
+    /// * A `Map` / `Set` element has no stable address — a rehash moves it —
+    ///   and the INTERPRETER declines the spelling too since B-2026-08-31-36.
+    ///   So `--interp` is not a workaround and must not be offered as one; the
+    ///   actionable advice is to index directly, which works everywhere.
+    /// * Any other base (a nested `ref v[0][1]`, a field base codegen could not
+    ///   type) IS handled by the interpreter, so the standard `--interp`
+    ///   pointer the neighbouring codegen-gap messages use is accurate.
+    ///
+    /// Built with `concat!` rather than a `\`-continued literal: rustfmt
+    /// rejoins those and freezes the continuation indentation into the shipped
+    /// text, which `diagnostic_text_hygiene` rejects (B-2026-08-21-45).
+    fn ref_binding_gap_msg(&self, base: Option<&str>) -> String {
+        // Name the class that actually matched rather than "Map / Set": the
+        // message is read by someone who wrote one specific thing.
+        let class = base.and_then(|b| {
+            if self.mapset.map_key_types.contains_key(b) {
+                Some("Map")
+            } else if self.mapset.set_elem_types.contains_key(b) {
+                Some("Set")
+            } else {
+                None
+            }
+        });
+        match base.zip(class) {
+            Some((b, class)) => format!(
+                concat!(
+                    "codegen: a `ref` binding over a `{}` element is not supported — ",
+                    "the element has no stable address to borrow, because a rehash ",
+                    "moves it — and the interpreter declines this spelling too, so ",
+                    "`--interp` is not a workaround. Index `{}` directly to read the ",
+                    "value."
+                ),
+                class, b
+            ),
+            None => concat!(
+                "codegen: cannot lower this `ref <container>[i]` binding — the base is ",
+                "not a `Vec`, `Slice` or `Array`, the three classes whose element ",
+                "address codegen can take. This is a compiler gap — run with `--interp` ",
+                "(or `KARAC_RUN_JIT=0`) and please report it."
+            )
+            .to_string(),
+        }
+    }
+
     fn try_compile_ref_binding(&mut self, stmt: &Stmt) -> Result<bool, String> {
         let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
             return Ok(false);
@@ -14303,10 +14353,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // lowerings agree on what a container is. Declining is the
                 // right answer for every other class, which is also what the
                 // sibling `FieldAccess` arm below does (`_ => Ok(None)`): a
-                // Map base is deliberately NOT wired up here, because
-                // `let g = ref m[k]` binds the whole map rather than the value
-                // under the interpreter too — a separate defect that wiring
-                // codegen alone would convert into a run-vs-build divergence.
+                // Map base is deliberately NOT wired up here.
+                //
+                // B-2026-08-31-37 — the REASON changed, the conclusion did
+                // not. It used to be that `let g = ref m[k]` bound the whole
+                // map under the interpreter too, so wiring codegen alone
+                // would have created a divergence. B-2026-08-31-36 fixed that
+                // half: the interpreter now DECLINES a `Map` element `ref`.
+                // Wiring codegen would therefore create the divergence in the
+                // opposite direction — and a map element has no stable address
+                // to borrow in the first place, since a rehash moves it. The
+                // decline is the answer on both backends; only the MESSAGE
+                // needed fixing, which is what this row did.
                 let is_vec = self
                     .var_types
                     .vec_elem_types
@@ -14351,17 +14409,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.var_types.array_elem_type_exprs.get(container).cloned(),
                     )
                 } else {
-                    return Ok(false);
+                    // B-2026-08-31-37 — was `Ok(false)`, which fell through to
+                    // `compile_unaryop`'s `UnaryOp::Ref` arm and surfaced the
+                    // INTERNAL invariant string `unreachable: Ref handled in
+                    // compile_expr` to the user: no span, no source construct,
+                    // and the word "unreachable" for a state any `Map` base
+                    // reaches. Answer where the decision is actually made, and
+                    // name the real limitation.
+                    return Err(self.ref_binding_gap_msg(Some(container)));
                 };
                 (ptr, ty, te)
             }
             ExprKind::FieldAccess { .. } => {
                 match self.nested_index_field_base_elem(object, index)? {
                     Some((ptr, ty, te)) => (ptr, ty, Some(te)),
-                    None => return Ok(false),
+                    None => return Err(self.ref_binding_gap_msg(None)),
                 }
             }
-            _ => return Ok(false),
+            // Any other base shape — a NESTED index (`ref v[0][1]`) is the one
+            // that occurs in practice, and the interpreter handles it, so the
+            // `--interp` half of the message is accurate here (B-2026-09-01-6
+            // tracks giving codegen a lowering).
+            _ => return Err(self.ref_binding_gap_msg(None)),
         };
 
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());

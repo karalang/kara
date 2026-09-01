@@ -10869,7 +10869,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Deref is handled in compile_expr before reaching here.
             UnaryOp::Deref => Err("unreachable: Deref handled in compile_expr".into()),
-            UnaryOp::Ref => Err("unreachable: Ref handled in compile_expr".into()),
+            // B-2026-08-31-37 — NOT "unreachable". `try_compile_ref_binding`
+            // declines several real shapes, and every one of them used to land
+            // here and print an internal invariant string at the user. Those
+            // now answer for themselves with `ref_binding_gap_msg`, so what
+            // reaches this arm is a `ref` in a position the let-binding path
+            // never sees — still a compiler gap, but say so plainly rather
+            // than claiming the state cannot happen.
+            UnaryOp::Ref => Err(concat!(
+                "codegen: `ref` is not supported in this position (only a ",
+                "`let` binding over a container element is lowered). This is a ",
+                "compiler gap — run with `--interp` (or `KARAC_RUN_JIT=0`) and ",
+                "please report it."
+            )
+            .into()),
         }
     }
 

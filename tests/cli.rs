@@ -35543,3 +35543,86 @@ fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
+
+/// B-2026-08-31-37 — a `ref` binding codegen cannot lower says WHAT and WHY,
+/// not `unreachable: Ref handled in compile_expr`.
+///
+/// That string was an internal invariant leaking to a user: no span, no source
+/// construct, and the word "unreachable" for a state any `Map` base reaches.
+/// The two shapes below need DIFFERENT advice, which is why one message would
+/// not have done:
+///
+/// * a `Map` element has no stable address to borrow (a rehash moves it), and
+///   the interpreter declines the spelling too since B-2026-08-31-36 — so
+///   `--interp` is NOT a workaround and the message must not offer it. The row
+///   as filed proposed exactly that wording; it was written before the
+///   interpreter half changed.
+/// * a NESTED `ref v[0][1]` is handled correctly by the interpreter
+///   (B-2026-09-01-6 tracks giving codegen a lowering), so there the standard
+///   `--interp` pointer is accurate.
+///
+/// The assertions are deliberately about CONTENT, not the exact sentence: that
+/// the internal string is gone, that the container class is named, and that the
+/// `--interp` advice appears for exactly the case where it is true.
+#[test]
+fn ref_binding_codegen_gap_explains_itself() {
+    // `std::env::temp_dir()` with uniquely-named fixtures, the shape the other
+    // CLI tests in this file use — no `tempfile` dependency here.
+    let tmp = std::env::temp_dir();
+
+    let cases: [(&str, &str, bool); 2] = [
+        (
+            "map",
+            "fn main() {\n    let mut m: Map[i64, i64] = Map.new();\n\
+             \x20   m.insert(1, 42);\n    let g = ref m[1];\n    println(g);\n}\n",
+            false,
+        ),
+        (
+            "nested",
+            "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3, 4]];\n\
+             \x20   let g = ref v[0][1];\n    println(g);\n}\n",
+            true,
+        ),
+    ];
+
+    for (label, src, interp_is_a_workaround) in cases {
+        let f = tmp.join(format!("karac_refgap_{label}.kara"));
+        if std::fs::write(&f, src).is_err() {
+            return;
+        }
+        let out = match karac_bin()
+            .current_dir(&tmp)
+            .args(["build", &format!("karac_refgap_{label}.kara")])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return,
+        };
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("unreachable: Ref handled in compile_expr"),
+            "[{label}] the internal invariant string reached the user:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("ref"),
+            "[{label}] the message does not mention the construct:\n{stderr}"
+        );
+        if interp_is_a_workaround {
+            assert!(
+                stderr.contains("--interp"),
+                "[{label}] the interpreter DOES handle this shape, so the message \
+                 must point at it:\n{stderr}"
+            );
+        } else {
+            assert!(
+                stderr.contains("`Map`"),
+                "[{label}] the message must name the container class:\n{stderr}"
+            );
+            assert!(
+                stderr.contains("not a workaround"),
+                "[{label}] the interpreter declines this too, so the message must \
+                 say `--interp` will not help:\n{stderr}"
+            );
+        }
+    }
+}
