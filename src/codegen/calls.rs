@@ -2175,11 +2175,31 @@ impl<'ctx> super::Codegen<'ctx> {
         slot: VarSlot<'ctx>,
         index: &Expr,
     ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
-        let i64_t = self.context.i64_type();
         let arr_ty = match slot.ty {
             BasicTypeEnum::ArrayType(at) => at,
             _ => return Err("Array shape required for Array indexed-receiver lowering".to_string()),
         };
+        self.lower_indexed_elem_ptr_array_at(slot.ptr, arr_ty, index)
+    }
+
+    /// B-2026-09-01-15 — the by-POINTER core of
+    /// [`Self::lower_indexed_elem_ptr_array`], split for the same reason
+    /// B-2026-08-09-21 split the `Vec` one: only two things in the lowering
+    /// ever needed the variable SLOT — the array's LLVM type and the pointer to
+    /// its storage — so taking both directly lets a base with no slot of its
+    /// own reuse the identical bounds check and GEP.
+    ///
+    /// The base with no slot is an `Array` sitting INLINE in another
+    /// container's buffer: `let v: Vec[Array[i64, 2]]; ref v[i][j]`. The first
+    /// hop yields a pointer into the `Vec`'s buffer aimed at the array, and
+    /// there is no `VarSlot` anywhere that describes it.
+    pub(super) fn lower_indexed_elem_ptr_array_at(
+        &mut self,
+        arr_ptr: PointerValue<'ctx>,
+        arr_ty: inkwell::types::ArrayType<'ctx>,
+        index: &Expr,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        let i64_t = self.context.i64_type();
         let elem_ty = arr_ty.get_element_type();
         let idx_raw = self.compile_expr(index)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
@@ -2203,7 +2223,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let zero = i64_t.const_int(0, false);
         let elem_ptr = unsafe {
             self.builder
-                .build_gep(arr_ty, slot.ptr, &[zero, idx_val], "a.mr.elem.ptr")
+                .build_gep(arr_ty, arr_ptr, &[zero, idx_val], "a.mr.elem.ptr")
                 .unwrap()
         };
         Ok((elem_ptr, elem_ty))

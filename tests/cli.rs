@@ -35557,12 +35557,15 @@ fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
 ///   `--interp` is NOT a workaround and the message must not offer it. The row
 ///   as filed proposed exactly that wording; it was written before the
 ///   interpreter half changed.
-/// * a root codegen has no lowering for — a `Slice` of `Vec` — is handled
-///   correctly by the interpreter, so there the standard `--interp` pointer is
-///   accurate. This case was originally a nested `ref v[0][1]`; B-2026-09-01-6
-///   gave codegen that lowering, so the shape stopped producing a diagnostic
-///   at all and the case moved to one that still declines. The remaining roots
-///   are tracked in that row's follow-up.
+/// * a shape codegen has no lowering for — a `Map` VALUE root, `m[k][i]` over
+///   `Map[K, Vec[V]]` — is handled correctly by the interpreter, so there the
+///   standard `--interp` pointer is accurate.
+///
+/// That second case has moved twice as its predecessors were fixed: it was a
+/// nested `ref v[0][1]` until B-2026-09-01-6 lowered it, then a `Slice` root
+/// until B-2026-09-01-15 lowered every container root. The assertion is the
+/// stable part — `--interp` is offered exactly where it is true — and the
+/// program demonstrating it is expected to keep changing as gaps close.
 ///
 /// The assertions are deliberately about CONTENT, not the exact sentence: that
 /// the internal string is gone, that the container class is named, and that the
@@ -35592,17 +35595,25 @@ fn ref_binding_codegen_gap_explains_itself() {
              \x20   m.insert(1, 42);\n    let g = ref m[1];\n    println(g);\n}\n",
             false,
         ),
-        // B-2026-09-01-6 lowered the nested VEC chain that used to sit here, so
-        // it no longer produces a diagnostic at all. A `Slice` ROOT is the
-        // nearest shape that still declines — the element index has to shift by
-        // the window's start, which the Vec-rooted lowering does not model — and
-        // the interpreter still handles it, so the `--interp` half of the
-        // message is accurate for it exactly as it was for the nested case.
+        // This slot has now moved TWICE, which is worth stating rather than
+        // quietly editing again. It began as a nested `ref v[0][1]`;
+        // B-2026-09-01-6 lowered that. It became a `Slice` root;
+        // B-2026-09-01-15 lowered that too, along with every other container
+        // root. What it needs is a shape codegen declines while the
+        // INTERPRETER handles it, so the `--interp` half of the message is
+        // accurate — and each fix in that family removes one.
+        //
+        // A `Map` VALUE root (`m[k][i]` over `Map[K, Vec[V]]`, the ordinary
+        // multimap) is the current one: `nested_index_field_base_elem` lowers
+        // it for indexed READS but no `ref`-binding arm reaches it, and
+        // `--interp` returns the element. If a later row lowers this too, the
+        // replacement must be checked the same way — `interp` correct,
+        // `build` declining — not assumed.
         (
-            "slice-root",
-            "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2]];\n\
-             \x20   let s: Slice[Vec[i64]] = v.as_slice();\n\
-             \x20   let g = ref s[0][1];\n    println(g);\n}\n",
+            "map-value-root",
+            "fn main() {\n    let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+             \x20   m.insert(1, [3, 4]);\n\
+             \x20   let g = ref m[1][1];\n    println(g);\n}\n",
             true,
         ),
     ];

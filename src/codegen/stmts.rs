@@ -14507,20 +14507,50 @@ impl<'ctx> super::Codegen<'ctx> {
         // element it names and that element's own `TypeExpr` — which, for every
         // hop but the last, is the `Vec[T]` being indexed next.
         let (base_ptr, base_te) = match &inner_obj.kind {
+            // B-2026-09-01-15, ROOT classification — the same three-way dispatch
+            // the flat `ref c[i]` arm performs, so the two indexed lowerings
+            // agree on what a container is (the rule B-2026-08-31-29's comment
+            // sets out). `Vec` and `Slice` read their element `TypeExpr` from
+            // `var_elem_type_exprs`; an `Array`'s lives in its OWN table,
+            // because the ~170 readers of the former treat a present entry as
+            // "this binding is a Vec/Slice/Map".
             ExprKind::Identifier(name) => {
-                let Some(te) = self
-                    .var_types
-                    .var_elem_type_exprs
+                let is_vec = self.var_types.vec_elem_types.contains_key(name.as_str());
+                let is_slice = self.var_types.slice_elem_types.contains_key(name.as_str());
+                let arr_slot = self
+                    .variables
                     .get(name.as_str())
-                    .cloned()
-                else {
-                    return Ok(None);
-                };
-                if !self.var_types.vec_elem_types.contains_key(name.as_str()) {
+                    .copied()
+                    .filter(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                if is_vec || is_slice {
+                    let Some(te) = self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(name.as_str())
+                        .cloned()
+                    else {
+                        return Ok(None);
+                    };
+                    let (ptr, _) = if is_vec {
+                        self.lower_indexed_elem_ptr_vec(name, inner_idx)?
+                    } else {
+                        self.lower_indexed_elem_ptr_slice(name, inner_idx)?
+                    };
+                    (ptr, te)
+                } else if let Some(slot) = arr_slot {
+                    let Some(te) = self
+                        .var_types
+                        .array_elem_type_exprs
+                        .get(name.as_str())
+                        .cloned()
+                    else {
+                        return Ok(None);
+                    };
+                    let (ptr, _) = self.lower_indexed_elem_ptr_array(slot, inner_idx)?;
+                    (ptr, te)
+                } else {
                     return Ok(None);
                 }
-                let (ptr, _) = self.lower_indexed_elem_ptr_vec(name, inner_idx)?;
-                (ptr, te)
             }
             ExprKind::Index {
                 object: deeper_obj,
@@ -14529,18 +14559,62 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some((ptr, _, te)) => (ptr, te),
                 None => return Ok(None),
             },
+            // B-2026-09-01-15, field root — `ref h.grid[i][j]`, and through the
+            // `self` normalisation inside the helper, `ref self.grid[i][j]`,
+            // which is the shape a 2D cursor in a struct actually writes.
+            //
+            // The address computation already existed:
+            // `nested_index_field_base_elem` lowers `h.grid[i]` for indexed
+            // READS and hands back exactly the (pointer, element `TypeExpr`)
+            // pair this resolver threads. It only had to be routed in — the
+            // `ref` arm had a FieldAccess case for `ref h.xs[i]` (one index)
+            // and nothing for a field root under a SECOND index.
+            ExprKind::FieldAccess { .. } => {
+                match self.nested_index_field_base_elem(inner_obj, inner_idx)? {
+                    Some((ptr, _, te)) => (ptr, te),
+                    None => return Ok(None),
+                }
+            }
             _ => return Ok(None),
         };
-        // The element being named must live in a `Vec`, so the pointer above is
-        // a `Vec` header we can index.
-        let (Some(elem_ll), Some(elem_te)) = (
-            self.extract_vec_elem_type(&base_te),
-            vec_inner_type_expr(&base_te),
-        ) else {
-            return Ok(None);
+        // Index the element the chain just named. Its CLASS decides how: a
+        // `Vec` slot holds a `{ptr, i64, i64}` header, an `Array` slot IS the
+        // storage. Reading one as the other is precisely the B-2026-08-31-29
+        // segfault (element 0 taken as a data pointer), so this dispatches on
+        // the recorded `TypeExpr` rather than guessing from the pointer.
+        let head = match &base_te.kind {
+            TypeKind::Path(p) => p.segments.last().map(String::as_str),
+            _ => None,
         };
-        let (ptr, ty) = self.lower_indexed_elem_ptr_vec_at(base_ptr, elem_ll, outer_idx)?;
-        Ok(Some((ptr, ty, elem_te)))
+        match head {
+            Some("Vec") | Some("VecDeque") => {
+                let (Some(elem_ll), Some(elem_te)) = (
+                    self.extract_vec_elem_type(&base_te),
+                    vec_inner_type_expr(&base_te),
+                ) else {
+                    return Ok(None);
+                };
+                let (ptr, ty) = self.lower_indexed_elem_ptr_vec_at(base_ptr, elem_ll, outer_idx)?;
+                Ok(Some((ptr, ty, elem_te)))
+            }
+            // B-2026-09-01-15 — an `Array` INLINE in the outer container
+            // (`Vec[Array[T, N]]`). There is no `VarSlot` describing it, which
+            // is why this needs the by-pointer core rather than the named
+            // lowering.
+            Some("Array") => {
+                let Some(elem_te) = super::helpers::array_inner_type_expr(&base_te) else {
+                    return Ok(None);
+                };
+                let BasicTypeEnum::ArrayType(arr_ty) = self.llvm_type_for_type_expr(&base_te)
+                else {
+                    return Ok(None);
+                };
+                let (ptr, ty) =
+                    self.lower_indexed_elem_ptr_array_at(base_ptr, arr_ty, outer_idx)?;
+                Ok(Some((ptr, ty, elem_te)))
+            }
+            _ => Ok(None),
+        }
     }
 
     fn try_compile_ref_binding(&mut self, stmt: &Stmt) -> Result<bool, String> {

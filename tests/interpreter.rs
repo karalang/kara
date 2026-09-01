@@ -230,6 +230,43 @@ fn main() {
     );
 }
 
+/// B-2026-09-01-15 — the interpreter twin of `tests/codegen.rs`'s
+/// `e2e_ref_binding_over_nested_chain_roots`, pinned to the same string.
+///
+/// This side handled every root already — each container evaluates to a
+/// `Value::Array` its existing arm matches — so this half is the ORACLE the
+/// compiled side was built against and passes before the fix too. It is here
+/// so the two stay pinned to one string as roots are added.
+#[test]
+fn test_ref_binding_over_nested_chain_roots() {
+    assert_eq!(
+        run("struct Hh { grid: Vec[Vec[i64]] }\n\
+             fn main() {\n\
+             \x20   let av: Array[Vec[i64], 1] = Array[[1, 2]];\n\
+             \x20   let g1 = ref av[0][1];\n\
+             \x20   println(f\"arrayvec {g1}\");\n\
+             \x20   let b: Vec[Vec[i64]] = [[3, 4]];\n\
+             \x20   let sl: Slice[Vec[i64]] = b.as_slice();\n\
+             \x20   let g2 = ref sl[0][1];\n\
+             \x20   println(f\"slicevec {g2}\");\n\
+             \x20   let va: Vec[Array[i64, 2]] = [Array[5, 6]];\n\
+             \x20   let g3 = ref va[0][1];\n\
+             \x20   println(f\"vecarray {g3}\");\n\
+             \x20   let aa: Array[Array[i64, 2], 1] = Array[Array[7, 8]];\n\
+             \x20   let g4 = ref aa[0][1];\n\
+             \x20   println(f\"arrayarray {g4}\");\n\
+             \x20   let h: Hh = Hh { grid: [[9, 10]] };\n\
+             \x20   let g5 = ref h.grid[0][1];\n\
+             \x20   println(f\"field {g5}\");\n\
+             \x20   let mut m: Vec[Array[i64, 2]] = [Array[1, 2]];\n\
+             \x20   let ga = ref m[0][1];\n\
+             \x20   m[0][1] = 66;\n\
+             \x20   println(f\"alias {ga}\");\n\
+             }"),
+        "arrayvec 2\nslicevec 4\nvecarray 6\narrayarray 8\nfield 10\nalias 66\n"
+    );
+}
+
 /// B-2026-09-01-6 — the interpreter twin of `tests/codegen.rs`'s
 /// `e2e_ref_binding_over_a_nested_vec_chain`, pinned to the same string.
 ///

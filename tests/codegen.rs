@@ -21603,6 +21603,65 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-15 — every ROOT a nested `ref c[i][j]` chain can start
+    /// from, not just a `Vec` local.
+    ///
+    /// B-2026-09-01-6 lowered the Vec-rooted chain and deliberately declined
+    /// the rest rather than guess a slot layout; this closes the four it left,
+    /// plus `Array[Array]`, which nobody had filed.
+    ///
+    /// The classes really do differ, which is why they were declined rather
+    /// than waved through: a `Vec` slot holds a `{ptr, i64, i64}` HEADER while
+    /// an `Array` slot IS the storage, and reading one as the other is exactly
+    /// the B-2026-08-31-29 segfault (element 0 taken as the data pointer). So
+    /// the resolver dispatches on the recorded `TypeExpr` at every hop instead
+    /// of inferring from the pointer, and the by-pointer array core added here
+    /// mirrors the `Vec` one B-2026-08-09-21 split out for the same reason —
+    /// an `Array` inline in another container's buffer has no `VarSlot` to
+    /// describe it.
+    ///
+    /// `field` is the shape that motivated the row: a 2D grid on a struct,
+    /// reached as `self.grid[i][j]` from a method. `alias` is load-bearing —
+    /// a write through the container is visible through the borrow, so these
+    /// are pointers into the nested buffer rather than copies of the element.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_ref_binding_over_nested_chain_roots`, pinned to the same string.
+    #[test]
+    fn e2e_ref_binding_over_nested_chain_roots() {
+        let Some(out) = run_program(
+            "struct Hh { grid: Vec[Vec[i64]] }\n\
+             fn main() {\n\
+             \x20   let av: Array[Vec[i64], 1] = Array[[1, 2]];\n\
+             \x20   let g1 = ref av[0][1];\n\
+             \x20   println(f\"arrayvec {g1}\");\n\
+             \x20   let b: Vec[Vec[i64]] = [[3, 4]];\n\
+             \x20   let sl: Slice[Vec[i64]] = b.as_slice();\n\
+             \x20   let g2 = ref sl[0][1];\n\
+             \x20   println(f\"slicevec {g2}\");\n\
+             \x20   let va: Vec[Array[i64, 2]] = [Array[5, 6]];\n\
+             \x20   let g3 = ref va[0][1];\n\
+             \x20   println(f\"vecarray {g3}\");\n\
+             \x20   let aa: Array[Array[i64, 2], 1] = Array[Array[7, 8]];\n\
+             \x20   let g4 = ref aa[0][1];\n\
+             \x20   println(f\"arrayarray {g4}\");\n\
+             \x20   let h: Hh = Hh { grid: [[9, 10]] };\n\
+             \x20   let g5 = ref h.grid[0][1];\n\
+             \x20   println(f\"field {g5}\");\n\
+             \x20   let mut m: Vec[Array[i64, 2]] = [Array[1, 2]];\n\
+             \x20   let ga = ref m[0][1];\n\
+             \x20   m[0][1] = 66;\n\
+             \x20   println(f\"alias {ga}\");\n\
+             }",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "arrayvec 2\nslicevec 4\nvecarray 6\narrayarray 8\nfield 10\nalias 66\n",
+            "a nested `ref` chain must lower from every container root"
+        );
+    }
+
     /// The fixture B-2026-08-31-48's two halves share: this E2E and
     /// `tests/interpreter.rs`'s `test_generic_fn_at_nameless_aggregate_args`.
     const NAMELESS_MONO_ARG_SRC: &str = r#"struct H { n: i64 }
