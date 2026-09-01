@@ -124124,6 +124124,148 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-35 — AN AGGREGATE LITERAL AT A VALUE-POSITION TAIL DID NOT
+    /// RETRACT THE LOCAL IT CONSUMED, so the body ran twice: once for the
+    /// consumer that took the value, once at the source's own death.
+    ///
+    /// THE ROW'S DIAGNOSIS WAS WRONG AND THE CORRECTION IS WHAT LOCATES THE
+    /// FIX. It read the trigger as the DISCARD path, on the strength of a
+    /// control showing the `let`-BOUND spelling correct. That control is the
+    /// UNCONDITIONAL one — `let w = S { r: t, k: 1 };` — and it is the only
+    /// bound spelling that works. Put any value-position wrapper between the
+    /// `let` and the literal and the bound spelling doubles identically:
+    ///
+    ///     let w = if n == 0 { S { r: t, k: 1 } } else { … };   dR7 dR7
+    ///     let w = match n { 0 => { S { r: t, k: 1 } } … };     dR7 dR7
+    ///     let w = { S { r: t, k: 1 } };                        dR7 dR7
+    ///
+    /// A BARE BLOCK doubles with no branch anywhere in it, which is what says
+    /// the population is "an aggregate literal at a value-position tail" rather
+    /// than anything about branches or about discards. The unconditional `let`
+    /// escapes only because `stmts.rs` retracts its sources STATICALLY, which a
+    /// tail behind a wrapper cannot do — one arm runs, and a static retraction
+    /// disarms on all paths or none.
+    ///
+    /// THE MECHANISM ALREADY EXISTED and reached one shape too few. A bare
+    /// IDENTIFIER tail (`if c { t } else { u }`) has been correct since
+    /// B-2026-08-28-51 via a per-path `i1` drop flag cleared in the arm's own
+    /// basic block. The same move one aggregate deeper was invisible to it,
+    /// because both backends' hooks matched `ExprKind::Identifier` and nothing
+    /// else. Widening them to `collect_aggregate_literal_sources` — the walker
+    /// the static retraction already uses — makes the identifier case a special
+    /// case of the general one rather than a branch beside it.
+    ///
+    /// PATH-SENSITIVITY IS THE POINT and the mixed case pins it: with two arms
+    /// consuming two different locals, the one whose arm did NOT run must keep
+    /// its own body. A static retraction over both arms would lose it.
+    #[test]
+    fn e2e_an_arm_literal_consuming_a_local_runs_one_body() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct S { r: R, k: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "bound `if` arm literal consumes a local",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let w = if n == 0 { S { r: t, k: 1 } } else { S { r: R { id: 9 }, k: 2 } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "bound `match` arm literal consumes a local",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let w = match n { 0 => { S { r: t, k: 1 } } _ => { S { r: R { id: 9 }, k: 2 } } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "bare BLOCK wrapper, no branch at all",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = { S { r: t, k: 1 } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "TWO sources in one literal behind a wrapper",
+                "fn go() -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 let w = { S2 { r: t, s: u, k: 1 } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            (
+                "one source and one MINTED sibling",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = { S2 { r: t, s: R { id: 8 }, k: 1 } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            // PATH-SENSITIVITY. Two arms consume two different locals; only the
+            // taken arm's source may be disarmed. `u`'s body must still run, at
+            // its own death, or a static retraction has been used where a
+            // per-path one was required.
+            (
+                "mixed arms: the NON-taken arm's source keeps its body",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 let w = if n == 0 { S { r: t, k: 1 } } else { S { r: u, k: 2 } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            (
+                "ELSE taken: the unconsumed source dies on its own",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 };\n\
+                 let w = if n == 0 { S { r: t, k: 1 } } else { S { r: R { id: 9 }, k: 5 } };\n\
+                 return w.k + 2; }\n\
+                 fn take() -> i64 { return go(3); }",
+                "dR7\ndR9\nv=7\n",
+            ),
+            // CONTROLS — already correct before this row, and together the
+            // reason the wrapper rather than the discard is the trigger.
+            (
+                "control: the UNCONDITIONAL `let` spelling",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let w = S { r: t, k: 1 };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\nv=7\n",
+            ),
+            (
+                "control: a bare IDENTIFIER arm tail",
+                "fn go(n: i64) -> i64 { let t = R { id: 7 }; let u = R { id: 8 };\n\
+                 let w = if n == 0 { t } else { u };\n\
+                 return w.id; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR8\ndR7\nv=7\n",
+            ),
+            (
+                "control: the arm MINTS its field",
+                "fn go(n: i64) -> i64 {\n\
+                 let w = if n == 0 { S { r: R { id: 7 }, k: 1 } } else { S { r: R { id: 9 }, k: 2 } };\n\
+                 return w.k + 6; }\n\
+                 fn take() -> i64 { return go(0); }",
+                "dR7\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: one value, one body");
+            }
+        }
+    }
+
     /// B-2026-08-31-49 — A `Result[T, E]` RENDERED WITH THE `Option` VARIANT
     /// TABLE. `Ok(7)` printed `Some(7)` and `Err(9)` printed `None`, DROPPING
     /// THE PAYLOAD, silently, on both compiled backends.

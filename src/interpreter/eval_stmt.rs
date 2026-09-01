@@ -3214,25 +3214,38 @@ impl<'a> super::Interpreter<'a> {
         {
             return;
         }
-        let ExprKind::Identifier(name) = &expr.kind else {
-            return;
-        };
-        if cleanup
-            .iter()
-            .any(|a| matches!(a, CleanupAction::Drop { name: n } if n == name))
-        {
-            return;
+        // B-2026-08-31-35 — every local the tail CONSUMES, not only one it
+        // hands out whole. This read a bare `Identifier` and nothing else, so
+        // `if c { t } else { u }` was right while the identical move one
+        // aggregate deeper — `if c { W { r: t, b: 1 } } else { … }` — left `t`
+        // armed and ran its body twice. `collect_aggregate_literal_sources` is
+        // the same walker the container-move recorder uses and resolves a bare
+        // identifier to itself, so the original behaviour is a special case of
+        // this rather than a branch beside it. Codegen's twin
+        // (`clear_cond_move_flags_for_tail_sources`) took the identical
+        // widening, which is what keeps the two backends deciding this
+        // together — the row filed it as an AGREED gap, and a one-sided fix
+        // would have traded that for a run-vs-build divergence.
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_aggregate_literal_sources(expr, &mut names);
+        for name in names {
+            if cleanup
+                .iter()
+                .any(|a| matches!(a, CleanupAction::Drop { name: n } if *n == name))
+            {
+                continue;
+            }
+            let type_name = match self.env.get(&name) {
+                Some(Value::Struct { name, .. }) => name.clone(),
+                // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
+                Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+                _ => continue,
+            };
+            if !self.program.drop_method_keys.contains_key(&type_name) {
+                continue;
+            }
+            self.moved_out_user_drop_bindings.insert(name);
         }
-        let type_name = match self.env.get(name) {
-            Some(Value::Struct { name, .. }) => name.clone(),
-            // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
-            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
-            _ => return,
-        };
-        if !self.program.drop_method_keys.contains_key(&type_name) {
-            return;
-        }
-        self.moved_out_user_drop_bindings.insert(name.clone());
     }
 
     /// Sub-slice (3) of move-suppression — interpreter helper that

@@ -9229,29 +9229,63 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
-        let ExprKind::Identifier(name) = &expr.kind else {
-            return;
-        };
-        let name = name.clone();
+        self.clear_cond_move_flags_for_tail_sources(expr);
+    }
+
+    /// B-2026-08-31-35 — the same per-path disarm for every local an arm tail
+    /// CONSUMES, not only for one it hands out whole.
+    ///
+    /// `arm_conditional_move_tail_flag` read a bare `Identifier` tail and
+    /// nothing else, so `if c { t } else { u }` was correct while
+    /// `if c { W { r: t, b: 1 } } else { … }` — the identical move, one
+    /// aggregate deeper — left `t` armed. Both the branch's consumer and `t`
+    /// itself then ran the body: `dD7 dD7` where one is due, agreed by every
+    /// backend, which is why no A/B gate reported it.
+    ///
+    /// A BARE BLOCK is enough to trigger it, with no branch anywhere
+    /// (`let w = { W { r: t, b: 1 } };` doubles too), so the population is "an
+    /// aggregate literal at a value-position tail", of which the branch arm is
+    /// one member. That matters because the obvious reading sends a fix to the
+    /// discard path — the spelling this was filed against — and the DISCARD is
+    /// not the trigger either: the `let`-BOUND spelling behind the same wrapper
+    /// doubles identically. Only the literal written DIRECTLY as a `let` RHS is
+    /// correct, and that one is correct because `stmts.rs` retracts its sources
+    /// statically, which a branch arm cannot do.
+    ///
+    /// Sources come from `collect_aggregate_literal_sources`, the same walker
+    /// the static retraction uses, so the two disarms see one definition of
+    /// "what this literal consumed" — nested aggregates, tuples and array /
+    /// `Vec`-prefix literals included. A bare `Identifier` still resolves to
+    /// itself through it, so the original behaviour is a special case of this
+    /// one rather than a branch beside it.
+    ///
+    /// The ENCLOSING-frame guard is what keeps this honest for a field that is
+    /// not a move at all: a scalar field, or a name with no armed body, has no
+    /// `UserDrop` to find and is skipped.
+    pub(super) fn clear_cond_move_flags_for_tail_sources(&mut self, expr: &Expr) {
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_aggregate_literal_sources(expr, &mut names);
         let depth = self.drop_rc.scope_cleanup_actions.len();
         if depth == 0 {
             return;
         }
-        let in_enclosing = self.drop_rc.scope_cleanup_actions[..depth - 1]
-            .iter()
-            .any(|frame| {
-                frame.iter().any(|a| {
-                    matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == &name)
-                })
-            });
-        if !in_enclosing {
-            return;
+        for name in names {
+            let in_enclosing = self.drop_rc.scope_cleanup_actions[..depth - 1]
+                .iter()
+                .any(|frame| {
+                    frame.iter().any(|a| {
+                        matches!(a, CleanupAction::UserDrop { binding_name, .. } if binding_name == &name)
+                    })
+                });
+            if !in_enclosing {
+                continue;
+            }
+            let Some(flag) = self.cond_move_drop_flag_for(&name) else {
+                continue;
+            };
+            let bool_t = self.context.bool_type();
+            let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
         }
-        let Some(flag) = self.cond_move_drop_flag_for(&name) else {
-            return;
-        };
-        let bool_t = self.context.bool_type();
-        let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
     }
 
     /// B-2026-08-30-28 — clear a conditionally-stored parameter's per-path
