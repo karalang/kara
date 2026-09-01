@@ -52638,3 +52638,115 @@ fn method_frame_retracts_to_the_caller_only_when_the_caller_fires() {
         assert_eq!(run(&format!("{H}{body}")), want, "{label}");
     }
 }
+
+/// B-2026-08-31-47, shape 2 — the two DISCARD SPELLINGS of one call agree.
+///
+/// `k.f(mk(4), true);` ran no `Drop` body at all while
+/// `let _ = k.f(mk(4), true);` ran one. The bare arm took the DECLARED-TYPE
+/// payload walk, and `Option`/`Result` are built-ins with no source-level
+/// `EnumDef`, so that walk answers nothing for them; the `let _` spelling
+/// reaches the shared discard walker, which carries its own value-driven
+/// `Option`/`Result` arm.
+///
+/// The matrix is 2x2 on purpose — (user enum, `Option`) x (bare, `let _`) —
+/// because only ONE of the four cells was wrong, and a fixture covering just
+/// the failing spelling would not have shown that the user-enum sibling is the
+/// control rather than a second bug. The user-enum rows also guard the fix's
+/// blast radius: they must keep running exactly one body, since only the
+/// built-ins were rerouted.
+///
+/// Bodies only. The COMPILED backends run two for the escaping call here, which
+/// is B-2026-08-29-38's family — over-firing, the opposite direction — and is
+/// deliberately not this row's, so there is no codegen twin to share.
+#[test]
+fn discard_spellings_of_a_method_call_agree_on_the_payload_body() {
+    let src = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+               enum MyBox { Full(R), Empty }\n\
+               struct K { n: i64 }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+               impl K {\n\
+               \x20   fn userenum(ref self, r: R) -> MyBox { return MyBox.Full(r); }\n\
+               \x20   fn opt(ref self, r: R) -> Option[R] { return Option.Some(r); }\n\
+               }\n\
+               fn main() {\n\
+               \x20   let k: K = K { n: 1 };\n\
+               \x20   k.userenum(mk(1));\n\
+               \x20   let _ = k.userenum(mk(2));\n\
+               \x20   k.opt(mk(3));\n\
+               \x20   let _ = k.opt(mk(4));\n\
+               \x20   println(\"end\");\n\
+               }\n";
+    assert_eq!(
+        run(src),
+        "drop 1\ndrop 2\ndrop 3\ndrop 4\nend\n",
+        "each of the four discards owns exactly one body; `drop 3` is the cell \
+         that ran none before this row — a bare-statement discard of a method \
+         returning `Option`"
+    );
+}
+
+/// B-2026-08-31-47, shape 1 — a fresh-temp enum argument whose arm BINDS the
+/// payload still runs its body.
+///
+/// Disarming the scrutinee's payload walk is a HAND-OFF: the arm binds the
+/// payload out and its new owner runs the body. In a method frame reached with
+/// a fresh temp there is no such owner — the arm defers to the caller
+/// (`scrutinee_expr_is_consuming`'s caller-retains carve-out) and the caller
+/// has no binding to defer to — so the body ran nowhere.
+///
+/// The three rows are the isolation, and they are what shows this is about the
+/// BINDING arm rather than about enum arguments or method frames generally:
+/// `nomatch` and the wildcard `Full(_)` were correct throughout, and only
+/// `Full(r)` lost the body.
+///
+/// `handed-back` is the guard on the other edge. There the arm's payload
+/// ESCAPES through the return, so the caller's RESULT binding owns it; arming
+/// the walk for that shape too runs two bodies against one compiled, which an
+/// earlier version of this fix did.
+///
+/// Twin: `tests/codegen.rs`'s
+/// `test_e2e_method_fresh_temp_enum_arg_arm_binds_payload`, same programs and
+/// expectations — the property is that the two backends agree.
+#[test]
+fn method_fresh_temp_enum_arg_arm_binds_payload() {
+    const H: &str = "struct R { id: i64, name: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+         enum Box2 { Full(R), Empty }\n\
+         struct T { n: i64 }\n\
+         fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+         impl T {\n\
+         \x20   fn nomatch(ref self, b: Box2) -> i64 { return 1; }\n\
+         \x20   fn wild(ref self, b: Box2) -> i64 {\n\
+         \x20       match b { Box2.Full(_) => { return 2; } Box2.Empty => { return 0; } } }\n\
+         \x20   fn bind(ref self, b: Box2) -> i64 {\n\
+         \x20       match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } }\n\
+         \x20   fn handback(ref self, b: Box2) -> R {\n\
+         \x20       match b { Box2.Full(r) => { return r; } Box2.Empty => { return mk(0); } } }\n\
+         }\n";
+    for (label, body, want) in [
+        (
+            "nomatch",
+            "let n = t.nomatch(Box2.Full(mk(1))); println(f\"n{n}\");",
+            "drop 1\nn1\n",
+        ),
+        (
+            "wildcard-arm",
+            "let n = t.wild(Box2.Full(mk(2))); println(f\"n{n}\");",
+            "drop 2\nn2\n",
+        ),
+        (
+            "binding-arm",
+            "let n = t.bind(Box2.Full(mk(3))); println(f\"n{n}\");",
+            "drop 3\nn3\n",
+        ),
+        (
+            "handed-back",
+            "let r = t.handback(Box2.Full(mk(4))); println(f\"n{r.id}\");",
+            "n4\ndrop 4\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{\nlet t: T = T {{ n: 1 }};\n{body}\n}}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}

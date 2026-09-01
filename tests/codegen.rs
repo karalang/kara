@@ -98526,6 +98526,57 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-08-31-47 — compiled twin of `tests/interpreter.rs`'s
+    /// `method_fresh_temp_enum_arg_arm_binds_payload`, same programs and
+    /// expectations.
+    ///
+    /// This backend was correct on every row; the interpreter lost the body for
+    /// the BINDING arm. The twin exists because the property is that the two
+    /// agree — a fixture on the fixed side alone would keep passing while this
+    /// one drifted.
+    #[test]
+    fn test_e2e_method_fresh_temp_enum_arg_arm_binds_payload() {
+        const H: &str = "struct R { id: i64, name: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\") } }\n\
+             enum Box2 { Full(R), Empty }\n\
+             struct T { n: i64 }\n\
+             fn mk(i: i64) -> R { return R { id: i, name: f\"h{i}\" }; }\n\
+             impl T {\n\
+             \x20   fn nomatch(ref self, b: Box2) -> i64 { return 1; }\n\
+             \x20   fn wild(ref self, b: Box2) -> i64 {\n\
+             \x20       match b { Box2.Full(_) => { return 2; } Box2.Empty => { return 0; } } }\n\
+             \x20   fn bind(ref self, b: Box2) -> i64 {\n\
+             \x20       match b { Box2.Full(r) => { return r.id; } Box2.Empty => { return 0; } } }\n\
+             \x20   fn handback(ref self, b: Box2) -> R {\n\
+             \x20       match b { Box2.Full(r) => { return r; } Box2.Empty => { return mk(0); } } }\n\
+             }\n";
+        for (label, body, want) in [
+            (
+                "nomatch",
+                "let n = t.nomatch(Box2.Full(mk(1))); println(f\"n{n}\");",
+                "drop 1\nn1\n",
+            ),
+            (
+                "wildcard-arm",
+                "let n = t.wild(Box2.Full(mk(2))); println(f\"n{n}\");",
+                "drop 2\nn2\n",
+            ),
+            (
+                "binding-arm",
+                "let n = t.bind(Box2.Full(mk(3))); println(f\"n{n}\");",
+                "drop 3\nn3\n",
+            ),
+            (
+                "handed-back",
+                "let r = t.handback(Box2.Full(mk(4))); println(f\"n{r.id}\");",
+                "n4\ndrop 4\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{\nlet t: T = T {{ n: 1 }};\n{body}\n}}\n");
+            assert_eq!(run_program(&src), Some(want.to_string()), "{label}");
+        }
+    }
+
     /// B-2026-08-30-55 — the compiled twin of `tests/interpreter.rs`'s
     /// `method_frame_owns_its_by_value_enum_argument`, sharing its expectations
     /// verbatim.
