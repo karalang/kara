@@ -52951,6 +52951,69 @@ fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
     }
 }
 
+/// B-2026-09-01-33 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_producer_call_arg_runs_the_enum_payload_body`, same programs and
+/// expectations.
+///
+/// This backend was CORRECT on every row; both compiled backends lost the
+/// payload body for an enum temp returned from a call. The twin pins the
+/// transcript the fix had to converge ON, and keeps the two spellings and the
+/// three control positions asserted on both sides.
+///
+/// Note the DIRECTION: this is the opposite of B-2026-08-31-8, where the
+/// interpreter was the wrong side for a neighbouring shape. That is why the
+/// producer-call case was deliberately excluded from that row's fixtures --
+/// pinning it then would have asserted one side of a live disagreement.
+#[test]
+fn producer_call_arg_runs_the_enum_payload_body() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Sv { Hold { inner: R }, Nil }\n\
+         impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+         enum Tv { A(R), Nil }\n\
+         impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+         struct Mk { z: i64 }\n\
+         impl Mk { fn s(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; } }\n\
+         fn eatS(v: Sv) { println(\"e\") }\n\
+         fn eatT(v: Tv) { println(\"e\") }\n\
+         fn mkS(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; }\n\
+         fn mkT(i: i64) -> Tv { return Tv.A(R { id: i }); }\n";
+    for (label, body, want) in [
+        (
+            "producer fn, struct variant",
+            "eatS(mkS(5))",
+            "e\ndSv\ndR5\n",
+        ),
+        (
+            "producer fn, tuple variant",
+            "eatT(mkT(6))",
+            "e\ndTv\ndR6\n",
+        ),
+        (
+            "via named local, struct variant (control)",
+            "let x = mkS(7); eatS(x)",
+            "e\ndSv\ndR7\n",
+        ),
+        (
+            "via named local, tuple variant (control)",
+            "let y = mkT(8); eatT(y)",
+            "e\ndTv\ndR8\n",
+        ),
+        (
+            "inline constructor argument (control)",
+            "eatS(Sv.Hold { inner: R { id: 9 } })",
+            "e\ndSv\ndR9\n",
+        ),
+        ("associated producer fn", "eatS(Mk.s(10))", "e\ndSv\ndR10\n"),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}
+
 /// B-2026-09-01-40 — interpreter twin of `tests/codegen.rs`'s
 /// `test_e2e_let_bound_scalar_field_read_runs_sibling_body_once`, same programs
 /// and expectations.

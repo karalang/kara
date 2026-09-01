@@ -124,6 +124,38 @@ mod memory_sanitizer_tests {
     ) -> Option<(String, String, std::process::ExitStatus)> {
         run_under_asan_opts(src, label, false, false, true)
     }
+    /// B-2026-09-01-33 — the heap-carrying producer-call argument under
+    /// ASAN + LSan.
+    ///
+    /// This case pins the REORDER, which is the part of the fix that could go
+    /// wrong. The arm previously pushed the enum's memory free AFTER the
+    /// wrapper, so the frame drained the free FIRST; that was harmless only
+    /// while no walker existed to read through it. Adding the payload walker
+    /// without moving the free ahead of it would have had `dR5`'s body read a
+    /// freed `String` and `Vec` -- a use-after-free ASAN catches, unlike the
+    /// missing body that motivated the fix.
+    ///
+    /// The transcript is asserted alongside so the case also fails if the
+    /// walker stops running rather than merely staying memory-clean.
+    #[test]
+    fn asan_producer_call_arg_enum_payload_body_reads_live_heap() {
+        assert_clean_asan_run(
+            "struct R { id: i64, s: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.s}:{self.xs.len()}\") } }\n\
+             enum Sv { Hold { inner: R }, Nil }\n\
+             impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+             enum Tv { A(R), Nil }\n\
+             impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+             fn eatS(v: Sv) { println(\"e\") }\n\
+             fn eatT(v: Tv) { println(\"e\") }\n\
+             fn mkS(i: i64) -> Sv { return Sv.Hold { inner: R { id: i, s: \"pay\", xs: [1, 2, 3] } }; }\n\
+             fn mkT(i: i64) -> Tv { return Tv.A(R { id: i, s: \"pay\", xs: [1, 2] }); }\n\
+             fn main() { eatS(mkS(5)); eatT(mkT(6)) }\n",
+            &["e", "dSv", "dR5:pay:3", "e", "dTv", "dR6:pay:2"],
+            "b33-producer-call-arg-enum-payload",
+        );
+    }
+
     /// B-2026-09-01-40 — the heap-carrying form of the doubled sibling body,
     /// under ASAN + LSan.
     ///

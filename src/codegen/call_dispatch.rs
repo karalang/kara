@@ -4257,6 +4257,52 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else {
                                 None
                             };
+                            // B-2026-09-01-33 — the enum leg needs the PAYLOAD
+                            // WALKER as well as the wrapper, and the two
+                            // registrations below are ordered for it.
+                            //
+                            // `karac_drop_<E>` runs an enum's OWN body alone;
+                            // its payload walk lives in the separate
+                            // `__karac_dropelems_enum_<E>`. (A struct differs --
+                            // its wrapper carries the field bodies from inside --
+                            // which is why only the enum leg is short a
+                            // registration here.) This arm registered the
+                            // wrapper and the memory free and no walker, so
+                            // `eat(mk(5))` ran `e dSv` on all three compiled
+                            // surfaces against the interpreter's `e dSv dR5`.
+                            //
+                            // The two neighbouring spellings were already
+                            // correct and are what localize it: the same value
+                            // through a NAMED LOCAL (`let x = mk(5); eat(x)`)
+                            // is registered by the `let` path, and an INLINE
+                            // CONSTRUCTOR argument (`eat(E.A(R { .. }))`) by the
+                            // ctor arm below -- both of which register the pair.
+                            // Only the temp returned FROM A CALL had half of it.
+                            //
+                            // MEMORY MOVES AHEAD OF THE BODIES, matching the
+                            // ctor arm's rule (B-2026-08-01-2): the frame drains
+                            // LIFO, so pushing the free FIRST makes it run LAST,
+                            // after the bodies that read the payload. The old
+                            // order pushed it after the wrapper, which was
+                            // harmless only while no walker existed to read
+                            // through it -- adding one without this move would
+                            // have had `dR5` read a freed payload.
+                            if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
+                                self.track_enum_var(&ret_ty_name, slot);
+                            }
+                            if is_enum {
+                                if let Some(w) =
+                                    self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name)
+                                {
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        "__owned_agg_tmp",
+                                        slot,
+                                        w,
+                                        UserDropKind::ContainerElemBodies,
+                                    );
+                                }
+                            }
                             match masked {
                                 Some(f) => self.track_user_drop_var_with_fn(
                                     &ret_ty_name,
@@ -4268,9 +4314,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                 None => {
                                     self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot)
                                 }
-                            }
-                            if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
-                                self.track_enum_var(&ret_ty_name, slot);
                             }
                             return;
                         }

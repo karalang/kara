@@ -98747,6 +98747,92 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-09-01-33 — an enum temp returned FROM A CALL and passed as an
+    /// argument runs its payload's `Drop` body.
+    ///
+    /// `karac_drop_<E>` runs an enum's OWN body alone; the payload walk lives in
+    /// the separate `__karac_dropelems_enum_<E>`. (A struct differs -- its
+    /// wrapper carries the field bodies from inside.) The fn-call producer arm
+    /// registered the wrapper and the memory free and no walker, so
+    /// `eat(mk(5))` ran `e dSv` here against the interpreter's `e dSv dR5`.
+    ///
+    /// NOT struct-variant specific: the tuple spelling loses it identically,
+    /// which is what puts the axis on the producer-call shape rather than on
+    /// the variant form.
+    ///
+    /// The three controls are what localize it, and all three were already
+    /// correct: a NAMED LOCAL is registered by the `let` path, an INLINE
+    /// CONSTRUCTOR argument by the ctor arm, and an ASSOCIATED producer
+    /// (`Mk.s(10)`, a 2-segment `Path` callee) reaches the same arm as the free
+    /// one. Only the temp returned from a call had half the pair.
+    #[test]
+    fn test_e2e_producer_call_arg_runs_the_enum_payload_body() {
+        const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Sv { Hold { inner: R }, Nil }\n\
+         impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+         enum Tv { A(R), Nil }\n\
+         impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+         struct Mk { z: i64 }\n\
+         impl Mk { fn s(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; } }\n\
+         fn eatS(v: Sv) { println(\"e\") }\n\
+         fn eatT(v: Tv) { println(\"e\") }\n\
+         fn mkS(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; }\n\
+         fn mkT(i: i64) -> Tv { return Tv.A(R { id: i }); }\n";
+
+        for (label, body, want) in [
+            (
+                "producer fn, struct variant",
+                "eatS(mkS(5))",
+                "e\ndSv\ndR5\n",
+            ),
+            (
+                "producer fn, tuple variant",
+                "eatT(mkT(6))",
+                "e\ndTv\ndR6\n",
+            ),
+            (
+                "via named local, struct variant (control)",
+                "let x = mkS(7); eatS(x)",
+                "e\ndSv\ndR7\n",
+            ),
+            (
+                "via named local, tuple variant (control)",
+                "let y = mkT(8); eatT(y)",
+                "e\ndTv\ndR8\n",
+            ),
+            (
+                "inline constructor argument (control)",
+                "eatS(Sv.Hold { inner: R { id: 9 } })",
+                "e\ndSv\ndR9\n",
+            ),
+            ("associated producer fn", "eatS(Mk.s(10))", "e\ndSv\ndR10\n"),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+
+        // Heap-carrying payload: the body reads a live `String` and `Vec`, which
+        // is what proves the memory free now drains AFTER the bodies. Before the
+        // reorder this arm pushed the free after the wrapper, so a walker added
+        // without moving it would have read through a freed payload.
+        assert_eq!(
+            run_program(
+                "struct R { id: i64, s: String, xs: Vec[i64] }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.s}:{self.xs.len()}\") } }\n\
+                 enum Sv { Hold { inner: R }, Nil }\n\
+                 impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+                 fn eatS(v: Sv) { println(\"e\") }\n\
+                 fn mkS(i: i64) -> Sv { return Sv.Hold { inner: R { id: i, s: \"pay\", xs: [1, 2, 3] } }; }\n\
+                 fn main() { eatS(mkS(5)) }\n"
+            ),
+            Some("e\ndSv\ndR5:pay:3\n".to_string())
+        );
+    }
+
     /// B-2026-09-01-40 — a `let`-bound SCALAR field read off a struct with its
     /// own `impl Drop` must not run a sibling field's body twice.
     ///
