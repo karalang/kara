@@ -108270,6 +108270,36 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-19 — the shapes that stay ACCEPTED around the new range check
+    /// agree on every backend.
+    ///
+    /// The rejected shapes have no runtime left to compare, so what needs pinning
+    /// is the boundary the check draws: an in-range suffixed literal in a seeded
+    /// payload slot still compiles and still means what it says, and the `as u8`
+    /// an author writes to mean the truncation gives the same 44 everywhere rather
+    /// than the `300`/`44` split the unchecked literal used to.
+    /// `255i64` sits on the boundary itself, which is where an off-by-one in the
+    /// range comparison would show. Verified byte-identical under
+    /// `karac run --interp`, `karac run`, `karac build`, and
+    /// `KARAC_AUTO_PAR=0 karac build`.
+    #[test]
+    fn test_e2e_seeded_slot_range_check_boundary_agrees_across_backends() {
+        assert_eq!(
+            run_program(
+                r#"fn main() {
+    let e: Option[u8] = Option.Some(5i64);
+    println(f"{e}");
+    let g: Option[u8] = Option.Some(255i64);
+    println(f"{g}");
+    let h: Option[u8] = Option.Some(300i64 as u8);
+    println(f"{h}");
+}
+"#
+            ),
+            Some("Some(5)\nSome(255)\nSome(44)\n".to_string())
+        );
+    }
+
     #[test]
     fn test_e2e_vector_unary_math_lane_width_matches_the_interpreter() {
         // The COMPILED half of the oracle pair for B-2026-08-29-40. The bug was

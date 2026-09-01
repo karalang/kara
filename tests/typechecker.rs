@@ -47795,3 +47795,70 @@ fn a_contradicting_suffix_withdraws_the_redundant_suffix_warning() {
     );
     assert_eq!(warnings_of("fn main() { let b = 0.1f64; println(b); }"), 1);
 }
+
+/// B-2026-09-01-19 — an out-of-range integer literal with a suffix is rejected
+/// in a slot the EXPECTATION seeded, not only in one `check_expr` checks.
+///
+/// `check_int_widening_coercion` exempts suffixed integer literals, and states
+/// its precondition: they are "already range-checked against the contextual
+/// type at the top of `check_expr`". That holds on the `check_expr` route and
+/// not on this one — a generic payload slot is fixed from the OUTSIDE and its
+/// argument is checked at the call site instead, which is the route
+/// `check_expr`'s two literal blocks never run on. So nothing consulted the
+/// destination at all, and the backends parted company on the value:
+/// `Option[u8] = Option.Some(300i64)` was `Some(300)` under `--interp` and
+/// `Some(44)` on all three compiled backends, and `Option.Some(-1i64)` was
+/// `Some(-1)` against `Some(255)` — a SIGN change, silent, on a program whose
+/// every other spelling was already rejected (`let a: u8 = 300i64`,
+/// `Option.Some(300)`, and `Option.Some(v)` with `v: i64` all error).
+///
+/// The negative case is listed separately because it takes the OTHER arm of
+/// `check_int_literal_fits` — "negative integer literal cannot initialize
+/// unsigned type" rather than "out of range" — so a fix that only compared
+/// against the maximum would pass the first three assertions and still admit
+/// it.
+#[test]
+fn an_out_of_range_suffixed_literal_is_rejected_in_a_seeded_slot() {
+    let rejects = |src: &str, needle: &str| {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.message.contains(needle)),
+            "expected {needle:?} from: {src}\ngot: {errs:?}"
+        );
+    };
+    rejects(
+        "fn main() { let a: Option[u8] = Option.Some(300i64); println(f\"{a}\"); }",
+        "out of range for 'u8'",
+    );
+    rejects(
+        "fn main() { let b: Option[i32] = Option.Some(5000000000i64); println(f\"{b}\"); }",
+        "out of range for 'i32'",
+    );
+    rejects(
+        "fn main() { let c: Option[u8] = Option.Some(-1i64); println(f\"{c}\"); }",
+        "cannot initialize unsigned type 'u8'",
+    );
+    // `Result` seeds its payload the same way, and a user-defined generic fn
+    // is the shape B-2026-08-08-9 already covers for a non-literal argument —
+    // both reach this site, so both were holed and both are pinned.
+    rejects(
+        "fn main() { let d: Result[u8, i64] = Result.Ok(300i64); println(f\"{d}\"); }",
+        "out of range for 'u8'",
+    );
+    rejects(
+        "fn id[T](x: T) -> T { return x; }\n\
+         fn main() { let e: u8 = id(300i64); println(e); }",
+        "out of range for 'u8'",
+    );
+
+    // IN-RANGE stays accepted, deliberately. The check emits only when the
+    // value does not fit, exactly as `check_expr`'s arm does, so an in-range
+    // coercion is untouched — that permissiveness is what keeps the
+    // `Box.new(5)` shapes seeding exists for working, and the annotation
+    // types the binding either way.
+    typecheck_ok("fn main() { let e: Option[u8] = Option.Some(5i64); println(f\"{e}\"); }");
+    typecheck_ok("fn main() { let g: Option[u8] = Option.Some(255i64); println(f\"{g}\"); }");
+    typecheck_ok("fn main() { let h: Option[i64] = Option.Some(5i64); println(f\"{h}\"); }");
+    // And the cast the author would write to mean it.
+    typecheck_ok("fn main() { let i: Option[u8] = Option.Some(300i64 as u8); println(f\"{i}\"); }");
+}

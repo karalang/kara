@@ -2194,6 +2194,35 @@ impl<'a> super::TypeChecker<'a> {
                     if seeded_from_expectation {
                         self.check_float_narrowing_coercion(&arg.value, &resolved, arg_ty);
                     }
+                    // B-2026-09-01-19 — the contextual RANGE check for a
+                    // suffixed integer literal, which this route also never
+                    // ran. `check_int_widening_coercion` above exempts
+                    // suffixed literals, and says why: they are "already
+                    // range-checked against the contextual type at the top of
+                    // `check_expr`". True of that route; false of this one,
+                    // whose whole point is that the slot was fixed from the
+                    // outside and the argument is checked here instead. So
+                    // `Option[u8] = Option.Some(300i64)` reached the payload
+                    // with nothing consulting `u8` at all: `Some(300)` under
+                    // `--interp` against `Some(44)` on every compiled backend,
+                    // and `Option.Some(-1i64)` `Some(-1)` against `Some(255)`
+                    // — a sign change — while the bare `Option.Some(300)` and
+                    // the plain `let a: u8 = 300i64` were both already
+                    // rejected. This is the same check `check_expr` runs, on
+                    // the route that does not reach it; like that one it emits
+                    // ONLY when the value does not fit, so an in-range
+                    // coercion (`Option.Some(5i64)` into `Option[u8]`) is left
+                    // alone and the `Box.new(5)` shapes seeding exists for
+                    // keep working.
+                    if seeded_from_expectation {
+                        if let Some((value, sfx)) = Self::suffixed_int_literal_value(&arg.value) {
+                            let ctx = match &resolved {
+                                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                                other => other,
+                            };
+                            self.check_int_literal_fits(value, ctx, &arg.value.span, sfx);
+                        }
+                    }
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, arg_ty);
                     }
