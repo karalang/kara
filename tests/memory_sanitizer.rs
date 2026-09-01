@@ -1190,13 +1190,131 @@ fn main() {
     /// widening admits (a `Map` handle; a `Result`'s error arm), each carrying
     /// `String`s so there is real heap behind the handle.
     ///
-    /// The loop is a `let`-bound Option per iteration rather than an
-    /// interpolated CALL RESULT (`f"{mk(i)}"`), which leaks its payload once per
-    /// evaluation — a PRE-EXISTING hole in the Option/Result f-string temp
-    /// path, not something this widening introduced: the same fixture with an
-    /// `Option[String]` return, a shape admitted since B-2026-07-08-9, leaks 20
-    /// buffers on the unmodified compiler. Filed as B-2026-08-31-17; when that
-    /// lands, the call-result spelling belongs here too.
+    /// The loop is a `let`-bound Option per iteration. The interpolated
+    /// CALL-RESULT spelling (`f"{mk(i)}"`) used to leak its payload once per
+    /// evaluation — a pre-existing hole in the Option/Result f-string temp path,
+    /// not one this widening introduced — and now has its own fixture,
+    /// `asan_option_result_display_call_result_frees_once` (B-2026-08-31-17).
+    /// Both spellings are kept: this one covers the `let`-bound and repeated
+    /// variable renders, that one the non-place operands and the place
+    /// expressions that must NOT be freed here.
+    /// B-2026-08-31-17 — an `Option`/`Result` CALL RESULT interpolated in an
+    /// f-string frees its payload once per evaluation.
+    ///
+    /// `try_compile_option_result_display` spills a non-place value into an
+    /// `optres.disp.tmp` entry alloca so the by-pointer Display fn has something
+    /// to load from, and nothing dropped it: `f"{mk(i)}"` in a 20-iteration loop
+    /// leaked 20 buffers, while the `let`-bound spelling of the same value was
+    /// clean because scope cleanup owned it. The bare-`String` version of the
+    /// same hole was B-2026-07-15-12.
+    ///
+    /// Every shape here is a NON-PLACE operand, which is the whole class: a
+    /// direct call, a call nested among other interpolations, a constructor
+    /// applied inline, a `Result` rather than an `Option`, and a payload with
+    /// depth (`Vec[String]`, which leaked the element buffer AND the `String`s
+    /// inside it, so a fix that frees only the outer allocation still shows).
+    /// The `let`-bound and repeated-variable spellings ride along as controls:
+    /// they were already clean, and a fix that drops a PLACE expression would
+    /// double-free them rather than leak.
+    #[test]
+    fn asan_option_result_display_call_result_frees_once() {
+        let Some((out, status)) = run_under_asan(
+            r#"fn mks(n: i64) -> Option[String] {
+    return Some(f"abcdefghijklmnopqrstuvwxyz{n}")
+}
+
+fn mkv(n: i64) -> Option[Vec[String]] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"abcdefghijklmnopqrstuvwxyz{n}");
+    return Some(v)
+}
+
+fn mkr(n: i64) -> Result[String, i64] {
+    return Ok(f"rrrrrrrrrrrrrrrrrrrrrrrrrr{n}")
+}
+
+fn mke(n: i64) -> Result[i64, String] {
+    return Err(f"eeeeeeeeeeeeeeeeeeeeeeeeee{n}")
+}
+
+struct H { o: Option[String], r: Result[String, i64] }
+
+fn main() {
+    let n: i64 = env.args().len();
+
+    let mut i = 0;
+    while i < 20 {
+        println(f"call {mks(i + n)}");
+        i = i + 1;
+    }
+
+    let mut j = 0;
+    while j < 20 {
+        println(f"deep {mkv(j + n)}");
+        j = j + 1;
+    }
+
+    let mut k = 0;
+    while k < 20 {
+        println(f"ok   {mkr(k + n)} err {mke(k + n)}");
+        k = k + 1;
+    }
+
+    let mut m = 0;
+    while m < 20 {
+        println(f"inln {Some(f"iiiiiiiiiiiiiiiiiiiiiiiiii{m + n}")}");
+        m = m + 1;
+    }
+
+    let o = mks(n);
+    println(f"var  {o}");
+    println(f"var  {o}");
+
+    let h = H { o: mks(n), r: mkr(n) };
+    println(f"fld  {h.o} {h.r}");
+    println(f"fld  {h.o} {h.r}");
+
+    let mut vo: Vec[Option[String]] = Vec.new();
+    vo.push(mks(n));
+    println(f"elem {vo[0]}");
+    println(f"elem {vo[0]}");
+
+    let t: (Option[String], i64) = (mks(n), 1);
+    println(f"tup  {t.0}");
+    println(f"tup  {t.0}");
+    println("end");
+}
+"#,
+            "asan_option_result_display_call_result_frees_once",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        for (want, n) in [
+            ("call Some(abcdefghijklmnopqrstuvwxyz", 20),
+            ("deep Some([abcdefghijklmnopqrstuvwxyz", 20),
+            ("ok   Ok(rrrrrrrrrrrrrrrrrrrrrrrrrr", 20),
+            ("inln Some(iiiiiiiiiiiiiiiiiiiiiiiiii", 20),
+            ("var  Some(abcdefghijklmnopqrstuvwxyz", 2),
+            // Place expressions: NOT identifiers, so they reach the same spill
+            // arm, but each is owned by something else. Printing twice is the
+            // point — a fix that registered them unconditionally would free the
+            // owner's buffer on the first render and the second would read
+            // freed memory, which is how the Vec sibling's B-2026-08-14-30
+            // double free presented.
+            ("fld  Some(abcdefghijklmnopqrstuvwxyz", 2),
+            ("elem Some(abcdefghijklmnopqrstuvwxyz", 2),
+            ("tup  Some(abcdefghijklmnopqrstuvwxyz", 2),
+        ] {
+            assert_eq!(
+                out.matches(want).count(),
+                n,
+                "`{want}` should render {n} times:\n{out}"
+            );
+        }
+        assert!(out.contains("end"), "program did not reach the end:\n{out}");
+    }
+
     #[test]
     fn asan_option_display_multiword_payload_frees_once() {
         let Some((out, status)) = run_under_asan(

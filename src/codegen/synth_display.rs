@@ -4198,6 +4198,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 let fn_val = self.current_fn.unwrap();
                 let slot = self.create_entry_alloca(fn_val, "optres.disp.tmp", val.get_type());
                 self.builder.build_store(slot, val).unwrap();
+                // B-2026-08-31-17 — a MATERIALIZED temp spilled here has no
+                // other owner, so register the same inline-payload cleanups a
+                // `let` of the same value would get. Without them `f"{mk(i)}"`
+                // leaked its payload once per evaluation (LSan: 20 buffers over
+                // 20 iterations for an `Option[String]`; a `Vec[String]` payload
+                // leaked the element buffer AND every `String` in it), while the
+                // `let`-bound spelling of the identical value was clean —
+                // scope cleanup owned it there. Same hole the bare-`String`
+                // spill had (B-2026-07-15-12) and the fresh-temp `Option`
+                // ARGUMENT spill had (B-2026-08-12-1, `track_optres_arg_temp`),
+                // which is why this reuses their exact channel: the `cap > 0`
+                // and tag guards already in `FreeInlineOptionPayload` are what
+                // make a `None`/`Err` temp a no-op rather than a wild free.
+                //
+                // GATED ON FRESHNESS, and that gate is the load-bearing half.
+                // Reaching this arm means the expression is not a bare
+                // identifier — but a PLACE is not an identifier either. `b.opt`,
+                // `v[i]`, `t.0` and `*p` read storage something ELSE owns, and
+                // `compile_expr` hands back that owner's own payload words
+                // rather than a copy, so registering them would schedule a free
+                // on a buffer the owner also frees. That is precisely the double
+                // free B-2026-08-14-30 recorded when the Vec sibling tracked
+                // unconditionally, which is why this shares its predicate.
+                if self.print_vec_operand_is_owned_temp(expr) {
+                    self.track_inline_option_payload_var("optres.disp.tmp", slot, &full_te);
+                    self.track_inline_result_payload_var("optres.disp.tmp", slot, &full_te);
+                }
                 slot
             }
         };
