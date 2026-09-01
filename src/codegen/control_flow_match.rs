@@ -8952,6 +8952,32 @@ impl<'ctx> super::Codegen<'ctx> {
         // which resolve a path.
         let here_now: std::collections::BTreeSet<usize> = skip.iter().copied().collect();
         let skip = self.field_skip_tree_for_var(var_name, here_now);
+        // B-2026-09-01-40 — a struct with its OWN `impl Drop` has NO per-binding
+        // bodies walker to replace: it runs its field bodies from inside
+        // `karac_drop_<T>`, the type-level wrapper, which is registered as a
+        // separate `OwnWrapper` action. So the retraction below finds nothing
+        // and the registration ADDS a second walk on top of the wrapper's,
+        // running every surviving field's body twice.
+        //
+        // `let h = H { r: R { .. }, n: 4 }; let q = h.n;` measured
+        // `dR3 dH dR3` on all three compiled surfaces against the
+        // interpreter's `dH dR3`, with the field fully LIVE in both bodies --
+        // so a body that releases a resource released it twice over a live
+        // object. Nothing is moved here and the read is of a SCALAR, which is
+        // why no memory error appears and ASAN stays green on it.
+        //
+        // The wrapper mask is the surgery that fits this shape, and is what the
+        // param-view caller in `runtime.rs` already selects for an own-`Drop`
+        // struct before ever reaching this helper. Doing it here too makes the
+        // invariant structural rather than each caller's to remember.
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(&struct_name));
+        if owns_body {
+            self.disarm_user_drop_field_bodies_masked(slot.ptr, &struct_name, &skip);
+            return;
+        }
         self.suppress_struct_field_bodies_for_var(var_name);
         if let Some(bodies) =
             self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip)

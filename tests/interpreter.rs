@@ -52951,6 +52951,74 @@ fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
     }
 }
 
+/// B-2026-09-01-40 — interpreter twin of `tests/codegen.rs`'s
+/// `test_e2e_let_bound_scalar_field_read_runs_sibling_body_once`, same programs
+/// and expectations.
+///
+/// This backend was CORRECT on every row; the compiled ones ran a sibling
+/// field's body twice for a `let`-bound scalar field read. The twin is what
+/// makes "both backends agree here" a property a test holds rather than one
+/// only the fixed side asserts, and it pins the transcript this fix had to
+/// converge ON.
+#[test]
+fn let_bound_scalar_field_read_runs_sibling_body_once() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         struct H { r: R, n: i64 }\n\
+         impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n\
+         struct P { r: R, n: i64 }\n\
+         struct H2 { r: R, r2: R, n: i64 }\n\
+         impl Drop for H2 { fn drop(mut ref self) { println(\"dH2\") } }\n";
+    for (label, body, want) in [
+        (
+            "let-bound scalar read",
+            "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; println(f\"{q}\")",
+            "dH\ndR3\n4\n",
+        ),
+        (
+            "no field read (control)",
+            "let h = H { r: R { id: 3 }, n: 4 }; println(\"mid\")",
+            "dH\ndR3\nmid\n",
+        ),
+        (
+            "inline read (control)",
+            "let h = H { r: R { id: 3 }, n: 4 }; println(f\"{h.n}\")",
+            "4\ndH\ndR3\n",
+        ),
+        (
+            "two reads run one set of bodies",
+            "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; let w = h.n; println(f\"{q}{w}\")",
+            "dH\ndR3\n44\n",
+        ),
+        (
+            "wrapper without its own Drop (control)",
+            "let p = P { r: R { id: 3 }, n: 4 }; let q = p.n; println(f\"{q}\")",
+            "dR3\n4\n",
+        ),
+        (
+            "reading the Drop-bearing field (control)",
+            "let h = H { r: R { id: 5 }, n: 4 }; let q = h.r; println(\"z\")",
+            "dR5\ndH\nz\n",
+        ),
+        (
+            "two Drop siblings each run once",
+            "let h = H2 { r: R { id: 1 }, r2: R { id: 2 }, n: 4 }; let q = h.n; println(f\"{q}\")",
+            "dH2\ndR2\ndR1\n4\n",
+        ),
+        (
+            "field read inside an expression (control)",
+            "let h = H { r: R { id: 4 }, n: 4 }; let q = h.n + 1; println(f\"{q}\")",
+            "dH\ndR4\n5\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}
+
 /// B-2026-09-01-2 — a `let x = s.a` moving one field out leaves the source's
 /// OTHER fields their `Drop` bodies.
 ///

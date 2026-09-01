@@ -124,6 +124,41 @@ mod memory_sanitizer_tests {
     ) -> Option<(String, String, std::process::ExitStatus)> {
         run_under_asan_opts(src, label, false, false, true)
     }
+    /// B-2026-09-01-40 — the heap-carrying form of the doubled sibling body,
+    /// under ASAN + LSan.
+    ///
+    /// WHAT THIS PINS, and what it does NOT. The defect was a body COUNT, not a
+    /// memory error: the extra `__karac_dropbodies_*` walk ran user `Drop`
+    /// bodies a second time but freed nothing twice, so ASAN was GREEN on this
+    /// program BEFORE the fix and this case would not have caught it. The row
+    /// records that measurement, and it is the same blind spot B-2026-09-01-38
+    /// names for its own family.
+    ///
+    /// What it pins is the OTHER direction, which is the risk this particular
+    /// fix carries: the fix removes a registered walker, and removing a walker
+    /// is how bodies -- and, for a walker that also frees, memory -- go missing.
+    /// On Linux this runs LeakSanitizer too, so a leak introduced by dropping
+    /// that registration fails here. The transcript is asserted alongside, so a
+    /// "fix" that silenced the double by losing the surviving field's body
+    /// entirely fails on the output rather than passing quietly.
+    #[test]
+    fn asan_let_bound_scalar_field_read_sibling_body_runs_once() {
+        assert_clean_asan_run(
+            "struct R { s: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.xs.len()}:{self.s}\") } }\n\
+             struct H { r: R, n: i64 }\n\
+             impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n\
+             fn main() {\n\
+             \x20   let h = H { r: R { s: \"payload\", xs: [1, 2, 3] }, n: 4 };\n\
+             \x20   let q = h.n;\n\
+             \x20   println(f\"{q}\");\n\
+             \x20   println(\"end\");\n\
+             }\n",
+            &["dH", "dR3:payload", "4", "end"],
+            "b40-let-bound-scalar-field-read",
+        );
+    }
+
     /// B-2026-08-31-8 — a heap-carrying enum STRUCT-VARIANT payload passed as a
     /// fresh-temp argument is neither leaked nor double-freed.
     ///

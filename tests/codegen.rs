@@ -98747,6 +98747,105 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-09-01-40 — a `let`-bound SCALAR field read off a struct with its
+    /// own `impl Drop` must not run a sibling field's body twice.
+    ///
+    /// `disarm_struct_field_bodies_at` REPLACES a per-binding
+    /// `__karac_dropbodies_*` walker, which is right for a struct with no
+    /// `Drop` of its own. A struct that HAS one runs its field bodies from
+    /// inside `karac_drop_<T>` and has no per-binding walker, so the retraction
+    /// found nothing and the registration ADDED a second walk -- measured
+    /// `dR3 dH dR3` here against the interpreter's `dH dR3`, with the field
+    /// fully live in both bodies.
+    ///
+    /// Nothing is moved and the read is of an `i64`, so the heap is freed
+    /// exactly once and ASAN was green on it before the fix. Only the body
+    /// COUNT is wrong, which is why these rows assert the transcript.
+    ///
+    /// The five discriminators are the row's own and each is required:
+    /// no field read at all, the same read spelled INLINE, and a wrapper
+    /// without its own `Drop` were all already correct; two reads produce
+    /// exactly ONE extra body, so it is keyed on the binding rather than the
+    /// read; and reading the DROP-BEARING field is correct too, because that
+    /// path takes the whole-wrapper swap instead.
+    #[test]
+    fn test_e2e_let_bound_scalar_field_read_runs_sibling_body_once() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct H { r: R, n: i64 }\n\
+             impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n\
+             struct P { r: R, n: i64 }\n\
+             struct H2 { r: R, r2: R, n: i64 }\n\
+             impl Drop for H2 { fn drop(mut ref self) { println(\"dH2\") } }\n";
+        for (label, body, want) in [
+            (
+                "let-bound scalar read",
+                "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; println(f\"{q}\")",
+                "dH\ndR3\n4\n",
+            ),
+            (
+                "no field read (control)",
+                "let h = H { r: R { id: 3 }, n: 4 }; println(\"mid\")",
+                "dH\ndR3\nmid\n",
+            ),
+            (
+                "inline read (control)",
+                "let h = H { r: R { id: 3 }, n: 4 }; println(f\"{h.n}\")",
+                "4\ndH\ndR3\n",
+            ),
+            (
+                "two reads run one set of bodies",
+                "let h = H { r: R { id: 3 }, n: 4 }; let q = h.n; let w = h.n; println(f\"{q}{w}\")",
+                "dH\ndR3\n44\n",
+            ),
+            (
+                "wrapper without its own Drop (control)",
+                "let p = P { r: R { id: 3 }, n: 4 }; let q = p.n; println(f\"{q}\")",
+                "dR3\n4\n",
+            ),
+            (
+                "reading the Drop-bearing field (control)",
+                "let h = H { r: R { id: 5 }, n: 4 }; let q = h.r; println(\"z\")",
+                "dR5\ndH\nz\n",
+            ),
+            (
+                "two Drop siblings each run once",
+                "let h = H2 { r: R { id: 1 }, r2: R { id: 2 }, n: 4 }; let q = h.n; println(f\"{q}\")",
+                "dH2\ndR2\ndR1\n4\n",
+            ),
+            (
+                "field read inside an expression (control)",
+                "let h = H { r: R { id: 4 }, n: 4 }; let q = h.n + 1; println(f\"{q}\")",
+                "dH\ndR4\n5\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+
+        // The row's own repro, with a heap-carrying payload: `xs.len()` read 3
+        // in BOTH bodies before the fix, which is what made it a live-object
+        // double release rather than a residue read.
+        assert_eq!(
+            run_program(
+                "struct R { s: String, xs: Vec[i64] }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.xs.len()}\") } }\n\
+                 struct H { r: R, n: i64 }\n\
+                 impl Drop for H { fn drop(mut ref self) { println(\"dH\") } }\n\
+                 fn main() {\n\
+                 \x20   let h = H { r: R { s: \"d\", xs: [1, 2, 3] }, n: 4 };\n\
+                 \x20   let q = h.n;\n\
+                 \x20   println(f\"{q}\");\n\
+                 \x20   println(\"end\");\n\
+                 }\n"
+            ),
+            Some("dH\ndR3\n4\nend\n".to_string())
+        );
+    }
+
     /// B-2026-09-01-2 — compiled twin of `tests/interpreter.rs`'s
     /// `moving_one_field_out_leaves_the_others_their_drop_bodies`, same programs
     /// and expectations.
