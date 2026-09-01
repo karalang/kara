@@ -3439,6 +3439,15 @@ impl<'a> super::Interpreter<'a> {
                     self.find_struct_def(n)
                         .is_some_and(|d| !d.is_shared && !d.is_par)
                 })
+                // B-2026-08-31-8 — an enum STRUCT-VARIANT literal
+                // (`eat(Sv.Hold { inner: R { .. } })`) is spelled as a struct
+                // literal whose path ends in the VARIANT, so the lookup above
+                // answered `None` and this walk claimed no owner: neither the
+                // enum's own body nor its payload's ran, against both compiled
+                // backends running both. The tuple-variant twin
+                // (`eat(Tv.A(R { .. }))`) is an `ExprKind::Call` and was always
+                // correct — the spelling was the whole variable.
+                .or_else(|| self.qualified_struct_variant_enum_name(path))
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(v) => self.find_enum_for_variant(v).or_else(|| {

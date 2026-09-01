@@ -2518,6 +2518,32 @@ impl<'a> Interpreter<'a> {
     /// builds a `Value::EnumVariant` (with `EnumData::Struct` in declared
     /// order, for deterministic Display + structural `==`) rather than
     /// falling through to a plain `Value::Struct`.
+    /// B-2026-08-31-8 — the enum a QUALIFIED struct-variant literal
+    /// constructs: `Sv.Hold { inner: … }` → `Some("Sv")`.
+    ///
+    /// Ownership sites classify a struct literal by `path.last()`, which is the
+    /// TYPE name for `R { … }` and a module-qualified `m.R { … }` alike, but is
+    /// the VARIANT name here — so `find_struct_def("Hold")` answered `None` and
+    /// the value reached those sites with no owner at all. The tuple-variant
+    /// spelling of the same construction (`Tv.A(r)`) is an `ExprKind::Call`
+    /// whose callee path resolves through the enum, which is why only the
+    /// struct-variant half was affected and why the two spellings disagreed.
+    ///
+    /// QUALIFIED only, and that is deliberate. The unqualified spelling
+    /// (`Hold { … }`, legal per the construction site above) loses the same
+    /// bodies on BOTH backends today; claiming it here would turn an agreed
+    /// answer into a fresh run-vs-build divergence, which is the worse of the
+    /// two. Filed separately.
+    pub(crate) fn qualified_struct_variant_enum_name(&self, path: &[String]) -> Option<String> {
+        if path.len() < 2 {
+            return None;
+        }
+        let enum_name = &path[path.len() - 2];
+        let variant = path.last()?;
+        self.qualified_enum_struct_variant_field_order(enum_name, variant)
+            .map(|_| enum_name.clone())
+    }
+
     fn qualified_enum_struct_variant_field_order(
         &self,
         enum_name: &str,
