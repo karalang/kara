@@ -52526,3 +52526,111 @@ fn main() {
         "14081\n15091\n13181\n9441\n"
     );
 }
+
+/// B-2026-08-30-55 — a method frame owns its by-value ENUM argument.
+///
+/// `method_param_drop_names` admitted `Value::Struct` only, and a method frame
+/// stands its caller down, so an owned enum argument had NO owner on either
+/// side: `t.eat(E.A(R { .. }))` ran ZERO `Drop` bodies here — neither the
+/// enum's own nor its payload's — against two on both compiled backends.
+///
+/// Every row is a body COUNT, and each of the four is a different answer to
+/// "who owns this argument", which is the one question the fix turns on:
+///
+/// * `temp` — no caller binding exists, so the frame must claim it. The
+///   reported hole.
+/// * `named` — the caller's binding fires, so the frame must NOT claim it.
+///   Claiming unconditionally was the obvious widening and it doubles this row.
+/// * `named-struct` — the row recorded its struct twin as a working control.
+///   That holds only for the fresh-temp spelling; this one ran `dR8` TWICE
+///   before the fix, so the defect was never enum-specific — only
+///   enum-visible in the shape probed.
+/// * `free-fn` — the control that localizes it: the caller still fires, and
+///   this spelling was correct throughout.
+#[test]
+fn method_frame_owns_its_by_value_enum_argument() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct T { n: i64 }\n\
+         impl T { fn eat(ref self, b: E) -> i64 { return 3; } }\n\
+         impl T { fn eats(ref self, r: R) -> i64 { return 3; } }\n\
+         fn eatf(b: E) -> i64 { return 3; }\n";
+    for (label, body, want) in [
+        (
+            "temp",
+            "fn main() { let t: T = T { n: 1 };\n\
+             let v: i64 = t.eat(E.A(R { id: 8, tag: f\"t8\" })); println(f\"v{v}\") }\n",
+            "dE\ndR8\nv3\n",
+        ),
+        (
+            "named",
+            "fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             let v: i64 = t.eat(c); println(f\"v{v}\") }\n",
+            "dE\ndR8\nv3\n",
+        ),
+        (
+            "named-struct",
+            "fn main() { let t: T = T { n: 1 }; let c: R = R { id: 8, tag: f\"t8\" };\n\
+             let v: i64 = t.eats(c); println(f\"v{v}\") }\n",
+            "dR8\nv3\n",
+        ),
+        (
+            "free-fn",
+            "fn main() { let v: i64 = eatf(E.A(R { id: 8, tag: f\"t8\" })); println(f\"v{v}\") }\n",
+            "dE\ndR8\nv3\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+}
+
+/// B-2026-08-30-55, leg 2 — a method frame RETRACTS to its caller, but only
+/// where the caller is actually firing.
+///
+/// The retraction guards were a blanket "never inside a method frame", which
+/// left a named argument's payload body running twice: the caller's binding
+/// fired it and the frame's own slot fired it again.
+///
+/// Lifting them outright is what the row proposed and it is wrong in the other
+/// direction — measured, it loses the body entirely for a fresh temp, exactly
+/// as `record_assign_of_param_view`'s own doc warned. The licence is that some
+/// OTHER frame owns the value, so the guards ask
+/// `method_frame_caller_retains_args`.
+///
+/// Both spellings are here because they have to agree — the property
+/// B-2026-08-29-58 restored — and one predicate now serves both, which is what
+/// stops them drifting apart again.
+#[test]
+fn method_frame_retracts_to_the_caller_only_when_the_caller_fires() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct T { n: i64 }\n";
+    for (label, body, want) in [
+        (
+            "assign-spelling",
+            "impl T { fn take(ref self, b: E) -> i64 {\n\
+             let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             match b { E.A(r) => { out = r; } E.B => { } }\n\
+             println(\"m\"); return out.id; } }\n\
+             fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             let v: i64 = t.take(c); println(f\"v{v}\") }\n",
+            "dR0\nm\ndE\ndR8\nv8\n",
+        ),
+        (
+            "let-spelling",
+            "impl T { fn take(ref self, b: E) -> i64 {\n\
+             match b { E.A(r) => { let inner: R = r; println(\"m\"); return inner.id; }\n\
+             E.B => { } }\n\
+             return 0; } }\n\
+             fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+             let v: i64 = t.take(c); println(f\"v{v}\") }\n",
+            "m\ndE\ndR8\nv8\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}")), want, "{label}");
+    }
+}

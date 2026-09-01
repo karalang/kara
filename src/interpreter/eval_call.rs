@@ -2723,12 +2723,22 @@ impl<'a> super::Interpreter<'a> {
             //
             // A FRESH TEMP has no caller binding at all, so nothing on that
             // side can fire it — which is the hole this row reports.
+            // The gate is `record_returned_arg_user_drop_move`'s, NOT the wider
+            // `escapes` one beside it. Those two retract different things and
+            // conflating them double-fires: `escapes` stands the caller's
+            // CONTAINER walk down, while the binding keeps its OWN `Drop`
+            // action unless the callee is guaranteed to hand the value back as
+            // itself. Measured on `fn assign_enum(b: E) -> R` — which returns a
+            // payload BOUND OUT of `b`, so it escapes but `b` itself does not —
+            // where the wider predicate had the caller and the frame both
+            // firing the enum's body.
+            //
+            // `fn_always_returns_param` is not in the union because the loop
+            // above already skipped those params outright.
             let caller_still_owns = matches!(
                 args.get(i).map(|a| &a.value.kind),
                 Some(ExprKind::Identifier(_))
-            ) && !(crate::ast::fn_returns_param(f, i)
-                || crate::ast::fn_returns_param_payload(f, i)
-                || crate::ast::fn_moves_param_into_outliving_place(f, i));
+            ) && !crate::ast::fn_conditionally_returns_param_bare(f, i);
             if caller_still_owns {
                 continue;
             }
@@ -2747,6 +2757,50 @@ impl<'a> super::Interpreter<'a> {
             }
         }
         out
+    }
+
+    /// Does the CALLER still own every by-value argument of this method call?
+    ///
+    /// B-2026-08-30-55. This is the licence a retraction inside the frame
+    /// needs, and it is a different question from "did this frame register any
+    /// drop slots" — which is what an earlier version of the guard asked, and
+    /// got wrong. `fn tup(ref self, p: (Res, i64))` called with a fresh temp
+    /// registers NOTHING (the registration admits structs and enums, and a
+    /// tuple is neither), yet the frame is still the only owner, because a
+    /// fresh temp has no caller binding at all. Retracting there ran ZERO
+    /// bodies against one on both compiled backends — `strc(h: Holder)`, whose
+    /// `Holder` has no `Drop` of its own, failed the same way.
+    ///
+    /// So ask about the ARGUMENTS rather than about the registrations: only
+    /// where a caller binding is firing every one of them may the frame hand
+    /// its slots over.
+    ///
+    /// The per-argument test is the one `method_param_drop_names` uses, for the
+    /// same reason — the caller fires a named argument unless the callee is
+    /// guaranteed to hand it back as itself.
+    pub(crate) fn method_frame_caller_retains_args(
+        &self,
+        type_name: &str,
+        method: &str,
+        args: &[crate::ast::CallArg],
+    ) -> bool {
+        let Some(f) = self.impl_method_ast(type_name, method) else {
+            return false;
+        };
+        f.params.iter().enumerate().all(|(i, p)| {
+            // A borrow is a view the caller never handed over.
+            if matches!(
+                p.ty.kind,
+                crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+            ) {
+                return true;
+            }
+            matches!(
+                args.get(i).map(|a| &a.value.kind),
+                Some(ExprKind::Identifier(_))
+            ) && !crate::ast::fn_always_returns_param(f, i)
+                && !crate::ast::fn_conditionally_returns_param_bare(f, i)
+        })
     }
 
     /// Does an owned ENUM value carry user-`Drop` work the frame that owns it

@@ -98453,6 +98453,98 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-08-30-55 — the compiled twin of `tests/interpreter.rs`'s
+    /// `method_frame_owns_its_by_value_enum_argument`, sharing its expectations
+    /// verbatim.
+    ///
+    /// This backend was already correct on every row; the interpreter ran ZERO
+    /// bodies for the fresh-temp enum argument and TWO for the named struct
+    /// one. The twin exists because the property being restored is that the two
+    /// AGREE, and a fixture on one side alone cannot pin that — it would keep
+    /// passing while the other drifted.
+    #[test]
+    fn test_e2e_method_frame_owns_its_by_value_enum_argument() {
+        const H: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             struct T { n: i64 }\n\
+             impl T { fn eat(ref self, b: E) -> i64 { return 3; } }\n\
+             impl T { fn eats(ref self, r: R) -> i64 { return 3; } }\n\
+             fn eatf(b: E) -> i64 { return 3; }\n";
+        for (label, body, want) in [
+            (
+                "temp",
+                "fn main() { let t: T = T { n: 1 };\n\
+                 let v: i64 = t.eat(E.A(R { id: 8, tag: f\"t8\" })); println(f\"v{v}\") }\n",
+                "dE\ndR8\nv3\n",
+            ),
+            (
+                "named",
+                "fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 let v: i64 = t.eat(c); println(f\"v{v}\") }\n",
+                "dE\ndR8\nv3\n",
+            ),
+            (
+                "named-struct",
+                "fn main() { let t: T = T { n: 1 }; let c: R = R { id: 8, tag: f\"t8\" };\n\
+                 let v: i64 = t.eats(c); println(f\"v{v}\") }\n",
+                "dR8\nv3\n",
+            ),
+            (
+                "free-fn",
+                "fn main() { let v: i64 = eatf(E.A(R { id: 8, tag: f\"t8\" })); println(f\"v{v}\") }\n",
+                "dE\ndR8\nv3\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
+    /// B-2026-08-30-55, leg 2 — compiled twin of `tests/interpreter.rs`'s
+    /// `method_frame_retracts_to_the_caller_only_when_the_caller_fires`, same
+    /// programs and same expectations.
+    #[test]
+    fn test_e2e_method_frame_retracts_to_the_caller_only_when_the_caller_fires() {
+        const H: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             struct T { n: i64 }\n";
+        for (label, body, want) in [
+            (
+                "assign-spelling",
+                "impl T { fn take(ref self, b: E) -> i64 {\n\
+                 let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 println(\"m\"); return out.id; } }\n\
+                 fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 let v: i64 = t.take(c); println(f\"v{v}\") }\n",
+                "dR0\nm\ndE\ndR8\nv8\n",
+            ),
+            (
+                "let-spelling",
+                "impl T { fn take(ref self, b: E) -> i64 {\n\
+                 match b { E.A(r) => { let inner: R = r; println(\"m\"); return inner.id; }\n\
+                 E.B => { } }\n\
+                 return 0; } }\n\
+                 fn main() { let t: T = T { n: 1 }; let c: E = E.A(R { id: 8, tag: f\"t8\" });\n\
+                 let v: i64 = t.take(c); println(f\"v{v}\") }\n",
+                "m\ndE\ndR8\nv8\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_borrow_projection_copy_runs_the_drop_body_twice() {
         // B-2026-09-01-4 — the OBSERVABLE this row is about, pinned so the

@@ -2024,9 +2024,9 @@ impl<'a> super::Interpreter<'a> {
         // B-2026-08-29-58 restored, and keeping one predicate for both is what
         // stops them drifting apart again.
         if self
-            .method_frame_owned_params
+            .method_frame_caller_retains_args
             .last()
-            .is_some_and(|owned| !owned.is_empty())
+            .is_some_and(|caller_owns| !caller_owns)
         {
             return false;
         }
@@ -2214,9 +2214,9 @@ impl<'a> super::Interpreter<'a> {
         // catch. A frame that claimed nothing has a caller firing every
         // argument, which is the licence the retraction needs.
         if self
-            .method_frame_owned_params
+            .method_frame_caller_retains_args
             .last()
-            .is_some_and(|owned| !owned.is_empty())
+            .is_some_and(|caller_owns| !caller_owns)
         {
             return;
         }

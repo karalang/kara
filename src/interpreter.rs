@@ -603,7 +603,11 @@ pub struct Interpreter<'a> {
     /// that — it says the frame is a method, not who owns which argument — and
     /// the two answers stopped coinciding once a method frame began claiming
     /// fresh-temp arguments.
-    pub(crate) method_frame_owned_params: Vec<Vec<String>>,
+    /// Per method frame: does the CALLER still own every by-value argument?
+    /// B-2026-08-30-55 — the licence a retraction inside the frame needs. See
+    /// `method_frame_caller_retains_args` for why this is not the same question
+    /// as "did the frame register any drop slots".
+    pub(crate) method_frame_caller_retains_args: Vec<bool>,
     /// Bindings whose WHOLE value moved into a variant constructor
     /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
     /// — own `impl Drop` body and container walks — is silenced; the enum's
@@ -1036,7 +1040,7 @@ impl<'a> Interpreter<'a> {
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
-            method_frame_owned_params: Vec::new(),
+            method_frame_caller_retains_args: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             cond_move_escaping_sites: HashSet::new(),
             taken_branch_tail: None,
