@@ -125115,6 +125115,113 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-24 — A SCALAR FIELD READ of a live local INSIDE a discarded
+    /// literal (`k: t.id`) declined the all-fresh gate, so the whole literal
+    /// registered no owner and every MINTED sibling was leaked.
+    ///
+    /// `discard_tuple_elem_is_fresh_expr`'s fallback is meant to admit exactly
+    /// this — "a place / unknown shape: safe only when its type is a scalar
+    /// primitive" — but reached its slot-type test only through an
+    /// `Identifier` guard, and none of `infer_arg_elem_te`'s three resolvers
+    /// handles a `FieldAccess`, so the type came back as the EMPTY path and
+    /// the scalar test failed. `place_projection_is_scalar` answers from the
+    /// DECLARED field type instead.
+    ///
+    /// A scalar read is a COPY, so unlike B-2026-09-01-21's movable-place
+    /// admission it needs no source retraction and is safe for every consumer
+    /// of the predicate.
+    #[test]
+    fn e2e_a_scalar_projection_field_does_not_decline_a_discarded_literal() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct Inner { n: i64 }\n\
+             struct Outer { inner: Inner, m: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "scalar field read of a live Drop-bearing local, bare statement",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 S2 { r: R { id: 1 }, s: R { id: 9 }, k: t.id };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR1\ndR7\nv=7\n",
+            ),
+            (
+                "same, wildcard `let`",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 let _ = S2 { r: R { id: 1 }, s: R { id: 9 }, k: t.id };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR1\ndR7\nv=7\n",
+            ),
+            (
+                "same, behind a block wrapper",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 { S2 { r: R { id: 1 }, s: R { id: 9 }, k: t.id } };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR1\ndR7\nv=7\n",
+            ),
+            (
+                "DEPTH-1 projection of a non-`Drop` struct — lost BOTH objects before",
+                "fn go() -> i64 { let o = Outer { inner: Inner { n: 3 }, m: 4 };\n\
+                 S2 { r: R { id: 1 }, s: R { id: 9 }, k: o.m };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR1\nv=7\n",
+            ),
+            (
+                "NESTED projection `o.inner.n` — the recursion through the object",
+                "fn go() -> i64 { let o = Outer { inner: Inner { n: 3 }, m: 4 };\n\
+                 S2 { r: R { id: 1 }, s: R { id: 9 }, k: o.inner.n };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR1\nv=7\n",
+            ),
+            (
+                "control: an INDEX of a scalar element, which agreed throughout",
+                "fn go() -> i64 { let v = [5, 6, 7];\n\
+                 S2 { r: R { id: 1 }, s: R { id: 9 }, k: v[0] };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR9\ndR1\nv=7\n",
+            ),
+            (
+                "control: the same read HOISTED out, correct before and after",
+                "fn go() -> i64 { let t = R { id: 7 }; let n = t.id;\n\
+                 S2 { r: R { id: 1 }, s: R { id: 9 }, k: n };\n\
+                 return 7; }\n\
+                 fn take() -> i64 { return go(); }",
+                "dR7\ndR9\ndR1\nv=7\n",
+            ),
+            (
+                "control: the local is read AFTER the statement, not inside it",
+                "fn go() -> i64 { let t = R { id: 7 };\n\
+                 S2 { r: R { id: 1 }, s: R { id: 9 }, k: 5 };\n\
+                 return t.id; }\n\
+                 fn take() -> i64 { return go(); }",
+                // `t` is still live at the statement — the `return` reads it —
+                // so the literal's fields die at the discard and `t` at scope
+                // exit, in that order. The hoisted control above has the
+                // opposite order for the opposite reason: there `t`'s last use
+                // is the `let`, so NLL kills it first.
+                "dR9\ndR1\ndR7\nv=7\n",
+            ),
+        ];
+        for (label, decls, want) in cases {
+            let src = format!("{PRELUDE}{decls}\nfn main() {{ println(f\"v={{take()}}\"); }}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: every object dropped, each once");
+            }
+        }
+    }
+
     /// B-2026-09-01-21 — A DISCARDED STRUCT LITERAL MIXING A LIVE-LOCAL SOURCE
     /// WITH A MINTED SIBLING lost the minted field's `Drop` body on both
     /// compiled backends.

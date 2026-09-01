@@ -17873,9 +17873,53 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-01-24 — a FIELD PROJECTION of scalar type
+                // (`k: t.id`). The arm above is this same question one hop
+                // shorter, and the `infer_arg_elem_te` fallback below cannot
+                // answer it: none of its three resolvers handles a
+                // `FieldAccess`, so the type came back as the EMPTY path and
+                // the scalar test failed. One non-fresh field then declined the
+                // whole literal and every MINTED sibling was leaked outright —
+                // 76 B / 2 allocations for
+                // `S2 { r: mk(1), s: mk(9), k: t.id };`, with the identical
+                // read hoisted into its own `let` measuring clean.
+                if self.place_projection_is_scalar(e) {
+                    return true;
+                }
                 Self::te_head_is_scalar_primitive(&self.infer_arg_elem_te(e))
             }
         }
+    }
+
+    /// B-2026-09-01-24 — does this place expression project a SCALAR-typed
+    /// field out of a user struct?
+    ///
+    /// Answered from the DECLARED field type (`struct_field_type_exprs`),
+    /// recursing through the object so a nested projection (`t.inner.id`)
+    /// resolves too. Scalar-only by construction, which is what makes it safe
+    /// for every consumer of the freshness predicate: a scalar read is a COPY
+    /// that no cleanup can alias, so admitting it creates no second owner and
+    /// needs no source retraction — unlike B-2026-09-01-21's movable-place
+    /// admission, which is a MOVE and is confined to the two discard sites that
+    /// retract.
+    fn place_projection_is_scalar(&self, e: &Expr) -> bool {
+        let ExprKind::FieldAccess { object, field } = &e.kind else {
+            return false;
+        };
+        let Some(outer) = self.expr_user_struct_name(object) else {
+            return false;
+        };
+        let (Some(names), Some(tes)) = (
+            self.type_decls.struct_field_names.get(&outer),
+            self.type_decls.struct_field_type_exprs.get(&outer),
+        ) else {
+            return false;
+        };
+        names
+            .iter()
+            .position(|f| f == field)
+            .and_then(|idx| tes.get(idx))
+            .is_some_and(Self::te_head_is_scalar_primitive)
     }
 
     /// Is `te` a bare scalar-primitive path (integer/float/bool/char, no

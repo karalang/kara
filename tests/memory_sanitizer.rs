@@ -56144,6 +56144,82 @@ fn main() { println(go()); }
         }
     }
 
+    /// B-2026-09-01-24 — a SCALAR field read of a live local inside a discarded
+    /// literal declined the all-fresh gate, so the literal registered no owner
+    /// and every MINTED object leaked: 76 B / 2 allocations, which is how this
+    /// was found (it was written as a CONTROL in B-2026-09-01-21's ASAN test
+    /// and failed, on unmodified `main` too).
+    ///
+    /// Unlike that row's admission this one is a COPY — a scalar read moves
+    /// nothing — so there is no retraction to get wrong and no double-free
+    /// direction to guard. What the guards below pin instead is that admitting
+    /// the projection did not disturb the shapes that already had owners.
+    #[test]
+    fn asan_a_scalar_projection_field_leaves_the_literal_owned() {
+        const H: &str = "struct R { id: i64, s: String }\n\
+             struct Inner { n: i64 }\n\
+             struct Outer { inner: Inner, m: i64 }\n\
+             struct S2 { r: R, s: R, k: i64 }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str)] = &[
+            (
+                "scalar field read of a live local, bare statement",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  S2 { r: mk(1), s: mk(9), k: t.id };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "same, wildcard `let`",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let _ = S2 { r: mk(1), s: mk(9), k: t.id };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "same, behind a block wrapper",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  { S2 { r: mk(1), s: mk(9), k: t.id } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "DEPTH-1 projection of a non-`Drop` struct",
+                "fn go() -> i64 { let o = Outer { inner: Inner { n: 3 }, m: 4 };\n\
+                 \x20  S2 { r: mk(1), s: mk(9), k: o.m };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "NESTED projection through the object",
+                "fn go() -> i64 { let o = Outer { inner: Inner { n: 3 }, m: 4 };\n\
+                 \x20  S2 { r: mk(1), s: mk(9), k: o.inner.n };\n\
+                 \x20  1 }\n",
+            ),
+            // ── guards: these already had owners and must keep exactly one ──
+            (
+                "guard: an INDEX of a scalar element, clean throughout",
+                "fn go() -> i64 { let v = [5, 6, 7];\n\
+                 \x20  S2 { r: mk(1), s: mk(9), k: v[0] };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: the same read HOISTED into its own `let`",
+                "fn go() -> i64 { let t = mk(7); let n = t.id;\n\
+                 \x20  S2 { r: mk(1), s: mk(9), k: n };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: the BOUND `let` is owned by its binding",
+                "fn go() -> i64 { let t = mk(7);\n\
+                 \x20  let w = S2 { r: mk(1), s: mk(9), k: t.id };\n\
+                 \x20  w.k - w.k + 1 }\n",
+            ),
+        ];
+        for (label, body) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), &["1"], label);
+        }
+    }
+
     /// B-2026-09-01-25 — the MEMORY half of B-2026-09-01-21, QUARANTINED on the
     /// `-O0` leg (`tests/asan-o0-known-failures.txt`) against that row.
     ///
