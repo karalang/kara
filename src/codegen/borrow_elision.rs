@@ -795,10 +795,30 @@ fn record_discarded_branch(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
 /// to hand the buffer to a consumer that does not exist: the body fired (the
 /// binding kept its action) and freed nothing, stranding 9 B per evaluation.
 fn record_discarded_let_rhs(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
+    record_discarded_value_block(expr, out);
+    record_discarded_branch(expr, out);
+}
+
+/// The value-position-block leg of [`Self::record_discarded_let_rhs`], applied
+/// at every DEPTH rather than only the outermost.
+///
+/// Discard is inherited through a single-tail wrapper exactly as
+/// [`record_discarded_branch`] documents for a branch: `{ { r } }` throws the
+/// inner block's value away just as directly, and each block is compiled by its
+/// OWN `compile_block_with_frame` looking up its OWN span, so recording only
+/// the outer one leaves the inner asking a question nobody answered.
+///
+/// Measured (B-2026-08-30-3) at HEAD: `{ f"b{n}" };`, `{ { f"c{n}" } };` and
+/// `{ { { f"e{n}" } } };` each lost 2 B per evaluation, and recording only the
+/// outermost span fixed the first while leaving the other two -- the same
+/// value, one and two wrappers deeper.
+fn record_discarded_value_block(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
     if let ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) = &expr.kind {
         out.insert(SpanKey::from_span(&b.span));
+        if let Some(inner) = b.final_expr.as_deref() {
+            record_discarded_value_block(inner, out);
+        }
     }
-    record_discarded_branch(expr, out);
 }
 
 /// Walk every block reachable from `block`, recording the discarding positions.
@@ -807,7 +827,23 @@ fn record_discarded_let_rhs(expr: &Expr, out: &mut FxHashSet<SpanKey>) {
 fn walk_block_for_discards(block: &Block, out: &mut FxHashSet<SpanKey>) {
     for stmt in &block.stmts {
         if let StmtKind::Expr(e) = &stmt.kind {
-            record_discarded_branch(e, out);
+            // B-2026-08-30-3 — the SAME recorder the wildcard-`let` position
+            // uses, because the two spellings are the same discard. A bare
+            // `{ .. };` statement throws its value away exactly as
+            // `let _ = { .. };` does, but only the `let` leg recorded a
+            // VALUE-POSITION BLOCK by its own span, so
+            // `compile_block_with_frame` could ask "does my tail have a
+            // consumer?" under one spelling and not the other.
+            //
+            // Measured at HEAD, i.e. this is a leak in its own right and not
+            // fallout from the f-string widening that found it:
+            // `{ f"b{n}" };` lost 2 B per evaluation while
+            // `let _ = { f"d{n}" };` -- the same program, the other spelling --
+            // was clean. It stayed hidden because every OTHER tail shape that
+            // reaches the question is also owned by the statement site
+            // (`stmt_owns_block_tail`), which suppresses this span leg
+            // entirely; an f-string tail is the first one owned by neither.
+            record_discarded_let_rhs(e, out);
         }
         walk_stmt_for_discards(stmt, out);
     }

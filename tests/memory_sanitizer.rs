@@ -741,7 +741,7 @@ fn main() {
         );
     }
 
-    /// The three shapes still DECLINED after B-2026-08-30-2, pinned at their
+    /// The two shapes still DECLINED after B-2026-08-30-2, pinned at their
     /// leaking values.
     ///
     /// They still leak, and they must: the point of the pin is that no fix in
@@ -750,15 +750,16 @@ fn main() {
     /// is therefore the right runner — a clean exit means no use-after-free and
     /// no double free, and the leak is the known, deliberate remainder.
     ///
-    /// An F-STRING ARM (`b`, `d`) is a PRODUCER-side gap. The accumulator DOES
-    /// register its own cleanup and the arm-tail suppressor then neutralizes it
-    /// on the way out — correct, the value escapes the arm — leaving nothing at
-    /// the merge. The owner B-2026-08-30-2 registers cannot stand in: it keys
-    /// off the Vec/String MOVE neutralizer, and an f-string tail takes the
-    /// `last_fstr_acc` path instead, a different disarm with different staging
-    /// (`rhs_stages_fstr_acc`) to reason through. Tracked as B-2026-08-30-3. The
-    /// call-argument spelling (`d`) is opt-level split — clean at `-O2`, still
-    /// leaking at `-O0` — which is not enough to call that half fixed.
+    /// The F-STRING ARM rows (`b`, `d`) that used to sit here are GONE: fixed
+    /// by B-2026-08-30-3 and moved to
+    /// `asan_branch_tail_fstring_arm_frees_once`, which asserts they are clean
+    /// rather than pinning them. They were never a producer-side gap needing
+    /// B-2026-08-30-2's owner — the consuming GATE simply did not recognize an
+    /// f-string as a minting tail, so one line in
+    /// `branch_tail_mints_fresh_owned_temp_inner` closed all nine spellings.
+    /// Left as a pointer because the reasoning recorded here — "the owner
+    /// cannot stand in, it keys off the Vec/String MOVE neutralizer" — was
+    /// correct AND led away from the fix.
     ///
     /// The MINTING ARM OF A MIXED BRANCH (`m1`, `m2`) has the same shape as the
     /// fixed population and a frame problem the fixed population does not.
@@ -789,16 +790,10 @@ fn main() {
         let src = r#"
 fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
 fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
-fn use_s(s: String) -> i64 { return s.len(); }
 
 fn main() {
     let n: i64 = env.args().len();
     let c = n > 0;
-
-    let b = if c { f"x{n}" } else { f"y{n}" }.contains("x");
-    println(f"b={b}");
-    let d = use_s(if c { f"x{n}" } else { f"y{n}" });
-    println(f"d={d}");
 
     let m1 = mkB(n);
     let rm1 = if c { mkA(n) } else { m1 }.contains("aaa");
@@ -826,8 +821,6 @@ fn main() {
             status.code()
         );
         for want in [
-            "b=true",
-            "d=2",
             "m1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
             "m2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
             "m3=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
@@ -837,6 +830,171 @@ fn main() {
                 "[asan_branch_tail_declined_shapes] missing {want:?}\nstdout:\n{stdout}"
             );
         }
+    }
+
+    /// B-2026-08-30-3 — an f-string ARM TAIL is a minting tail, and every
+    /// consuming gate now frees it.
+    ///
+    /// `expr_yields_fresh_owned_temp` recognizes `Call`/`MethodCall` only, so
+    /// `branch_tail_mints_fresh_owned_temp_inner` declined an
+    /// `InterpolatedStringLit` tail and the rendered buffer reached the merge
+    /// owned by nobody. The accumulator registers its own scope cleanup and
+    /// `suppress_block_tail_cleanup` zeroes that alloca's `cap` on the way out
+    /// of the arm — correct in itself, the value escapes — which is what leaves
+    /// the hole: a disarm with no counterpart.
+    ///
+    /// THE ROW MEASURED TWO SPELLINGS; THERE WERE NINE. Every shape below
+    /// leaked 2 B per evaluation before the fix, unbounded in a loop
+    /// (`-O0`, valgrind, one fixture per shape):
+    ///
+    /// | shape | pre `-O0` | pre `-O2` |
+    /// |---|---|---|
+    /// | `b` receiver `if` | 2 B | 2 B |
+    /// | `d` by-value call argument | 2 B | clean |
+    /// | `p1` bare block | 2 B | 2 B |
+    /// | `p2` nested block | 2 B | 2 B |
+    /// | `p3` `match` | 2 B | 2 B |
+    /// | `p4` `else if` chain | 2 B | 2 B |
+    /// | `p5` `len` fast path | 2 B | clean |
+    /// | `p6` f-string interpolation | 2 B | 2 B |
+    /// | `p7` concat operand | 2 B | 2 B |
+    /// | `v.push` (OWNING) | clean | clean |
+    /// | `p8` `let` (OWNING) | clean | clean |
+    ///
+    /// Seven of the nine leak at the DEFAULT `-O2`, so this fixture gates on
+    /// the ordinary leg rather than needing `scripts/asan-o0-leg.sh` — worth
+    /// stating because the row's one opt-level note (`d` is `-O0`-only) reads
+    /// like the whole population is. `p5` is the second `-O0`-only spelling and
+    /// was not previously known.
+    ///
+    /// THE TWO OWNING DESTINATIONS ARE THE POINT OF THE CONTROLS. `v.push` and
+    /// the `let` were ALREADY clean, on both backends and at both opt levels:
+    /// they take the value over rather than consuming it in place. They are
+    /// here to catch the failure this fix could have introduced — a second
+    /// owner, i.e. a double free — which ASAN reports as an error rather than a
+    /// leak. `p8` is read twice for the same reason.
+    ///
+    /// The call-argument gate's extra `!rhs_stages_fstr_acc` term (`d`) is the
+    /// one thing the row flagged as unknown, and `d` being clean here is the
+    /// measurement that answers it: the predicate matches a DIRECT f-string,
+    /// never a branch wrapping one, so the double-materialization staging it
+    /// guards stays inert for this shape.
+    #[test]
+    fn asan_branch_tail_fstring_arm_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn use_s(s: String) -> i64 { return s.len(); }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let b = if c { f"x{n}" } else { f"y{n}" }.contains("x");
+    let d = use_s(if c { f"x{n}" } else { f"y{n}" });
+    println(f"b={b} d={d}");
+
+    let p1 = { f"p{n}" }.contains("p");
+    let p2 = { { f"q{n}" } }.contains("q");
+    println(f"p1={p1} p2={p2}");
+
+    let p3 = match n { 0 => f"m{n}", _ => f"o{n}" }.contains("o");
+    let p4 = if n < 0 { f"u{n}" } else if c { f"v{n}" } else { f"w{n}" }.contains("v");
+    println(f"p3={p3} p4={p4}");
+
+    let p5 = if c { f"r{n}" } else { f"s{n}" }.len();
+    let p6 = f"[{if c { f"t{n}" } else { f"z{n}" }}]";
+    let p7 = if c { f"c{n}" } else { f"e{n}" } + "-tail";
+    println(f"p5={p5} p6={p6} p7={p7}");
+
+    let mut v: Vec[String] = [];
+    v.push(if c { f"k{n}" } else { f"l{n}" });
+    println(f"v0={v[0]}");
+
+    let p8 = if c { f"g{n}" } else { f"h{n}" };
+    println(f"p8={p8} again={p8}");
+}
+"#,
+            &[
+                "b=true d=2",
+                "p1=true p2=true",
+                "p3=true p4=true",
+                "p5=2 p6=[t1] p7=c1-tail",
+                "v0=k1",
+                "p8=g1 again=g1",
+            ],
+            "asan_branch_tail_fstring_arm_frees_once",
+            // 35 measured under the audit (3 of those are the ASAN runtime's
+            // own startup allocations, so 32 are the fixture's). The floor
+            // guards the direction that makes a clean-run assertion vacuous:
+            // if a future pipeline change folds these f-strings away, the
+            // fixture would pass over memory it never touched.
+            20,
+        );
+    }
+
+    /// B-2026-08-30-3, second half — a DISCARDED value-block keeps its own
+    /// owner, and the two spellings of one discard agree.
+    ///
+    /// A SEPARATE PRE-EXISTING LEAK, found while fixing the one above and kept
+    /// as its own fixture because the mechanism is a different one. Measured at
+    /// HEAD, before any part of that fix: `{ f"b{n}" };` lost 2 B per
+    /// evaluation, and so did the same value one and two wrappers deeper. It is
+    /// recorded that way deliberately — an earlier draft of this fixture called
+    /// it a regression the widening introduced, on a pre/post comparison whose
+    /// "pre" compiler could not find the runtime archive and so reported a
+    /// FAILED BUILD as a clean run.
+    ///
+    /// `compile_block_with_frame` computes `consumer_frees` from "does my tail
+    /// mint?", which is really "will a use-site gate free this?" — a question
+    /// that presupposes a use site. A discarded block has none, so the frame
+    /// must keep its own owner however the tail is spelled. It stayed hidden
+    /// because every OTHER tail shape reaching that question is also owned by
+    /// the statement site (`stmt_owns_block_tail`), which suppresses the
+    /// discard leg entirely; an f-string tail is the first owned by neither.
+    ///
+    /// Two gaps, both measured, both fixed here:
+    ///
+    /// - the bare `{ .. };` statement did not record a value-position block by
+    ///   its own span, while `let _ = { .. };` did — so one spelling of the
+    ///   same discard was clean and the other leaked 2 B;
+    /// - the recorder took only the OUTERMOST block, so `{ { .. } };` leaked at
+    ///   one wrapper deeper than `{ .. };`. Discard is inherited through a
+    ///   single-tail wrapper exactly as it is through a branch.
+    ///
+    /// The `mk*` and literal rows are the tripwires that matter: a discarded
+    /// block with a CALL tail is owned by the statement site, so it must stay
+    /// on that path and NOT acquire a second owner here — the failure mode is a
+    /// double free, which is why this asserts a clean ASAN run rather than only
+    /// the absence of leaks.
+    #[test]
+    fn asan_discarded_value_block_keeps_its_owner() {
+        assert_clean_asan_run(
+            r#"
+fn mkS(n: i64) -> String { return f"S{n}-ssssssssssss"; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    { f"b{n}" };
+    { { f"c{n}" } };
+    { { { f"e{n}" } } };
+    let _ = { f"d{n}" };
+    let _ = { { f"g{n}" } };
+
+    { mkS(n) };
+    { { mkS(n) } };
+    let _ = mkS(n);
+    { if c { mkS(n) } else { mkS(n + 1) } };
+    { { if c { f"h{n}" } else { f"i{n}" } } };
+    { "lit" };
+
+    println(f"done {n}");
+}
+"#,
+            &["done 1"],
+            "asan_discarded_value_block_keeps_its_owner",
+        );
     }
 
     /// B-2026-08-29-37 — the memory half of "withhold the body, keep the copy".

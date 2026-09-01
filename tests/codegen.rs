@@ -114828,6 +114828,52 @@ fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o, false).v); 
         );
     }
 
+    /// B-2026-08-30-3 — the VALUE half of the f-string arm-tail fix.
+    ///
+    /// `branch_tail_mints_fresh_owned_temp_inner` now admits an
+    /// `InterpolatedStringLit` tail, so all seven consuming gates free the
+    /// rendered buffer at the use site instead of stranding it. The leak is
+    /// asserted by `asan_branch_tail_fstring_arm_frees_once`; this is the twin
+    /// that pins the VALUES, because the failure mode a use-site free can
+    /// introduce is reading freed memory, and a wrong value is how that shows
+    /// up when it does not crash outright.
+    ///
+    /// `p8` is read twice on purpose: the `let` is an OWNING destination that
+    /// was already correct, and the second read is what would print empty if
+    /// the new free were applied there too.
+    #[test]
+    fn test_e2e_branch_tail_fstring_arm_values_round_trip() {
+        assert_eq!(
+            run_program(
+                "fn use_s(s: String) -> i64 { return s.len(); }\n\
+                 fn main() {\n\
+                 let n: i64 = \"ab\".len();\n\
+                 let c = n > 0;\n\
+                 let b = if c { f\"x{n}\" } else { f\"y{n}\" }.contains(\"x\");\n\
+                 let d = use_s(if c { f\"x{n}\" } else { f\"y{n}\" });\n\
+                 println(f\"b={b} d={d}\");\n\
+                 let p1 = { f\"p{n}\" }.contains(\"p\");\n\
+                 let p2 = { { f\"q{n}\" } }.contains(\"q\");\n\
+                 let p3 = match n { 0 => f\"m{n}\", _ => f\"o{n}\" }.contains(\"o\");\n\
+                 let p4 = if n < 0 { f\"u{n}\" } else if c { f\"v{n}\" } else { f\"w{n}\" }.contains(\"v\");\n\
+                 println(f\"p1={p1} p2={p2} p3={p3} p4={p4}\");\n\
+                 let p5 = if c { f\"r{n}\" } else { f\"s{n}\" }.len();\n\
+                 let p6 = f\"[{if c { f\"t{n}\" } else { f\"z{n}\" }}]\";\n\
+                 let p7 = if c { f\"c{n}\" } else { f\"e{n}\" } + \"-tail\";\n\
+                 println(f\"p5={p5} p6={p6} p7={p7}\");\n\
+                 let mut v: Vec[String] = [];\n\
+                 v.push(if c { f\"k{n}\" } else { f\"l{n}\" });\n\
+                 let p8 = if c { f\"g{n}\" } else { f\"h{n}\" };\n\
+                 println(f\"v0={v[0]} p8={p8} again={p8}\");\n\
+                 }\n",
+            ),
+            Some(
+                "b=true d=2\np1=true p2=true p3=true p4=true\np5=2 p6=[t2] p7=c2-tail\nv0=k2 p8=g2 again=g2\n"
+                    .to_string()
+            )
+        );
+    }
+
     #[test]
     fn test_e2e_value_fn_loop_tail_terminates_with_unreachable() {
         // A value-returning function whose body's final expression is a

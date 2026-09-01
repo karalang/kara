@@ -48,6 +48,44 @@ fn run_no_errors(source: &str) -> String {
     out.join("")
 }
 
+/// The interpreter oracle for B-2026-08-30-3's codegen twin
+/// (`test_e2e_branch_tail_fstring_arm_values_round_trip`).
+///
+/// The bug was a codegen-only LEAK, so the interpreter never had it — which is
+/// exactly what makes this worth pinning. The fix teaches seven consuming gates
+/// to free an f-string arm tail at the use site, and the way that goes wrong is
+/// freeing a value someone still reads. This side has no frees to get wrong, so
+/// it is the reference the compiled backends must keep matching.
+#[test]
+fn test_branch_tail_fstring_arm_values_round_trip() {
+    assert_eq!(
+        run(r#"fn use_s(s: String) -> i64 { return s.len(); }
+
+fn main() {
+    let n: i64 = "ab".len();
+    let c = n > 0;
+    let b = if c { f"x{n}" } else { f"y{n}" }.contains("x");
+    let d = use_s(if c { f"x{n}" } else { f"y{n}" });
+    println(f"b={b} d={d}");
+    let p1 = { f"p{n}" }.contains("p");
+    let p2 = { { f"q{n}" } }.contains("q");
+    let p3 = match n { 0 => f"m{n}", _ => f"o{n}" }.contains("o");
+    let p4 = if n < 0 { f"u{n}" } else if c { f"v{n}" } else { f"w{n}" }.contains("v");
+    println(f"p1={p1} p2={p2} p3={p3} p4={p4}");
+    let p5 = if c { f"r{n}" } else { f"s{n}" }.len();
+    let p6 = f"[{if c { f"t{n}" } else { f"z{n}" }}]";
+    let p7 = if c { f"c{n}" } else { f"e{n}" } + "-tail";
+    println(f"p5={p5} p6={p6} p7={p7}");
+    let mut v: Vec[String] = [];
+    v.push(if c { f"k{n}" } else { f"l{n}" });
+    let p8 = if c { f"g{n}" } else { f"h{n}" };
+    println(f"v0={v[0]} p8={p8} again={p8}");
+}
+"#),
+        "b=true d=2\np1=true p2=true p3=true p4=true\np5=2 p6=[t2] p7=c2-tail\nv0=k2 p8=g2 again=g2\n"
+    );
+}
+
 /// B-2026-08-31-48 (oracle half) — one generic fn at several nameless-aggregate
 /// type arguments.
 ///

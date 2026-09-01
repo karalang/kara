@@ -970,10 +970,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // than freed outright, because the owning destinations own the same
             // buffer — without that half this trades the leak for a double
             // free.
-            let tail_mints = block
-                .final_expr
-                .as_deref()
-                .is_some_and(|t| self.branch_tail_mints_fresh_owned_temp(t));
+            // `tail_mints` feeds `consumer_frees` below, so it is really the
+            // question "will a use-site gate free this value?" -- which
+            // presupposes a use site. A DISCARDED value-block has none, so the
+            // answer is no however the tail is spelled, and standing this
+            // frame's owner down on the strength of the tail strands the
+            // buffer.
+            //
+            // Every OTHER shape the predicate admits is also admitted by
+            // `stmt_owns_block_tail` above, so a discarded block carrying one
+            // already had `arm_value_discarded == false` and this term changes
+            // nothing for it. An f-string tail is the first shape admitted by
+            // the predicate and by none of those four discard predicates,
+            // which is why it is the one that reached here with the value
+            // discarded and nothing coming to free it. Measured at HEAD --
+            // this leak predates the widening that exposed it:
+            // `{ f"b{n}" };`, `{ { f"c{n}" } };` and `{ { { f"e{n}" } } };`
+            // each lost 2 B per evaluation, at three nesting depths.
+            let tail_mints = !arm_value_discarded
+                && block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.branch_tail_mints_fresh_owned_temp(t));
             // A standalone value-block answers both questions itself: its own
             // span is what a consumer looks up, and its own tail decides
             // whether B-2026-08-29-27's gates will free the value at the use
@@ -15284,6 +15302,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.branch_tail_mints_fresh_owned_temp_inner(&a.body, block_local_tail_ok)
                     })
             }
+            // B-2026-08-30-3 — an F-STRING tail mints a fresh owned temp just
+            // as a call does, but by a different route, so
+            // `expr_yields_fresh_owned_temp` (Call/MethodCall only) declined it
+            // and `if c { f"x{n}" } else { f"y{n}" }.contains("x")` stranded the
+            // taken arm's rendered buffer once per evaluation.
+            //
+            // There is no dangling hazard in admitting it, which is what makes
+            // this a consumer-gate widening rather than the per-arm owner its
+            // binding-tail sibling needs: the accumulator registers its own
+            // scope cleanup, and `suppress_block_tail_cleanup` zeroes that
+            // alloca's `cap` on the way out of the arm — correct in itself, the
+            // value escapes — leaving the merged value owned by NOBODY. A
+            // disarm with no counterpart is exactly the hole a use-site free
+            // fills, and an f-string temp has no later reader by construction.
+            //
+            // The call-argument gate's extra `!rhs_stages_fstr_acc` term stays
+            // inert here and must: it matches a DIRECT `InterpolatedStringLit`
+            // (or a struct/enum `.to_string()`), never a branch wrapping one, so
+            // the staging that keeps a direct f-string argument from being
+            // materialized twice never fires for this shape. Measured, not
+            // assumed — under ASAN the wrapped spellings free once.
+            //
+            // A string LITERAL tail is deliberately NOT admitted, so a MIXED
+            // branch (`if c { f"i{n}" } else { "lit" }`) still leaks its
+            // f-string arm. The tempting argument is that a literal needs no
+            // free — rodata, `cap == 0`, and `free_str_vec_buffer_if_heap`
+            // branches on `cap > 0`, making the emitted free a no-op. That is
+            // measured for ONE of the seven gates this predicate feeds, not for
+            // the rest. The real cost is to the fail-closed quantifier itself:
+            // "every tail MINTS" is what keeps an aliased-place arm out, and
+            // weakening it to "mints or is harmless" puts every future
+            // candidate for "harmless" up for re-argument at seven sites.
+            // B-2026-09-01-9 carries that widening, with the measurement.
+            ExprKind::InterpolatedStringLit(_) => true,
             _ => {
                 self.expr_yields_fresh_owned_temp(e)
                     || (block_local_tail_ok && self.arg_producer_mints_fresh_owned_temp(e))
