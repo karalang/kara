@@ -283,6 +283,20 @@ pub(crate) struct PayloadVars<'ctx> {
     /// (`scrutinee_is_owned_param_binding` consults this), and its own
     /// let-site registration is memory-only. Cleared per-function.
     pub(crate) param_view_locals: HashSet<String>,
+    /// B-2026-08-29-47 — the PER-FIELD companion to [`Self::param_view_locals`]:
+    /// for a binding built by a struct literal, which of its fields were filled
+    /// from a param VIEW.
+    ///
+    /// `param_view_locals` answers the all-or-nothing question — every visited
+    /// field was a view, so the binding is itself one. A MIXED literal
+    /// (`S3 { a: r, b: mk(2) }`) and a wrap over a struct with its own
+    /// `impl Drop` both mask per field and never reach that mark, yet a later
+    /// `let x = s.a;` still moves a caller-owned value out and must not arm a
+    /// body of its own. This is the record that makes that question answerable
+    /// at the move-out site. Keyed by binding name and field NAME (the shape
+    /// the let-site `FieldAccess` has in hand); cleared per function alongside
+    /// `param_view_locals`.
+    pub(crate) param_view_struct_fields: HashMap<String, HashSet<String>>,
 }
 
 /// One queued per-field neutralization against a payload box whose user `Drop`

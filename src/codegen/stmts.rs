@@ -9227,6 +9227,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             // a field move-out takes, so there has to be an
                             // action to retract.
                             self.mask_param_view_struct_literal_fields(var_name, value);
+                            // B-2026-08-29-47 — the opposite direction of the
+                            // same move: `let x = s.r;` reads a field back OUT
+                            // of a place the caller owns. The move-out
+                            // machinery above retracts the SOURCE's body
+                            // correctly (B-2026-08-03-8); nothing ever asked
+                            // whether the DESTINATION should register one, so a
+                            // caller-owned value got a second body here and
+                            // printed twice. Placed beside the wrap mask
+                            // because it retracts the registration made above,
+                            // for the same reason that one does.
+                            if self.field_move_out_source_is_param_view(value) {
+                                self.suppress_user_drop_for_var(var_name);
+                                // Propagate view-ness, so a later `let y = x;`
+                                // inherits the withholding instead of re-arming
+                                // (B-2026-08-01-15's rule, reached through a
+                                // field read).
+                                self.payload_vars
+                                    .param_view_locals
+                                    .insert(var_name.to_string());
+                            }
                         }
                     }
                 }

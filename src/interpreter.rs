@@ -507,6 +507,16 @@ pub struct Interpreter<'a> {
     /// walker with the same field masked. Cleared for a name by
     /// `rearm_container_bodies_for_name`.
     pub(crate) moved_out_struct_field_bodies: HashSet<(String, String)>,
+    /// B-2026-08-29-47 — `(binding, field)` pairs a struct literal filled from
+    /// a param VIEW. The interpreter twin of codegen's
+    /// `param_view_struct_fields`, and held apart from the mask above for the
+    /// same reason the two backends hold theirs apart: that mask says "this
+    /// binding does not run this field's body", written for several unrelated
+    /// reasons (a move-out, a destructure, a rebind), while this says WHY —
+    /// the value is the CALLER's. Only the second answers whether a later
+    /// `let x = s.a;` may register a body of its own. Rides the per-frame
+    /// save/restore with the masks, being name-keyed like them.
+    pub(crate) param_view_struct_fields: HashSet<(String, String)>,
     /// B-2026-08-29-33 — `(variable, field name)` pairs whose ENUM field's
     /// PAYLOAD bodies a consuming `match` / `if let` arm over `<var>.<field>`
     /// took. Held apart from `moved_out_struct_field_bodies` because the mask is
@@ -1007,6 +1017,7 @@ impl<'a> Interpreter<'a> {
             moved_out_container_bodies_bindings: HashSet::new(),
             moved_out_tuple_elem_bodies: HashSet::new(),
             moved_out_struct_field_bodies: HashSet::new(),
+            param_view_struct_fields: HashSet::new(),
             moved_out_struct_field_payload_bodies: HashSet::new(),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,

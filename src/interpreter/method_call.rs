@@ -632,6 +632,14 @@ impl<'a> super::Interpreter<'a> {
                     std::mem::take(&mut self.moved_out_container_bodies_bindings),
                     std::mem::take(&mut self.moved_out_tuple_elem_bodies),
                     std::mem::take(&mut self.moved_out_struct_field_bodies),
+                    // B-2026-08-29-47 — the param-view FIELD record IS isolated
+                    // here, unlike the sets above. The comment below explains
+                    // why theirs is not: a callee arm relies on the caller's
+                    // mark leaking in under a shared name. Nothing relies on
+                    // this one leaking — it was introduced with the isolation
+                    // in place — so it takes the correct scoping from the
+                    // start rather than inheriting a hazard it never had.
+                    std::mem::take(&mut self.param_view_struct_fields),
                 );
                 // B-2026-08-29-9 — the callee frame's moved-out sets are
                 // deliberately NOT isolated here, though `eval_call` isolates a
@@ -673,6 +681,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_container_bodies_bindings,
                     self.moved_out_tuple_elem_bodies,
                     self.moved_out_struct_field_bodies,
+                    self.param_view_struct_fields,
                 ) = saved_moved_out;
                 // B-2026-08-30-33 — restored with the rest of this frame's
                 // move bookkeeping, so a parameter name cannot outlive the

@@ -35964,16 +35964,17 @@ fn test_wrapped_param_view_nonenum_and_mixed_wraps_drop_once() {
             "dR4\nv=7\n",
         ),
         // Moving a param view back OUT of the struct it was wrapped into: the
-        // destination registers a body the caller also runs. Pre-existing, and
-        // the local-source twin beside it is correct, which isolates the cause.
-        // UNFIXED (B-2026-08-29-47).
+        // destination used to register a body the caller also runs. FIXED
+        // (B-2026-08-29-47), in the same commit as the codegen twin — this
+        // expectation was the recorded known-bad `dR1 dR1`. The local-source
+        // twin beside it never moved, which isolated the cause.
         (
-            "pin-view-field-moved-out",
+            "view-field-moved-out",
             format!(
                 "{HDR}fn take(r: R) -> i64 {{ let s = S {{ r: r }}; let x = s.r; 7 }}\n\
                  fn main() {{ let v = take(R {{ id: 1 }}); println(f\"v={{v}}\") }}\n"
             ),
-            "dR1\ndR1\nv=7\n",
+            "dR1\nv=7\n",
         ),
         (
             "local-field-moved-out-is-correct",
@@ -50420,6 +50421,163 @@ fn test_whole_value_rebind_inherits_the_wrap_mask() {
         run(&enum_rebind),
         "dR1\ndR2\ndR1\nv=7\n",
         "[pinned DEFECT: enum ctor MIXED then rebind — agreed, awaiting a codegen per-var store]"
+    );
+}
+
+#[test]
+fn test_param_view_field_moved_back_out_runs_one_body() {
+    let hdr = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n\
+               struct S1 { r: R }\n\
+               struct S3 { a: R, b: R }\n\
+               struct D1 { r: R }\n\
+               impl Drop for D1 { fn drop(mut ref self) { println(\"dD\") } }\n\
+               struct W1 { s: S1 }\n\
+               struct O { r: R }\n\
+               struct O3 { o: O }\n\
+               struct H { n: i64 }\n";
+    for (label, fns, main, want) in [
+        // THE ROW. `let s = S1 { r: r }` wraps a param view; `let x = s.r`
+        // reads it straight back out. The caller runs that body, so `x`
+        // must not register one — this printed `dR1 dR1` on all four
+        // surfaces, agreed, which is why no A/B parity gate could see it.
+        (
+            "all-views wrap, then move the view back out",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // NO WRAP AT ALL. The same read straight off a by-value param is
+        // the same caller-owned move, and doubled the same way — which is
+        // what shows the subject is view-ness, not the wrap.
+        (
+            "raw owned param, direct field read",
+            "fn take(o: O) -> i64 { let x = o.r; return 7; }",
+            "let v = take(O { r: mk(1) }); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "raw owned param, two-hop field read",
+            "fn take(w: O3) -> i64 { let x = w.o.r; return 7; }",
+            "let v = take(O3 { o: O { r: mk(1) } }); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // DEPTH. One test at the chain ROOT settles any depth, because
+        // everything reachable through a view is a view.
+        (
+            "two-hop chain through two wraps",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; let w = W1 { s: s }; let x = w.s.r; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // The move-out destination inherits view-ness, so a later whole-
+        // value rebind of it does not re-arm what this withheld.
+        (
+            "move out, then rebind the destination",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; let x = s.r; let y = x; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // READING `x` does not change who owns it.
+        (
+            "move out, then read the destination",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return x.id; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=1\n",
+        ),
+        // BOTH fields views: the binding is a view whole, and moving one
+        // out leaves both bodies to the caller.
+        (
+            "both fields views, move one out",
+            "fn take(p: R, q: R) -> i64 { let s = S3 { a: p, b: q }; let x = s.a; return 7; }",
+            "let v = take(mk(1), mk(2)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        // OWN-`Drop` WRAPPER. This wrap never becomes a view — `D1`'s body
+        // is the binding's own — so the per-field record is the only thing
+        // that can answer for `d.r`. `dD` still fires; only the doubled
+        // `dR1` goes.
+        (
+            "own-Drop wrapper, move the view out",
+            "fn take(r: R) -> i64 { let d = D1 { r: r }; let x = d.r; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dD\ndR1\nv=7\n",
+        ),
+        // METHOD FRAME. Codegen doubled here where the interpreter did not
+        // (its caller-side fire is wired into `eval_call` alone), so this
+        // shape was a run-vs-build DIVERGENCE before the fix — the one
+        // place in the family where the two backends disagreed. Fixing
+        // codegen converges it; the interpreter's method-frame bail is what
+        // keeps its single body from going to zero.
+        (
+            "method frame, all-views wrap",
+            "impl H { fn take(ref self, r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; } }",
+            "let h = H { n: 0 }; let v = h.take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // A REBIND on the way in is still a view.
+        (
+            "param rebound, then wrapped, then moved out",
+            "fn take(r: R) -> i64 { let m = r; let s = S1 { r: m }; let x = s.r; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // CONTROLS. Each is the same statement over a LOCAL source, and
+        // each was already correct — which is what isolates view-ness as
+        // the missing half rather than the move-out machinery, and what
+        // this fix must not disturb.
+        (
+            "control: local source, move out",
+            "fn take() -> i64 { let s = S1 { r: mk(1) }; let x = s.r; return 7; }",
+            "let v = take(); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "control: all-views wrap, NO move out",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "control: own-Drop wrapper, local source",
+            "fn take() -> i64 { let d = D1 { r: mk(1) }; let x = d.r; return 7; }",
+            "let v = take(); println(f\"v={v}\");",
+            "dR1\ndD\nv=7\n",
+        ),
+        (
+            "control: method frame, local source",
+            "impl H { fn take(ref self) -> i64 { let s = S1 { r: mk(1) }; let x = s.r; return 7; } }",
+            "let h = H { n: 0 }; let v = h.take(); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // CONTROL, and the one that keeps the fix from being a blunt
+        // instrument: moving the FRESH field out of a mixed wrap must
+        // still register a body, because nobody else runs it.
+        (
+            "control: mixed wrap, move the FRESH field out",
+            "fn take(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; let x = s.b; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+    ] {
+        let src = format!("{hdr}{fns}\nfn main() {{ {main} }}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
+    // PINNED AT THE DEFECT. The TUPLE spelling of the same move
+    // (`let t = (r, 5); let x = t.0;`) still doubles, on BOTH backends, so
+    // it stays an agreed gap rather than a divergence. It needs the tuple
+    // peer of the per-field record this fix added — `param_view_locals`
+    // never covers it, since a tuple literal's view elements are masked per
+    // index and the binding is not marked a view. Filed separately.
+    let tuple_moveout = format!(
+        "{hdr}fn take(r: R) -> i64 {{ let t = (r, 5); let x = t.0; return 7; }}\n\
+         fn main() {{ let v = take(mk(1)); println(f\"v={{v}}\"); }}\n"
+    );
+    assert_eq!(
+        run(&tuple_moveout),
+        "dR1\ndR1\nv=7\n",
+        "[pinned DEFECT: tuple wrap then element move-out — agreed, awaiting a tuple record]"
     );
 }
 

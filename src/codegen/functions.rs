@@ -1507,6 +1507,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.owned_struct_params.clear();
         self.borrow_vars.owned_array_params.clear();
         self.payload_vars.param_view_locals.clear();
+        self.payload_vars.param_view_struct_fields.clear();
         self.payload_vars.shared_enum_payload_view_vars.clear();
         self.drop_rc.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-

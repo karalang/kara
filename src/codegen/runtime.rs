@@ -6839,6 +6839,25 @@ impl<'ctx> super::Codegen<'ctx> {
         if views.is_empty() {
             return;
         }
+        // B-2026-08-29-47 — record the view fields BEFORE any of the branches
+        // below return. A later `let x = s.a;` moves one of them back out and
+        // must not arm a body of its own (the caller runs it), and the three
+        // arms mask by three different routes — only this record is common to
+        // all of them. `param_view_locals` below answers the same question but
+        // only for the all-views case, which is exactly the case a mixed or
+        // own-`Drop` wrap never reaches.
+        {
+            let entry = self
+                .payload_vars
+                .param_view_struct_fields
+                .entry(var_name.to_string())
+                .or_default();
+            for &idx in &views {
+                if let Some(fname) = field_names.get(idx) {
+                    entry.insert(fname.clone());
+                }
+            }
+        }
         let all_views = views.len() == drop_idxs.len();
         // A struct with its own `impl Drop` runs its field bodies from INSIDE
         // `karac_drop_<T>`, a type-level wrapper shared by every binding of the
@@ -6894,6 +6913,57 @@ impl<'ctx> super::Codegen<'ctx> {
                 .param_view_locals
                 .insert(var_name.to_string());
         }
+    }
+
+    /// B-2026-08-29-47 — does `value`, a `let` initializer, read a field out of
+    /// a place the CALLER owns, so the destination binding must not arm a
+    /// `Drop` body of its own?
+    ///
+    /// Under caller-retains, a by-value parameter is a VIEW: the caller runs
+    /// that value's body. Everything reachable THROUGH a view is a view too —
+    /// `scrutinee_is_owned_param_binding` already spells that rule for a match
+    /// scrutinee — but the `let` site never asked, so `let x = s.r;` registered
+    /// a second body for a value the caller was already going to fire.
+    /// Measured `dR1 dR1` against a due `dR1`, agreed by all four surfaces,
+    /// with the same shape over a LOCAL source correct — which is what isolates
+    /// view-ness, not the move-out machinery, as the missing half.
+    ///
+    /// Two ways a root can be caller-owned, and both are needed:
+    ///
+    /// 1. The root is itself a param view — a by-value param (`let x = o.r;` in
+    ///    `fn take(o: O)`) or a local that inherited view-ness whole
+    ///    (`let s = S1 { r: r };`, all of whose visited fields were views).
+    /// 2. The root is a MIXED wrap, which never becomes a view itself because
+    ///    it still owns its fresh fields, but whose individual view fields are
+    ///    recorded in `param_view_struct_fields`. Only the FIRST hop is
+    ///    consulted: a view field's interior is caller-owned all the way down,
+    ///    so a deeper chain through it needs no further record.
+    pub(super) fn field_move_out_source_is_param_view(&self, value: &Expr) -> bool {
+        let ExprKind::FieldAccess { .. } = &value.kind else {
+            return false;
+        };
+        let mut cur = value;
+        let mut first_field: Option<&str> = None;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    first_field = Some(field.as_str());
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                _ => return false,
+            }
+        };
+        if self.expr_is_param_view(cur) {
+            return true;
+        }
+        let Some(field) = first_field else {
+            return false;
+        };
+        self.payload_vars
+            .param_view_struct_fields
+            .get(root)
+            .is_some_and(|fs| fs.contains(field))
     }
 
     /// B-2026-08-29-24 — does `value` construct an `Option` / `Result` whose

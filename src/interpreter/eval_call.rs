@@ -2178,6 +2178,9 @@ impl<'a> super::Interpreter<'a> {
                     // B-2026-08-29-24 — and the enum-payload SLOT mask, for the
                     // same name-keyed reason.
                     std::mem::take(&mut self.moved_out_enum_payload_slots),
+                    // B-2026-08-29-47 — the param-view FIELD record, name-keyed
+                    // like the masks above and isolated for the same reason.
+                    std::mem::take(&mut self.param_view_struct_fields),
                 );
                 // B-2026-08-28-22 — hand the callee ownership of the `Drop`
                 // BODY of any owned param it returns on some tail paths and not
@@ -2211,6 +2214,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_struct_field_payload_bodies,
                     self.moved_out_tuple_elem_payload_bodies,
                     self.moved_out_enum_payload_slots,
+                    self.param_view_struct_fields,
                 ) = saved_moved_out;
                 // B-2026-08-30-33 — restore with the rest of the per-frame
                 // move bookkeeping. Left un-restored, a callee's parameter name

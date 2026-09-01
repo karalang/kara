@@ -1690,6 +1690,14 @@ impl<'a> super::Interpreter<'a> {
         // for a struct with no `impl Drop` of its own.
         let bname = bname.clone();
         for f in views {
+            // B-2026-08-29-47 — the SAME pair into two sets. The mask says the
+            // walk skips this field; the record says the value belongs to the
+            // caller, which is what a later `let x = s.a;` has to ask before
+            // registering a slot of its own. The mask alone cannot answer it —
+            // a field moved out by an ordinary `let` lands there too, and that
+            // one the destination genuinely owns.
+            self.param_view_struct_fields
+                .insert((bname.clone(), f.clone()));
             self.moved_out_struct_field_bodies
                 .insert((bname.clone(), f));
         }
@@ -2052,6 +2060,30 @@ impl<'a> super::Interpreter<'a> {
                     return true;
                 }
             }
+            // B-2026-08-29-47 — the move-out spelling, and the mirror image of
+            // the constructor one above: `let x = s.r;` reads a caller-owned
+            // value back OUT of the place a wrap put it into (or straight out
+            // of a by-value param — `let x = o.r;` needs no wrap at all). The
+            // caller runs that body, so registering a slot here ran it twice;
+            // measured `dR1 dR1` against a due `dR1` on all four surfaces, with
+            // a LOCAL source correct, which is what isolates view-ness rather
+            // than the move-out machinery as the missing half.
+            //
+            // The method-frame bail at the top of this fn covers this arm too,
+            // and has to: a method's arguments reach no caller-side fire, so
+            // the interpreter's slot here is the ONLY one. Measured — with the
+            // bail, `impl H { fn take(ref self, r: R) { let s = S1 { r: r };
+            // let x = s.r; } }` keeps its single body and CONVERGES with
+            // codegen, which this same row fixes from two down to one.
+            if let PatternKind::Binding(bname) = &pattern.kind {
+                if self.let_reads_param_view_field(value) {
+                    let bname = bname.clone();
+                    if let Some(top) = self.owned_param_names_stack.last_mut() {
+                        top.insert(bname);
+                    }
+                    return true;
+                }
+            }
             return false;
         }
         let ExprKind::Identifier(n) = &value.kind else {
@@ -2060,6 +2092,50 @@ impl<'a> super::Interpreter<'a> {
         self.owned_param_names_stack
             .last()
             .is_some_and(|params| params.contains(n.as_str()))
+    }
+
+    /// B-2026-08-29-47 — does this `let` initializer read a field out of a
+    /// place the CALLER owns? The interpreter twin of codegen's
+    /// `field_move_out_source_is_param_view`, name-based where that one is
+    /// index-based, and answering the same two questions in the same order:
+    ///
+    /// 1. Is the chain ROOT a param view — a by-value parameter of the running
+    ///    function, or a local that inherited view-ness whole? Everything
+    ///    reachable through a view is a view, so one test at the root settles
+    ///    any depth (`w.s.r` as well as `s.r`).
+    /// 2. Failing that, was the FIRST hop off the root recorded as a param-view
+    ///    field? That covers the two wraps that never become views themselves —
+    ///    a MIXED literal, which still owns its fresh fields, and a wrap over a
+    ///    struct with its own `impl Drop`, whose body is the binding's own.
+    ///    A view field's interior is caller-owned all the way down, so no
+    ///    record is needed past the first hop.
+    fn let_reads_param_view_field(&self, value: &Expr) -> bool {
+        if !matches!(&value.kind, ExprKind::FieldAccess { .. }) {
+            return false;
+        }
+        let mut cur = value;
+        let mut first_field: Option<&str> = None;
+        let root = loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, field } => {
+                    first_field = Some(field.as_str());
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => break n.as_str(),
+                _ => return false,
+            }
+        };
+        if self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(root))
+        {
+            return true;
+        }
+        first_field.is_some_and(|f| {
+            self.param_view_struct_fields
+                .contains(&(root.to_string(), f.to_string()))
+        })
     }
 
     /// B-2026-08-29-58 — the ASSIGNMENT spelling of the move
