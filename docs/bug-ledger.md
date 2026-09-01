@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 343 | 5 |
-| run-vs-build | 283 | 22 |
+| run-vs-build | 283 | 21 |
 | leak | 245 | 6 |
 | missing-feature | 192 | 1 |
 | double-free | 161 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1333 | 31 |
-| interp | 308 | 21 |
+| interp | 308 | 20 |
 | typecheck | 285 | 1 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced · 40 open · 1871 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced · 39 open · 1872 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (40)
+### Open (39)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -162,7 +162,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced
 | B-2026-09-01-3 | 2026-09-01 | interp+codegen | medium | THE TUPLE SPELLING OF B-2026-08-29-47 STILL DOUBLES A PARAM VIEW'S `Drop` BODY -- `let t = (r, 5); let x = t.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-field param-view record that fix added has no tuple peer | none |
 | B-2026-09-01-4 | 2026-09-01 | codegen | medium | READING A NON-`Copy` FIELD OUT OF A `ref` PARAM MINTS AN IMPLICIT DEEP COPY -- silently allocating and running a user `Drop` body the source never wrote, which is exactly what `enum_payload_clone_is_faithful` refuses to do one level down | — |
 | B-2026-09-01-5 | 2026-09-01 | codegen | low | A DISCARDED BRANCH LITERAL WHOSE FIELD IS A PROJECTION OFF A NAMED LOCAL STILL STRANDS 38 B -- `P { a: t.a, b: 1 }` is the half of B-2026-08-29-32's guard that B-2026-08-31-44 could NOT admit, because the aggregate-literal move takeover does not extend to named locals and admitting it double-frees in a loop | — |
-| B-2026-09-01-7 | 2026-09-01 | interp | medium | A BARE `if` WITH NO `else` IN STATEMENT POSITION, WHOSE ARM LITERAL CONSUMES A LIVE LOCAL, RUNS THAT LOCAL'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the compiled answer is the correct one, and this is the single cell of the B-2026-08-31-35 family where the backends disagree rather than agreeing on the doubled transcript | — |
 | B-2026-09-01-8 | 2026-09-01 | codegen | low | CODEGEN'S ERROR CHANNEL CARRIES NO SPAN, SO EVERY `codegen failed: ...` DIAGNOSTIC IS SOURCE-LESS -- ~135 messages render as a bare sentence with no line, column or caret, and no single message can be fixed without reworking the channel | none |
 | B-2026-09-01-9 | 2026-09-01 | codegen | low | A BRANCH MIXING AN F-STRING ARM WITH A STRING-LITERAL ARM LEAKS THE F-STRING -- `if c { f"i{n}" } else { "lit" }.contains("i")` strands the 2 B buffer that the all-f-string spelling now frees, because the fail-closed predicate requires EVERY tail to mint and a rodata literal mints nothing; admitting it is a runtime no-op at the one free site that was read, but weakens the quantifier that keeps an aliased-place arm out at seven | — |
 | B-2026-09-01-11 | 2026-09-01 | interp+codegen | medium | THE NON-CONSTRUCTOR ARMS OF A DISCARDED BRANCH STILL DISAGREE IN THREE SHAPES -- a CALL arm registers nothing on either compiled backend where the direct call spelling runs the own body, and a LIVE-LOCAL arm makes the interpreter drop that local at the branch (doubling the enum's own body in the `let _ =` spelling) where both compiled backends correctly leave it to its own scope end | — |
@@ -202,9 +201,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced
 
 </details>
 
-### Fixed (1871)
+### Fixed (1872)
 
-<details><summary>1871 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1872 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2073,6 +2072,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1942 surfaced
 | B-2026-08-31-48 | codegen | high | TWO INSTANTIATIONS OF ONE GENERIC FN AT DIFFERENT `Array`/`Slice`/`Vector` TYPE ARGS COLLIDE ON ONE MONO SYMBOL AND FAIL MODULE VERIFICATION -- `fn i… | 007c279 |
 | B-2026-08-31-49 | codegen | high | A GENERIC `Result[T, E]` RENDERS WITH THE `Option` VARIANT TABLE WHEN A GENERIC `Option[T]` DISPLAY IS EMITTED FIRST -- `Ok(7)` prints `Some(7)` and… | e5fd34f |
 | B-2026-09-01-6 | codegen | medium | CODEGEN DECLINES A NESTED `ref v[0][1]` WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` WHILE THE INTERPRETER READS THE ELEMENT C… | b7674909 |
+| B-2026-09-01-7 | interp | medium | A BARE `if` WITH NO `else` IN STATEMENT POSITION, WHOSE ARM LITERAL CONSUMES A LIVE LOCAL, RUNS THAT LOCAL'S `Drop` BODY TWICE UNDER `--interp` AND O… | e49a85f |
 | B-2026-09-01-10 | codegen | medium | THE -O0 ASAN LEG IS RED ON `main` WITH THREE UNOWNED FAILURES AND AN EMPTY QUARANTINE LIST -- `scripts/asan-o0-leg.sh` reports 1339 passed / 3 failed… | fcb6696 |
 | B-2026-09-01-12 | interp+codegen | medium | A SUFFIXED FLOAT LITERAL WHOSE SUFFIX CONTRADICTS THE DESTINATION WIDTH SPLITS THE BACKENDS -- `let d: Option[f32] = Option.Some(0.1f64)` is `Some(0.… | 605208d9 |
 | B-2026-09-01-13 | codegen+interp | medium | THE QUALIFIED `Type.method` CALLEE SPELLING IS RESOLVED DIFFERENTLY FROM THE BARE ONE IN AT LEAST THREE PLACES, AND NOBODY HAS SWEPT FOR THE REST --… | 43a0e728 |
