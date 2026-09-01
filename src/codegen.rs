@@ -293,6 +293,30 @@ pub enum SnapshotPrimKind {
     /// walk the shallow handle transfer can't carry, same as the
     /// aggregate Map cases.
     Set(VecElemKind),
+    /// B-2026-08-30-7: any type whose lowered representation is a plain
+    /// BY-VALUE aggregate with no heap or RC pointer anywhere inside it —
+    /// every integer/float width the language has, `Option`/`Result` over
+    /// those, and tuples of those.
+    ///
+    /// This variant exists because the six kinds above are each a bespoke
+    /// ownership story, and the whole class below them needs NO ownership
+    /// story at all. A `let o: Option[i64]` slot is 32 bytes of tag +
+    /// payload words; copying it into the global and copying it back is a
+    /// COMPLETE transfer, because there is nothing behind a pointer to
+    /// own. So capture is a plain `store`, replay is a plain `load`, and
+    /// neither side suppresses a cleanup — unlike `String`/`Vec` (which
+    /// zero the slot's `cap`) or `Map`/`Set` (which skip `track_map_var`).
+    /// That is also exactly why the heap-carrying shapes are still
+    /// excluded: a shallow copy of a `Vec[String]` would leave the same
+    /// element buffers reachable from two owners.
+    ///
+    /// The variant carries no payload so the enum stays `Copy`; the
+    /// binding's `TypeExpr` travels beside it in
+    /// [`Codegen::snapshot_value_types`], which is what
+    /// `snapshot_storage_type` lowers for the global and what replay
+    /// hands to `register_var_from_type_expr` to rebuild dispatch
+    /// metadata.
+    ByValue,
 }
 
 /// Slice c-repl.B.5.3: Vec element kinds eligible for the v1 snapshot
@@ -345,6 +369,7 @@ pub fn compile_to_ir_for_repl_cell(
         main_symbol,
         &HashMap::new(),
         &HashMap::new(),
+        &HashMap::new(),
     )
 }
 
@@ -374,6 +399,10 @@ pub fn compile_to_ir_for_repl_cell(
 /// loaded at the `let` and stored back at the tail; a name in
 /// `snapshot_capture` alone is a first binding, whose RHS runs.
 ///
+/// `snapshot_value_types`: the `TypeExpr` of each binding classified
+/// [`SnapshotPrimKind::ByValue`] — that variant carries no payload, so
+/// the type it stands for travels here (B-2026-08-30-7).
+///
 /// The original [`compile_to_ir_for_repl_cell`] entry delegates here
 /// with empty snapshot maps; non-REPL callers don't need to know
 /// this variant exists.
@@ -383,6 +412,7 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
     main_symbol: &str,
     snapshot_capture: &HashMap<String, SnapshotPrimKind>,
     snapshot_replay: &HashMap<String, SnapshotPrimKind>,
+    snapshot_value_types: &HashMap<String, crate::ast::TypeExpr>,
 ) -> Result<String, String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_repl_cell");
@@ -390,6 +420,7 @@ pub fn compile_to_ir_for_repl_cell_with_snapshots(
     cg.main_symbol_override = Some(main_symbol.to_string());
     cg.snapshot_capture = snapshot_capture.clone();
     cg.snapshot_replay = snapshot_replay.clone();
+    cg.snapshot_value_types = snapshot_value_types.clone();
     cg.compile_program(program)?;
     Ok(cg.module.print_to_string().to_string())
 }
@@ -2192,6 +2223,21 @@ pub(super) struct Codegen<'ctx> {
     /// defining copy already lives in the runner's JITDylib, so this
     /// cell stores THROUGH an external declaration of it.
     pub(crate) snapshot_replay: HashMap<String, SnapshotPrimKind>,
+    /// B-2026-08-30-7: the `TypeExpr` of every binding classified
+    /// [`SnapshotPrimKind::ByValue`], keyed by binding name.
+    ///
+    /// That variant deliberately carries no payload (the enum stays
+    /// `Copy`), so the type it stands for rides here instead. Two
+    /// consumers: [`Codegen::snapshot_storage_type`] lowers it to the
+    /// global's LLVM type, and the replay path feeds it to
+    /// `register_var_from_type_expr` so the replayed binding lands in the
+    /// same dispatch side-tables the original `let` would have written —
+    /// which is what keeps `o.is_some()` and `println(o)` working on a
+    /// binding whose RHS never ran in this cell.
+    ///
+    /// Empty in every non-REPL codegen entry, and empty for the six
+    /// bespoke kinds, whose storage type is fixed by the variant itself.
+    pub(crate) snapshot_value_types: HashMap<String, crate::ast::TypeExpr>,
 }
 
 /// Apply the malloc-family allocator attributes to an alloc/realloc wrapper
@@ -6361,6 +6407,7 @@ impl<'ctx> Codegen<'ctx> {
             force_external_linkage: false,
             snapshot_capture: HashMap::new(),
             snapshot_replay: HashMap::new(),
+            snapshot_value_types: HashMap::new(),
         }
     }
 

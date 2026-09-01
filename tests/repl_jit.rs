@@ -566,17 +566,198 @@ fn repl_jit_eligible_binding_emits_no_passthrough_warning() {
 /// is observationally identical, so there is nothing to report. This is the
 /// common shape in an interactive session; warning here would make the note
 /// worthless.
+///
+/// The struct carries a `String` field deliberately: a struct of pure scalars
+/// is snapshot-eligible now (the by-value tier below), so it would pass this
+/// test for the wrong reason — quiet because it is COVERED rather than quiet
+/// because the pass-through is harmless. A heap-carrying field keeps it on the
+/// path the test is about.
 #[test]
 fn repl_jit_immutable_constructor_binding_emits_no_passthrough_warning() {
     let mut s = Session::new();
     enable_jit(&mut s);
-    let r = s.evaluate_cell_captured("struct P { x: i64 }");
+    let r = s.evaluate_cell_captured("struct P { x: String }");
     assert!(r.errors.is_empty(), "items cell: {:?}", r.errors);
-    let r = s.evaluate_cell_captured("let p = P { x: 1 };");
+    let r = s.evaluate_cell_captured("let p = P { x: f\"a\" };");
     assert!(r.errors.is_empty(), "declare cell: {:?}", r.errors);
     assert!(
         !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
         "a pure immutable binding must not warn; notes: {:?}",
+        r.notes,
+    );
+}
+
+/// B-2026-08-30-7, the DIVERGENCE half — a mutation to a by-value binding made
+/// in a later cell must survive the cell boundary on the JIT lane.
+///
+/// The row's own measurement is the `Option[i64]` row of its table: `o =
+/// Option.Some(4)` in cell 2 read back `false` under `karac repl` and `true`
+/// under `karac repl --interp`, because `Option` was not snapshot-eligible and
+/// the pass-through re-ran `Option.None` in every later cell. The other four
+/// shapes are the rest of the by-value class — a narrow scalar (the width the
+/// original tier deliberately excluded), a tuple, a user struct, and a user
+/// enum.
+///
+/// Each is asserted against the value the interpreter produces, which is the
+/// standard this row is measured against throughout.
+#[test]
+fn repl_jit_by_value_binding_carries_a_later_cell_mutation() {
+    for (items, decl, mutate, read, want) in [
+        (
+            "",
+            "let mut o: Option[i64] = Option.None;",
+            "o = Option.Some(4);",
+            "println(f\"{o.is_some()}\");",
+            "true",
+        ),
+        (
+            "",
+            "let mut n: i32 = 0;",
+            "n = 5;",
+            "println(f\"{n}\");",
+            "5",
+        ),
+        (
+            "",
+            "let mut t: (i64, bool) = (1, false);",
+            "t = (7, true);",
+            "println(f\"{t.0} {t.1}\");",
+            "7 true",
+        ),
+        (
+            "struct P { x: i64, y: i64 }",
+            "let mut p: P = P { x: 1, y: 2 };",
+            "p.x = 9;",
+            "println(f\"{p.x} {p.y}\");",
+            "9 2",
+        ),
+        (
+            "enum E { A, B(i64) }",
+            "let mut e: E = E.A;",
+            "e = E.B(3);",
+            "println(f\"{match e { E.A => 0, E.B(n) => n }}\");",
+            "3",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        if !items.is_empty() {
+            let r = s.evaluate_cell_captured(items);
+            assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        }
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "{decl} is by-value and must reach the snapshot tier; notes: {:?}",
+            r.notes,
+        );
+        let r = s.evaluate_cell_captured(mutate);
+        assert!(r.errors.is_empty(), "{mutate}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(read);
+        assert!(r.errors.is_empty(), "{read}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.trim(),
+            want,
+            "a mutation made in the cell AFTER the declaring one must survive \
+             the boundary for `{decl}`; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7, the SIDE-EFFECT half — a by-value binding whose initializer
+/// prints must print once across the session, not once per later cell.
+///
+/// This is the second divergence the row measures, and it is a different
+/// mechanism from the one above: the mutation loss comes from cell N+1
+/// rebuilding the binding, the re-execution from that rebuild running the RHS.
+/// A fix that replayed the value but still emitted the RHS would pass the test
+/// above and fail this one.
+#[test]
+fn repl_jit_by_value_initializer_runs_once_across_cells() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "fn mk() -> Option[i64] { println(f\"SIDE EFFECT\"); Option.Some(1) }",
+    );
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let mut o: Option[i64] = mk();");
+    assert!(r.errors.is_empty(), "declare: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.matches("SIDE EFFECT").count(),
+        1,
+        "the declaring cell runs the initializer exactly once; stdout: {:?}",
+        r.stdout,
+    );
+    for cell in ["println(f\"two\");", "println(f\"three\");"] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.matches("SIDE EFFECT").count(),
+            0,
+            "a later cell must not re-run the initializer; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7 — the by-value tier must NOT admit a type whose declared
+/// shape is a lie about its storage.
+///
+/// `DataFrame` walks as a struct of by-value fields, so a field-shape-only
+/// eligibility rule accepts it — and then codegen lowers it to a bare `ptr`
+/// whose pointee the slot's scope-exit cleanup frees, the global keeps the
+/// freed pointer, and the next cell loads a dangling handle. Measured while
+/// building this tier: the runner died mid-cell where `--interp` printed `0`.
+/// The guard is that a named type must be declared in the session's own
+/// source; this pins that `DataFrame` is not, and stays on pass-through.
+#[test]
+fn repl_jit_by_value_tier_excludes_an_opaque_handle_type() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("let mut d: DataFrame = DataFrame.new();");
+    assert!(r.errors.is_empty(), "declare: {:?}", r.errors);
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("repl-jit-no-snapshot") && n.contains("`d`")),
+        "an opaque-handle type must stay on pass-through; notes: {:?}",
+        r.notes,
+    );
+    let r = s.evaluate_cell_captured("println(f\"{d.height()}\");");
+    assert!(r.errors.is_empty(), "use: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "0",
+        "the handle must still be live in a later cell; stdout: {:?}",
+        r.stdout,
+    );
+}
+
+/// B-2026-08-30-7 — a struct carrying a user `impl Drop` must stay on
+/// pass-through.
+///
+/// Its fields are by-value, so the shape walk alone would admit it. But
+/// capture hands the value to a global nobody tears down, so the destructor
+/// would never run — trading this row's divergence for a different one. The
+/// exclusion is by name: any type with a `Drop` impl in the session.
+#[test]
+fn repl_jit_by_value_tier_excludes_a_drop_carrying_struct() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "struct D { x: i64 } \
+         impl Drop for D { fn drop(mut ref self) { println(f\"dD\"); } }",
+    );
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let mut d: D = D { x: 1 };");
+    assert!(r.errors.is_empty(), "declare: {:?}", r.errors);
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("repl-jit-no-snapshot") && n.contains("`d`")),
+        "a Drop-carrying struct must stay on pass-through; notes: {:?}",
         r.notes,
     );
 }

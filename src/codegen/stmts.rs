@@ -14909,7 +14909,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let global = self.get_or_declare_snapshot_global(name, kind);
-        let llvm_ty = self.snapshot_storage_type(kind);
+        let llvm_ty = self.snapshot_storage_type(name, kind);
         let loaded = self
             .builder
             .build_load(
@@ -14988,6 +14988,28 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mapset
                 .set_elem_type_names
                 .insert(name.clone(), Self::vec_elem_kind_name(elem).to_string());
+        }
+        // B-2026-08-30-7: a by-value binding registers through the SAME
+        // registrar the ordinary `let` arm uses, rather than through a
+        // hand-written table poke like the four arms above. That matters
+        // because the class is open-ended — `Option[i32]`, `(i64, bool)`,
+        // a plain scalar of any width — and each shape wants different
+        // side-tables (`var_option_payload_te` for `println(o)`,
+        // `tuple_var_elem_type_names` for `t.0`, the generic-instantiation
+        // record). Reconstructing that by hand per shape is exactly the
+        // divergence the replay path keeps re-learning; deferring to the
+        // registrar makes a replayed binding indistinguishable from a
+        // freshly-bound one.
+        //
+        // Safe to call here for the same reason the arms above skip
+        // `track_vec_var`: `register_var_from_type_expr` writes DISPATCH
+        // metadata only and never queues a cleanup action, so it cannot
+        // schedule a free of storage the snapshot global owns. (It owns
+        // nothing here anyway — a by-value type has no heap behind it.)
+        if matches!(kind, super::SnapshotPrimKind::ByValue) {
+            if let Some(te) = self.snapshot_value_types.get(name).cloned() {
+                self.register_var_from_type_expr(name, &te);
+            }
         }
         Ok(true)
     }
@@ -15078,6 +15100,26 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(v) => v,
             Err(_) => return,
         };
+        // B-2026-08-30-7: for a by-value binding the global's width comes
+        // from the classification and the slot's width from this cell's
+        // lowering, and a store is only sound when they agree. They agree
+        // in every shape reachable today — `compute_snapshot_sets_for_cell`
+        // classifies the LAST binder of a name and this runs at end of cell,
+        // where `self.variables[name]` IS that binder — so this guard should
+        // never fire. It is here because the cost of being wrong is
+        // asymmetric: LLVM stores through an opaque pointer without
+        // complaint, so a 32-byte `Option` value stored into an 8-byte
+        // global would silently scribble 24 bytes past it. Declining the
+        // capture instead degrades to the pass-through behaviour this row
+        // is fixing, which is wrong but bounded. Same reasoning as the
+        // `holds_vec_struct` slot check below (B-2026-07-07-6), which is the
+        // precedent for a cross-type rebind reaching a capture with a
+        // mismatched slot.
+        if matches!(kind, super::SnapshotPrimKind::ByValue)
+            && slot.ty != self.snapshot_storage_type(name, kind)
+        {
+            return;
+        }
         let _ = self.builder.build_store(global.as_pointer_value(), stored);
         // Slice c-repl.B.5.2: String capture transfers buffer ownership
         // from the let slot to the global (option (a) "leak the
@@ -15138,7 +15180,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// produces — same struct shape both `let` slots and the
     /// snapshot global use, so the load/store handshake doesn't need
     /// a conversion step.
-    fn snapshot_storage_type(&self, kind: super::SnapshotPrimKind) -> BasicTypeEnum<'ctx> {
+    fn snapshot_storage_type(
+        &self,
+        name: &str,
+        kind: super::SnapshotPrimKind,
+    ) -> BasicTypeEnum<'ctx> {
         match kind {
             super::SnapshotPrimKind::I64 => self.context.i64_type().into(),
             super::SnapshotPrimKind::F64 => self.context.f64_type().into(),
@@ -15150,6 +15196,18 @@ impl<'ctx> super::Codegen<'ctx> {
             super::SnapshotPrimKind::Map { .. } | super::SnapshotPrimKind::Set(_) => {
                 self.context.ptr_type(AddressSpace::default()).into()
             }
+            // B-2026-08-30-7: the storage type IS the binding's own lowered
+            // type — the global holds the value verbatim, no repacking. The
+            // `TypeExpr` comes from `snapshot_value_types` because the
+            // variant carries no payload; a missing entry can only mean the
+            // REPL classified a name `ByValue` without recording its type,
+            // and `i64` is the same width-of-last-resort
+            // `llvm_type_for_type_expr` itself falls back to.
+            super::SnapshotPrimKind::ByValue => self
+                .snapshot_value_types
+                .get(name)
+                .map(|te| self.llvm_type_for_type_expr(te))
+                .unwrap_or_else(|| self.context.i64_type().into()),
         }
     }
 
@@ -15195,7 +15253,13 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::String
             | super::SnapshotPrimKind::Vec(_)
             | super::SnapshotPrimKind::Map { .. }
-            | super::SnapshotPrimKind::Set(_) => Ok(loaded),
+            | super::SnapshotPrimKind::Set(_)
+            // B-2026-08-30-7: identity. The global's type IS the slot's
+            // type for a by-value binding, so there is no storage form to
+            // convert to — unlike `Bool`, whose i1 slot is widened to i8
+            // so the global's width does not depend on how a given cell
+            // happened to lower it.
+            | super::SnapshotPrimKind::ByValue => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -15223,7 +15287,13 @@ impl<'ctx> super::Codegen<'ctx> {
             | super::SnapshotPrimKind::String
             | super::SnapshotPrimKind::Vec(_)
             | super::SnapshotPrimKind::Map { .. }
-            | super::SnapshotPrimKind::Set(_) => Ok(loaded),
+            | super::SnapshotPrimKind::Set(_)
+            // B-2026-08-30-7: identity. The global's type IS the slot's
+            // type for a by-value binding, so there is no storage form to
+            // convert to — unlike `Bool`, whose i1 slot is widened to i8
+            // so the global's width does not depend on how a given cell
+            // happened to lower it.
+            | super::SnapshotPrimKind::ByValue => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -15251,7 +15321,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(g) = self.module.get_global(&sym) {
             return g;
         }
-        let ty = self.snapshot_storage_type(kind);
+        let ty = self.snapshot_storage_type(name, kind);
         let g = self.module.add_global(ty, None, &sym);
         g.set_linkage(Linkage::External);
         g
@@ -15271,7 +15341,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(g) = self.module.get_global(&sym) {
             return g;
         }
-        let ty = self.snapshot_storage_type(kind);
+        let ty = self.snapshot_storage_type(name, kind);
         let g = self.module.add_global(ty, None, &sym);
         match kind {
             super::SnapshotPrimKind::I64 => {
@@ -15304,9 +15374,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and same `karac_map_free` cleanup apply.
                 g.set_initializer(&self.context.ptr_type(AddressSpace::default()).const_null());
             }
+            // B-2026-08-30-7: zero the whole aggregate. Nothing in a
+            // by-value type is a pointer anyone frees, so an uncaptured
+            // global read before its defining cell ran is a well-formed
+            // zero value rather than a hazard — the same "safe if
+            // accidentally consumed" property the arms above buy with
+            // their cap/null sentinels, here for free.
+            super::SnapshotPrimKind::ByValue => {
+                g.set_initializer(&Self::const_zero_of(ty));
+            }
         }
         g.set_linkage(Linkage::External);
         g
+    }
+
+    /// The all-zero constant of an arbitrary lowered type — the
+    /// initializer for a [`super::SnapshotPrimKind::ByValue`] global.
+    /// `BasicTypeEnum` has no single `const_zero`, so this dispatches to
+    /// the per-kind one.
+    fn const_zero_of(ty: BasicTypeEnum<'ctx>) -> inkwell::values::BasicValueEnum<'ctx> {
+        match ty {
+            BasicTypeEnum::IntType(t) => t.const_zero().into(),
+            BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+            BasicTypeEnum::PointerType(t) => t.const_null().into(),
+            BasicTypeEnum::StructType(t) => t.const_zero().into(),
+            BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
+            BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+            BasicTypeEnum::ScalableVectorType(t) => t.const_zero().into(),
+        }
     }
 }
 

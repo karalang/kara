@@ -971,6 +971,7 @@ pub(super) fn parse_let_binding_names(let_src: &str) -> std::collections::HashSe
 #[cfg(feature = "llvm")]
 pub(super) fn snapshot_kind_for_type(
     ty: &crate::typechecker::Type,
+    by_value: &ByValueCtx<'_>,
 ) -> Option<crate::codegen::SnapshotPrimKind> {
     use crate::codegen::{SnapshotPrimKind, VecElemKind};
     use crate::typechecker::{FloatSize, IntSize, Type};
@@ -1029,7 +1030,154 @@ pub(super) fn snapshot_kind_for_type(
             Type::Char => Some(SnapshotPrimKind::Set(VecElemKind::Char)),
             _ => None,
         },
+        // B-2026-08-30-7: everything else that is BY VALUE — no heap and
+        // no RC pointer anywhere inside — snapshots with a plain
+        // store/load and no ownership handshake at all. See
+        // `is_by_value_snapshot_type` for the exact class and
+        // `SnapshotPrimKind::ByValue` for why it needs no handshake.
+        //
+        // Ordered LAST so the six bespoke kinds above keep their own
+        // arms: `i64` stays `I64` rather than becoming `ByValue`, which
+        // keeps their storage widths and their capture-side suppression
+        // exactly as measured, and keeps a global written by a
+        // pre-B-2026-08-30-7 cell readable by a post one.
+        other if by_value.is_by_value(other, 0) => Some(SnapshotPrimKind::ByValue),
         _ => None,
+    }
+}
+
+/// B-2026-08-30-7: what a by-value eligibility question needs to look at
+/// beyond the `Type` itself.
+///
+/// A user `struct`/`enum` cannot be classified from its name, so the walk
+/// needs the declaration tables — and it needs to know which types carry a
+/// user `impl Drop`, which no table records (`TypeCheckResult` exposes the
+/// shapes, not the impls, so the REPL scans its own accumulated items for
+/// them; see `Session::by_value_ctx`).
+#[cfg(feature = "llvm")]
+pub(super) struct ByValueCtx<'a> {
+    pub(super) structs: &'a rustc_hash::FxHashMap<String, crate::typechecker::StructInfo>,
+    pub(super) enums: &'a rustc_hash::FxHashMap<String, crate::typechecker::EnumInfo>,
+    /// Names carrying a user `impl Drop`. Excluded wholesale: capture
+    /// transfers the value to a global nobody ever tears down, so a
+    /// snapshotted binding's destructor would never run — a divergence
+    /// from `--interp`, which keeps a real `Value` and drops it.
+    pub(super) drop_types: &'a std::collections::HashSet<String>,
+    /// Type names the USER declared in this session — the `struct` /
+    /// `enum` items of the cell's own program, minus anything flagged
+    /// `stdlib_origin`. A named type must be in here to be eligible.
+    ///
+    /// This is a whitelist rather than a blacklist on purpose. Several
+    /// baked stdlib types are OPAQUE HANDLES whose declared shape is a lie
+    /// about their storage: `DataFrame` and `Interner` walk as a struct of
+    /// by-value fields, but codegen lowers each to a bare `ptr` whose
+    /// pointee the slot's scope-exit cleanup frees. Snapshotting one
+    /// copies the pointer, the original is freed at end of cell, and the
+    /// next cell loads a dangling handle — measured: the JIT runner dies
+    /// mid-cell where `--interp` prints `0`. Nothing in the `Type` says so,
+    /// and `StructInfo::defining_stdlib_origin` does not answer for these
+    /// two, so provenance is taken from the one place that cannot be
+    /// wrong about it: whether the declaration is in the session's own
+    /// source.
+    pub(super) user_declared: &'a std::collections::HashSet<String>,
+}
+
+#[cfg(feature = "llvm")]
+impl ByValueCtx<'_> {
+    /// Is `ty` lowered as a plain by-value aggregate, with no heap buffer
+    /// and no RC handle anywhere inside it?
+    ///
+    /// That question is the whole eligibility rule for
+    /// [`crate::codegen::SnapshotPrimKind::ByValue`]. A yes means copying
+    /// the binding's slot into the snapshot global is a COMPLETE transfer:
+    /// there is no second owner to reconcile, nothing to free, and nothing
+    /// whose destructor could run twice. A no means the shallow copy would
+    /// leave two owners pointing at one buffer, which is the deferred
+    /// per-type work the row describes.
+    ///
+    /// Members:
+    ///   - every scalar width the language has (`i8`..`i128`, `u8`..`u128`,
+    ///     `usize`/`isize`, `f16`/`bf16`/`f32`/`f64`, `bool`, `Char`). The
+    ///     four the bespoke kinds already claim never reach here.
+    ///   - `Option[T]` / `Result[T, E]` whose payloads are themselves
+    ///     by-value. Both lower to the seeded `{ i64 tag, i64 w0, i64 w1,
+    ///     i64 w2 }` shape — a fixed constant, so the global's width cannot
+    ///     drift between the cell that defines it and a cell that loads it.
+    ///   - tuples whose elements are all by-value.
+    ///   - a user `struct` / `enum` that is neither `shared` nor `par`,
+    ///     carries no user `impl Drop`, is not generic, is not
+    ///     stdlib-defined, and whose every field / variant payload is
+    ///     itself by-value.
+    ///
+    /// The session-declared requirement is not tidiness — see
+    /// [`ByValueCtx::user_declared`] for the handle types it keeps out and
+    /// what happens without it.
+    ///
+    /// Non-members, and why each is a separate slice rather than an
+    /// oversight: `String`/`Vec`/`Map`/`Set` own a buffer (the four bespoke
+    /// kinds handle the primitive-element cases and defer the rest);
+    /// `Rc`/`Arc`/`shared`/`par` own a refcount; closures own a captured
+    /// environment; a GENERIC struct/enum has no single lowered layout to
+    /// size a global with.
+    ///
+    /// `depth` bounds the recursion, which matters here rather than
+    /// theoretically: a user `struct` may reference another by name, and a
+    /// declaration cycle would otherwise walk forever.
+    pub(super) fn is_by_value(&self, ty: &crate::typechecker::Type, depth: u32) -> bool {
+        use crate::typechecker::{Type, VariantTypeInfo};
+        if depth > 8 {
+            return false;
+        }
+        match ty {
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => true,
+            Type::Tuple(elems) => {
+                // The empty tuple is `Type::Unit`, not `Tuple(vec![])`, so an
+                // empty one here would be a malformed type rather than a
+                // zero-width value worth snapshotting.
+                !elems.is_empty() && elems.iter().all(|e| self.is_by_value(e, depth + 1))
+            }
+            Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+                self.is_by_value(&args[0], depth + 1)
+            }
+            Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+                args.iter().all(|a| self.is_by_value(a, depth + 1))
+            }
+            Type::Named { name, args } if args.is_empty() => {
+                if self.drop_types.contains(name) {
+                    return false;
+                }
+                if !self.user_declared.contains(name) {
+                    return false;
+                }
+                if let Some(si) = self.structs.get(name) {
+                    return !si.is_shared
+                        && !si.is_par
+                        && !si.defining_stdlib_origin
+                        && si.generic_params.is_empty()
+                        && si
+                            .fields
+                            .iter()
+                            .all(|(_, fty, _)| self.is_by_value(fty, depth + 1));
+                }
+                if let Some(ei) = self.enums.get(name) {
+                    return !ei.is_shared
+                        && !ei.is_par
+                        && !ei.defining_stdlib_origin
+                        && ei.generic_params.is_empty()
+                        && ei.variants.iter().all(|(_, v)| match v {
+                            VariantTypeInfo::Unit => true,
+                            VariantTypeInfo::Tuple(tys) => {
+                                tys.iter().all(|t| self.is_by_value(t, depth + 1))
+                            }
+                            VariantTypeInfo::Struct(fields) => {
+                                fields.iter().all(|(_, t)| self.is_by_value(t, depth + 1))
+                            }
+                        });
+                }
+                false
+            }
+            _ => false,
+        }
     }
 }
 

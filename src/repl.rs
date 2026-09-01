@@ -613,6 +613,20 @@ pub struct Session {
     /// bool, char) qualify in B.5.1; richer types deferred.
     #[cfg(feature = "llvm")]
     jit_snapshotted_lets: std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
+    /// B-2026-08-30-7: for each binding recorded above as
+    /// [`crate::codegen::SnapshotPrimKind::ByValue`], the `TypeExpr` the
+    /// DECLARING cell classified it at.
+    ///
+    /// Kept in the session rather than re-derived per cell on purpose. The
+    /// replayed `let`'s RHS is still in the synthetic source and still
+    /// typechecks, so the type is nominally recomputable — but the global
+    /// was sized by the declaring cell, and a later cell that computed a
+    /// different type for the same name would load it at the wrong width
+    /// and read adjacent bytes. Carrying the declaring cell's answer makes
+    /// that impossible by construction. Cleared wherever
+    /// `jit_snapshotted_lets` is: the two describe the same globals.
+    #[cfg(feature = "llvm")]
+    jit_snapshot_value_types: std::collections::HashMap<String, crate::ast::TypeExpr>,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -709,6 +723,8 @@ impl Session {
             jit_installed_fns: std::collections::HashSet::new(),
             #[cfg(feature = "llvm")]
             jit_snapshotted_lets: std::collections::HashMap::new(),
+            #[cfg(feature = "llvm")]
+            jit_snapshot_value_types: std::collections::HashMap::new(),
         }
     }
 
@@ -2003,7 +2019,7 @@ impl Session {
         // the synthesized program directly so the binding's pattern
         // span lines up with the typechecker's recorded inferred
         // type.
-        let (snapshot_replay, snapshot_capture) =
+        let (snapshot_replay, snapshot_capture, snapshot_value_types) =
             self.compute_snapshot_sets_for_cell(program, typed);
 
         // B-2026-08-30-7: a binding this cell declares that the classification
@@ -2024,6 +2040,7 @@ impl Session {
             &main_symbol,
             &snapshot_capture,
             &snapshot_replay,
+            &snapshot_value_types,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -2133,6 +2150,13 @@ impl Session {
                     // future correct emission).
                     for (name, kind) in &snapshot_capture {
                         self.jit_snapshotted_lets.insert(name.clone(), *kind);
+                        // B-2026-08-30-7: remember the type the global was
+                        // SIZED at, so every later cell replays it at that
+                        // width rather than at whatever it re-infers.
+                        if let Some(te) = snapshot_value_types.get(name) {
+                            self.jit_snapshot_value_types
+                                .insert(name.clone(), te.clone());
+                        }
                     }
                 }
                 let stdout_lines = if capture {
@@ -2184,6 +2208,7 @@ impl Session {
                 // persistent let, not a replay path that would
                 // resolve to an unmapped symbol.
                 self.jit_snapshotted_lets.clear();
+                self.jit_snapshot_value_types.clear();
                 let exit_code = wait_status.and_then(|s| s.code());
                 let mut errors = vec![format!(
                     "JIT runner subprocess died mid-cell (exit code {:?}); \
@@ -2313,6 +2338,14 @@ impl Session {
             }
         }
 
+        let drop_types = Self::drop_impl_type_names(program);
+        let user_declared = Self::user_declared_type_names(program);
+        let by_value = crate::repl::util::ByValueCtx {
+            structs: &typed.struct_info,
+            enums: &typed.enum_info,
+            drop_types: &drop_types,
+            user_declared: &user_declared,
+        };
         let mut notes = Vec::new();
         for stmt in &main_fn.body.stmts {
             let StmtKind::Let {
@@ -2333,7 +2366,7 @@ impl Session {
             let Some(t) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {
                 continue;
             };
-            if snapshot_kind_for_type(t).is_some() {
+            if snapshot_kind_for_type(t, &by_value).is_some() {
                 continue;
             }
             if !*is_mut && !calls_session_fn(value, &user_fns) {
@@ -2352,6 +2385,57 @@ impl Session {
             ));
         }
         notes
+    }
+
+    /// B-2026-08-30-7: names carrying a user `impl Drop` in this cell's
+    /// program.
+    ///
+    /// Scanned from the AST rather than read from a table because there is
+    /// no table: `TypeCheckResult` exposes `struct_info` / `enum_info` (the
+    /// shapes) but not the impl blocks. The REPL's synthetic program
+    /// carries every item the session has accumulated, so one pass over
+    /// `program.items` sees every `impl Drop` the user has written.
+    #[cfg(feature = "llvm")]
+    fn drop_impl_type_names(program: &crate::ast::Program) -> std::collections::HashSet<String> {
+        use crate::ast::{Item, TypeKind};
+        let mut out = std::collections::HashSet::new();
+        for item in &program.items {
+            let Item::ImplBlock(ib) = item else { continue };
+            if ib.trait_name.as_ref().and_then(|t| t.segments.last()) != Some(&"Drop".to_string()) {
+                continue;
+            }
+            if let TypeKind::Path(tp) = &ib.target_type.kind {
+                if let Some(name) = tp.segments.last() {
+                    out.insert(name.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// B-2026-08-30-7: `struct` / `enum` names the user declared in this
+    /// session, which is the whitelist a named type must be on to reach
+    /// the by-value snapshot tier. See [`util::ByValueCtx::user_declared`]
+    /// for why provenance is read from the session's own source rather
+    /// than from a type-table flag.
+    #[cfg(feature = "llvm")]
+    fn user_declared_type_names(
+        program: &crate::ast::Program,
+    ) -> std::collections::HashSet<String> {
+        use crate::ast::Item;
+        let mut out = std::collections::HashSet::new();
+        for item in &program.items {
+            match item {
+                Item::StructDef(sd) if !sd.stdlib_origin => {
+                    out.insert(sd.name.clone());
+                }
+                Item::EnumDef(ed) if !ed.stdlib_origin => {
+                    out.insert(ed.name.clone());
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     /// Slice c-repl.B.5.1: classify every top-level `let` in this
@@ -2388,16 +2472,31 @@ impl Session {
     ) -> (
         std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
         std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
+        std::collections::HashMap<String, crate::ast::TypeExpr>,
     ) {
         use crate::ast::{Item, PatternKind, StmtKind};
         use crate::resolver::SpanKey;
         let mut replay = std::collections::HashMap::new();
         let mut capture = std::collections::HashMap::new();
+        // B-2026-08-30-7: the `TypeExpr` behind each `ByValue` name. Seeded
+        // from the session for a REPLAYED binding (so the load is sized by
+        // the cell that defined the global, never by a later cell's
+        // re-inference) and filled from this cell's inference for a new one.
+        let mut value_types: std::collections::HashMap<String, crate::ast::TypeExpr> =
+            std::collections::HashMap::new();
         let Some(main_fn) = program.items.iter().find_map(|item| match item {
             Item::Function(f) if f.name == "main" => Some(f),
             _ => None,
         }) else {
-            return (replay, capture);
+            return (replay, capture, value_types);
+        };
+        let drop_types = Self::drop_impl_type_names(program);
+        let user_declared = Self::user_declared_type_names(program);
+        let by_value = crate::repl::util::ByValueCtx {
+            structs: &typed.struct_info,
+            enums: &typed.enum_info,
+            drop_types: &drop_types,
+            user_declared: &user_declared,
         };
         // Same-scope shadowing is legal, and a re-bound name's earlier
         // binders stay in the replay (B-2026-07-02-33) — so a name can
@@ -2458,12 +2557,15 @@ impl Session {
             if let Some(kind) = self.jit_snapshotted_lets.get(name) {
                 replay.insert(name.clone(), *kind);
                 capture.insert(name.clone(), *kind);
+                if let Some(te) = self.jit_snapshot_value_types.get(name) {
+                    value_types.insert(name.clone(), te.clone());
+                }
                 continue;
             }
             let Some(ty) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {
                 continue;
             };
-            if let Some(kind) = snapshot_kind_for_type(ty) {
+            if let Some(kind) = snapshot_kind_for_type(ty, &by_value) {
                 // `let mut` String / Vec / Map / Set bindings used to be
                 // EXCLUDED here (slices c-repl.B.5.2 / B.5.3 / b / c). The
                 // reasoning was an alias hazard: capture transfers buffer
@@ -2484,10 +2586,16 @@ impl Session {
                 // capture, cell N+1 re-evaluated the RHS, so `let mut v =
                 // Vec.new(); v.push(7)` read back EMPTY. Dropping it is
                 // what makes the container tier work at all.
+                if matches!(kind, crate::codegen::SnapshotPrimKind::ByValue) {
+                    value_types.insert(
+                        name.clone(),
+                        crate::typechecker::TypeChecker::type_to_type_expr(ty),
+                    );
+                }
                 capture.insert(name.clone(), kind);
             }
         }
-        (replay, capture)
+        (replay, capture, value_types)
     }
 
     /// an entry in `pruned_provider_lets`, append a notebook-aware
@@ -2868,6 +2976,7 @@ impl Session {
         {
             self.jit_installed_fns.clear();
             self.jit_snapshotted_lets.clear();
+            self.jit_snapshot_value_types.clear();
             self.jit_client = None;
         }
     }
@@ -2897,6 +3006,7 @@ impl Session {
         {
             self.jit_installed_fns.clear();
             self.jit_snapshotted_lets.clear();
+            self.jit_snapshot_value_types.clear();
             self.jit_client = None;
         }
     }
