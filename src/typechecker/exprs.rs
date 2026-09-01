@@ -1764,6 +1764,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         let mut frame: FxHashMap<String, String> = FxHashMap::default();
         let mut mangle_frame: FxHashMap<String, String> = FxHashMap::default();
+        let mut te_frame: FxHashMap<String, crate::ast::TypeExpr> = FxHashMap::default();
         for (name, ty) in solutions {
             if let Some(resolved) = type_to_concrete_or_param_name(ty) {
                 frame.insert(name.clone(), resolved);
@@ -1788,6 +1789,25 @@ impl<'a> super::TypeChecker<'a> {
             if let Some(tok) = type_to_mono_mangle_token(ty) {
                 mangle_frame.insert(name.clone(), tok);
             }
+            // FULL `TypeExpr` channel (B-2026-08-31-39): the head name above
+            // drops a nested-generic's element (`Vec[i64]` → `"Vec"`) and
+            // records nothing at all for a nameless type argument, so a
+            // monomorph body could not resolve `T` to the type it was actually
+            // instantiated at.
+            //
+            // Two solutions are deliberately skipped. A bare type PARAM names
+            // no type — it is the self-referential / propagated binding the
+            // name channel already flattens through the caller's active
+            // substitution, and recording it here would let `T -> T` shadow
+            // that flattening. An `Error` round-trip is a LOST type, not a
+            // resolved one, and lowers to `i64`, so an entry would be worse
+            // than the absence that makes consumers fall back.
+            if !matches!(ty, Type::TypeParam(_)) {
+                let te = Self::type_to_type_expr(ty);
+                if !matches!(te.kind, crate::ast::TypeKind::Error) {
+                    te_frame.insert(name.clone(), te);
+                }
+            }
         }
         if !frame.is_empty() {
             self.call_type_subs.insert(SpanKey::from_span(span), frame);
@@ -1795,6 +1815,10 @@ impl<'a> super::TypeChecker<'a> {
         if !mangle_frame.is_empty() {
             self.call_type_subs_mangle
                 .insert(SpanKey::from_span(span), mangle_frame);
+        }
+        if !te_frame.is_empty() {
+            self.call_type_subs_te
+                .insert(SpanKey::from_span(span), te_frame);
         }
     }
 

@@ -1851,6 +1851,26 @@ pub struct TypeCheckResult {
     /// leg exposed this via the element-typed return copy). Only consulted for
     /// the mangle; the interpreter ignores it.
     pub call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
+    /// Per-call-site generic-param substitutions as the FULL resolved
+    /// `TypeExpr` (`T` → `Vec[i64]`, `Array[i64, 2]`, `Slice[i64]`, `(i64,
+    /// i64)`), the third sibling of `call_type_subs` (head NAME only) and
+    /// `call_type_subs_mangle` (a mangle token, not a type).
+    ///
+    /// Both existing channels are lossy where it matters to a monomorph body
+    /// that reasons about `T` symbolically: the name channel reduces
+    /// `Vec[i64]` to `"Vec"` and records NOTHING for a nameless type argument,
+    /// and the token channel is a string built for symbol disambiguation, not
+    /// a type anything can lower. `subst_monomorph_type_params` therefore
+    /// resolved a bare `T` to half a type or to itself, which is why an
+    /// `Option[T]` param inside `fn f[T: Display](x: Option[T])` could not be
+    /// displayed at an aggregate instantiation while every CONCRETE spelling
+    /// of the same `Option` rendered correctly (B-2026-08-31-39).
+    ///
+    /// A solution that is itself a bare type PARAM is omitted: it names no
+    /// type, and the name channel already flattens those through the caller's
+    /// active substitution. The interpreter ignores this map (it has no
+    /// monomorphization).
+    pub call_type_subs_te: FxHashMap<SpanKey, FxHashMap<String, crate::ast::TypeExpr>>,
     /// For each pattern-binding name introduced by `bind_pattern_types`, the
     /// canonical type name (e.g. `"MyError"`). Keyed by the pattern's span.
     /// Used by codegen to reconstitute struct payloads from the i64 word
@@ -2450,6 +2470,9 @@ pub struct TypeChecker<'a> {
     /// Element-aware mono-mangle tokens per call site. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
     pub(super) call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
+    /// Element-aware `TypeExpr` sibling of `call_type_subs` — see the field of
+    /// the same name on `TypeCheckResult`.
+    pub(super) call_type_subs_te: FxHashMap<SpanKey, FxHashMap<String, crate::ast::TypeExpr>>,
     /// Pattern-binding name → canonical type name. See the public copy on
     /// `TypeCheckResult` for the consumer doc.
     pub(super) pattern_binding_types: FxHashMap<SpanKey, String>,
@@ -2737,6 +2760,7 @@ impl<'a> TypeChecker<'a> {
             weak_elem_read_sites: FxHashSet::default(),
             index_read_is_fresh_value: FxHashSet::default(),
             call_type_subs_mangle: FxHashMap::default(),
+            call_type_subs_te: FxHashMap::default(),
             pattern_binding_types: FxHashMap::default(),
             pattern_binding_inner_types: FxHashMap::default(),
             pattern_binding_borrow_modes: FxHashMap::default(),
@@ -3025,6 +3049,7 @@ impl<'a> TypeChecker<'a> {
             weak_elem_store_sites: self.weak_elem_store_sites,
             weak_elem_read_sites: self.weak_elem_read_sites,
             call_type_subs_mangle: self.call_type_subs_mangle,
+            call_type_subs_te: self.call_type_subs_te,
             pattern_binding_types: self.pattern_binding_types,
             impl_trait_return_witnesses: self
                 .impl_trait_return_witnesses

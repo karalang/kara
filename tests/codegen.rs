@@ -12619,22 +12619,25 @@ none   None
     /// an Option/Result PLACE EXPRESSION whose payload the synthesizer declines
     /// — already `let`-bound, so the advice was false as well as unhelpful.
     ///
-    /// THE SUBJECT HAS RUN OUT, and that changes what this fixture asserts.
-    /// It has been retired three times — `Option[Vector[i64, 4]]`, then
+    /// THE SUBJECT HAS RUN OUT, and the declined-payload assertion is GONE.
+    /// It had been retired three times — `Option[Vector[i64, 4]]`, then
     /// `Option[Array[i64, 3]]` (B-2026-08-31-18 / -19), then
-    /// `Option[Slice[i64]]` (B-2026-08-31-25 / -41) — and there is no fourth
-    /// shape: every `E` the payload gate would decline is now rejected EARLIER
-    /// by the typechecker (`does not implement Display`), measured across
-    /// `VecDeque`, `Fn(..)`, `()` and `Option` wrappers of each.
+    /// `Option[Slice[i64]]` (B-2026-08-31-25 / -41) — leaving only an
+    /// UNSUBSTITUTED GENERIC `T` (`Option[T]` inside
+    /// `fn f[T: Display](x: Option[T])`), which this fixture pinned
+    /// deliberately and under protest, because that was a DEFECT rather than
+    /// an inherently unrenderable type. Its standing instruction was to DELETE
+    /// the assertion when B-2026-08-31-39 was fixed rather than hunt for a
+    /// fourth victim, and that is what happened: the generic instantiations
+    /// render now, so the program that used to be the declined subject is
+    /// asserted below to PRINT, alongside the three retired shapes.
     ///
-    /// The one shape that still reaches the declined arm is an UNSUBSTITUTED
-    /// GENERIC `T` — an `Option[T]` inside `fn f[T: Display](x: Option[T])` —
-    /// and that is a DEFECT (B-2026-08-31-39), not an inherently unrenderable
-    /// type, so pinning to it would enshrine a bug. It is used below anyway,
-    /// deliberately and with this note, because the property being protected
-    /// (a declined payload names its type and gives no false advice) is worth
-    /// keeping and has no other subject. When -39 is fixed, DELETE the first
-    /// assertion rather than hunting for a new victim.
+    /// Nothing pins the declined-payload arm of `deferred_display_error` any
+    /// more, and that is the honest state rather than an oversight — every `E`
+    /// the payload gate would decline is rejected EARLIER by the typechecker
+    /// (`does not implement Display`), measured across `VecDeque`, `Fn(..)`,
+    /// `()` and `Option` wrappers of each. The arm is kept for a shape that has
+    /// not been invented yet; the message it would produce is not asserted.
     ///
     /// The message prescribes no rewrite, and for every shape that has actually
     /// reached the declined arm the rewrite would have been worse than the
@@ -12652,26 +12655,19 @@ none   None
     /// branch rather than replacing the message.
     #[test]
     fn codegen_declined_option_payload_names_its_shape() {
-        let err = codegen_error(
+        // The former declined subject. Asserted as OUTPUT rather than deleted,
+        // so a regression that re-declines it fails on the fixture that
+        // documents why it was ever declined (B-2026-08-31-39).
+        if let Some(out) = run_program(
             r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
 fn main() {
     let a: Array[i64, 2] = [1, 2];
     show(Some(a));
 }
 "#,
-        );
-        assert!(
-            err.contains("Option[T]") && err.contains("`T` payload"),
-            "declined payload must name the type and the payload; got: {err}"
-        );
-        assert!(
-            !err.contains("bind a struct literal"),
-            "declined place expression must not advise a `let` that is already there; got: {err}"
-        );
-        assert!(
-            !err.contains("match") && !err.contains("if let"),
-            "must not prescribe a destructure that miscompiles for this shape; got: {err}"
-        );
+        ) {
+            assert_eq!(out, "Some([1, 2])\n");
+        }
 
         let lit_err = codegen_error(
             r#"#[derive(Display)]
@@ -12713,9 +12709,15 @@ fn main() { println(f"{mk()}"); }
         );
     }
 
-    /// B-2026-08-31-39 (the unsound half) — a DECLINED `Option`/`Result`
-    /// payload must not inherit the payload type a previous SAME-NAMED binding
-    /// registered. `var_option_payload_te` / `var_result_payload_te` are keyed
+    /// B-2026-08-31-39 — an `Option`/`Result` payload must not inherit the
+    /// payload type a previous SAME-NAMED binding registered.
+    ///
+    /// FORMERLY `codegen_declined_option_payload_does_not_inherit_a_stale_
+    /// same_named_entry`, and renamed because the word "declined" stopped being
+    /// true: the rendering half of -39 landed and these shapes now PRINT. The
+    /// five programs are unchanged; only the assertion moved from "takes the
+    /// structured refusal" to "matches the interpreter", which is what the
+    /// fixture's own NOTE ON SCOPE below said to do. `var_option_payload_te` / `var_result_payload_te` are keyed
     /// by BINDING NAME and outlive the function that registered them, so a
     /// declined registration used to leave the earlier entry standing, and the
     /// Display path then rendered THIS payload's words at the PREVIOUS
@@ -12744,11 +12746,26 @@ fn main() { println(f"{mk()}"); }
     /// restores the clean refusal that `codegen_declined_option_payload_names_
     /// its_shape` pins.
     ///
-    /// NOTE ON SCOPE: this does NOT make the aggregate instantiations render —
-    /// that is -39's still-open half, and these rows assert a REFUSAL, not an
-    /// answer. If a later change teaches codegen to render them, these
-    /// `codegen_error` calls are the ones to convert to `run_program`
-    /// assertions against the interpreter's output quoted above.
+    /// NOTE ON SCOPE, as originally written: "this does NOT make the aggregate
+    /// instantiations render — that is -39's still-open half, and these rows
+    /// assert a REFUSAL, not an answer. If a later change teaches codegen to
+    /// render them, these `codegen_error` calls are the ones to convert to
+    /// `run_program` assertions against the interpreter's output quoted above."
+    /// That change has landed, and this is that conversion. The expected
+    /// strings below ARE the interpreter's output for the same five programs.
+    ///
+    /// The stale-entry defect this fixture was written for is now unreachable
+    /// by construction rather than by retraction: it needed a DECLINED
+    /// registration to leave the earlier entry standing, and no registration in
+    /// these programs is declined any more. The retraction is still in the
+    /// compiler and still correct; these rows now also prove the thing it was
+    /// protecting — each instantiation renders at ITS OWN payload type — which
+    /// is a strictly stronger assertion than "it refused".
+    ///
+    /// REVERSED ORDER is asserted too. Aggregate-first was the direction that
+    /// always worked, so pre-fix it proved only that the stale entry was the
+    /// damage; post-fix both directions must render, and a regression that
+    /// re-poisons the name map would show up in exactly one of them.
     ///
     /// The last two cases are the controls, and they are the reason the fix is
     /// a retraction rather than a blanket clear: two DIFFERENT scalar
@@ -12756,10 +12773,10 @@ fn main() { println(f"{mk()}"); }
     /// registration legitimately succeeds and must win), and B-2026-08-31-49's
     /// own case must still pass.
     #[test]
-    fn codegen_declined_option_payload_does_not_inherit_a_stale_same_named_entry() {
+    fn codegen_option_payload_does_not_inherit_a_stale_same_named_entry() {
         // Each row: a scalar instantiation FIRST, then an aggregate one that
-        // must be declined rather than rendered at the scalar's type.
-        let poisoned: &[(&str, &str)] = &[
+        // must render at ITS OWN payload type rather than at the scalar's.
+        let poisoned: &[(&str, &str, &str)] = &[
             (
                 "i64 then Vec",
                 r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
@@ -12769,6 +12786,18 @@ fn main() {
     show(Some(v));
 }
 "#,
+                "Some(7)\nSome([1])\n",
+            ),
+            (
+                "Vec then i64 (reversed)",
+                r#"fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn main() {
+    let v: Vec[i64] = vec![1];
+    show(Some(v));
+    show(Some(7));
+}
+"#,
+                "Some([1])\nSome(7)\n",
             ),
             (
                 "String then Array",
@@ -12779,6 +12808,7 @@ fn main() {
     show(Some(a));
 }
 "#,
+                "Some(hi)\nSome([1, 2])\n",
             ),
             (
                 "i64 then Slice",
@@ -12789,6 +12819,7 @@ fn main() {
     show(Some(v.as_slice()));
 }
 "#,
+                "Some(7)\nSome([1, 2])\n",
             ),
             (
                 "Result, i64 then Vec",
@@ -12800,6 +12831,7 @@ fn main() {
     showr(mk2());
 }
 "#,
+                "Ok(7)\nOk([1])\n",
             ),
             (
                 "generic method, i64 then Vec",
@@ -12814,14 +12846,16 @@ fn main() {
     h.show(Some(v));
 }
 "#,
+                "1:Some(7)\n1:Some([1])\n",
             ),
         ];
-        for (label, src) in poisoned {
-            let err = codegen_error(src);
-            assert!(
-                err.contains("is not yet supported under codegen"),
-                "{label}: a declined payload must take the structured refusal, \
-                 not inherit the earlier binding's type; got: {err}"
+        for (label, src, want) in poisoned {
+            let Some(out) = run_program(src) else {
+                return;
+            };
+            assert_eq!(
+                out, *want,
+                "{label}: each instantiation must render at its own payload type"
             );
         }
 
@@ -12854,6 +12888,99 @@ fn main() {
             return;
         };
         assert_eq!(out, "Some(3)\nErr(9)\n");
+    }
+
+    /// B-2026-08-31-39 (the rendering half) — an `Option[T]` / `Result[T, E]`
+    /// inside a GENERIC fn renders at the type the call actually instantiated
+    /// `T` at, for the AGGREGATE instantiations as well as the scalar ones.
+    ///
+    /// The scalars always worked and the aggregates always refused, and the
+    /// split was the whole diagnosis: a monomorph body resolves `T`
+    /// symbolically through `subst_monomorph_type_params`, and both channels
+    /// feeding it are lossy in DIFFERENT ways. The name map is HEAD-ONLY, so
+    /// `T = Vec[i64]` resolved to a bare `Vec` — an elementless container no
+    /// program can write. A NAMELESS type argument (`Array`, `Slice`, a tuple)
+    /// has no name at all, so `T` stayed `T`. `i64` and `String` are the two
+    /// cases a head name happens to spell exactly, which is why exactly those
+    /// two rendered. The fix adds the typechecker's own solution as a third,
+    /// exact channel (`call_type_subs_te`) rather than teaching the Display
+    /// gate about generics — the gate was already right, it was being handed
+    /// half a type.
+    ///
+    /// EVERY LINE HERE IS A DISTINCT LOSS CHANNEL, which is why the fixture is
+    /// one program rather than a matrix of small ones: `Vec[i64]` and
+    /// `Vec[String]` pin the head-only loss at two elements (a shared body
+    /// would print one of them wrong), `Array[i64, 2]` beside `Array[i64, 3]`
+    /// pins the nameless loss AND the mono-symbol collision that made it
+    /// dangerous to fix (B-2026-08-31-48 — two lengths at one element type must
+    /// not share a body), `Slice` and the tuple are the other two nameless
+    /// shapes, and `Vec[Vec[i64]]` is the nested case a head name flattens.
+    /// `Result[T, E]` and the generic METHOD were this row's two NOT MEASURED
+    /// items: both were miscompiling, and both are fixed by the same channel.
+    ///
+    /// RED pre-fix as a compile ERROR, not a wrong answer: `error: codegen
+    /// failed: Display of `Option[T]` is not yet supported under codegen`.
+    #[test]
+    fn codegen_generic_option_payload_renders_at_its_instantiation() {
+        let Some(out) = run_program(
+            r#"struct H { n: i64 }
+impl H {
+    fn show[T: Display](ref self, x: Option[T]) { println(f"m {self.n} {x}"); }
+}
+
+fn show[T: Display](x: Option[T]) { println(f"{x}"); }
+fn showr[T: Display](x: Result[T, String]) { println(f"{x}"); }
+
+fn main() {
+    show(Some(7));
+    show(Some("hi"));
+
+    let v: Vec[i64] = vec![1];
+    show(Some(v));
+    let vs: Vec[String] = vec!["p" + "q"];
+    show(Some(vs));
+    let vv: Vec[Vec[i64]] = vec![vec![1, 2]];
+    show(Some(vv));
+
+    let a2: Array[i64, 2] = [1, 2];
+    show(Some(a2));
+    let a3: Array[i64, 3] = [3, 4, 5];
+    show(Some(a3));
+
+    let c: Array[i64, 2] = [6, 7];
+    let sl: Slice[i64] = c[0..2];
+    show(Some(sl));
+
+    let t: (i64, i64) = (8, 9);
+    show(Some(t));
+
+    let rv: Vec[i64] = vec![1, 2];
+    showr(Ok(rv));
+
+    let h = H { n: 3 };
+    h.show(Some(7));
+    let mv: Vec[i64] = vec![4];
+    h.show(Some(mv));
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "Some(7)\n\
+             Some(hi)\n\
+             Some([1])\n\
+             Some([pq])\n\
+             Some([[1, 2]])\n\
+             Some([1, 2])\n\
+             Some([3, 4, 5])\n\
+             Some([6, 7])\n\
+             Some((8, 9))\n\
+             Ok([1, 2])\n\
+             m 3 Some(7)\n\
+             m 3 Some([4])\n"
+        );
     }
 
     /// B-2026-07-31-38 (enum sibling) — a plain value enum whose walker

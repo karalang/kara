@@ -534,6 +534,26 @@ pub type FnValueTypedExprsTable = std::collections::HashMap<(usize, usize), Type
 pub type CallTypeSubsTable =
     std::collections::HashMap<(usize, usize), std::collections::HashMap<String, String>>;
 
+/// Element-aware sibling of [`CallTypeSubsTable`]: the FULL resolved
+/// `TypeExpr` each generic param was bound to at a call site, where
+/// `call_type_subs` keeps only a NAME.
+///
+/// The name channel is lossy in two different ways and both are observable.
+/// A nested-generic concrete reduces to its HEAD (`T = Vec[i64]` records
+/// `"Vec"`, element dropped), and a NAMELESS type argument records nothing at
+/// all (`T = Array[i64, 2]`, `Slice[i64]`, a tuple). So a monomorph body that
+/// resolves `T` symbolically saw either half a type or none — which is what
+/// left an `Option[T]` payload unrenderable inside `fn f[T: Display](x:
+/// Option[T])` while every concrete spelling of the same `Option` rendered
+/// fine (B-2026-08-31-39).
+///
+/// Built from the same solver solutions as `call_type_subs`, via
+/// `type_to_type_expr`. A solution that is itself a bare type PARAM is
+/// deliberately omitted: it names no type, and the name channel already
+/// flattens those through the caller's active substitution.
+pub type CallTypeSubsTeTable =
+    std::collections::HashMap<(usize, usize), std::collections::HashMap<String, TypeExpr>>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
 /// length) to the canonical surface type name (e.g. `"MyError"`). Used by
@@ -1104,6 +1124,13 @@ pub struct Program {
     /// (B-2026-07-11-35 return-owned-param leg). Same `(offset, length)` keying
     /// as `call_type_subs`.
     pub call_type_subs_mangle: CallTypeSubsTable,
+    /// Set by the lowering pass from `TypeCheckResult.call_type_subs_te`: the
+    /// FULL resolved `TypeExpr` per generic-call type-arg, where
+    /// `call_type_subs` above keeps only a head NAME and drops a nameless type
+    /// argument entirely. Codegen's `compile_generic_call` threads it into the
+    /// monomorph so `subst_monomorph_type_params` can resolve a bare `T` to its
+    /// exact instantiation. See [`CallTypeSubsTeTable`].
+    pub call_type_subs_te: CallTypeSubsTeTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every `Tensor[T, Shape]`-typed expression with statically-known
     /// rank, its element type + static dims. See [`TensorTypedExprsTable`].

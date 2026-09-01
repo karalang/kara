@@ -6308,6 +6308,7 @@ impl<'ctx> Codegen<'ctx> {
                 type_subst: HashMap::new(),
                 type_subst_names: HashMap::new(),
                 type_subst_type_exprs: HashMap::new(),
+                type_subst_call_te: HashMap::new(),
                 const_subst: HashMap::new(),
                 layout_subst: HashMap::new(),
                 mono_handle_param_infos: HashMap::new(),
@@ -6508,6 +6509,7 @@ impl<'ctx> Codegen<'ctx> {
                 dbg_arg_type_names: HashMap::new(),
                 call_type_subs: HashMap::new(),
                 call_type_subs_mangle: HashMap::new(),
+                call_type_subs_te: HashMap::new(),
                 index_recv_vec_types: HashMap::new(),
                 unsigned_vector_exprs: HashSet::new(),
                 unsigned_int_exprs: HashSet::new(),
@@ -7826,6 +7828,10 @@ impl<'ctx> Codegen<'ctx> {
         // collection whole-type-param instantiation sharing the `{ptr,i64,i64}`
         // LLVM shape.
         self.span_tables.call_type_subs_mangle = program.call_type_subs_mangle.clone();
+        // Third sibling: the exact per-type-arg `TypeExpr` (B-2026-08-31-39),
+        // which the head-only name map cannot spell for a nested generic or a
+        // nameless type argument.
+        self.span_tables.call_type_subs_te = program.call_type_subs_te.clone();
         // Sibling: per-span Tensor element-type + static-dims info for
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).

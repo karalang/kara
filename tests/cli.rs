@@ -35707,14 +35707,16 @@ fn ref_binding_codegen_gap_explains_itself() {
 }
 
 /// B-2026-08-31-39, the never-panic half — a generic `Option[T]` instantiated at
-/// `T = Vec[i64]` REFUSES with a diagnostic instead of ICEing.
+/// `T = Vec[i64]` reaches the user as OUTPUT, never as a compiler panic.
 ///
-/// The row is not fixed by this and is deliberately still open: rendering the
-/// aggregate instantiations needs the monomorph's type side-tables substituted
-/// wholesale (or the body re-typechecked), and an investigating session measured
-/// that a narrower fix turns a clean refusal into a SEGFAULT. What was fixable
-/// on its own is that ONE instantiation crashed the compiler where its siblings
-/// declined politely.
+/// This fixture was written when the instantiation still refused, and it
+/// asserted the refusal. The refusal is gone: the rendering half of the row
+/// landed, so the same program now builds and prints `Some([1])`. The
+/// never-panic property it exists for is unchanged and is what it still
+/// asserts — a `karac build` of this program must not put a Rust panic, or the
+/// by-name emitter's internal name, in front of the user, whether it succeeds
+/// or fails. FORMERLY `generic_option_vec_instantiation_refuses_without_ice`,
+/// renamed because it no longer refuses.
 ///
 /// The asymmetry had a cause worth keeping: the monomorph's name-level
 /// substitution records `{"T": "Vec"}` for `T = Vec[i64]` — HEAD ONLY, element
@@ -35725,21 +35727,21 @@ fn ref_binding_codegen_gap_explains_itself() {
 /// head-only path is not something a program can write, so requiring the generic
 /// args there costs nothing and turns the ICE into the sibling's refusal.
 ///
-/// Asserted as a PROPERTY, not a sentence: the build fails, and it fails without
-/// a Rust panic reaching the user. The exact refusal text belongs to
-/// `codegen_declined_option_payload_names_its_shape`, whose doc says to delete
-/// its generic assertion when -39 is properly fixed — that is still the right
-/// instruction, and this test is not it.
+/// Asserted as a PROPERTY, not a sentence: no Rust panic and no internal
+/// symbol reach the user. Deliberately NOT re-pointed at the refusal text or
+/// at the new output — `codegen_generic_option_payload_renders_at_its_
+/// instantiation` (tests/codegen.rs) owns the rendering assertion across all
+/// twelve shapes, and duplicating one of them here would mean two fixtures to
+/// update the next time this surface moves.
 ///
 /// B-2026-09-01-14 — `#[cfg(feature = "llvm")]`, like the 98 other tests in
-/// this file that shell out to a `karac build` whose OUTPUT they assert. The
-/// refusal (`!status.success()` and "not yet supported under codegen") comes
-/// from CODEGEN; on the default leg `karac` has none, so `karac build`
-/// type-checks, prints "note: karac build requires the llvm feature; falling
-/// back to type check" and exits zero, and the assertion cannot hold there.
+/// this file that shell out to `karac build`. On the default leg `karac` has no
+/// codegen at all, so the build type-checks, prints "note: karac build requires
+/// the llvm feature; falling back to type check" and produces no executable —
+/// nothing this test asserts is exercised there.
 #[cfg(feature = "llvm")]
 #[test]
-fn generic_option_vec_instantiation_refuses_without_ice() {
+fn generic_option_vec_instantiation_never_panics() {
     let tmp = std::env::temp_dir();
     let f = tmp.join("karac_generic_option_vec.kara");
     let src = "fn show[T: Display](x: Option[T]) { println(f\"{x}\") }\n\
@@ -35757,20 +35759,12 @@ fn generic_option_vec_instantiation_refuses_without_ice() {
     };
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !out.status.success(),
-        "the generic aggregate instantiation is still declined, so the build must fail:\n{stderr}"
-    );
-    assert!(
         !stderr.contains("panicked at"),
-        "a compiler PANIC reached the user; codegen must decline with a diagnostic:\n{stderr}"
+        "a compiler PANIC reached the user:\n{stderr}"
     );
     assert!(
         !stderr.contains("emit_display_fn_for_type"),
         "the by-name Display emitter's internal name leaked to the user:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("not yet supported under codegen"),
-        "expected the structured Display refusal its `Array`/`Slice` siblings get:\n{stderr}"
     );
 }
 

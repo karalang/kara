@@ -1645,6 +1645,50 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|gp| gp.params.iter().any(|p| &p.name == tp))
     }
 
+    /// Is `tp` the WHOLE declared type of some parameter of `generic_fn` —
+    /// `x: T`, `x: ref T`, `x: mut ref T` — as opposed to appearing nested
+    /// inside one (`x: Option[T]`, `x: Vec[T]`)?
+    ///
+    /// This is the gate on the exact-`TypeExpr` substitution channel
+    /// (B-2026-08-31-39), and it is a DELIBERATE, MEASURED narrowing rather
+    /// than caution. A bare-`T` by-value param whose concrete binding is a heap
+    /// collection lands in `owned_vecstr_params` — but only if the mono
+    /// prologue can see its ELEMENT, because that is what puts it in
+    /// `vec_elem_types`. For an argument the side-table resolvers cannot read
+    /// (anything but a plain identifier — `x.clone()`, a literal, a call
+    /// result) the element was invisible, so the param stayed OUT of
+    /// `owned_vecstr_params` and the body MOVED the buffer through instead of
+    /// deep-copying it. The caller-side materialization gate above is tuned
+    /// against exactly that state.
+    ///
+    /// Feeding the exact channel to those params flips them into
+    /// `owned_vecstr_params` and the two sides stop agreeing: measured,
+    /// `fn echo[T](x: T) -> T { x }` called with `[r, r + 1, r + 2]` leaked one
+    /// buffer per call (the body returns a deep copy, and nothing owns the
+    /// original), while widening the materialization gate to compensate turned
+    /// `fn takeout[T](b: T) -> T { match b { v => return v } }` into an ASAN
+    /// DOUBLE-FREE — because a match-arm return still moves rather than copies,
+    /// so the deep-copy is not uniform across return shapes and no single
+    /// caller-side rule is right for both.
+    ///
+    /// So the channel stops at the boundary where it is needed and no further.
+    /// Every shape it exists for — a type param NESTED in a param's type, which
+    /// is where the head-only name map loses the element and a nameless
+    /// aggregate loses everything — is untouched by this test. The whole-param
+    /// case keeps the resolution it has, and the underlying inconsistency (an
+    /// ownership convention that depends on the element being UNKNOWN) is filed
+    /// rather than fixed here.
+    fn type_param_is_a_whole_param_type(generic_fn: &Function, tp: &str) -> bool {
+        generic_fn.params.iter().any(|param| {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            matches!(&peeled.kind, TypeKind::Path(p)
+                if p.generic_args.is_none() && p.segments.len() == 1 && p.segments[0] == tp)
+        })
+    }
+
     /// Is the callee's parameter at `idx` written as a BARE type parameter
     /// (`v: T`), by value, AND not handed back out? That is the exact shape
     /// B-2026-07-11-35 routes through `owned_vecstr_params` — the mono resolves
@@ -2049,6 +2093,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // existing instantiation on exactly the entry it had.
         Self::merge_structural_type_arg_substs(structural_type_args, &mut subst_type_exprs);
 
+        // B-2026-08-31-39: the typechecker's EXACT per-type-arg `TypeExpr` for
+        // this call span. The three resolvers above each cover one param SHAPE
+        // (a bare `T`, a `T` inside a user generic struct, a `Container[T]`);
+        // this covers every shape at once, because it comes from the solver's
+        // own solution rather than from re-deriving the binding out of the
+        // argument. It is what lets a `T` nested in an `Option[T]` / `Result[T,
+        // E]` param, or bound to a NAMELESS aggregate the name channel cannot
+        // spell, resolve inside the body at all.
+        //
+        // Flattened through the CALLER's active substitution before it is
+        // stored, so a recorded `Vec[T]` inside a monomorph resolves against the
+        // outer binding — the same flattening `subst_names` gets above. That
+        // must happen HERE, while the caller's maps are still live.
+        let subst_call_te: HashMap<String, TypeExpr> = self
+            .span_tables
+            .call_type_subs_te
+            .get(&(call_span.offset, call_span.length))
+            .map(|frame| {
+                frame
+                    .iter()
+                    .filter(|(k, _)| {
+                        !Self::type_param_is_a_whole_param_type(&generic_fn, k.as_str())
+                    })
+                    .map(|(k, te)| (k.clone(), self.subst_monomorph_type_params(te)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Per-layout-monomorphization axis — forward layout-flow inference
         // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
         // the monomorph key: each layout-carrying param's active `LayoutId`,
@@ -2189,6 +2261,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 &mut self.mono_state.type_subst_type_exprs,
                 subst_type_exprs.clone(),
             );
+            let saved_call_te = std::mem::replace(
+                &mut self.mono_state.type_subst_call_te,
+                subst_call_te.clone(),
+            );
             for a in args.iter() {
                 mono_agg.push(match &a.value.kind {
                     ExprKind::StructLiteral { path, .. } => match path.last() {
@@ -2214,6 +2290,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.mono_state.type_subst_names = saved_names;
             self.mono_state.type_subst_type_exprs = saved_type_exprs;
+            self.mono_state.type_subst_call_te = saved_call_te;
         }
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
@@ -2393,6 +2470,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // before the side-table swap cleared the caller's element map.
             let saved_subst_type_exprs =
                 std::mem::replace(&mut self.mono_state.type_subst_type_exprs, subst_type_exprs);
+            // Third channel (B-2026-08-31-39): the typechecker's exact
+            // per-type-arg `TypeExpr`, so a bare `T` in the body resolves to
+            // the type this call instantiated it at even when it is nested in a
+            // non-container param or names no type at all.
+            let saved_subst_call_te =
+                std::mem::replace(&mut self.mono_state.type_subst_call_te, subst_call_te);
             // Const generics slice 4: thread the const-arg substitution
             // into the body-lowering pass so `compile_expr Identifier`
             // can resolve const-param refs against it. Parallel to
@@ -2461,6 +2544,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_state.type_subst = saved_subst;
             self.mono_state.type_subst_names = saved_subst_names;
             self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
+            self.mono_state.type_subst_call_te = saved_subst_call_te;
             self.fn_ctx.loop_stack = saved_loop_stack;
             self.conc.branch_cancel_ptr = saved_cancel_ptr;
             self.drop_rc.scope_cleanup_actions = saved_cleanup;
@@ -3081,6 +3165,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Element-aware twin (B-2026-07-13-2/-3): a layout mono is non-generic,
         // so clear any stale outer type-expr subst too; restored below.
         let saved_subst_type_exprs = std::mem::take(&mut self.mono_state.type_subst_type_exprs);
+        let saved_subst_call_te = std::mem::take(&mut self.mono_state.type_subst_call_te);
         let saved_const_subst = std::mem::take(&mut self.mono_state.const_subst);
         let saved_layout_subst = std::mem::replace(&mut self.mono_state.layout_subst, layout_subst);
         let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
@@ -3125,6 +3210,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mono_state.type_subst = saved_subst;
         self.mono_state.type_subst_names = saved_subst_names;
         self.mono_state.type_subst_type_exprs = saved_subst_type_exprs;
+        self.mono_state.type_subst_call_te = saved_subst_call_te;
         self.fn_ctx.loop_stack = saved_loop_stack;
         self.conc.branch_cancel_ptr = saved_cancel_ptr;
         self.drop_rc.scope_cleanup_actions = saved_cleanup;

@@ -177,6 +177,14 @@ pub(crate) struct SpanTables {
     /// collide on one `$struct` symbol, sharing an element-erased body
     /// (B-2026-07-11-35 return-owned-param leg).
     pub(crate) call_type_subs_mangle: HashMap<(usize, usize), HashMap<String, String>>,
+    /// FULL resolved `TypeExpr` per generic-call type-arg (`T` → `Vec[i64]`,
+    /// `Array[i64, 2]`, `Slice[i64]`, `(i64, i64)`) — the exact sibling of the
+    /// head-only `call_type_subs`. `compile_generic_call` threads it into
+    /// `mono_state.type_subst_call_te`, where `subst_monomorph_type_params`
+    /// consults it in preference to the lossy name map, so a bare `T` inside a
+    /// monomorph body resolves to the type the call actually instantiated it at
+    /// (B-2026-08-31-39).
+    pub(crate) call_type_subs_te: HashMap<(usize, usize), HashMap<String, TypeExpr>>,
     /// B-2026-08-14-38 — the `Vec[T]` / `VecDeque[T]` `TypeExpr` of an `Index`
     /// RECEIVER that is a method call (`Program.index_recv_vec_types`). The Vec
     /// twin of `tensor_index_recv_types`: same key, same collision (the parser

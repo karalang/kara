@@ -84,6 +84,31 @@ pub(crate) struct MonoState<'ctx> {
     /// Empty entry ⇒ fall back to the `type_subst_names` head-name path
     /// (unchanged for every non-collection param).
     pub(crate) type_subst_type_exprs: HashMap<String, crate::ast::TypeExpr>,
+    /// The typechecker's EXACT per-call type-arg `TypeExpr` for the active
+    /// monomorph (`span_tables.call_type_subs_te` at the call span, flattened
+    /// through the caller's own substitution). B-2026-08-31-39.
+    ///
+    /// Sits BETWEEN the two maps above in `subst_monomorph_type_params`'s
+    /// precedence, and that position is the whole design. It OVERRIDES
+    /// `type_subst_names`, which is head-only and therefore wrong rather than
+    /// merely incomplete for a nested generic (`T = Vec[i64]` resolves a bare
+    /// `T` to `Vec`, an elementless container no program can write). It YIELDS
+    /// to `type_subst_type_exprs`, which is equally exact and is written by
+    /// resolvers reading the caller's LIVE var side-tables — those see
+    /// instantiations no per-call record can, notably a nested generic call
+    /// whose binding `record_call_type_subs` drops as self-referential.
+    ///
+    /// Deliberately NOT consulted by the mangle. The two axes
+    /// (`append_collection_type_param_mangle`,
+    /// `append_structural_type_param_mangle`) read `type_subst_type_exprs`
+    /// directly, and the typechecker already feeds the mangle its own exact
+    /// channel (`call_type_subs_mangle`, widened to the nameless aggregates by
+    /// B-2026-08-31-48). Routing this map into those axes would change existing
+    /// symbols for a fix that is entirely about resolving types INSIDE a body.
+    ///
+    /// Saved/restored around `compile_mono_function` exactly like
+    /// `type_subst_type_exprs`.
+    pub(crate) type_subst_call_te: HashMap<String, crate::ast::TypeExpr>,
     /// Per-layout-monomorphization axis: callee param NAME → the `LayoutId`
     /// of the caller's argument at the active call site
     /// (`docs/spikes/per-layout-monomorphization.md`). Saved/restored around

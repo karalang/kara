@@ -3824,6 +3824,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn subst_monomorph_type_params(&self, te: &TypeExpr) -> TypeExpr {
         if self.mono_state.type_subst_names.is_empty()
             && self.mono_state.type_subst_type_exprs.is_empty()
+            && self.mono_state.type_subst_call_te.is_empty()
         {
             return te.clone();
         }
@@ -3850,6 +3851,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // head `"Vec"`, dropping `[E]`, so a bare-`T` collection param would
         // register elementless and miss its owned-param deep-copy / size its
         // enum payload at the erased scalar width. Overrides the head-only entry.
+        // B-2026-08-31-39: the typechecker's EXACT per-call binding, which
+        // covers every param the two resolvers below do not — a type param
+        // nested inside a NON-container param (`x: Option[T]`, `Result[T, E]`),
+        // and a NAMELESS type argument (`Array`, `Slice`, a tuple) that the
+        // head-name map cannot record at all. Overrides the head-only name
+        // entry above for the same reason `type_subst_type_exprs` does: a bare
+        // `Vec` with no element is not the type the call instantiated.
+        for (param, full_te) in &self.mono_state.type_subst_call_te {
+            subst.insert(param.clone(), full_te.clone());
+        }
+        // Highest precedence: the side-table resolvers. Equally exact, and they
+        // read the caller's LIVE registrations, so they see instantiations no
+        // per-call record can (a nested generic call whose binding the
+        // typechecker drops as self-referential).
         for (param, full_te) in &self.mono_state.type_subst_type_exprs {
             subst.insert(param.clone(), full_te.clone());
         }

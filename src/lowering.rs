@@ -758,6 +758,20 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             ((k.0, k.1), inner)
         })
         .collect();
+    // Third sibling: the FULL resolved `TypeExpr` per type-arg
+    // (B-2026-08-31-39). `call_type_subs` above is a head NAME, which loses a
+    // nested generic's element and cannot spell a nameless type argument at
+    // all; codegen threads this into the monomorph so a bare `T` in the body
+    // resolves to its exact instantiation. The interpreter has no
+    // monomorphization and ignores it.
+    program.call_type_subs_te = tc
+        .call_type_subs_te
+        .iter()
+        .map(|(k, v)| {
+            let inner = v.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+            ((k.0, k.1), inner)
+        })
+        .collect();
     // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
     // expression whose rank is statically known (concrete `Type::Shape`,
     // no `...` splice), record the element type (as a TypeExpr, lowered
