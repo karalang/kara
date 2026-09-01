@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 342 | 6 |
 | run-vs-build | 279 | 22 |
-| leak | 243 | 8 |
+| leak | 245 | 9 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 158 | 3 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1324 | 38 |
+| codegen | 1326 | 39 |
 | interp | 302 | 25 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1930 surfaced · 47 open · 1852 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1932 surfaced · 48 open · 1853 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (47)
+### Open (48)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
-| B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | medium | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
 | B-2026-08-30-11 | 2026-08-30 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path while the `t` path is clean, because B-2026-08-29-27's gates need EVERY tail to mint and B-2026-08-30-2's owner needs a source binding to inherit a FRAME from; the innermost frame is wrong (a wrapping block's drains before the value escapes -- caught by the self-host seed-run oracle, not by any sweep), so the lead is the SIBLING binding arm's frame | — |
@@ -177,6 +176,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1930 surfaced
 | B-2026-09-01-6 | 2026-09-01 | codegen | medium | CODEGEN DECLINES A NESTED `ref v[0][1]` WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` WHILE THE INTERPRETER READS THE ELEMENT CORRECTLY -- the same arm as B-2026-08-31-37, reached by a spelling that has nothing to do with `Map` | none |
 | B-2026-09-01-7 | 2026-09-01 | interp | medium | A BARE `if` WITH NO `else` IN STATEMENT POSITION, WHOSE ARM LITERAL CONSUMES A LIVE LOCAL, RUNS THAT LOCAL'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the compiled answer is the correct one, and this is the single cell of the B-2026-08-31-35 family where the backends disagree rather than agreeing on the doubled transcript | — |
 | B-2026-09-01-8 | 2026-09-01 | codegen | low | CODEGEN'S ERROR CHANNEL CARRIES NO SPAN, SO EVERY `codegen failed: ...` DIAGNOSTIC IS SOURCE-LESS -- ~135 messages render as a bare sentence with no line, column or caret, and no single message can be fixed without reworking the channel | none |
+| B-2026-09-01-9 | 2026-09-01 | codegen | low | A BRANCH MIXING AN F-STRING ARM WITH A STRING-LITERAL ARM LEAKS THE F-STRING -- `if c { f"i{n}" } else { "lit" }.contains("i")` strands the 2 B buffer that the all-f-string spelling now frees, because the fail-closed predicate requires EVERY tail to mint and a rodata literal mints nothing; admitting it is a runtime no-op at the one free site that was read, but weakens the quantifier that keeps an aliased-place arm out at seven | — |
+| B-2026-09-01-10 | 2026-09-01 | codegen | medium | THE -O0 ASAN LEG IS RED ON `main` WITH THREE UNOWNED FAILURES AND AN EMPTY QUARANTINE LIST -- `scripts/asan-o0-leg.sh` reports 1339 passed / 3 failed, every one reproducing without the change that found them; one fixture landed GREEN on the default -O2 leg and red at -O0 the same day, so the two-way ratchet is only a ratchet when somebody runs it | — |
 
 ### Relocated (2)
 
@@ -209,9 +210,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1930 surfaced
 
 </details>
 
-### Fixed (1852)
+### Fixed (1853)
 
-<details><summary>1852 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1853 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2002,6 +2003,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1930 surfaced
 | B-2026-08-29-67 | codegen | medium | A `Vec[T]` of `Drop` elements returned from a callee runs the element's `Drop` body BEFORE the caller's first use of the vector on the compiled backe… | fa0f33fe |
 | B-2026-08-30-1 | cli+codegen | high | The DEFAULT (JIT) REPL lane silently discards every cross-cell mutation -- `let mut n: i64 = 0;` then `n = 5;` reads back 0, a String reads back EMPT… | 80bb5ec6 |
 | B-2026-08-30-2 | codegen | medium | A VALUE-POSITION BLOCK OR BRANCH WHOSE TAIL HANDS OUT A BINDING RATHER THAN MINTING A TEMP LEAKS IT, AND CANNOT BE FIXED AT THE CONSUMER -- `{ loc }.… | c935db1 |
+| B-2026-08-30-3 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argumen… | a0619a88 |
 | B-2026-08-30-5 | codegen | medium | `to_degrees` / `to_radians` on an `f16` receiver disagree between the interpreter and every compiled surface on ~25% of inputs -- codegen rounds 180/… | 42e103d |
 | B-2026-08-30-6 | codegen | high | A bisection over NEGATIVE bounds miscompiles: `(lo + hi) / 2` truncates toward zero, so the midpoint recognizer's `assume(mid < hi)` is `assume(false… | 7a10c4e |
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
