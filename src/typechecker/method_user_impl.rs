@@ -576,6 +576,42 @@ impl<'a> super::TypeChecker<'a> {
                         imp.target_type.clone(),
                     );
                 }
+                // B-2026-09-01-20 — instance-method DEFAULT ARGUMENT fill.
+                //
+                // This is the first phase that can do it. `default_args`'s
+                // pre-resolve pass fills a free function's and an associated
+                // function's calls, because their callee is named
+                // syntactically; a method's is named through the RECEIVER, so
+                // the impl cannot be picked until the receiver has a type. It
+                // has one here, and `sig` is the resolved winner, so the key
+                // below is exact rather than a guess by method name — which is
+                // what makes this safe where a name-keyed fill in the earlier
+                // pass would not be (a stdlib method of the same name could
+                // claim a call on a type that does not have it, silently).
+                //
+                // The plan comes from the SAME `try_fill` the other two
+                // spellings use, so labels, contiguity and the
+                // no-name-destructuring rule cannot drift between them; it
+                // self-gates on arity, so calling it unconditionally is safe.
+                // The completed list is recorded for `lowering` to splice into
+                // the AST — before effectcheck, ownership, the interpreter and
+                // codegen — so every surface sees one ordinary full-arity call.
+                //
+                // BEFORE `validate_labels`, not after: a fill exists precisely
+                // to let a label SKIP a defaulted parameter (`h.g(1, c: 9)`),
+                // and validating the author's shorter list rejects that as
+                // "label 'c' does not match parameter 'b' at position 2" —
+                // measured. Every check from here on sees the completed list,
+                // which is what the author would have written out in full.
+                let default_filled: Option<Vec<CallArg>> = self
+                    .method_defaults
+                    .get(&format!("{type_name}.{method}"))
+                    .and_then(|info| crate::default_args::try_fill(args, info));
+                if let Some(list) = &default_filled {
+                    self.method_default_fills
+                        .insert((SpanKey::from_span(span), method.to_string()), list.clone());
+                }
+                let args: &[CallArg] = default_filled.as_deref().unwrap_or(args);
                 // Validate labels against method parameter names
                 self.validate_labels(args, &sig.param_names, span);
                 // Pre-bind the impl's generic params to the receiver's
@@ -678,11 +714,25 @@ impl<'a> super::TypeChecker<'a> {
                 };
                 // Check argument count (excluding self)
                 if args.len() != params.len() {
+                    // A defaulted method's expectation is a RANGE, phrased the
+                    // way the free-function path phrases it — otherwise
+                    // "expects 2, found 1" is actively misleading about a
+                    // signature one of whose parameters is optional.
+                    let optional = self
+                        .method_defaults
+                        .get(&format!("{type_name}.{method}"))
+                        .map(|i| i.defaults.iter().filter(|d| d.is_some()).count())
+                        .unwrap_or(0);
+                    let expected = if optional > 0 && optional < params.len() {
+                        format!("{} to {}", params.len() - optional, params.len())
+                    } else {
+                        params.len().to_string()
+                    };
                     self.type_error(
                         format!(
                             "method '{}' expects {} argument(s), found {}",
                             method,
-                            params.len(),
+                            expected,
                             args.len()
                         ),
                         *span,

@@ -65,12 +65,12 @@ use crate::ast::*;
 
 /// Per-function default info the filler needs, cloned out of the item so the
 /// walk can mutate the program freely.
-struct FnDefaultInfo {
+pub(crate) struct FnDefaultInfo {
     /// One entry per parameter: `Some(name)` for a simple binding (usable as
     /// an argument label), `None` for a destructuring pattern.
-    names: Vec<Option<String>>,
+    pub(crate) names: Vec<Option<String>>,
     /// One entry per parameter: the default expression, if declared.
-    defaults: Vec<Option<Expr>>,
+    pub(crate) defaults: Vec<Option<Expr>>,
 }
 
 impl FnDefaultInfo {
@@ -83,6 +83,70 @@ impl FnDefaultInfo {
             defaults: params.iter().map(|p| p.default_value.clone()).collect(),
         }
     }
+}
+
+/// B-2026-09-01-20 — INSTANCE-METHOD defaults, keyed `"Type.method"`.
+///
+/// Unlike the free-function and associated-fn tables built inside
+/// [`fill_default_args_in_program`], this one is NOT consumed here. A method
+/// call names its callee only through the RECEIVER, and this pass runs before
+/// resolve, so there is no type to dispatch on — the module doc's "Scope of
+/// the rewrite" records that as the reason methods were left out.
+///
+/// So the table is handed to the TYPECHECKER, which is the first phase that
+/// resolves a method call to a concrete impl. It plans the fill with the same
+/// [`try_fill`] every other spelling uses (so labels, contiguity and the
+/// no-name-destructuring rule behave identically), records the completed
+/// argument list, and `lowering` splices it into the AST — before
+/// effectcheck, ownership, the interpreter and codegen, so all three surfaces
+/// still see one ordinary full-arity call.
+///
+/// Ambiguity is dropped exactly as the associated table drops it: a
+/// `Type.method` claimed by both an inherent and a trait impl is removed.
+///
+/// That drop is LOAD-BEARING here, not belt-and-braces, and it is worth being
+/// precise about why — the tempting reading is that the typechecker consults
+/// this table only after it has already picked the impl, so a wrong-signature
+/// fill is impossible. It is not: the key is `Type.method`, which does not
+/// distinguish an inherent `impl S` from an `impl T1 for S`, and the resolved
+/// `FunctionSig` carries no default EXPRESSIONS to key on instead. So with the
+/// drop removed, `s.m()` would be filled from whichever of the two impls
+/// happened to be inserted last.
+///
+/// The cost is stated rather than hidden: a type carrying both an inherent and
+/// a trait method of one name gets no default fill on EITHER, and falls back
+/// to today's arity error. Declining is the safe direction — filling the wrong
+/// signature's defaults changes the program silently.
+pub(crate) fn method_default_table(program: &Program) -> HashMap<String, FnDefaultInfo> {
+    let mut out: HashMap<String, FnDefaultInfo> = HashMap::new();
+    let mut ambiguous: Vec<String> = Vec::new();
+    for item in &program.items {
+        let Item::ImplBlock(imp) = item else { continue };
+        let Some(head) = impl_target_head(&imp.target_type) else {
+            continue;
+        };
+        for it in &imp.items {
+            let ImplItem::Method(m) = it else { continue };
+            // METHODS only — the receiver-less half is the `assoc` table's.
+            if m.self_param.is_none() {
+                continue;
+            }
+            if !m.params.iter().any(|p| p.default_value.is_some()) {
+                continue;
+            }
+            let key = format!("{head}.{}", m.name);
+            if out
+                .insert(key.clone(), FnDefaultInfo::of(&m.params))
+                .is_some()
+            {
+                ambiguous.push(key);
+            }
+        }
+    }
+    for key in ambiguous {
+        out.remove(&key);
+    }
+    out
 }
 
 /// The head name of an impl's target type — `H` for `impl H`, `Vec` for
@@ -503,7 +567,7 @@ impl Filler {
 /// Compute the completed argument list for a call to a defaulted fn, or
 /// `None` to leave the call untouched (nothing to fill, or a shape whose
 /// existing diagnostics should fire unchanged — see the module doc).
-fn try_fill(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<CallArg>> {
+pub(crate) fn try_fill(args: &[CallArg], info: &FnDefaultInfo) -> Option<Vec<CallArg>> {
     let n = info.defaults.len();
     if args.len() >= n {
         return None;

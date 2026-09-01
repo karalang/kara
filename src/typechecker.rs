@@ -1499,6 +1499,31 @@ pub struct TypeCheckResult {
     /// them (`impl_args_match` compares the args vector) — the only thing
     /// missing was a way to NAME the winner for the runtimes.
     pub method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
+    /// B-2026-09-01-20 — the COMPLETED argument list for an instance-method
+    /// call whose omitted arguments have declared defaults.
+    ///
+    /// The pre-resolve pass (`default_args`) fills a free function's and an
+    /// associated function's calls directly, because their callee is named
+    /// syntactically. A method's callee is named only through the RECEIVER, so
+    /// nothing before this phase can pick the impl. This phase can: the fill is
+    /// planned here, with the very same `try_fill` the other two spellings use,
+    /// and `lowering::lower_program` splices it into the AST — before
+    /// effectcheck, ownership, the interpreter and codegen, so every surface
+    /// still sees one ordinary full-arity call rather than three hand-kept
+    /// implementations of the same rule.
+    ///
+    /// Keyed by `(span, method)` like `method_impl_dispatch` above. What
+    /// actually separates the links of a chain is the span's LENGTH, not the
+    /// method name: the parser gives a `MethodCall` its receiver's OFFSET but
+    /// its own extent, so `a.same().same()` measures as `(242, 15)` for the
+    /// outer call and `(242, 8)` for the inner one — distinct `SpanKey`s, since
+    /// `SpanKey` is `(offset, length)`. Verified by instrumentation on exactly
+    /// that program, because the two links can carry DIFFERENT defaults
+    /// (`A.same(k = 100)` returning a `B` whose `same` defaults `k = 200`), so
+    /// a genuine key collision would silently apply one method's default to the
+    /// other. The method name is kept in the key as belt-and-braces: an
+    /// `(offset, length)` pair already names one expression.
+    pub method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
     /// For every method call dispatched to a user `impl` with its own generic
     /// params, the impl's `T -> concrete` binding at that call site. Keyed by
     /// `(span, method)` for the same reason `method_impl_dispatch` above is:
@@ -2250,6 +2275,13 @@ pub struct TypeChecker<'a> {
     pub(super) method_callee_types: FxHashMap<SpanKey, String>,
     /// Working half of `TypeCheckResult::method_impl_dispatch`.
     pub(super) method_impl_dispatch: FxHashMap<(SpanKey, String), String>,
+    /// Working half of `TypeCheckResult::method_default_fills`.
+    pub(super) method_default_fills: FxHashMap<(SpanKey, String), Vec<crate::ast::CallArg>>,
+    /// Declared defaults for every instance METHOD, keyed `"Type.method"`.
+    /// Built once from the program (`default_args::method_default_table`);
+    /// consulted only after the impl is resolved, so the key is exact.
+    pub(super) method_defaults:
+        std::collections::HashMap<String, crate::default_args::FnDefaultInfo>,
     /// Working half of `TypeCheckResult::method_impl_type_subs`.
     pub(super) method_impl_type_subs: FxHashMap<(SpanKey, String), FxHashMap<String, String>>,
     /// B-2026-08-13-8 — qualified dispatch segments for impls whose head name is
@@ -2663,6 +2695,8 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: FxHashSet::default(),
             method_callee_types: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
+            method_default_fills: FxHashMap::default(),
+            method_defaults: crate::default_args::method_default_table(program),
             method_impl_type_subs: FxHashMap::default(),
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
             checked_container_hashers: FxHashSet::default(),
@@ -2958,6 +2992,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
             method_impl_dispatch: self.method_impl_dispatch,
+            method_default_fills: self.method_default_fills,
             method_impl_type_subs: self.method_impl_type_subs,
             direct_iter_terminals: self.direct_iter_terminals,
             method_typeparam_receiver: self.method_typeparam_receiver,

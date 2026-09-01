@@ -1285,6 +1285,33 @@ impl<'a> Lowerer<'a> {
         // method-call span (== the receiver's span in this AST) — capture it
         // before the kind borrow.
         let self_span = expr.span;
+        // B-2026-09-01-20 — splice in the instance-method DEFAULT ARGUMENTS the
+        // typechecker planned.
+        //
+        // This is the second half of the method default fill; the first is in
+        // `method_user_impl.rs`, which is where the receiver finally has a type
+        // and the impl can be picked. Applying the plan HERE — before
+        // effectcheck, ownership, the interpreter and codegen all read the tree
+        // — is what keeps the free-function, associated-function and method
+        // spellings on ONE implementation instead of three. Without it the
+        // typechecker accepts `h.g(1)` and codegen emits a call with the wrong
+        // arity: measured, `Incorrect number of arguments passed to called
+        // function` from the module verifier, with the interpreter meanwhile
+        // answering correctly — a run-vs-build divergence rather than a
+        // missing feature.
+        //
+        // Before the recursion, so a spliced default is lowered exactly like an
+        // argument the author wrote.
+        if let ExprKind::MethodCall { method, .. } = &expr.kind {
+            let key = (SpanKey::from_span(&self_span), method.clone());
+            if let Some(filled) = self.tc.method_default_fills.get(&key).cloned() {
+                if let ExprKind::MethodCall { args, .. } = &mut expr.kind {
+                    if args.len() < filled.len() {
+                        *args = filled;
+                    }
+                }
+            }
+        }
         // Recurse into sub-expressions first.
         match &mut expr.kind {
             ExprKind::Binary { left, right, .. } => {
