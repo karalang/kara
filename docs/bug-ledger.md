@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 342 | 6 |
-| run-vs-build | 278 | 22 |
+| run-vs-build | 278 | 21 |
 | leak | 243 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
-| codegen-gap | 157 | 2 |
+| codegen-gap | 158 | 3 |
 | diagnostics | 114 | 2 |
 | false-positive | 102 | 0 |
 | soundness | 93 | 2 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1322 | 38 |
-| interp | 301 | 25 |
+| codegen | 1323 | 39 |
+| interp | 301 | 24 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1927 surfaced · 47 open · 1849 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1928 surfaced · 47 open · 1850 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (47)
 
@@ -163,7 +163,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1927 surfaced
 | B-2026-08-31-32 | 2026-08-31 | interp | medium | THE INTERPRETER RUNS NO `Drop` BODY AT ALL FOR A FRESH-TEMP STRUCT SCRUTINEE THAT AN ARM DESTRUCTURES -- `match H { .. } { H { r, .. } => .. }`; both compiled backends run it once | — |
 | B-2026-08-31-33 | 2026-08-31 | interp | medium | THE INTERPRETER SKIPS THE PARTIALLY-MOVED RESIDUE'S OWN `Drop` BODY WHEN AN ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD -- `Some(H { r, .. })` prints `dR[a]` where both compiled backends print `dH dR[a]` | — |
 | B-2026-08-31-35 | 2026-08-31 | interp+codegen | medium | A DISCARDED BRANCH WHOSE ARM LITERAL CONSUMES A LOCAL RUNS THAT LOCAL'S `Drop` BODY TWICE ON ALL THREE BACKENDS -- `let t = mkd(7); let _ = if n == 0 { W { r: t, b: 1 } } else { .. };` prints `dD7` twice, once at the discard and once at the local's own scope end; the projected spelling (`W { r: t.r, .. }` over a local `W`) doubles identically | — |
-| B-2026-08-31-36 | 2026-08-31 | interp | medium | THE INTERPRETER BINDS THE WHOLE CONTAINER, NOT THE ELEMENT, FOR `let g = ref c[i]` WHEN `c` IS A `Slice` OR A `Map` -- codegen and the typechecker both say `i64`, the interpreter says `Slice` | — |
 | B-2026-08-31-37 | 2026-08-31 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly reachable | — |
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
@@ -177,6 +176,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1927 surfaced
 | B-2026-09-01-3 | 2026-09-01 | interp+codegen | medium | THE TUPLE SPELLING OF B-2026-08-29-47 STILL DOUBLES A PARAM VIEW'S `Drop` BODY -- `let t = (r, 5); let x = t.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-field param-view record that fix added has no tuple peer | none |
 | B-2026-09-01-4 | 2026-09-01 | codegen | medium | READING A NON-`Copy` FIELD OUT OF A `ref` PARAM MINTS AN IMPLICIT DEEP COPY -- silently allocating and running a user `Drop` body the source never wrote, which is exactly what `enum_payload_clone_is_faithful` refuses to do one level down | — |
 | B-2026-09-01-5 | 2026-09-01 | codegen | low | A DISCARDED BRANCH LITERAL WHOSE FIELD IS A PROJECTION OFF A NAMED LOCAL STILL STRANDS 38 B -- `P { a: t.a, b: 1 }` is the half of B-2026-08-29-32's guard that B-2026-08-31-44 could NOT admit, because the aggregate-literal move takeover does not extend to named locals and admitting it double-frees in a loop | — |
+| B-2026-09-01-6 | 2026-09-01 | codegen | medium | CODEGEN DECLINES A NESTED `ref v[0][1]` WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` WHILE THE INTERPRETER READS THE ELEMENT CORRECTLY -- the same arm as B-2026-08-31-37, reached by a spelling that has nothing to do with `Map` | none |
 
 ### Relocated (2)
 
@@ -209,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1927 surfaced
 
 </details>
 
-### Fixed (1849)
+### Fixed (1850)
 
-<details><summary>1849 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1850 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2059,6 +2059,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1927 surfaced
 | B-2026-08-31-29 | codegen | medium | `let g = ref arr[i]` ON AN `Array[Vector[T, N], M]` PANICS THE COMPILER -- the ref binding is loaded as the LANE type (`i64`) instead of the vector,… | 73e6e86 |
 | B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
 | B-2026-08-31-34 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b:… | 2b3b966 |
+| B-2026-08-31-36 | interp | medium | THE INTERPRETER BINDS THE WHOLE CONTAINER, NOT THE ELEMENT, FOR `let g = ref c[i]` WHEN `c` IS A `Slice` OR A `Map` -- codegen and the typechecker bo… | 8ba5e95f |
 | B-2026-08-31-41 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[… | c5b5f6a |
 | B-2026-08-31-44 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE… | 1b5c026 |
 | B-2026-08-31-45 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
