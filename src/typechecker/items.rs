@@ -4500,6 +4500,203 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// B-2026-09-01-38 — design.md § Part 8 `Drop`, "Interaction with move
+    /// semantics": *"Partial moves out of a struct field are rejected if the
+    /// struct has a `Drop` impl: the drop body assumes all fields are present,
+    /// so the compiler cannot permit a half-moved struct to reach the
+    /// destructor."*
+    ///
+    /// Nothing enforced that sentence, and the shape it forbids does exactly
+    /// what its rationale predicts: `let m = h.r;` leaves `h` half-moved and
+    /// still bound, so `H`'s destructor runs over a field that is gone.
+    ///
+    /// The OWNED-root twin of [`Self::warn_borrow_projection_copy`], and the
+    /// split between them is the whole point. A projection off a BORROW copies
+    /// (that lint's population); a projection off an OWNED binding MOVES, and
+    /// only the move can leave a half-populated struct behind for the drop
+    /// body. Both walk the same projection chain and part company at the root.
+    fn partial_move_of_drop_struct(&self, value: &Expr, ty: &Type) -> Option<String> {
+        if !matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return None;
+        }
+        // A `Copy` field is read, not moved: the struct keeps every field and
+        // the drop body still sees them all. Same exemptions as the borrow
+        // twin — a `shared` read RETAINS, a function value is a fat pointer,
+        // and an unsubstituted type parameter is not known either way.
+        if matches!(ty, Type::Error | Type::Never)
+            || self.is_copy_type_during_check(ty)
+            || self.copy_is_only_an_rc_retain(ty)
+            || matches!(ty, Type::Function { .. } | Type::TypeParam(_))
+        {
+            return None;
+        }
+        // Walk to the chain's root, and report the type of the object the
+        // FINAL projection reads out of: that is the struct left half-moved.
+        let object = match &value.kind {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => object,
+            _ => return None,
+        };
+        let owner = self.drop_impl_type_name_of(object)?;
+        // The root must be an owned binding. A borrow root copies instead of
+        // moving, and belongs to `warn_borrow_projection_copy`.
+        let mut cur = value;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => {
+                    let borrowed = self.current_fn_ref_params.contains(n.as_str())
+                        && matches!(
+                            self.local_scope.lookup(n.as_str()),
+                            Some(Type::Ref(_) | Type::MutRef(_))
+                        );
+                    return (!borrowed).then_some(owner);
+                }
+                ExprKind::SelfValue => {
+                    return (!self.current_fn_ref_params.contains("self")).then_some(owner);
+                }
+                // A call, a literal, an index: the value is fresh or is
+                // somebody else's element, and neither leaves a NAMED struct
+                // half-moved for its own destructor to walk.
+                _ => return None,
+            }
+        }
+    }
+
+    /// The named type of a place expression, resolved from the scope and the
+    /// struct field table alone.
+    ///
+    /// Deliberately narrow: a binding, `self`, or a chain of field reads off
+    /// one of those. Anything else answers `None`, which makes the rule above
+    /// decline rather than guess — a rejection that fires on a shape nobody
+    /// verified is worse than one that misses it.
+    fn place_named_type(&self, expr: &Expr) -> Option<String> {
+        let ty = match &expr.kind {
+            ExprKind::Identifier(n) => self.local_scope.lookup(n.as_str())?.clone(),
+            ExprKind::SelfValue => self.current_self_type.clone()?,
+            ExprKind::FieldAccess { object, field } => {
+                let owner = self.place_named_type(object)?;
+                self.env
+                    .structs
+                    .get(&owner)?
+                    .fields
+                    .iter()
+                    .find(|(n, _, _)| n == field)
+                    .map(|(_, t, _)| t.clone())?
+            }
+            _ => return None,
+        };
+        match ty {
+            Type::Named { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// The type name of `expr` when that type declares its own `Drop` impl.
+    /// `None` for anything else, which is what keeps this rule off every
+    /// struct that has no destructor to confuse.
+    fn drop_impl_type_name_of(&self, expr: &Expr) -> Option<String> {
+        let name = self.place_named_type(expr)?;
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Drop") && imp.target_type == name)
+            .then_some(name)
+    }
+
+    /// The PATTERN spelling of [`Self::warn_partial_move_of_drop_struct`]:
+    /// `let H { r, .. } = h;` and `match h { H { r, .. } => .. }` move a field
+    /// out of a `Drop`-implementing struct exactly as `let m = h.r;` does, and
+    /// design.md § Part 8 `Drop` rejects all of them for the same reason.
+    ///
+    /// Fires only on an OWNED scrutinee: under `ref` / `mut ref` the arm
+    /// bindings are borrows, so nothing leaves the struct. And only when some
+    /// bound field is non-`Copy` — a pattern that binds scalars alone leaves
+    /// every heap-bearing field where the destructor expects it.
+    pub(super) fn reject_partial_move_pattern(
+        &mut self,
+        pattern_span: Span,
+        struct_name: &str,
+        fields: &[crate::ast::FieldPattern],
+        mode: crate::typechecker::types::ScrutineeMode,
+    ) {
+        use crate::typechecker::types::ScrutineeMode;
+        if !matches!(mode, ScrutineeMode::Owned) {
+            return;
+        }
+        let has_drop =
+            self.env.impls.iter().any(|imp| {
+                imp.trait_name.as_deref() == Some("Drop") && imp.target_type == struct_name
+            });
+        if !has_drop {
+            return;
+        }
+        let Some(info) = self.env.structs.get(struct_name).cloned() else {
+            return;
+        };
+        // A field is MOVED when its sub-pattern binds it by value. A `_`
+        // binds nothing, and a nested pattern that only reads scalars moves
+        // nothing either — but the conservative test is the field's TYPE,
+        // which is what the drop body will find missing.
+        let moved: Vec<&str> = fields
+            .iter()
+            .filter(|f| {
+                !matches!(
+                    f.pattern.as_ref().map(|p| &p.kind),
+                    Some(crate::ast::PatternKind::Wildcard)
+                )
+            })
+            .filter_map(|f| {
+                let (name, ty, _) = info.fields.iter().find(|(n, _, _)| *n == f.name)?;
+                let movable = !matches!(ty, Type::Error | Type::Never)
+                    && !self.is_copy_type_during_check(ty)
+                    && !self.copy_is_only_an_rc_retain(ty)
+                    && !matches!(ty, Type::Function { .. } | Type::TypeParam(_));
+                movable.then_some(name.as_str())
+            })
+            .collect();
+        if moved.is_empty() {
+            return;
+        }
+        let list = moved.join("`, `");
+        self.type_lint_warning_with_fix(
+            format!(
+                "this pattern moves `{list}` out of `{struct_name}`, which has its own \
+                 `impl Drop`: the struct still reaches its destructor, so its drop body — \
+                 and the field walk after it — run over a half-populated value. design.md \
+                 § Part 8 `Drop` rejects this shape. Bind the whole struct and read the \
+                 field in place, or give the field a `.clone()`"
+            ),
+            pattern_span,
+            TypeErrorKind::TypeMismatch,
+            "partial_move_of_drop_struct",
+            None,
+        );
+    }
+
+    pub(super) fn warn_partial_move_of_drop_struct(&mut self, value: &Expr, ty: &Type) {
+        let Some(owner) = self.partial_move_of_drop_struct(value, ty) else {
+            return;
+        };
+        self.type_lint_warning_with_fix(
+            format!(
+                "moving a field out of `{owner}`, which has its own `impl Drop`: the struct \
+                 stays bound and still reaches its destructor, but the moved-out field is \
+                 gone by then, so `{owner}`'s drop body — and the field walk after it — run \
+                 over a half-populated value. design.md § Part 8 `Drop` rejects this shape. \
+                 Consume the whole struct instead, or give the field a `.clone()`"
+            ),
+            value.span,
+            TypeErrorKind::TypeMismatch,
+            "partial_move_of_drop_struct",
+            None,
+        );
+    }
+
     pub(super) fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
         if !matches!(value.kind, ExprKind::Index { .. }) {
             return;
@@ -4648,6 +4845,7 @@ impl<'a> super::TypeChecker<'a> {
                 // B-2026-09-01-4 — its sibling one level up: the same read
                 // through a BORROW rather than through a container index.
                 self.warn_borrow_projection_copy(value, &expected_ty);
+                self.warn_partial_move_of_drop_struct(value, &expected_ty);
                 // B-2026-07-31-20 — record the result type of a
                 // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                 // (read as an implicit binding annotation). The intercept in
@@ -4817,6 +5015,7 @@ impl<'a> super::TypeChecker<'a> {
                     // B-2026-09-01-4 — sibling of the rule above, same
                     // value position.
                     self.warn_borrow_projection_copy(value, &rhs_ty);
+                    self.warn_partial_move_of_drop_struct(value, &rhs_ty);
                 }
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
                 if let ExprKind::Unary {

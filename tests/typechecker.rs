@@ -48025,6 +48025,164 @@ fn associated_default_fill_does_not_borrow_another_function_s_defaults() {
     );
 }
 
+/// Count `partial_move_of_drop_struct` diagnostics in a program that may or
+/// may not have them. `typecheck_errors` asserts at least one error and
+/// `typecheck_ok` asserts none, so neither can express a matrix whose whole
+/// content is which cells fire.
+fn partial_move_diagnostics(source: &str) -> usize {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let result = typecheck(&parsed.program, &resolved);
+    result
+        .errors
+        .iter()
+        .chain(result.warnings.iter())
+        .filter(|e| e.lint_name.as_deref() == Some("partial_move_of_drop_struct"))
+        .count()
+}
+
+/// B-2026-09-01-38 — design.md § Part 8 `Drop`, "Interaction with move
+/// semantics", was UNIMPLEMENTED: *"Partial moves out of a struct field are
+/// rejected if the struct has a `Drop` impl."*
+///
+/// Nothing enforced it, and the shape the sentence forbids failed exactly as
+/// its rationale predicts. `match h { H { r, .. } => .. }` over an own-`Drop`
+/// `H` printed `dR[d:3] dH dR[:0]` on both compiled backends: `R`'s body ran
+/// once for the moved-out binding and again for the moved-FROM slot, which by
+/// then was ZEROED — a drop body observing a cleared field. ASAN is green on
+/// it (the zeroed `Vec` frees nothing), so no sanitizer job covers the class;
+/// for the resource types `Drop` exists for it is a live hazard, since
+/// `host.close(self.fd)` on the residue closes fd 0.
+///
+/// All five spellings are one rule, and each was measured before the rule
+/// existed. Two of them ALSO diverged run-vs-build — the `let` destructure ran
+/// no `dH` at all under `--interp` against compiled's — so rejecting the shape
+/// deletes three divergence classes rather than repairing each in place.
+///
+/// The negatives carry the boundary, and both are the spec's own: a wrapper
+/// with NO `Drop` impl may have fields moved out (the sentence says so
+/// outright), and a `ref`/`mut ref` scrutinee binds borrows, so nothing leaves
+/// the struct at all.
+#[test]
+fn partial_move_out_of_a_drop_struct_is_rejected_in_every_spelling() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.s); } }\n\
+         struct H { r: R, n: i64 }\n\
+         impl Drop for H { fn drop(mut ref self) { println(\"dH\"); } }\n\
+         struct P { r: R, n: i64 }\n";
+    // Not `typecheck_errors` / `typecheck_ok`: this rule's whole point is that
+    // some cells produce the diagnostic and some produce none, so the helper
+    // must tolerate both rather than assert one.
+    let fires = |body: &str| -> usize {
+        partial_move_diagnostics(&format!("{PRELUDE}fn main() {{ {body} }}"))
+    };
+    let mk = "let h = H { r: R { s: \"d\" }, n: 4 };\n";
+    let mkp = "let p = P { r: R { s: \"d\" }, n: 4 };\n";
+
+    // ── the five rejected spellings ──
+    assert_eq!(
+        fires(&format!("{mk} let m = h.r; println(m.s);")),
+        1,
+        "a field projection off an owned `Drop` struct is the row's plainest shape"
+    );
+    assert_eq!(
+        fires(&format!("{mk} let H {{ r, .. }} = h; println(r.s);")),
+        1,
+        "the `let` destructure spelling — `bind_pattern_types`, not the match route"
+    );
+    assert_eq!(
+        fires(&format!(
+            "{mk} let H {{ r, n }} = h; println(f\"{{r.s}}{{n}}\");"
+        )),
+        1,
+        "the FULL destructure too: compiled still runs `H`'s body over a struct \
+         whose every field has moved, which is the half-moved hazard at its limit"
+    );
+    assert_eq!(
+        fires(&format!(
+            "{mk} match h {{ H {{ r, .. }} => {{ println(r.s); }} }}"
+        )),
+        1,
+        "the match-arm spelling — the row's own repro"
+    );
+    assert_eq!(
+        fires(&format!(
+            "{mk} match h {{ H {{ r, n }} => {{ println(f\"{{r.s}}{{n}}\"); }} }}"
+        )),
+        1,
+        "the full match destructure"
+    );
+
+    // ── the negatives, both of which the spec states ──
+    assert_eq!(
+        fires(&format!("{mkp} let m = p.r; println(m.s);")),
+        0,
+        "\"A struct without a `Drop` impl may have individual fields moved out\" \
+         — design.md, the sentence right after the rule"
+    );
+    assert_eq!(
+        fires(&format!("{mkp} let P {{ r, .. }} = p; println(r.s);")),
+        0,
+        "same wrapper, the pattern spelling"
+    );
+    assert_eq!(
+        fires(&format!("{mk} let q = h.n; println(f\"{{q}}\");")),
+        0,
+        "a `Copy` field is READ, not moved: every field is still there when the \
+         drop body runs. (That read has its own defect — B-2026-09-01-40 — but \
+         it is not this rule's.)"
+    );
+    assert_eq!(
+        fires(&format!(
+            "{mk} match h {{ H {{ r: _, n }} => {{ println(f\"{{n}}\"); }} }}"
+        )),
+        0,
+        "a `_` sub-pattern binds nothing, so the heap-bearing field never leaves"
+    );
+}
+
+/// B-2026-09-01-38 — a BORROWED scrutinee binds borrows, so the rule must not
+/// fire: nothing is moved out and the struct reaches its destructor whole.
+///
+/// The `ref`-parameter half is the population `borrow_projection_copy` owns —
+/// the two rules partition the same syntax by the root's ownership, and this
+/// test is what keeps the partition honest from this side.
+#[test]
+fn a_borrowed_drop_struct_may_be_destructured_and_projected() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.s); } }\n\
+         struct H { r: R, n: i64 }\n\
+         impl Drop for H { fn drop(mut ref self) { println(\"dH\"); } }\n";
+    let fires = |src: &str| -> usize { partial_move_diagnostics(&format!("{PRELUDE}{src}")) };
+    assert_eq!(
+        fires(
+            "fn peek(h: ref H) -> i64 { return h.n; }\n\
+             fn main() { let h = H { r: R { s: \"d\" }, n: 4 }; println(f\"{peek(h)}\"); }"
+        ),
+        0,
+        "a scalar read through a borrow moves nothing"
+    );
+    assert_eq!(
+        fires(
+            "fn peek(h: ref H) -> i64 { let m = h.r; return m.s.len(); }\n\
+             fn main() { let h = H { r: R { s: \"d\" }, n: 4 }; println(f\"{peek(h)}\"); }"
+        ),
+        0,
+        "a non-`Copy` projection off a BORROW copies rather than moves — \
+         `borrow_projection_copy`'s population, not this rule's"
+    );
+}
+
 /// B-2026-09-01-4 — `borrow_projection_copy` fires on a non-`Copy` field read
 /// out of a BORROW.
 ///

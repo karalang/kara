@@ -746,6 +746,11 @@ impl<'a> super::TypeChecker<'a> {
             } => {
                 let struct_name = path.last().cloned().unwrap_or_default();
 
+                // B-2026-09-01-38 — design.md § Part 8 `Drop` rejects a
+                // partial move out of a `Drop`-implementing struct, and a
+                // struct pattern is one spelling of that move.
+                self.reject_partial_move_pattern(pattern.span, &struct_name, fields, mode);
+
                 // `#[non_exhaustive]` slice 4 pattern half — cross-package
                 // exhaustive struct pattern (no `..`) on a `#[non_exhaustive]`
                 // struct is rejected with the `..`-insertion fix-it. Mirrors
@@ -2223,6 +2228,17 @@ impl<'a> super::TypeChecker<'a> {
                 has_rest,
             } => {
                 let struct_name = path.last().map(String::as_str).unwrap_or("");
+
+                // B-2026-09-01-38 — the `let H { r, .. } = h;` spelling of the
+                // same move. `bind_pattern_types` is the let route and never
+                // reaches `check_pattern_against`, so the rule must fire here
+                // too; a `let` destructure is always an OWNED scrutinee.
+                self.reject_partial_move_pattern(
+                    pattern.span,
+                    struct_name,
+                    fields,
+                    crate::typechecker::types::ScrutineeMode::Owned,
+                );
 
                 // `#[non_exhaustive]` slice 4 pattern half (let-binding
                 // route) — same check as the match-arm site in
