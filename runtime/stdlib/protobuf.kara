@@ -653,11 +653,16 @@ comptime fn proto_read_scalar_one(rn: String, tn: String) -> String {
 
 // The body run when a map field's tag matches: decode one entry sub-message
 // (key=1, value=2) and insert it into `target` (the decode local or `self.f`).
-// `via_writeback` selects read-modify-writeback (`let t = place; t.insert(..);
-// place = t;`) instead of a direct `place.insert(..)`. Merge needs it because a
-// mutating method on a `Map` *field* through `mut ref self` does not persist
-// (Map values are stored inline, not shared like `Vec`) — but field assignment
-// does; decode targets a local and inserts directly.
+//
+// Both callers insert DIRECTLY into the place. `merge` used to need a
+// read-modify-writeback here (`let t = self.f; t.insert(..); self.f = t;`)
+// because a mutating method on a `Map` *field* through `mut ref self` did not
+// persist. That is no longer true — `self.m.insert(k, v)` through
+// `mut ref self` persists on all three backends (measured: interpreter, JIT and
+// AOT all report the inserted entry) — and the workaround had become actively
+// wrong: reading `self.f` out of `mut ref self` is a move out of a borrowed
+// place, which B-2026-08-31-2's rule rejects, and the intermediate state it
+// created was a `Map` field the callee owned while the caller still did.
 comptime fn proto_map_decode(
     target: String,
     tag: String,
@@ -665,19 +670,13 @@ comptime fn proto_map_decode(
     vdflt: String,
     kread: String,
     vread: String,
-    via_writeback: bool,
 ) -> String {
     let prefix = "let mut sub" + tag + " = ProtoReader.new(reader.read_len_delim()); let mut mk"
         + tag + " = " + kdflt + "; let mut mv" + tag + " = " + vdflt + "; while not sub" + tag
         + ".at_end() { let (sf, sw) = sub" + tag + ".read_tag(); if sf == 1 { mk" + tag + " = "
         + kread + "; } else if sf == 2 { mv" + tag + " = " + vread + "; } else { sub" + tag
         + ".skip_field(sw); } } ";
-    if via_writeback {
-        prefix + "let mut emt" + tag + " = " + target + "; emt" + tag + ".insert(mk" + tag + ", mv"
-            + tag + "); " + target + " = emt" + tag + ";"
-    } else {
-        prefix + target + ".insert(mk" + tag + ", mv" + tag + ");"
-    }
+    prefix + target + ".insert(mk" + tag + ", mv" + tag + ");"
 }
 
 // ── wire-type overrides (slice 9) ────────────────────────────────
@@ -965,8 +964,8 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             } else {
                 proto_read_scalar_one("sub" + tag, vtn)
             };
-            dec_body = proto_map_decode(fname, tag, kdflt, vdflt, kread, vread, false);
-            mrg_body = proto_map_decode("self." + fname, tag, kdflt, vdflt, kread, vread, true);
+            dec_body = proto_map_decode(fname, tag, kdflt, vdflt, kread, vread);
+            mrg_body = proto_map_decode("self." + fname, tag, kdflt, vdflt, kread, vread);
         } else if repeated {
             let et = f.ty.element_type();
             let etn = et.name();
