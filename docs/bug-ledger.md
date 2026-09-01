@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 245 | 6 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
-| codegen-gap | 159 | 2 |
+| codegen-gap | 159 | 1 |
 | diagnostics | 115 | 2 |
 | false-positive | 102 | 0 |
 | soundness | 93 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1331 | 36 |
+| codegen | 1331 | 35 |
 | interp | 305 | 23 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1938 surfaced · 43 open · 1864 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1938 surfaced · 42 open · 1865 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (43)
+### Open (42)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -171,7 +171,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1938 surfaced
 | B-2026-09-01-11 | 2026-09-01 | interp+codegen | medium | THE NON-CONSTRUCTOR ARMS OF A DISCARDED BRANCH STILL DISAGREE IN THREE SHAPES -- a CALL arm registers nothing on either compiled backend where the direct call spelling runs the own body, and a LIVE-LOCAL arm makes the interpreter drop that local at the branch (doubling the enum's own body in the `let _ =` spelling) where both compiled backends correctly leave it to its own scope end | — |
 | B-2026-09-01-12 | 2026-09-01 | interp+codegen | medium | A SUFFIXED FLOAT LITERAL WHOSE SUFFIX CONTRADICTS THE DESTINATION WIDTH SPLITS THE BACKENDS -- `let d: Option[f32] = Option.Some(0.1f64)` is `Some(0.1)` under `--interp` and `Some(0.10000000149011612)` compiled, and the warning calls the suffix "redundant" when it is contradictory | none |
 | B-2026-09-01-13 | 2026-09-01 | codegen+interp | medium | THE QUALIFIED `Type.method` CALLEE SPELLING IS RESOLVED DIFFERENTLY FROM THE BARE ONE IN AT LEAST THREE PLACES, AND NOBODY HAS SWEPT FOR THE REST -- three rows filed separately turned out to be one root, each with a different symptom, so the remaining sites are unknown rather than known-absent | none |
-| B-2026-09-01-15 | 2026-09-01 | codegen | medium | A NESTED `ref c[i][j]` STILL DECLINES ON FOUR ROOTS THE Vec-ROOTED LOWERING DOES NOT MODEL -- `Array[Vec[T], N]`, `Vec[Array[T, N]]`, a struct FIELD and a `Slice`, each correct under `--interp` and a hard `karac build` failure | none |
 | B-2026-09-01-16 | 2026-09-01 | codegen | medium | A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON ALL THREE COMPILED SURFACES -- `println(f"field={readf(h.r)}")` is interp `field=43 drop 40 end` vs compiled `field=43 end drop 40`, against design.md line 866; hoisting the call to its own `let` makes all four agree, and the callee returns `i64`, which is B-2026-08-31-4's own passing CONTROL | — |
 
 ### Relocated (2)
@@ -205,9 +204,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1938 surfaced
 
 </details>
 
-### Fixed (1864)
+### Fixed (1865)
 
-<details><summary>1864 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1865 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2075,6 +2074,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1938 surfaced
 | B-2026-09-01-6 | codegen | medium | CODEGEN DECLINES A NESTED `ref v[0][1]` WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` WHILE THE INTERPRETER READS THE ELEMENT C… | b7674909 |
 | B-2026-09-01-10 | codegen | medium | THE -O0 ASAN LEG IS RED ON `main` WITH THREE UNOWNED FAILURES AND AN EMPTY QUARANTINE LIST -- `scripts/asan-o0-leg.sh` reports 1339 passed / 3 failed… | fcb6696 |
 | B-2026-09-01-14 | cli | medium | THE DEFAULT `cargo test` LEG WAS RED ON `main` FOR TWO HOURS BECAUSE A CODEGEN-DIAGNOSTIC ASSERTION IS NOT GATED ON THE llvm FEATURE -- `ref_binding_… | Added `#[cfg(feature = "llvm")]`, the gate the other 98 `ka… |
+| B-2026-09-01-15 | codegen | medium | A NESTED `ref c[i][j]` STILL DECLINES ON FOUR ROOTS THE Vec-ROOTED LOWERING DOES NOT MODEL -- `Array[Vec[T], N]`, `Vec[Array[T, N]]`, a struct FIELD… | 2143f047 |
 
 </details>
 
