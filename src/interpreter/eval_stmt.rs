@@ -3830,6 +3830,116 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-01-11 — ask the arm that RAN, not every arm.
+    ///
+    /// [`Self::discard_producer_runs_payload_walk`] requires ALL arms to
+    /// qualify, and the reason it gives is sound: the walk is value-driven, so
+    /// a construct with one producing arm and one handing out a LIVE LOCAL
+    /// would, on the second arm, walk a payload that local's binding still
+    /// owns. What it does not need is to answer STATICALLY. The interpreter
+    /// already records which arm tail produced the value
+    /// (`note_taken_branch_tail`, B-2026-08-29-31, which
+    /// `disarm_discarded_tail_sources` reads two lines from this site), so the
+    /// hazard can be excluded per RUN instead of per SHAPE — which is how both
+    /// compiled backends decide it, one arm's basic block at a time.
+    ///
+    /// The difference is exactly the row's shape: for
+    /// `let _ = if c { E.A(mk(8)) } else { e };` with `c` true, all-arms
+    /// declined over the `e` arm that never ran, so the interpreter printed the
+    /// enum's own body and stopped while both compiled backends printed the
+    /// payload's too. Asking the taken tail admits it, and on the run where `e`
+    /// IS the value the same test declines — the local keeps its own body, and
+    /// nothing is doubled.
+    ///
+    /// Falls back to the all-arms question when no arm tail was recorded (a
+    /// non-branch producer, or a branch whose recorded span matched none of its
+    /// arms), so nothing this predicate used to admit is lost.
+    fn discard_taken_producer_runs_payload_walk(&self, expr: &Expr) -> bool {
+        if self.discard_producer_runs_payload_walk(expr) {
+            return true;
+        }
+        // …and ONLY where the all-arms question declined on a LIVE LOCAL. That
+        // restriction is not caution, it is the difference between the two
+        // reasons an arm can fail `discard_arm_yields_fresh_enum`, and only one
+        // of them varies per run:
+        //
+        //   * a LIVE LOCAL is a hazard about THIS run — on the run where that
+        //     arm is taken the binding still owns the payload, and on the run
+        //     where it is not the arm contributed nothing. Asking the taken
+        //     tail answers it exactly.
+        //   * a CALL arm is not a hazard at all; it is a statement about what
+        //     `let _ = mke(9);` does, which is to run the own body ALONE on
+        //     every backend. That answer does not vary per run, and re-asking
+        //     it per run would make the ctor arm of a mixed ctor/call branch
+        //     walk a payload the compiled backends do not — trading this row's
+        //     divergence for a fresh one in the other direction. (Measured:
+        //     `let _ = if c { E.A(mk(8)) } else { mke(9) };` went to `dE dR8`
+        //     here against `dE` on jit and aot.)
+        if !self.branch_arms_are_fresh_or_live_locals(expr) {
+            return false;
+        }
+        self.taken_discarded_tail(expr)
+            .is_some_and(|tail| self.discard_arm_yields_fresh_enum(tail))
+    }
+
+    /// Is every arm of this branch either a fresh producer or a name that is
+    /// still LIVE — the one population
+    /// [`Self::discard_taken_producer_runs_payload_walk`] re-asks per run?
+    fn branch_arms_are_fresh_or_live_locals(&self, expr: &Expr) -> bool {
+        let arm_ok = |t: &Expr| {
+            let t = Self::arm_tail_expr(t);
+            self.discard_arm_yields_fresh_enum(t)
+                || matches!(&t.kind, ExprKind::Identifier(n) if self.env.get(n).is_some())
+        };
+        match &expr.kind {
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.branch_arms_are_fresh_or_live_locals(t)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let then_ok = then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| arm_ok(t) || self.branch_arms_are_fresh_or_live_locals(t));
+                then_ok
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(|e| arm_ok(e) || self.branch_arms_are_fresh_or_live_locals(e))
+            }
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms.iter().all(|a| {
+                        arm_ok(&a.body) || self.branch_arms_are_fresh_or_live_locals(&a.body)
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// B-2026-09-01-11 — the taken-arm form of the BARE-STATEMENT discard's
+    /// liveness gate, and the sibling of
+    /// [`Self::discard_taken_producer_runs_payload_walk`] one question earlier.
+    ///
+    /// That site's `hands_out_live_binding` / `owns` gates ask whether ANY arm
+    /// hands out a live binding and decline the whole construct if one does.
+    /// The hazard is real — an enclosing local owns its own scope-exit body, so
+    /// firing here as well doubles it — but it belongs to the arm that RAN. A
+    /// mixed `if c { E.A(mk(8)) } else { e };` was declined whole, so with `c`
+    /// true the interpreter ran NOTHING for a value it had just minted and
+    /// thrown away, against `dE dR8` on both compiled backends.
+    ///
+    /// `None` when no arm tail was recorded, which leaves the caller on its
+    /// all-arms question: a no-`else` `if` that took no arm, or a producer that
+    /// is not a branch at all.
+    fn discarded_branch_taken_tail_is_ownable(&self, e: &Expr) -> Option<bool> {
+        self.taken_discarded_tail(e)
+            .map(|t| self.discard_arm_tail_is_ownable(Self::arm_tail_expr(t)))
+    }
+
     /// B-2026-08-29-25 — the expression whose SHAPE decides a bare-statement
     /// discard (`{ mk(7) };`, `{ match n { … } };`). The value has already
     /// been evaluated from the whole statement; only the shape dispatch needs
@@ -5355,7 +5465,7 @@ impl<'a> super::Interpreter<'a> {
                     // reference; one that came off a still-live binding
                     // (`let _ = a;`) does not, and keeps its own path.
                     self.run_discarded_shared_user_drop(&val);
-                    let inline_ctor = self.discard_producer_runs_payload_walk(value);
+                    let inline_ctor = self.discard_taken_producer_runs_payload_walk(value);
                     if inline_ctor {
                         if let Value::EnumVariant { enum_name, .. } = &val {
                             if self.program.drop_method_keys.contains_key(enum_name) {
@@ -6005,10 +6115,21 @@ impl<'a> super::Interpreter<'a> {
                         // scope, looks up to `Some`, and correctly does not.
                         // Shape alone cannot tell them apart — both are a bare
                         // `Identifier` at the arm tail.
-                        let hands_out_live_binding = arms.iter().any(|a| {
-                            matches!(&Self::arm_tail_expr(&a.body).kind,
-                                ExprKind::Identifier(n) if self.env.get(n).is_some())
-                        });
+                        //
+                        // B-2026-09-01-11 — asked of the arm that RAN where one
+                        // was recorded; see
+                        // `discarded_branch_taken_tail_is_ownable`. The
+                        // all-arms form below stays as the fallback, and is
+                        // what still answers for a construct whose arm tail was
+                        // never noted.
+                        let hands_out_live_binding =
+                            match self.discarded_branch_taken_tail_is_ownable(shape) {
+                                Some(ownable) => !ownable,
+                                None => arms.iter().any(|a| {
+                                    matches!(&Self::arm_tail_expr(&a.body).kind,
+                                    ExprKind::Identifier(n) if self.env.get(n).is_some())
+                                }),
+                            };
                         if !hands_out_live_binding {
                             // B-2026-08-31-21 — before the clone, which would
                             // bump the `Arc` and defeat the walker's
@@ -6040,7 +6161,7 @@ impl<'a> super::Interpreter<'a> {
                             // `let _ =` twin uses, so the two statement kinds
                             // admit one population — the drift B-2026-08-29-20
                             // had to repair once already on this trio.
-                            if self.discard_producer_runs_payload_walk(shape) {
+                            if self.discard_taken_producer_runs_payload_walk(shape) {
                                 if let Value::EnumVariant { enum_name, .. } = &payload_src {
                                     if self.program.drop_method_keys.contains_key(enum_name) {
                                         self.run_enum_payload_user_drops_value(&payload_src);
@@ -6084,22 +6205,31 @@ impl<'a> super::Interpreter<'a> {
                         // `Call`/`MethodCall` by
                         // `discarded_arm_owned_aggregate_tail`), so both
                         // backends fire together.
-                        let owns = match (then_block.final_expr.as_deref(), else_branch.as_deref())
-                        {
-                            (Some(then_tail), Some(else_tail)) => [then_tail, else_tail]
-                                .into_iter()
-                                .map(Self::arm_tail_expr)
-                                .all(|tail| {
-                                    !matches!(&tail.kind,
-                                        ExprKind::Identifier(n) if self.env.get(n).is_some())
-                                }),
-                            (Some(then_tail), None) => {
-                                let tail = Self::arm_tail_expr(then_tail);
-                                !matches!(&tail.kind,
-                                    ExprKind::Identifier(n) if self.env.get(n).is_some())
-                            }
-                            _ => false,
-                        };
+                        //
+                        // B-2026-09-01-11 — the `match` arm's taken-tail gate,
+                        // in the `if` spelling. The all-arms form is the
+                        // fallback for a construct that recorded no arm tail,
+                        // which is exactly the no-`else` shape the second arm
+                        // below is written for.
+                        let owns = self
+                            .discarded_branch_taken_tail_is_ownable(shape)
+                            .unwrap_or_else(|| {
+                                match (then_block.final_expr.as_deref(), else_branch.as_deref()) {
+                                    (Some(then_tail), Some(else_tail)) => [then_tail, else_tail]
+                                        .into_iter()
+                                        .map(Self::arm_tail_expr)
+                                        .all(|tail| {
+                                            !matches!(&tail.kind,
+                                                ExprKind::Identifier(n) if self.env.get(n).is_some())
+                                        }),
+                                    (Some(then_tail), None) => {
+                                        let tail = Self::arm_tail_expr(then_tail);
+                                        !matches!(&tail.kind,
+                                            ExprKind::Identifier(n) if self.env.get(n).is_some())
+                                    }
+                                    _ => false,
+                                }
+                            });
                         if owns {
                             // B-2026-08-31-21 — before the clone, which would
                             // bump the `Arc` and defeat the walker's
@@ -6131,7 +6261,7 @@ impl<'a> super::Interpreter<'a> {
                             // `let _ =` twin uses, so the two statement kinds
                             // admit one population — the drift B-2026-08-29-20
                             // had to repair once already on this trio.
-                            if self.discard_producer_runs_payload_walk(shape) {
+                            if self.discard_taken_producer_runs_payload_walk(shape) {
                                 if let Value::EnumVariant { enum_name, .. } = &payload_src {
                                     if self.program.drop_method_keys.contains_key(enum_name) {
                                         self.run_enum_payload_user_drops_value(&payload_src);

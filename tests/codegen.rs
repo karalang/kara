@@ -126292,6 +126292,159 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-11 (shapes 2 and 3) — A DISCARDED BRANCH WITH ONE ARM
+    /// NAMING A LIVE LOCAL lost the value the OTHER arm minted, in the
+    /// interpreter only.
+    ///
+    /// `let _ = if c { E.A(mk(8)) } else { e };` with `c` true printed the
+    /// enum's own body and stopped (`dE`), against `dE dR8` on both compiled
+    /// backends; the bare-statement spelling printed nothing at all for the
+    /// discarded value.
+    ///
+    /// Both interpreter gates asked a STATIC all-arms question —
+    /// `discard_producer_runs_payload_walk` for the payload walk,
+    /// `hands_out_live_binding` / `owns` for ownership itself — and the hazard
+    /// they were written for is real: the walk is value-driven, so a live
+    /// local handed out of one arm would have its payload walked while its own
+    /// binding still owns it. But that hazard belongs to the arm that RUNS.
+    /// The interpreter has recorded which arm tail produced the value since
+    /// B-2026-08-29-31, so both gates now ask the taken tail — which is how
+    /// each compiled backend decides it, one arm's basic block at a time.
+    ///
+    /// The `guard:` cells are the reason this is not simply a wider gate: an
+    /// arm's own PATTERN BINDING is a different population from an enclosing
+    /// local (the first has left scope, the second has not), a no-`else` `if`
+    /// records no arm tail when the condition is false, and the all-ctor
+    /// branch must keep the count it already had. Nothing here may double.
+    ///
+    /// STILL DIVERGING, and deliberately not in this test: the run where the
+    /// TAKEN arm is itself the live local and that local carries a payload.
+    /// Compiled runs the payload's body there and the interpreter does not,
+    /// and the `if` and `match` spellings disagree with each other on BOTH
+    /// backends in opposite directions. That is a separate defect, measured
+    /// and filed on its own row rather than folded into this one.
+    #[test]
+    fn e2e_a_discarded_branch_whose_sibling_arm_names_a_live_local() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\"); } }\n\
+             fn mk(n: i64) -> R { return R { id: n }; }\n\
+             fn mke(n: i64) -> E { return E.A(mk(n)); }\n";
+        // (label, the body of `go`, expected)
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "wildcard `let`, the fresh arm taken — the row's shape 2",
+                "let e = E.B; let c = true;\n\
+                 let _ = if c { E.A(mk(8)) } else { e };",
+                "dE\ndR8\ndE\nmid\nv=7\n",
+            ),
+            (
+                "the same with the LIVE-LOCAL arm taken",
+                "let e = E.B; let c = false;\n\
+                 let _ = if c { E.A(mk(8)) } else { e };",
+                "dE\nmid\nv=7\n",
+            ),
+            (
+                "bare statement, the fresh arm taken — shape 3",
+                "let e = E.B; let c = true;\n\
+                 if c { E.A(mk(8)) } else { e };",
+                "dE\ndR8\ndE\nmid\nv=7\n",
+            ),
+            (
+                "bare statement, the live-local arm taken",
+                "let e = E.B; let c = false;\n\
+                 if c { E.A(mk(8)) } else { e };",
+                "dE\nmid\nv=7\n",
+            ),
+            (
+                "the sibling local CARRIES a payload, wildcard `let`",
+                "let e = E.A(mk(5)); let c = true;\n\
+                 let _ = if c { E.A(mk(8)) } else { e };",
+                "dE\ndR8\ndE\ndR5\nmid\nv=7\n",
+            ),
+            (
+                "the sibling local carries a payload, bare statement",
+                "let e = E.A(mk(5)); let c = true;\n\
+                 if c { E.A(mk(8)) } else { e };",
+                "dE\ndR8\ndE\ndR5\nmid\nv=7\n",
+            ),
+            (
+                "nested `else if`, the live local deepest and NOT taken",
+                "let e = E.B; let c = true;\n\
+                 let _ = if c { E.A(mk(8)) } else { if c { E.B } else { e } };",
+                "dE\ndR8\ndE\nmid\nv=7\n",
+            ),
+            // ── guards: populations the taken-tail question must not move ──
+            (
+                "guard: a no-`else` `if` whose arm ran",
+                "let c = true; let _ = if c { E.A(mk(8)) };",
+                "dE\ndR8\nmid\nv=7\n",
+            ),
+            (
+                "guard: a no-`else` `if` whose arm did NOT run",
+                "let c = false; let _ = if c { E.A(mk(8)) };",
+                "mid\nv=7\n",
+            ),
+            (
+                "guard: an arm's own PATTERN BINDING, wildcard `let`",
+                "let o = E.A(mk(3));\n\
+                 let _ = match o { E.A(r) => E.A(r), _ => E.B };",
+                "dE\ndR3\ndE\nmid\nv=7\n",
+            ),
+            (
+                "guard: an arm's own pattern binding, bare statement",
+                "let o = E.A(mk(3));\n\
+                 match o { E.A(r) => E.A(r), _ => E.B };",
+                "dE\ndR3\ndE\nmid\nv=7\n",
+            ),
+            (
+                // `e` is never mentioned in the branch, so its NLL last use is
+                // its own `let` and it dies BEFORE the discard — the inverse
+                // order of the two cells above, where the branch mentions it.
+                "guard: ALL arms construct — the count it already had",
+                "let e = E.A(mk(5)); let c = true;\n\
+                 let _ = if c { E.A(mk(8)) } else { E.A(mk(9)) };",
+                "dE\ndR5\ndE\ndR8\nmid\nv=7\n",
+            ),
+            (
+                "guard: the local discarded DIRECTLY, no branch",
+                "let e = E.A(mk(5));\n\
+                 let _ = e;",
+                "dE\nmid\nv=7\n",
+            ),
+            (
+                // The boundary the taken-tail question is NARROWED at: a CALL
+                // arm is not a per-run hazard, it is a statement about what
+                // `let _ = mke(9);` does — the own body alone, on every
+                // backend. Re-asking it per run would walk `R{8}` here and
+                // nowhere else: a fresh divergence, not a fix. Measured — this
+                // cell printed `dE dR8` against compiled's `dE` on the first,
+                // unnarrowed attempt.
+                "guard: a CALL arm, which the question must NOT reach",
+                "let c = true;\n\
+                 let _ = if c { E.A(mk(8)) } else { mke(9) };",
+                "dE\nmid\nv=7\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!(
+                "{PRELUDE}fn go() -> i64 {{ {body}\n \
+                 println(\"mid\"); return 7; }}\n\
+                 fn main() {{ println(f\"v={{go()}}\"); }}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: compiled");
+            }
+        }
+    }
+
     /// B-2026-09-01-11 (shape 1) — A DISCARDED BRANCH WHOSE **FIRST** ARM IS
     /// AN ENUM CONSTRUCTION registered NOTHING on either compiled backend.
     ///
