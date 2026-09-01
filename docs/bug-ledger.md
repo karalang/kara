@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 159 | 1 |
-| diagnostics | 115 | 2 |
+| diagnostics | 115 | 1 |
 | false-positive | 102 | 0 |
 | soundness | 93 | 1 |
 | perf | 87 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1332 | 35 |
+| codegen | 1332 | 34 |
 | interp | 307 | 24 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1940 surfaced · 43 open · 1866 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1940 surfaced · 42 open · 1867 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (43)
+### Open (42)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -148,7 +148,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1940 surfaced
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
-| B-2026-08-31-16 | 2026-08-31 | codegen | low | THE DERIVED-Display REFUSAL FOR AN UNSUPPORTED FIELD TYPE DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr — spans and byte offsets included — INTO USER-FACING OUTPUT, running to hundreds of characters for a one-line source construct and never naming the type in source syntax; the refusal itself is correct, and what it needs is a TypeExpr-to-source formatter this file lacks | — |
 | B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
 | B-2026-08-31-31 | 2026-08-31 | codegen | medium | WHEN THE DESTRUCTURED STRUCT HAS ITS OWN `impl Drop`, ITS WRAPPER STILL RUNS THE MOVED-OUT FIELD'S BODY ON THE HUSK -- the carrier is `OwnWrapper`, which B-2026-08-31-26's mask cannot reach | — |
 | B-2026-08-31-32 | 2026-08-31 | interp | medium | THE INTERPRETER RUNS NO `Drop` BODY AT ALL FOR A FRESH-TEMP STRUCT SCRUTINEE THAT AN ARM DESTRUCTURES -- `match H { .. } { H { r, .. } => .. }`; both compiled backends run it once | — |
@@ -205,9 +204,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1940 surfaced
 
 </details>
 
-### Fixed (1866)
+### Fixed (1867)
 
-<details><summary>1866 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1867 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2050,6 +2049,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1940 surfaced
 | B-2026-08-31-13 | typecheck | low | THE VALUE-RECEIVER SPELLING `x.partial_cmp(y)` IS REJECTED ON A CONCRETE RECEIVER WITH "expects 2 argument(s), found 1" WHILE THE IDENTICALLY-REGISTE… | 7bd0b04 |
 | B-2026-08-31-14 | codegen | high | A BORROW-MODE PAYLOAD BINDING NAME STAYED REGISTERED FOR EVERY LATER MATCH IN THE SAME FUNCTION -- `borrowed_agg_payload_struct_vars` is keyed by BIN… | c64cbfd |
 | B-2026-08-31-15 | typecheck | medium | A COMPARISON METHOD ON A PRIMITIVE RECEIVER IS SILENTLY POISONED, NOT CHECKED — `let s: String = n.cmp(m)` type-checks and PRINTS `Less` into the Str… | 26e3508 |
+| B-2026-08-31-16 | codegen | low | THE DERIVED-Display REFUSAL FOR AN UNSUPPORTED FIELD TYPE DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr — spans and byte offsets included — INTO USER-F… | 64194650 |
 | B-2026-08-31-18 | codegen | high | A `Vector[T, N]` OR `Array[T, N]` ENUM PAYLOAD RECONSTRUCTS AS GARBAGE UNDER CODEGEN -- silently, in `match` as well as in Display, so a bound payloa… | 527bdf8 |
 | B-2026-08-31-19 | codegen | medium | `Array[T, N]` HAS NO Display UNDER CODEGEN AT ANY DEPTH, AND THE QUIET HALF IS THE PLAIN ONE -- nested (a `Vec` element, a struct field, a tuple fiel… | c48c0fb |
 | B-2026-08-31-17 | codegen | medium | AN `Option`/`Result` CALL RESULT INTERPOLATED IN AN F-STRING LEAKS ITS PAYLOAD ONCE PER EVALUATION -- `f"{mk(n)}"` where `mk` returns `Option[String]… | 4a58370 |
