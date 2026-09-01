@@ -294,6 +294,42 @@ impl<'a> super::TypeChecker<'a> {
     /// constructor), so the recursion is where `let t: (f32, f32) = (0.1, 0.2)`
     /// is reached.
     pub(super) fn record_narrow_float_literal(&mut self, expr: &Expr, expected: &Type) {
+        /// The element type of a SEQUENCE context (B-2026-08-31-20). The same
+        /// argument the tuple arm rests on: a collection literal whose elements
+        /// are plain values does not check them against their slots — the
+        /// Vec-context arm in `check_expr` SYNTHESIZES its elements — so
+        /// nothing ever reaches the literal with the element type in hand.
+        ///
+        /// `Vector[T, N]` is deliberately absent: nothing was measured through
+        /// it, and its lane literal is a call rather than a collection literal.
+        fn seq_elem(t: &Type) -> Option<&Type> {
+            match t {
+                Type::Array { element, .. } | Type::Slice { element, .. } => Some(element),
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(&args[0])
+                }
+                _ => None,
+            }
+        }
+        /// Which type argument a value-carrying prelude constructor fills:
+        /// `Some(x)` / `Ok(x)` take the FIRST, `Err(e)` the SECOND. Both
+        /// spellings the parser produces are accepted — a bare `Some` is an
+        /// identifier, `Option.Some` a two-segment path.
+        fn payload_arg_index(callee: &Expr, expected_name: &str) -> Option<usize> {
+            let variant = match &callee.kind {
+                ExprKind::Identifier(n) => n.as_str(),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => segments[1].as_str(),
+                _ => return None,
+            };
+            match (expected_name, variant) {
+                ("Option", "Some") => Some(0),
+                ("Result", "Ok") => Some(0),
+                ("Result", "Err") => Some(1),
+                _ => None,
+            }
+        }
         let ctx = match expected {
             Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
             other => other,
@@ -307,6 +343,40 @@ impl<'a> super::TypeChecker<'a> {
             (ExprKind::Tuple(elems), Type::Tuple(slots)) if elems.len() == slots.len() => {
                 for (e, slot) in elems.iter().zip(slots.iter()) {
                     self.record_narrow_float_literal(e, slot);
+                }
+            }
+            // B-2026-08-31-20 — a collection literal's elements. `let v:
+            // Vec[f16] = [0.1]` and `Array[0.1]` both kept f64 precision under
+            // `--interp` against every compiled backend's narrowed value. The
+            // row's own control used `v.push(0.1)`, which has its OWN recording
+            // site (`method_vec_mutation.rs`) and therefore agreed — so the
+            // literal spelling of the same store was the one nothing covered.
+            (
+                ExprKind::ArrayLiteral(items) | ExprKind::PrefixCollectionLiteral { items, .. },
+                _,
+            ) => {
+                if let Some(elem) = seq_elem(ctx).cloned() {
+                    for it in items {
+                        self.record_narrow_float_literal(it, &elem);
+                    }
+                }
+            }
+            (ExprKind::RepeatLiteral { value, .. }, _) => {
+                if let Some(elem) = seq_elem(ctx).cloned() {
+                    self.record_narrow_float_literal(value, &elem);
+                }
+            }
+            // B-2026-08-31-20 — an `Option` / `Result` PAYLOAD. The width comes
+            // from the binding's annotation and has to travel through the
+            // constructor call to reach the literal; nothing carried it, so
+            // `Option.Some(0.1)` stayed f64 while `Option.Some(c)` with an
+            // already-narrowed `c` was right, which is what made this look like
+            // an Option-specific defect rather than one missing recursion.
+            (ExprKind::Call { callee, args }, Type::Named { name, args: targs }) => {
+                if let Some(idx) = payload_arg_index(callee, name) {
+                    if let (Some(a), Some(t)) = (args.first(), targs.get(idx).cloned()) {
+                        self.record_narrow_float_literal(&a.value, &t);
+                    }
                 }
             }
             _ => {}

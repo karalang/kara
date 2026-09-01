@@ -40336,6 +40336,18 @@ fn test_field_bound_out_of_local_is_a_copy() {
 /// the rule is about the declared width rather than about f32. Each prints the
 /// SUFFIXED spelling's value; pre-fix the interpreter printed `0.1` on all
 /// seven.
+///
+/// B-2026-08-31-20 added six more, and they are the positions "all the ones a
+/// bare literal can reach" missed: an `Option` / `Result` PAYLOAD in all three
+/// constructor spellings (`Option.Some`, bare `Some`, `Ok` / `Err`), a `Vec`
+/// literal element, and a PREFIX `Array[...]` element. The width has to travel
+/// through the constructor call or the collection literal to reach the literal,
+/// and `record_narrow_float_literal` recursed through tuples only.
+///
+/// The `v.push(0.1)` line above is why this looked covered: `Vec` elements DO
+/// narrow through the method spelling, which has its own recording site, so a
+/// reader checking "do Vec elements narrow?" got yes — while `[0.1]`, the same
+/// store written as a literal, did not. Two spellings, one of them tested.
 #[test]
 fn test_unsuffixed_float_literal_takes_the_destination_width() {
     assert_eq!(
@@ -40356,6 +40368,18 @@ fn test_unsuffixed_float_literal_takes_the_destination_width() {
                  println(ar[0]);\n\
                  let tu: (f32, f32) = (0.1, 0.2);\n\
                  println(tu.0);\n\
+                 let po: Option[f32] = Option.Some(0.1);\n\
+                 println(po);\n\
+                 let pb: Option[f32] = Some(0.1);\n\
+                 println(pb);\n\
+                 let pk: Result[f32, i64] = Ok(0.1);\n\
+                 println(pk);\n\
+                 let pe: Result[i64, f32] = Err(0.1);\n\
+                 println(pe);\n\
+                 let vl: Vec[f32] = [0.1];\n\
+                 println(vl[0]);\n\
+                 let ap: Array[f32, 1] = Array[0.1];\n\
+                 println(ap[0]);\n\
                  let h: f16 = 0.1;\n\
                  println(h);\n\
              }"),
@@ -40364,6 +40388,12 @@ fn test_unsuffixed_float_literal_takes_the_destination_width() {
          0.10000000149011612\n\
          0.10000000149011612\n\
          0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n\
+         Some(0.10000000149011612)\n\
+         Some(0.10000000149011612)\n\
+         Ok(0.10000000149011612)\n\
+         Err(0.10000000149011612)\n\
          0.10000000149011612\n\
          0.10000000149011612\n\
          0.0999755859375\n"
