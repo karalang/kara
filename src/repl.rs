@@ -613,9 +613,15 @@ pub struct Session {
     /// bool, char) qualify in B.5.1; richer types deferred.
     #[cfg(feature = "llvm")]
     jit_snapshotted_lets: std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
-    /// B-2026-08-30-7: for each binding recorded above as
-    /// [`crate::codegen::SnapshotPrimKind::ByValue`], the `TypeExpr` the
-    /// DECLARING cell classified it at.
+    /// B-2026-08-30-7: for each binding recorded above whose kind answers
+    /// [`crate::codegen::SnapshotPrimKind::needs_value_type`], the `TypeExpr`
+    /// the DECLARING cell classified it at.
+    ///
+    /// Keyed on the PREDICATE rather than on a variant list, because the list
+    /// has grown twice since this map arrived — `ByValue` first, then the
+    /// `String`-component containers, then `InlineEnvelope` — and each time
+    /// the consumers were already correct while a variant-naming comment was
+    /// not.
     ///
     /// Kept in the session rather than re-derived per cell on purpose. The
     /// replayed `let`'s RHS is still in the synthetic source and still

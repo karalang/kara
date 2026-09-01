@@ -439,6 +439,37 @@ pub enum SnapshotPrimKind {
     /// hands to `register_var_from_type_expr` to rebuild dispatch
     /// metadata.
     ByValue,
+    /// B-2026-08-30-7: an `Option[T]` / `Result[T, E]` whose lowered slot is
+    /// the SEEDED inline `{ i64 tag, i64 w0, i64 w1, i64 w2 }` envelope and
+    /// whose heap-carrying payload is a `{ptr,len,cap}` triple the
+    /// `FreeInline{Option,Result}Payload` overlay owns WHOLESALE.
+    ///
+    /// The distinction from [`SnapshotPrimKind::ByValue`] is one word: that
+    /// variant is for a slot with no heap behind it at all, this one is for a
+    /// slot with heap behind it whose ENTIRE cleanup is a single retractable
+    /// action keyed on the slot. Storage is identical (the binding's own
+    /// lowered type, a fixed 32-byte constant for the seeded envelope, so the
+    /// global's width cannot drift between the cell that defines it and a cell
+    /// that loads it) and so is replay. Only capture differs: it retracts the
+    /// overlay action instead of doing nothing.
+    ///
+    /// Why the shallow transfer is COMPLETE here, which is the whole argument:
+    /// the overlay action is the only thing that would free the payload
+    /// buffer, and retracting it leaves exactly one owner — the snapshot
+    /// global — reclaimed when the JITDylib is torn down. That is the same
+    /// "option (a) leak the buffer" policy `String` and `Vec` have had since
+    /// B.5.2, reached by retraction rather than by a `cap` sentinel because an
+    /// enum payload word is not a vec struct to GEP.
+    ///
+    /// Deliberately NOT admitted, and each for its own reason: a payload
+    /// owning a REFCOUNT (`shared`, `Rc`/`Arc`) — retracting an rc-dec is not
+    /// a transfer, since a second owner elsewhere in the session could drop
+    /// the last reference while the global still points at the object; a
+    /// payload with a user `impl Drop` — capture hands the value to a global
+    /// nobody tears down, so its destructor would never run; and a payload
+    /// whose cleanup is a struct-drop fn rather than the overlay
+    /// (`ok_payload_struct_drop`), whose retraction has not been measured.
+    InlineEnvelope,
 }
 
 /// Slice c-repl.B.5.3: Vec element kinds eligible for the v1 snapshot
@@ -501,7 +532,7 @@ impl SnapshotPrimKind {
     ///     freshly-bound one instead of approximately so.
     pub(crate) fn needs_value_type(self) -> bool {
         match self {
-            SnapshotPrimKind::ByValue => true,
+            SnapshotPrimKind::ByValue | SnapshotPrimKind::InlineEnvelope => true,
             SnapshotPrimKind::Vec(e) | SnapshotPrimKind::Set(e) => e == VecElemKind::String,
             SnapshotPrimKind::Map { key, val } => {
                 key == VecElemKind::String || val == VecElemKind::String

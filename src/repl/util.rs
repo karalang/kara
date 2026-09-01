@@ -1043,6 +1043,20 @@ pub(super) fn snapshot_kind_for_type(
             Type::Str => Some(SnapshotPrimKind::Set(VecElemKind::String)),
             _ => None,
         },
+        // B-2026-08-30-7: an `Option` / `Result` whose payload owns a
+        // `{ptr,len,cap}` buffer. The slot is the seeded inline
+        // `{ tag, w0, w1, w2 }` envelope — a fixed 32-byte constant, so the
+        // global's width is stable across cells the way the by-value arm
+        // needs — and the payload buffer's ENTIRE cleanup is one queued
+        // `FreeInline{Option,Result}Payload` on that slot, which capture
+        // retracts. See `SnapshotPrimKind::InlineEnvelope`.
+        //
+        // Ordered BEFORE the by-value arm only for readability: the two
+        // classes are disjoint by construction, since `is_by_value` is false
+        // for any payload this arm accepts.
+        other if inline_envelope_payload_class(other, by_value) => {
+            Some(SnapshotPrimKind::InlineEnvelope)
+        }
         // B-2026-08-30-7: everything else that is BY VALUE — no heap and
         // no RC pointer anywhere inside — snapshots with a plain
         // store/load and no ownership handshake at all. See
@@ -1056,6 +1070,76 @@ pub(super) fn snapshot_kind_for_type(
         // pre-B-2026-08-30-7 cell readable by a post one.
         other if by_value.is_by_value(other, 0) => Some(SnapshotPrimKind::ByValue),
         _ => None,
+    }
+}
+
+/// B-2026-08-30-7: is `ty` an `Option` / `Result` whose lowered slot is the
+/// seeded inline envelope and whose heap-carrying payload is one the
+/// `FreeInline{Option,Result}Payload` overlay owns WHOLESALE?
+///
+/// A yes is the eligibility rule for
+/// [`crate::codegen::SnapshotPrimKind::InlineEnvelope`], and it says exactly
+/// one thing: retracting that single queued action leaves the snapshot global
+/// as the only owner of everything reachable from the slot.
+///
+/// Members — at least one half must be heap-carrying, or the by-value arm
+/// already claims the type:
+///   - `Option[String]`, `Option[Vec[X]]` / `Option[VecDeque[X]]`, with `X`
+///     itself by-value or `String`.
+///   - `Result[A, B]` where each half is by-value or one of the above.
+///
+/// Non-members, each because the overlay is NOT the whole story for it:
+///   - an AGGREGATE payload (`Option[<user struct>]`, `Vec[<user struct>]`).
+///     Its cleanup can reach a struct-drop fn or a per-element aggregate
+///     drop, and a field of that aggregate can own a refcount — where a
+///     shallow transfer stops being a bounded leak and becomes a potential
+///     dangle, the one case the row singles out. Kept out until measured
+///     rather than argued.
+///   - a `shared` / `Rc` / `Arc` payload, for that same reason directly.
+///   - a payload carrying a user `impl Drop`: capture hands the value to a
+///     global nobody tears down, so its destructor would never run — trading
+///     this row's divergence for a new one, the same exclusion the by-value
+///     walk makes.
+///
+/// A payload deeper than `Vec[String]` (`Vec[Vec[i64]]`) is excluded with the
+/// direct-binding case it mirrors: the one-level suppression there does not
+/// reach a nested triple, and there is no reason to believe the envelope
+/// spelling behaves differently.
+#[cfg(feature = "llvm")]
+fn inline_envelope_payload_class(ty: &crate::typechecker::Type, by_value: &ByValueCtx<'_>) -> bool {
+    use crate::typechecker::Type;
+    match ty {
+        Type::Named { name, args } if name == "Option" && args.len() == 1 => {
+            is_overlay_owned_heap_payload(&args[0], by_value)
+        }
+        Type::Named { name, args } if name == "Result" && args.len() == 2 => {
+            let halves_ok = args
+                .iter()
+                .all(|a| is_overlay_owned_heap_payload(a, by_value) || by_value.is_by_value(a, 0));
+            halves_ok
+                && args
+                    .iter()
+                    .any(|a| is_overlay_owned_heap_payload(a, by_value))
+        }
+        _ => false,
+    }
+}
+
+/// One payload half of [`inline_envelope_payload_class`]: a `{ptr,len,cap}`
+/// triple the overlay frees in full.
+///
+/// `String` is the triple itself. A `Vec` / `VecDeque` is the triple plus the
+/// overlay's own one-level recursion into a `{ptr,len,cap}` ELEMENT, which is
+/// why a `String` element is admitted and a container element is not.
+#[cfg(feature = "llvm")]
+fn is_overlay_owned_heap_payload(ty: &crate::typechecker::Type, by_value: &ByValueCtx<'_>) -> bool {
+    use crate::typechecker::Type;
+    match ty {
+        Type::Str => true,
+        Type::Named { name, args } if (name == "Vec" || name == "VecDeque") && args.len() == 1 => {
+            matches!(&args[0], Type::Str) || by_value.is_by_value(&args[0], 0)
+        }
+        _ => false,
     }
 }
 

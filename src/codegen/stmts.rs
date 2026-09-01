@@ -15071,9 +15071,56 @@ impl<'ctx> super::Codegen<'ctx> {
         if kind.needs_value_type() {
             if let Some(te) = self.snapshot_value_types.get(name).cloned() {
                 self.register_var_from_type_expr(name, &te);
+                if matches!(kind, super::SnapshotPrimKind::InlineEnvelope) {
+                    self.register_replayed_inline_envelope_payload(name, &te);
+                }
             }
         }
         Ok(true)
+    }
+
+    /// B-2026-08-30-7: register a replayed `InlineEnvelope` binding in the
+    /// payload-var sets — the METADATA half of
+    /// `track_inline_{option,result}_payload_var`, without its queued action.
+    ///
+    /// This is not bookkeeping tidiness; without it the widening turns a wrong
+    /// answer into a DEAD RUNNER, which is strictly worse than the divergence
+    /// it fixes. `inline_{option,result}_payload_vars` is what
+    /// `scrutinee_is_inline_optres_local` reads, and that predicate is an input
+    /// to the arm's borrow-vs-consume classification. A replayed binding
+    /// missing from the set is classified CONSUMING, so
+    /// `match o { Option.Some(s) => println(s) }` frees the payload buffer at
+    /// arm exit — while the snapshot global still points at it. Measured
+    /// before this registration existed: cell 2's match printed `alpha`, cell
+    /// 3's died with "JIT runner subprocess died mid-cell"; the same two cells
+    /// as one AOT program are clean under valgrind, because there `o` is a
+    /// real local the classification can see is still live.
+    ///
+    /// The registration says the true thing about a snapshotted binding: it is
+    /// NEVER dead at end of cell, because the global outlives the frame. So
+    /// the arm borrows, nothing is freed, and the next cell's load is valid —
+    /// which is also what `--interp` does (it keeps a real `Value` in
+    /// `let_snapshots` and hands out reads of it).
+    ///
+    /// Queueing the action itself would be wrong for the reason the capture
+    /// path retracts it: the global owns the buffer now, and a second owner is
+    /// exactly what this whole tier is built to avoid.
+    fn register_replayed_inline_envelope_payload(&mut self, name: &str, te: &TypeExpr) {
+        if self.option_inline_payload_elem(te).is_some() {
+            self.payload_vars
+                .inline_option_payload_vars
+                .insert(name.to_string());
+        }
+        let is_result = matches!(
+            &te.kind,
+            crate::ast::TypeKind::Path(p)
+                if p.segments.last().map(|s| s.as_str()) == Some("Result")
+        );
+        if is_result {
+            self.payload_vars
+                .inline_result_payload_vars
+                .insert(name.to_string());
+        }
     }
 
     /// Emit every pending REPL snapshot capture at the END OF THE CELL —
@@ -15177,8 +15224,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // `holds_vec_struct` slot check below (B-2026-07-07-6), which is the
         // precedent for a cross-type rebind reaching a capture with a
         // mismatched slot.
-        if matches!(kind, super::SnapshotPrimKind::ByValue)
-            && slot.ty != self.snapshot_storage_type(name, kind)
+        //
+        // B-2026-08-30-7 (heap-payload envelope): the guard covers
+        // `InlineEnvelope` too, and it matters MORE there. A mismatched
+        // by-value store scribbles past the global; a mismatched envelope
+        // store would additionally hand the retraction below a slot whose
+        // cleanup is not the overlay it assumes, turning a bounded
+        // out-of-bounds write into a missed free. Declining leaves both
+        // halves untouched.
+        if matches!(
+            kind,
+            super::SnapshotPrimKind::ByValue | super::SnapshotPrimKind::InlineEnvelope
+        ) && slot.ty != self.snapshot_storage_type(name, kind)
         {
             return;
         }
@@ -15252,6 +15309,56 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             self.retract_map_handle_cleanup(slot.ptr);
         }
+        // B-2026-08-30-7: an `Option`/`Result` whose payload owns a
+        // `{ptr,len,cap}` buffer is cleaned up by a single queued overlay
+        // action on the slot (`FreeInline{Option,Result}Payload`), so
+        // suppression is a retraction — the Map/Set shape rather than the
+        // String/Vec one. It cannot be the String/Vec one: `zero_vec_alloca_cap`
+        // GEPs field 2 of a `{ptr,i64,i64}`, and the slot here is a
+        // `{i64,i64,i64,i64}` envelope whose payload triple starts at word 1,
+        // so the same GEP would land on `len` and leave `cap` intact — a
+        // corrupted length AND an unsuppressed free.
+        if matches!(kind, super::SnapshotPrimKind::InlineEnvelope) {
+            self.retract_inline_envelope_payload_cleanup(slot.ptr);
+        }
+    }
+
+    /// B-2026-08-30-7: drop any queued `FreeInlineOptionPayload` /
+    /// `FreeInlineResultPayload` for `envelope_alloca` from every live
+    /// cleanup frame.
+    ///
+    /// The `InlineEnvelope` counterpart to `retract_map_handle_cleanup`, and
+    /// exact in the same way: the action carries the SLOT, so retracting by
+    /// alloca uses the identity the drain itself would have used.
+    ///
+    /// Called at END OF CELL, after the envelope has been stored into the
+    /// snapshot global, so the payload buffer outlives the frame that would
+    /// otherwise free it — ownership passes to the JITDylib and is reclaimed
+    /// when that is torn down (runner death / `:reset` / cross-cell shadow),
+    /// the policy String and Vec have followed since B.5.2.
+    ///
+    /// Scans every frame for the reason its Map/Set sibling does: the action
+    /// is queued at whichever frame was open when the binding was tracked,
+    /// which for a top-level REPL `let` is `main`'s outermost frame but is
+    /// not guaranteed to be the frame current at capture time.
+    fn retract_inline_envelope_payload_cleanup(
+        &mut self,
+        envelope_alloca: inkwell::values::PointerValue<'ctx>,
+    ) {
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| {
+                !matches!(
+                    action,
+                    super::state::CleanupAction::FreeInlineOptionPayload {
+                        option_slot: a,
+                        ..
+                    } | super::state::CleanupAction::FreeInlineResultPayload {
+                        result_slot: a,
+                        ..
+                    } if *a == envelope_alloca
+                )
+            });
+        }
     }
 
     /// B-2026-08-30-7: drop any queued `FreeMapHandle` for `map_alloca`
@@ -15312,7 +15419,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // REPL classified a name `ByValue` without recording its type,
             // and `i64` is the same width-of-last-resort
             // `llvm_type_for_type_expr` itself falls back to.
-            super::SnapshotPrimKind::ByValue => self
+            //
+            // B-2026-08-30-7 (heap-payload envelope): `InlineEnvelope` shares
+            // this arm verbatim. Its slot holds heap BEHIND a pointer, but the
+            // slot ITSELF is the same fixed-width seeded `{tag, w0, w1, w2}`
+            // aggregate, so the global's storage question has the same answer.
+            // The two kinds diverge only at capture, where this one retracts
+            // the payload overlay.
+            super::SnapshotPrimKind::ByValue | super::SnapshotPrimKind::InlineEnvelope => self
                 .snapshot_value_types
                 .get(name)
                 .map(|te| self.llvm_type_for_type_expr(te))
@@ -15377,7 +15491,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // convert to — unlike `Bool`, whose i1 slot is widened to i8
             // so the global's width does not depend on how a given cell
             // happened to lower it.
-            | super::SnapshotPrimKind::ByValue => Ok(loaded),
+            | super::SnapshotPrimKind::ByValue
+            // B-2026-08-30-7: identity for the same reason — the global's
+            // type IS the slot's type for an inline envelope too.
+            | super::SnapshotPrimKind::InlineEnvelope => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i8_val = loaded.into_int_value();
                 let zero = self.context.i8_type().const_zero();
@@ -15411,7 +15528,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // convert to — unlike `Bool`, whose i1 slot is widened to i8
             // so the global's width does not depend on how a given cell
             // happened to lower it.
-            | super::SnapshotPrimKind::ByValue => Ok(loaded),
+            | super::SnapshotPrimKind::ByValue
+            // B-2026-08-30-7: identity for the same reason — the global's
+            // type IS the slot's type for an inline envelope too.
+            | super::SnapshotPrimKind::InlineEnvelope => Ok(loaded),
             super::SnapshotPrimKind::Bool => {
                 let i1 = loaded.into_int_value();
                 let i8_ty = self.context.i8_type();
@@ -15498,7 +15618,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // zero value rather than a hazard — the same "safe if
             // accidentally consumed" property the arms above buy with
             // their cap/null sentinels, here for free.
-            super::SnapshotPrimKind::ByValue => {
+            //
+            // B-2026-08-30-7 (heap-payload envelope): same zero, and it is
+            // safe for a second reason worth naming. The envelope's tag word
+            // zeroes to `None` for an `Option` (whose `None` tag IS 0), and
+            // for a `Result` the zeroed tag names a half whose payload triple
+            // is also zero — `cap == 0`, which is the sentinel
+            // `emit_free_vec_buffer_body` checks before freeing. So an
+            // uncaptured envelope global consumed by accident frees nothing on
+            // either shape.
+            super::SnapshotPrimKind::ByValue | super::SnapshotPrimKind::InlineEnvelope => {
                 g.set_initializer(&Self::const_zero_of(ty));
             }
         }

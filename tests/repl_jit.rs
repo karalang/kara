@@ -1626,3 +1626,225 @@ fn repl_jit_interactive_subprocess_surfaces_panic_and_recovers() {
         "a later cell must run after the runner re-spawns; got:\n{combined}"
     );
 }
+
+/// B-2026-08-30-7 — the INLINE-ENVELOPE half of the snapshot tier: an
+/// `Option` / `Result` whose payload owns a `{ptr,len,cap}` buffer must carry
+/// a mutation across the cell boundary.
+///
+/// The row's earlier updates closed the by-value shapes (`Option[i64]`) and
+/// the container shapes (`Vec[String]`, `Map[String, i64]`). This is the
+/// nearest adjacent one the row names and explicitly leaves open: storage was
+/// never the obstacle — a `{ptr,len,cap}` payload fits the seeded
+/// `{tag, w0, w1, w2}` envelope exactly — only suppression was, since
+/// `zero_vec_alloca_cap` GEPs a vec struct and an enum payload word is not
+/// one. `retract_inline_envelope_payload_cleanup` is the answer, and it is the
+/// Map/Set retraction shape rather than the String/Vec sentinel shape.
+///
+/// The `mutate` cell is deliberately the one AFTER the declaring cell: that is
+/// the shape the row's own table measures, and it exercises the write-back on
+/// a REPLAYED binding rather than only on a first one.
+#[test]
+fn repl_jit_inline_envelope_tier_carries_a_heap_payload_across_cells() {
+    for (decl, mutate, read, want) in [
+        // The row's headline shape for this half.
+        (
+            "let mut o: Option[String] = Option.None;",
+            "o = Option.Some(f\"hi\");",
+            "println(f\"{o.is_some()}\");",
+            "true",
+        ),
+        // …and reading the payload back out, not just the tag. A tag-only
+        // assertion would pass on a snapshot that captured a dangling pointer.
+        (
+            "let mut o: Option[String] = Option.Some(f\"first\");",
+            "o = Option.Some(f\"second\");",
+            "match o { Option.Some(s) => println(s), Option.None => println(f\"none\") }",
+            "second",
+        ),
+        // A `Vec` payload: the same triple, reached through the overlay's own
+        // one-level recursion rather than the `String` arm.
+        (
+            "let mut o: Option[Vec[i64]] = Option.None;",
+            "o = Option.Some(Vec.new());",
+            "println(f\"{o.is_some()}\");",
+            "true",
+        ),
+        // Both `Result` halves heap-carrying.
+        (
+            "let mut r: Result[String, String] = Result.Err(f\"e\");",
+            "r = Result.Ok(f\"good\");",
+            "println(f\"{r.is_ok()}\");",
+            "true",
+        ),
+        // Only the `Err` half heap-carrying — the mixed shape, which is where
+        // a per-half eligibility bug would show up.
+        (
+            "let mut r: Result[i64, String] = Result.Ok(1);",
+            "r = Result.Err(f\"bad\");",
+            "println(f\"{r.is_err()}\");",
+            "true",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        assert!(
+            !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "{decl} is an inline envelope and must reach the snapshot tier; \
+             notes: {:?}",
+            r.notes,
+        );
+        let r = s.evaluate_cell_captured(mutate);
+        assert!(r.errors.is_empty(), "{mutate}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(read);
+        assert!(r.errors.is_empty(), "{read}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.trim(),
+            want,
+            "a mutation made in the cell AFTER the declaring one must survive \
+             the boundary for `{decl}`; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7 — a CONSUMING arm over a snapshotted inline envelope must
+/// borrow its payload, not free it.
+///
+/// This is the regression the widening itself introduced and had to fix, and
+/// it is worth its own test because the failure it guards is strictly WORSE
+/// than the divergence the widening removes. `inline_option_payload_vars` is
+/// an input to the arm's borrow-vs-consume classification; a replayed binding
+/// missing from it is classified CONSUMING, so `match o { Option.Some(s) =>
+/// println(s) }` frees the payload buffer at arm exit while the snapshot
+/// global still points at it. Measured on the transfer-only version: cell 2's
+/// match printed `alpha`, cell 3's died with "JIT runner subprocess died
+/// mid-cell". The same two matches as one AOT program are clean under
+/// valgrind — there `o` is a real local the classification can see is live.
+///
+/// THREE reads, not two: the first read is what frees, so a two-cell version
+/// passes on the broken build.
+///
+/// GREEN on pre-fix `main`, and that is not a weakness: there these shapes are
+/// on pass-through, so every cell rebuilds the binding from its constant
+/// initializer and prints the right thing by accident. The test is red only on
+/// the intermediate transfer-only version — it guards a regression the
+/// widening introduces, not a divergence that predates it.
+#[test]
+fn repl_jit_inline_envelope_consuming_arm_does_not_free_the_snapshot() {
+    for (decl, read, want) in [
+        (
+            "let mut o: Option[String] = Option.Some(f\"alpha\");",
+            "match o { Option.Some(s) => println(s), Option.None => println(f\"none\") }",
+            "alpha",
+        ),
+        (
+            "let mut o: Option[String] = Option.Some(f\"alpha\");",
+            "if let Option.Some(s) = o { println(s); }",
+            "alpha",
+        ),
+        (
+            "let mut r: Result[String, String] = Result.Ok(f\"good\");",
+            "match r { Result.Ok(s) => println(s), Result.Err(e) => println(e) }",
+            "good",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        for round in 1..=3 {
+            let r = s.evaluate_cell_captured(read);
+            assert!(r.errors.is_empty(), "{read} round {round}: {:?}", r.errors);
+            assert_eq!(
+                r.stdout.trim(),
+                want,
+                "round {round} of `{read}` over `{decl}`: a consuming arm must \
+                 not free a payload the snapshot global still owns; stdout: {:?}",
+                r.stdout,
+            );
+        }
+    }
+}
+
+/// B-2026-08-30-7, the SIDE-EFFECT half for the inline-envelope tier.
+///
+/// Same argument as `repl_jit_by_value_initializer_runs_once_across_cells`:
+/// mutation loss and RHS re-execution are two divergences with one mechanism,
+/// and a fix that replayed the value while still emitting the RHS would pass
+/// the tier test above and fail this one. Measured before the fix:
+/// `SIDE EFFECT` three times across four cells; after: once.
+#[test]
+fn repl_jit_inline_envelope_initializer_runs_once_across_cells() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "fn mk() -> Option[String] { println(f\"SIDE EFFECT\"); Option.Some(f\"x\") }",
+    );
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let mut o: Option[String] = mk();");
+    assert!(r.errors.is_empty(), "declare: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.matches("SIDE EFFECT").count(),
+        1,
+        "the declaring cell runs the initializer exactly once; stdout: {:?}",
+        r.stdout,
+    );
+    for cell in ["println(f\"two\");", "println(f\"three\");"] {
+        let r = s.evaluate_cell_captured(cell);
+        assert!(r.errors.is_empty(), "{cell}: {:?}", r.errors);
+        assert_eq!(
+            r.stdout.matches("SIDE EFFECT").count(),
+            0,
+            "a later cell must not re-run the initializer; stdout: {:?}",
+            r.stdout,
+        );
+    }
+}
+
+/// B-2026-08-30-7 — the inline-envelope tier must stay OUT of the payload
+/// shapes whose cleanup is not the retractable overlay.
+///
+/// Each of these is a deliberate exclusion with its own reason, recorded on
+/// `inline_envelope_payload_class`: an AGGREGATE payload can reach a
+/// struct-drop or per-element aggregate drop and can hold a refcount behind a
+/// field; a `shared` payload holds one directly, and retracting an rc-dec is
+/// not a transfer — a second owner could drop the last reference while the
+/// global still points at the object. Both stay on pass-through, which is
+/// wrong-but-bounded, and both keep warning.
+///
+/// The assertion is the WARNING rather than the divergence: the note keys on
+/// `snapshot_kind_for_type` returning `None`, so it is the exact observable of
+/// "this shape did not enter the tier", and it stays true if a later slice
+/// makes the divergence itself go away for some other reason.
+///
+/// GREEN on pre-fix `main` too — a boundary pin rather than a regression test.
+/// What it catches is a LATER slice widening the class past what the retraction
+/// argument covers, which is the direction this tier has drifted twice.
+#[test]
+fn repl_jit_inline_envelope_tier_excludes_aggregate_and_shared_payloads() {
+    for (items, decl) in [
+        (
+            "struct H { n: String }",
+            "let mut o: Option[H] = Option.None;",
+        ),
+        (
+            "shared struct S { n: i64 }",
+            "let mut o: Option[S] = Option.None;",
+        ),
+    ] {
+        let mut s = Session::new();
+        enable_jit(&mut s);
+        let r = s.evaluate_cell_captured(items);
+        assert!(r.errors.is_empty(), "{items}: {:?}", r.errors);
+        let r = s.evaluate_cell_captured(decl);
+        assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
+        assert!(
+            r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
+            "{decl} must stay on pass-through — its payload's cleanup is not \
+             the retractable overlay; notes: {:?}",
+            r.notes,
+        );
+    }
+}
