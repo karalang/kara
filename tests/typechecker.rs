@@ -47862,3 +47862,65 @@ fn an_out_of_range_suffixed_literal_is_rejected_in_a_seeded_slot() {
     // And the cast the author would write to mean it.
     typecheck_ok("fn main() { let i: Option[u8] = Option.Some(300i64 as u8); println(f\"{i}\"); }");
 }
+
+/// B-2026-09-01-13 — argument LABELS are validated on a qualified
+/// `Type.assoc_fn(..)` call, not silently discarded.
+///
+/// Found by the audit that row is: three earlier bugs turned out to be one
+/// shape — a site that resolves a callee by bare name and never considers the
+/// two-segment `Path` spelling — and this is a fourth, in `infer_call`'s
+/// `param_names` lookup. It looked the last segment up in `env.functions`,
+/// where an associated fn does not live under `f` or under `H.f`, so the
+/// lookup returned `None` and `validate_labels` was never called.
+///
+/// The consequence was not a missing check but a WRONG PROGRAM. With labels
+/// ignored the arguments bound positionally, so `H.f(b: 3, a: 10)` computed
+/// `a - b` as `3 - 10` and printed `-7` on all four surfaces — the labels read
+/// one way and the program meant the other. `H.f(zz: 3, qq: 10)`, whose labels
+/// name no parameter of anything in the program, was accepted in silence. The
+/// bare spelling and the instance-method spelling both reject both, which is
+/// what made this a spelling asymmetry rather than a policy.
+///
+/// The impl table is consulted FIRST and the bare-name lookup only as a
+/// fallback, which the last case guards: keyed on the last segment alone,
+/// `H.take(a: 5)` would find an unrelated global `take` and validate this
+/// call's labels against that function's parameter names — the same false
+/// positive B-2026-08-22-11 recorded for the where-clause lookup next door.
+#[test]
+fn labels_are_validated_on_a_qualified_associated_call() {
+    const IMPL: &str = "struct H { x: i64 }\n\
+                        impl H { fn f(a: i64, b: i64) -> i64 { return a - b; } }\n";
+    let rejects = |call: &str| {
+        let src = format!("{IMPL}fn main() {{ println({call}); }}");
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("does not match parameter")),
+            "expected a label rejection from: {call}\ngot: {errs:?}"
+        );
+    };
+    // Reordered labels: the shape that silently swapped the arguments.
+    rejects("H.f(b: 3, a: 10)");
+    // Labels naming no parameter at all.
+    rejects("H.f(zz: 3, qq: 10)");
+
+    let accepts = |call: &str| {
+        typecheck_ok(&format!("{IMPL}fn main() {{ println({call}); }}"));
+    };
+    accepts("H.f(a: 10, b: 3)");
+    accepts("H.f(10, b: 3)");
+    accepts("H.f(10, 3)");
+    // The bare spelling was always right and must stay so.
+    typecheck_ok(
+        "fn f(a: i64, b: i64) -> i64 { return a - b; }\n\
+         fn main() { println(f(a: 10, b: 3)); }",
+    );
+    // FALSE-POSITIVE GUARD: an associated fn whose name also exists globally
+    // must be validated against ITS OWN parameter names.
+    typecheck_ok(
+        "fn take(zzz: i64) -> i64 { return zzz; }\n\
+         struct H { x: i64 }\n\
+         impl H { fn take(a: i64) -> i64 { return a; } }\n\
+         fn main() { println(H.take(a: 5)); println(take(zzz: 1)); }",
+    );
+}

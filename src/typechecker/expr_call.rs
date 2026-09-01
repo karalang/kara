@@ -1939,12 +1939,39 @@ impl<'a> super::TypeChecker<'a> {
                 .functions
                 .get(name)
                 .map(|sig| sig.param_names.clone()),
-            ExprKind::Path { segments, .. } => segments.last().and_then(|name| {
-                self.env
-                    .functions
-                    .get(name)
-                    .map(|sig| sig.param_names.clone())
-            }),
+            // B-2026-09-01-13 — resolve a two-segment path the same way
+            // `callee_where_clause` does immediately below, and for the same
+            // two reasons it documents. The bare-name lookup alone missed an
+            // ASSOCIATED fn entirely (it lives in the impl table, not in
+            // `env.functions`, under neither `f` nor `H.f`), so `param_names`
+            // came back `None` and `validate_labels` was never called at all
+            // — labels on a `Type.assoc_fn(..)` call were not merely
+            // unchecked but IGNORED: `H.f(b: 3, a: 10)` bound positionally and
+            // computed `a - b` as `3 - 10`, and `H.f(zz: 3, qq: 10)` — labels
+            // naming no parameter of anything — was accepted in silence. The
+            // bare spelling and the INSTANCE-method spelling both reject both.
+            //
+            // Impl table FIRST, never as a fallback, for the false positive
+            // B-2026-08-22-11 records: the bare-name lookup keys on the last
+            // segment alone, so `H.take(x)` would find an unrelated global
+            // `mem.take` and validate this call's labels against THAT
+            // function's parameter names.
+            ExprKind::Path { segments, .. } => {
+                let impl_sig = if segments.len() == 2 {
+                    self.env.find_method(&segments[0], &[], &segments[1])
+                } else {
+                    None
+                };
+                match impl_sig {
+                    Some(sig) => Some(sig.param_names.clone()),
+                    None => segments.last().and_then(|name| {
+                        self.env
+                            .functions
+                            .get(name)
+                            .map(|sig| sig.param_names.clone())
+                    }),
+                }
+            }
             _ => None,
         };
 
