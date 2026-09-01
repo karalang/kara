@@ -117,7 +117,7 @@ The one discipline that carries over regardless of environment: **`main` advance
 - **Push with `git push origin main`**; retry transient network errors with 2s/4s/8s/16s backoff. A push rejected as **non-fast-forward** means the remote advanced after your last fetch — `git fetch` + `git rebase origin/main`, then retry. **Never** `push --force` / `update-ref` past commits you did not create (the silent-rewind footgun in failure mode 2 below); rebase onto them instead.
 - **Deleting the working branch**, when one exists, is a UI/one-click step for the owner — the cloud git gateway returns `403` on ref deletion and the GitHub MCP server exposes no delete-branch tool, so it cannot be done from inside the session. Delete the *local* branch after confirming it is fully contained in `main` (`git merge-base --is-ancestor <branch> main`), and flag the remote ref for the owner to remove.
 
-**On the local checkout, all dev work in karac-rust happens in an isolated worktree, not on the primary `main` checkout.** Every implementation slice — feature, fix, refactor, even single-line bug fixes — starts with `EnterWorktree` (which honors `.claude/settings.local.json`'s `worktree.baseRef: "head"`, so the new worktree picks up local-but-unpushed `main` commits). **Before `EnterWorktree`, always sync the primary's `main` with the remote first** — `git fetch origin main && git merge --ff-only origin/main` (or `git pull --ff-only origin main`) from the primary. `baseRef: "head"` only inherits *local* `main` commits; it does **not** pull commits another session, a teammate, or a bot pushed to remote `main`. Branch off a stale local `main` and the worktree forks from behind, forcing an avoidable `git rebase` (and the fork-point confusion it invites) at integration time — this repo has had remote `main` advance mid-task, so the pull is not optional. Commit inside the worktree, then `git rebase main` from the worktree and `git merge --ff-only <branch>` from the primary to integrate. Direct commits to `main` from the primary checkout are reserved for pure recovery operations (the `update-ref` failure-mode dance below) — never for normal feature/fix work, even if "it's just two lines."
+**On the local checkout, all dev work in karac-rust happens in an isolated worktree, not on the primary `main` checkout.** Every implementation slice — feature, fix, refactor, even single-line bug fixes — starts with `EnterWorktree` (which honors `.claude/settings.local.json`'s `worktree.baseRef: "head"`, so the new worktree picks up local-but-unpushed `main` commits). **Before `EnterWorktree`, always sync the primary's `main` with the remote first** — `git fetch origin main && git merge --ff-only origin/main` from the primary. (`git pull --ff-only` is the same two commands; this file spells out the pair everywhere so there is ONE sync verb to look for, and so the cloud-container rule above — where `pull` is wrong, because the follow-up is `reset`/`rebase` rather than a merge — cannot be read as contradicting this one.) `baseRef: "head"` only inherits *local* `main` commits; it does **not** pull commits another session, a teammate, or a bot pushed to remote `main`. Branch off a stale local `main` and the worktree forks from behind, forcing an avoidable `git rebase` (and the fork-point confusion it invites) at integration time — this repo has had remote `main` advance mid-task, so the pull is not optional. Commit inside the worktree, then `git rebase main` from the worktree and `git merge --ff-only <branch>` from the primary to integrate. Direct commits to `main` from the primary checkout are reserved for pure recovery operations (the `update-ref` failure-mode dance below) — never for normal feature/fix work, even if "it's just two lines."
 
 Why mandatory rather than judgment-call: the primary worktree's role is review, cross-referencing, and integration. Mixing in-progress work there contaminates `git status`, blocks parallel slices, and skips the rebase-loud-fail signal that catches stale fork-points (the same signal that prevents the silent-rewind footgun in failure mode 2 below). Worktree isolation makes "what's on main" and "what I'm currently doing" structurally separate, which is what every other rule in this section relies on.
 
@@ -139,22 +139,19 @@ Several agent sessions work this repo in parallel, and the open rows of `docs/bu
 
 **Claim before reading the bug in depth, not after.** The trigger is "I am about to pick an open ledger row to work on" — *including* when the user names a specific bug id, since another session may already hold it.
 
-**Step 0: sync the ledger before you read it.** `git fetch origin main` and
-`git reset --hard origin/main` (or `git rebase origin/main` if you have
-local-only commits) BEFORE listing the open rows. Branch management already
-requires this "before starting a slice"; it is restated here because the
-numbered list below is what a session actually follows when picking a row, and
-a list that omits it invites choosing from a stale `open` set — a row another
-session closed minutes ago, or missing the rows filed since your last fetch.
-Unconditionally, not "if something changed": you cannot know whether the ledger
-moved without fetching, and the fetch costs seconds against work that runs for
-tens of minutes. Note the verb — `git fetch` plus `reset`/`rebase`, never
-`git pull`, per Branch management's cloud-container rule.
-
-1. **Read the board.** `list_sessions({mine: true, limit: 30})` on the `claude-code-remote` MCP server (load the schema via ToolSearch if it isn't in context). Each row carries `tags`, `title`, `session_status`, `updated_at`, and `post_turn_summary`; collect the `kara-bug:<ID>` tags. A tag on a `RUNNING` session — or on an `IDLE` one whose `updated_at` is recent — is a **live claim: pick a different row**. A tag on an `ARCHIVED` session, or one stale by a day or more, is a dead claim and the row is free.
-2. **Stake it.** `get_session()` with no arguments returns your own session id; then `set_session_tags({session_ids: ["<own id>"], add: ["kara-bug:B-2026-08-17-29"]})`. Mirror the id into the title as well (`set_session_title`, e.g. `"bugs group D · B-2026-08-17-29"`) so the claim is legible in the web session list without anyone reading tags.
-3. **Re-read once.** List again after tagging. If another session tagged the same id inside that window, **the session with the older `created_at` keeps it**; the younger removes its tag and picks another row. Deterministic, no negotiation, no message round-trip.
-4. **Release on close.** Drop the tag (`set_session_tags({remove: [...]})`) once the closing commit lands. That commit's `status: "fixed"` is the real release — the tag is only the in-flight signal, so a session that dies mid-fix leaks nothing.
+1. **Sync the ledger, before you read it.** `git fetch origin main`, then
+   `git reset --hard origin/main` (or `git rebase origin/main` if you have
+   local-only commits). Branch management already requires this "before
+   starting a slice", and it is a NUMBERED STEP here because that is the only
+   form sessions actually follow — several have picked a row off a stale
+   `open` set, which means a row someone closed minutes ago or a set missing
+   everything filed since the last fetch. Unconditionally, not "if the ledger
+   moved": you cannot know that without fetching, and a fetch costs seconds
+   against work that runs for tens of minutes.
+2. **Read the board.** `list_sessions({mine: true, limit: 30})` on the `claude-code-remote` MCP server (load the schema via ToolSearch if it isn't in context). Each row carries `tags`, `title`, `session_status`, `updated_at`, and `post_turn_summary`; collect the `kara-bug:<ID>` tags. A tag on a `RUNNING` session — or on an `IDLE` one whose `updated_at` is recent — is a **live claim: pick a different row**. A tag on an `ARCHIVED` session, or one stale by a day or more, is a dead claim and the row is free.
+3. **Stake it.** `get_session()` with no arguments returns your own session id; then `set_session_tags({session_ids: ["<own id>"], add: ["kara-bug:B-2026-08-17-29"]})`. Mirror the id into the title as well (`set_session_title`, e.g. `"bugs group D · B-2026-08-17-29"`) so the claim is legible in the web session list without anyone reading tags.
+4. **Re-read once.** List again after tagging. If another session tagged the same id inside that window, **the session with the older `created_at` keeps it**; the younger removes its tag and picks another row. Deterministic, no negotiation, no message round-trip.
+5. **Release on close.** Drop the tag (`set_session_tags({remove: [...]})`) once the closing commit lands. That commit's `status: "fixed"` is the real release — the tag is only the in-flight signal, so a session that dies mid-fix leaks nothing.
 
 **Re-read the row itself before closing it — a claim does not freeze it.** The
 tag stops another SESSION from picking the row up; it does not stop the owner,
@@ -163,13 +160,13 @@ or a human, from editing that row while you hold it. Measured 2026-09-01:
 was claimed, one of which asked a scope question the in-flight fix had already
 answered. Closing from the copy you read at claim time would have written a
 `fix` that ignored them and left the row's own open question unanswered in its
-closing prose. Step 0's fetch cannot help here — the edit lands mid-flight — so
+closing prose. Step 1's fetch cannot help here — the edit lands mid-flight — so
 `grep '<BUG-ID>' docs/bug-ledger.jsonl` again after the final rebase, when you
 are reading the fix SHA back out of `git log` anyway.
 
 **Why metadata and not a git ref.** The better mechanism would be a custom ref: `git push origin <existing-sha>:refs/claims/<BUG-ID>` pushes zero new objects, and git's ref update is a server-side compare-and-swap — a genuine atomic lock. **The cloud git gateway rejects it with `HTTP 403` on any ref outside `refs/heads/main`** (measured 2026-08-17), and the same goes for notes and orphan branches. Session metadata is the fallback *because* the atomic option is unavailable; don't spend a session re-deriving that.
 
-**Known limits — this is a convention, not a lock.** `set_session_tags` has no compare-and-swap, so step 3 closes a one-round-trip race window by agreement rather than by construction; that is acceptable against work sessions running tens of minutes, and the `created_at` tiebreak is what makes a collision recoverable rather than silent. The protocol cannot be wrapped in a `scripts/` helper — bash has no MCP access, so these are tool calls the agent makes directly. `mine: true` scopes to a single account, so outside contributors are not covered. If the `claude-code-remote` tools are absent in a given environment, skip the protocol and say so in the first reply rather than silently working an unclaimed row.
+**Known limits — this is a convention, not a lock.** `set_session_tags` has no compare-and-swap, so step 4 (the re-read) closes a one-round-trip race window by agreement rather than by construction; that is acceptable against work sessions running tens of minutes, and the `created_at` tiebreak is what makes a collision recoverable rather than silent. The protocol cannot be wrapped in a `scripts/` helper — bash has no MCP access, so these are tool calls the agent makes directly. `mine: true` scopes to a single account, so outside contributors are not covered. If the `claude-code-remote` tools are absent in a given environment, skip the protocol and say so in the first reply rather than silently working an unclaimed row.
 
 ## Architecture
 
