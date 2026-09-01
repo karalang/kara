@@ -98653,6 +98653,85 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-09-01-31 — compiled twin of `tests/interpreter.rs`'s
+    /// `discarded_enum_struct_variant_literal_runs_its_payload_body`, same
+    /// programs and expectations.
+    ///
+    /// This backend was correct on every row; the interpreter ran the enum's
+    /// own body alone for the struct-variant spellings. The twin is what makes
+    /// "the two spellings and the two backends all agree" a property a test
+    /// holds rather than one only the fixed side asserts.
+    ///
+    /// `producer-call` matters most here: it is the row that pins what this
+    /// backend does NOT do, and the interpreter had to be left matching it.
+    ///
+    /// The two-tail `if` and `match` spellings are absent for the reason the
+    /// interpreter fixture gives -- this backend emits no body at all for them,
+    /// so there is no agreed expectation to share.
+    #[test]
+    fn test_e2e_discarded_enum_struct_variant_literal_runs_its_payload_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum Sv { Hold { inner: R }, Nil }\n\
+             impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+             enum Tv { A(R), Nil }\n\
+             impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+             enum Nd { H { inner: R }, Nil }\n\
+             fn mk(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; }\n";
+        for (label, body, want) in [
+            (
+                "struct-variant literal",
+                "let _ = Sv.Hold { inner: R { id: 1 } }; println(\"d\")",
+                "dSv\ndR1\nd\n",
+            ),
+            (
+                "tuple-variant literal (control)",
+                "let _ = Tv.A(R { id: 2 }); println(\"d\")",
+                "dTv\ndR2\nd\n",
+            ),
+            (
+                "no-own-drop-enum (control)",
+                "let _ = Nd.H { inner: R { id: 3 } }; println(\"d\")",
+                "dR3\nd\n",
+            ),
+            (
+                "block-peel",
+                "let _ = { Sv.Hold { inner: R { id: 4 } } }; println(\"d\")",
+                "dSv\ndR4\nd\n",
+            ),
+            (
+                "no-else-if",
+                "let c = true; let _ = if c { Sv.Hold { inner: R { id: 5 } } }; println(\"d\")",
+                "dSv\ndR5\nd\n",
+            ),
+            (
+                "producer-call (control: own body alone)",
+                "let _ = mk(6); println(\"d\")",
+                "dSv\nd\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+
+        assert_eq!(
+            run_program(
+                "struct R { id: i64, xs: Vec[i64] }\n\
+                 impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.xs.len()}\") } }\n\
+                 enum Sv { Hold { inner: R }, Nil }\n\
+                 impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+                 fn main() {\n\
+                 \x20   let _ = Sv.Hold { inner: R { id: 1, xs: [1, 2, 3] } };\n\
+                 \x20   println(\"d\")\n\
+                 }\n"
+            ),
+            Some("dSv\ndR1:3\nd\n".to_string())
+        );
+    }
+
     /// B-2026-08-31-8 — compiled twin of `tests/interpreter.rs`'s
     /// `fresh_temp_struct_variant_arg_runs_its_drop_bodies`, same programs and
     /// expectations.

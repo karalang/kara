@@ -3770,14 +3770,54 @@ impl<'a> super::Interpreter<'a> {
                 ExprKind::Identifier(n) => self.find_enum_for_variant(n).is_some(),
                 _ => false,
             },
+            // B-2026-09-01-31 — an enum STRUCT-VARIANT construction
+            // (`let _ = Sv.Hold { inner: R { .. } }`). It is spelled as a
+            // struct literal, so it matched no arm above and this predicate
+            // answered `false`: the discard ran the enum's OWN body and never
+            // its payload's, against `dSv dR1` on all three compiled surfaces.
+            // The tuple-variant twin `Tv.A(r)` is an `ExprKind::Call` and was
+            // correct in every discard shape, which is what localizes it.
+            //
+            // QUALIFIED only, exactly as B-2026-08-31-8's argument-side twin:
+            // the unqualified `Hold { .. }` runs `dSv` here and NOTHING at all
+            // on the compiled backends, so claiming it would deepen a
+            // divergence rather than close one (B-2026-09-01-32).
+            ExprKind::StructLiteral { path, .. } => {
+                self.qualified_struct_variant_enum_name(path).is_some()
+            }
             _ => false,
         }
+    }
+
+    /// B-2026-09-01-31 — is `e` a QUALIFIED enum struct-variant literal?
+    ///
+    /// Split out because the arm-level test below must answer DIFFERENTLY from
+    /// the producer test above for exactly this shape, and the measurement is
+    /// what says so. For a struct-variant literal the compiled backends run the
+    /// payload walk when it is the direct producer, a block tail, or the single
+    /// tail of a no-`else` `if` -- but emit NO body at all, not even the enum's
+    /// own, when it is an arm of a two-tail `if` or a `match`. Letting the arm
+    /// test inherit the producer answer would move this backend from disagreeing
+    /// at one body to disagreeing at two on those shapes. The tuple-variant
+    /// spelling has no such split -- it agrees on all four -- so this exclusion
+    /// is specific to the struct-variant literal and to those two positions.
+    /// Codegen's own inconsistency there is filed separately.
+    fn expr_is_qualified_struct_variant_literal(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::StructLiteral { path, .. }
+            if self.qualified_struct_variant_enum_name(path).is_some())
     }
 
     /// One arm of the all-arms test in
     /// [`Self::discard_producer_runs_payload_walk`]: a construction, a unit
     /// variant, or a name that no longer resolves.
     fn discard_arm_yields_fresh_enum(&self, tail: &Expr) -> bool {
+        // B-2026-09-01-31 — see `expr_is_qualified_struct_variant_literal`:
+        // the compiled backends run NOTHING for a struct-variant literal in a
+        // two-tail `if` or a `match` arm, so this position must not inherit the
+        // producer test's `true`.
+        if self.expr_is_qualified_struct_variant_literal(tail) {
+            return false;
+        }
         if self.discard_producer_runs_payload_walk(tail) {
             return true;
         }

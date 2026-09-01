@@ -52854,6 +52854,98 @@ fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
     }
 }
 
+/// B-2026-09-01-31 — a DISCARDED enum struct-variant literal runs its payload's
+/// `Drop` body.
+///
+/// `let _ = Sv.Hold { inner: R { .. } }` is spelled as a struct literal, so
+/// `discard_producer_runs_payload_walk` -- which had a `Call` arm for
+/// `Tv.A(r)` and none for a struct literal -- answered `false`, the discard
+/// took the own-`Drop`-enum branch, and the payload's body never ran. Measured
+/// `dSv` against `dSv dR1` on all three compiled surfaces.
+///
+/// `tuple-variant` is the control that localizes it: the same discard one
+/// spelling over was correct in every shape. `no-own-drop-enum` is the second
+/// control, and it is the sharper one -- a struct-variant whose ENUM declares
+/// no `Drop` of its own takes the payload-walk branch and was always correct,
+/// so the bug needed BOTH an own-`Drop` enum and a struct-shaped variant.
+///
+/// `block-peel` and `no-else-if` are the wrapper positions the same predicate
+/// reaches by recursion, and both compiled backends run the payload there too.
+///
+/// `producer-call` is the row a later widening would break: both backends run
+/// the enum's own body ALONE for `let _ = mk(6)`, and firing the payload here
+/// would be a fresh divergence rather than a fix.
+///
+/// The two-tail `if` and `match` spellings are deliberately ABSENT. The
+/// compiled backends emit NO body at all for a struct-variant literal in those
+/// positions -- not even the enum's own -- so this backend's `dSv` already
+/// disagrees, and widening it to `dSv dR` would disagree at two bodies instead
+/// of one. `discard_arm_yields_fresh_enum` excludes the shape for exactly that
+/// reason; codegen's inconsistency there is filed on its own.
+#[test]
+fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Sv { Hold { inner: R }, Nil }\n\
+         impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+         enum Tv { A(R), Nil }\n\
+         impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+         enum Nd { H { inner: R }, Nil }\n\
+         fn mk(i: i64) -> Sv { return Sv.Hold { inner: R { id: i } }; }\n";
+    for (label, body, want) in [
+        (
+            "struct-variant literal",
+            "let _ = Sv.Hold { inner: R { id: 1 } }; println(\"d\")",
+            "dSv\ndR1\nd\n",
+        ),
+        (
+            "tuple-variant literal (control)",
+            "let _ = Tv.A(R { id: 2 }); println(\"d\")",
+            "dTv\ndR2\nd\n",
+        ),
+        (
+            "no-own-drop-enum (control)",
+            "let _ = Nd.H { inner: R { id: 3 } }; println(\"d\")",
+            "dR3\nd\n",
+        ),
+        (
+            "block-peel",
+            "let _ = { Sv.Hold { inner: R { id: 4 } } }; println(\"d\")",
+            "dSv\ndR4\nd\n",
+        ),
+        (
+            "no-else-if",
+            "let c = true; let _ = if c { Sv.Hold { inner: R { id: 5 } } }; println(\"d\")",
+            "dSv\ndR5\nd\n",
+        ),
+        (
+            "producer-call (control: own body alone)",
+            "let _ = mk(6); println(\"d\")",
+            "dSv\nd\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+
+    // A heap-carrying payload, so the fix is pinned on the shape that actually
+    // owns memory rather than only on a scalar one.
+    assert_eq!(
+        run("struct R { id: i64, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.xs.len()}\") } }\n\
+             enum Sv { Hold { inner: R }, Nil }\n\
+             impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+             fn main() {\n\
+             \x20   let _ = Sv.Hold { inner: R { id: 1, xs: [1, 2, 3] } };\n\
+             \x20   println(\"d\")\n\
+             }\n"),
+        "dSv\ndR1:3\nd\n"
+    );
+}
+
 /// B-2026-08-31-8 — an enum STRUCT-VARIANT literal passed as a fresh-temp
 /// argument runs its `Drop` bodies.
 ///
