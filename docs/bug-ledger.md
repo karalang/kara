@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 343 | 5 |
 | run-vs-build | 285 | 21 |
-| leak | 248 | 5 |
+| leak | 248 | 4 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
 | codegen-gap | 159 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1338 | 29 |
+| codegen | 1338 | 28 |
 | interp | 308 | 19 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced · 35 open · 1881 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced · 34 open · 1882 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (35)
+### Open (34)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | medium | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
-| B-2026-08-30-13 | 2026-08-30 | codegen | low | AN ASSIGNMENT WHOSE RHS IS A VALUE-POSITION BLOCK DOES NOT FREE THE VALUE IT OVERWRITES AT -O0 -- `let mut s = mkA(n); s = { t };` strands 15 B while `s = mkB(n)` and `s = t` are both clean at BOTH opt levels, so it is one RHS shape missing the old-value drop rather than a missing mechanism; clean at -O2, which is the default, so a default build hides it | — |
 | B-2026-08-30-15 | 2026-08-30 | codegen | medium | A FRESH-TEMP STRUCT SCRUTINEE'S OWN `Drop` BODY NEVER RUNS AT ALL ON EITHER COMPILED BACKEND -- `match mkS() { S { r: r } => .. }` is interp `v7 dS dR7` vs compiled `v7 dR7`, with `dS` missing outright rather than misplaced | — |
 | B-2026-08-30-16 | 2026-08-30 | codegen | low | A FRESH-TEMP `shared enum` SCRUTINEE'S OWN `Drop` BODY STILL RUNS AT THE ENCLOSING SCOPE'S EXIT -- `match mkSe() { .. }` is interp `v1 dSe s1 s2` vs compiled `v1 s1 s2 dSe`; the value-enum half of this was fixed by B-2026-08-29-28, the shared half rides a different channel | — |
 | B-2026-08-30-17 | 2026-08-30 | interp+codegen | low | AN `if let` MISS DROPS THE SCRUTINEE TEMPORARY *AFTER* THE `else` ARM ON BOTH BACKENDS, WHERE design.md SAYS BEFORE IT -- `els dE` vs the specified `dE els`; the two backends AGREE, so no A/B gate can see it | — |
@@ -197,9 +196,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced
 
 </details>
 
-### Fixed (1881)
+### Fixed (1882)
 
-<details><summary>1881 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1882 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2000,6 +1999,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced
 | B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
 | B-2026-08-30-11 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path whi… | 1c0b4d5f |
 | B-2026-08-30-12 | codegen | medium | A VALUE-POSITION BLOCK WHOSE TAIL NAMES A BINDING IT DECLARED ITSELF LEAKS IT IN A READ-ONLY CONSUMER -- `{ let t = mkB(n); t }.contains("bbb")` stra… | cdb844d4 |
+| B-2026-08-30-13 | codegen | low | AN ASSIGNMENT WHOSE RHS IS A VALUE-POSITION BLOCK DOES NOT FREE THE VALUE IT OVERWRITES AT -O0 -- `let mut s = mkA(n); s = { t };` strands 15 B while… | bd00968b |
 | B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
 | B-2026-08-30-19 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still… | 4f02313 |
 | B-2026-08-30-20 | interp+codegen | medium | AN ARGUMENT PRODUCED BY AN ASSOCIATED CALL HAS NO OWNER ON ANY BACKEND -- `s1(H.mkr(1))` where `H.mkr` is an `impl` block's associated fn runs NO `Dr… | f1bb1102 |
