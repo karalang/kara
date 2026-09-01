@@ -1559,7 +1559,37 @@ impl<'a> super::Interpreter<'a> {
             return;
         };
         if self.value_runs_user_drop(&field_value) {
-            self.moved_out_drop_field_bindings.insert(src.clone());
+            // B-2026-09-01-2 — DEPTH 1 registers no coarse record, because the
+            // `let` arm has already registered the PRECISE `(src, field)` pair
+            // for exactly this shape (B-2026-08-03-8, keyed on the same bare
+            // `Identifier` object this branch requires). Two records for one
+            // statement, and `drop_user_drop_fields_of_binding` tests the
+            // coarse set FIRST and returns -- so the precise mask was dead code
+            // for every depth-1 move and the source's OTHER fields lost their
+            // bodies outright.
+            //
+            // `let s = S3 { a: r, b: mk(2) }; let x = s.a;` ran `dR1` against
+            // every compiled backend's `dR2 dR1` -- `b` has no other owner, so
+            // its body was simply lost. Both fields fresh
+            // (`S3 { a: mk(5), b: mk(6) }`) loses it the same way, which is what
+            // puts the axis on the shadowing rather than on the param view the
+            // row was found through.
+            //
+            // The coarse record is kept for a DEEP chain (`let x = o.h.r`),
+            // where the `let` arm registers nothing -- its precise insert
+            // requires a bare identifier object -- so the root-coarse disarm is
+            // still the only mask that shape has. That matches codegen's
+            // root-slot disarm for the deep case exactly as before.
+            //
+            // The enum branch of `drop_user_drop_fields_of_binding` sits BEHIND
+            // this early return, but no enum-valued source can reach it: both
+            // inserts into this set are gated on a `Value::Struct` source (here,
+            // and the passthrough disarm's `Some(v @ Value::Struct { .. })`
+            // arm), and a rebind clears the record. Measured on an enum-valued
+            // source either way.
+            if !middles.is_empty() {
+                self.moved_out_drop_field_bindings.insert(src.clone());
+            }
         }
     }
 

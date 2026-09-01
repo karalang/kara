@@ -98653,6 +98653,81 @@ fn main() {
         assert_eq!(output, "t:tp:4\nt:tp:4\nL:aa\nL:aa\ni:tp:4\ne:tp:4\n");
     }
 
+    /// B-2026-09-01-2 — compiled twin of `tests/interpreter.rs`'s
+    /// `moving_one_field_out_leaves_the_others_their_drop_bodies`, same programs
+    /// and expectations.
+    ///
+    /// This backend was correct on the two divergent rows; the interpreter lost
+    /// the surviving field's body to a coarse whole-walk disarm that shadowed
+    /// the precise per-field mask.
+    ///
+    /// `deep-chain` is the row that matters most here: both backends UNDER-DROP
+    /// it together (`dR1` alone, with `q` and `k` losing their bodies), which is
+    /// the coarse record's documented trade. It is pinned so that closing that
+    /// gap has to move both backends at once rather than reintroducing a
+    /// divergence on this one.
+    #[test]
+    fn test_e2e_moving_one_field_out_leaves_the_others_their_drop_bodies() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct S3 { a: R, b: R }\n\
+             struct Inner { r: R, q: R }\n\
+             struct Outer { h: Inner, k: R }\n\
+             enum E { A(R), Nil }\n\
+             struct HasE { e: E, r: R }\n\
+             fn mk(i: i64) -> R { return R { id: i }; }\n";
+        for (label, body, want) in [
+            (
+                "mixed wrap, move a",
+                "fn f(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; let x = s.a; return 7; }\n\
+                 fn main() { println(f(mk(1))) }",
+                "dR2\ndR1\n7\n",
+            ),
+            (
+                "both fresh, move a",
+                "fn f() -> i64 { let s = S3 { a: mk(5), b: mk(6) }; let x = s.a; return 7; }\n\
+                 fn main() { println(f()) }",
+                "dR5\ndR6\n7\n",
+            ),
+            (
+                "move b (control)",
+                "fn f(r: R) -> i64 { let s = S3 { a: r, b: mk(8) }; let x = s.b; return 7; }\n\
+                 fn main() { println(f(mk(7))) }",
+                "dR8\ndR7\n7\n",
+            ),
+            (
+                "no move (control)",
+                "fn f(r: R) -> i64 { let s = S3 { a: r, b: mk(4) }; return 7; }\n\
+                 fn main() { println(f(mk(3))) }",
+                "dR4\ndR3\n7\n",
+            ),
+            (
+                "deep chain keeps the coarse disarm",
+                "fn f() -> i64 { let o = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x = o.h.r; return 7; }\n\
+                 fn main() { println(f()) }",
+                "dR1\n7\n",
+            ),
+            (
+                "enum-valued source field",
+                "fn f() -> i64 { let s = HasE { e: E.A(mk(4)), r: mk(5) }; let x = s.r; return 7; }\n\
+                 fn main() { println(f()) }",
+                "dR5\ndR4\n7\n",
+            ),
+            (
+                "single Drop field",
+                "fn f() -> i64 { let s = Inner { r: mk(6), q: mk(9) }; let x = s.r; return 7; }\n\
+                 fn main() { println(f()) }",
+                "dR6\ndR9\n7\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}{body}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
     /// B-2026-09-01-31 — compiled twin of `tests/interpreter.rs`'s
     /// `discarded_enum_struct_variant_literal_runs_its_payload_body`, same
     /// programs and expectations.

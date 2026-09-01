@@ -52854,6 +52854,94 @@ fn fresh_temp_struct_scrutinee_if_let_matches_the_match_spelling() {
     }
 }
 
+/// B-2026-09-01-2 — a `let x = s.a` moving one field out leaves the source's
+/// OTHER fields their `Drop` bodies.
+///
+/// One statement ran two recorders: `suppress_moved_out_drop_field` inserted a
+/// COARSE whole-walk disarm keyed on the root name, and the `let` arm inserted
+/// the PRECISE `(src, field)` pair. `drop_user_drop_fields_of_binding` tests the
+/// coarse set first and returns, so the precise mask was dead code for every
+/// depth-1 move and every OTHER field lost its body outright. Measured `dR1`
+/// against every compiled backend's `dR2 dR1`.
+///
+/// `both-fresh` is the row that widens the report and belongs here for that
+/// reason: the bug was filed as a "mixed wrap" (a param view beside a fresh
+/// field), but a literal whose fields are BOTH fresh loses the body the same
+/// way. The axis is the shadowing, not the param view it was found through.
+///
+/// `move-b` is the control that shows why the report looked narrower than it
+/// was: moving the LAST field appears correct only because the surviving field
+/// there is the param view, whose body another owner already runs.
+///
+/// `deep-chain` keeps the coarse record and must: the `let` arm's precise
+/// insert requires a bare identifier object, so a two-hop source has no precise
+/// mask and the root-coarse disarm is the only one it has. Both backends agree
+/// on `dR1` alone there -- they under-drop together, which is the documented
+/// trade and not this row.
+///
+/// `enum-source` is the leg the row flagged as needing measurement before
+/// narrowing, because the enum branch of the walker sits behind the same early
+/// return. It cannot be reached: both inserts into the coarse set are gated on
+/// a `Value::Struct` source. Pinned so a later widening of either insert has to
+/// notice.
+#[test]
+fn moving_one_field_out_leaves_the_others_their_drop_bodies() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         struct S3 { a: R, b: R }\n\
+         struct Inner { r: R, q: R }\n\
+         struct Outer { h: Inner, k: R }\n\
+         enum E { A(R), Nil }\n\
+         struct HasE { e: E, r: R }\n\
+         fn mk(i: i64) -> R { return R { id: i }; }\n";
+    for (label, body, want) in [
+        (
+            "mixed wrap, move a",
+            "fn f(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; let x = s.a; return 7; }\n\
+             fn main() { println(f(mk(1))) }",
+            "dR2\ndR1\n7\n",
+        ),
+        (
+            "both fresh, move a",
+            "fn f() -> i64 { let s = S3 { a: mk(5), b: mk(6) }; let x = s.a; return 7; }\n\
+             fn main() { println(f()) }",
+            "dR5\ndR6\n7\n",
+        ),
+        (
+            "move b (control)",
+            "fn f(r: R) -> i64 { let s = S3 { a: r, b: mk(8) }; let x = s.b; return 7; }\n\
+             fn main() { println(f(mk(7))) }",
+            "dR8\ndR7\n7\n",
+        ),
+        (
+            "no move (control)",
+            "fn f(r: R) -> i64 { let s = S3 { a: r, b: mk(4) }; return 7; }\n\
+             fn main() { println(f(mk(3))) }",
+            "dR4\ndR3\n7\n",
+        ),
+        (
+            "deep chain keeps the coarse disarm",
+            "fn f() -> i64 { let o = Outer { h: Inner { r: mk(1), q: mk(2) }, k: mk(3) }; let x = o.h.r; return 7; }\n\
+             fn main() { println(f()) }",
+            "dR1\n7\n",
+        ),
+        (
+            "enum-valued source field",
+            "fn f() -> i64 { let s = HasE { e: E.A(mk(4)), r: mk(5) }; let x = s.r; return 7; }\n\
+             fn main() { println(f()) }",
+            "dR5\ndR4\n7\n",
+        ),
+        (
+            "single Drop field",
+            "fn f() -> i64 { let s = Inner { r: mk(6), q: mk(9) }; let x = s.r; return 7; }\n\
+             fn main() { println(f()) }",
+            "dR6\ndR9\n7\n",
+        ),
+    ] {
+        assert_eq!(run(&format!("{H}{body}\n")), want, "{label}");
+    }
+}
+
 /// B-2026-09-01-31 — a DISCARDED enum struct-variant literal runs its payload's
 /// `Drop` body.
 ///
