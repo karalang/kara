@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 341 | 5 |
 | run-vs-build | 277 | 22 |
-| leak | 241 | 8 |
+| leak | 242 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 157 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1318 | 37 |
+| codegen | 1319 | 37 |
 | interp | 299 | 24 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1922 surfaced · 46 open · 1846 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-08-31). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1923 surfaced · 46 open · 1847 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (46)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-29-47 | 2026-08-29 | interp+codegen | medium | MOVING A PARAM VIEW BACK OUT OF THE STRUCT IT WAS JUST WRAPPED INTO DOUBLES ITS `Drop` BODY -- `let s = S { r: r }; let x = s.r;` prints `dR1 dR1` where one is due, because the move-out destination registers its own body while the caller still fires; the same shape with a LOCAL source is correct | none |
-| B-2026-08-29-51 | 2026-08-29 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13 allocs / 12 frees, 2 bytes definitely lost) while the unwrapped `e = pass(e);` is clean. PRE-EXISTING (identical at d90b61f), and invisible to the A/B gate twice over: both backends agree AND the printed output is correct | — |
 | B-2026-08-29-63 | 2026-08-29 | codegen | medium | Passing an own-heap struct BY VALUE deep-copies its heap fields at every call, even though the argument is MOVED -- measured at exactly N*8 extra bytes for an N-element `Vec[i64]` field at N=256/1024/4096, on callees that return the param, wrap it, or just read a field and drop it, and with or without a `Drop` impl | — |
 | B-2026-08-30-3 | 2026-08-30 | codegen | low | A VALUE-POSITION BRANCH WHOSE ARM TAIL IS AN F-STRING LEAKS THE ACCUMULATOR -- `if c { f"x{n}" } else { f"y{n}" }.contains("x")` and the call-argument spelling each strand the 2 B buffer while the UNWRAPPED f-string is clean at both positions; the acc registers its own cleanup and the arm-tail suppressor then neutralizes it, so unlike the binding-tail sibling there is no dangling hazard here -- only a disarm with no counterpart at the merge | — |
 | B-2026-08-30-4 | 2026-08-30 | interp+codegen | low | `cbrt` can now be admitted to the float-math table -- the libm-shim mechanism added by B-2026-08-29-60 removes the exact `run == build` obstacle that `float_math.rs`'s own `classify` doc cites for excluding it. | — |
@@ -176,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1922 surfaced
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
 | B-2026-08-31-47 | 2026-08-31 | interp | medium | THE INTERPRETER LOSES A `Drop` BODY THAT BOTH COMPILED BACKENDS RUN, IN TWO METHOD-ARG SHAPES -- a fresh enum temp whose payload an arm BINDS but does not return (`t.keep(Box2.Full(mk(7)))` over `fn keep(..) -> i64 { match b { Box2.Full(r) => { return r.id; } .. } }`) prints nothing under `--interp` against one body compiled; and the BARE-STATEMENT discard of a method call returning `Option[R]` loses the body where the `let _ =` spelling of the same call keeps it | — |
 | B-2026-08-31-50 | 2026-08-31 | interp+codegen | medium | AN ENUM-CONSTRUCTOR MIXED WRAP LOSES ITS SLOT MASK ACROSS A WHOLE-VALUE REBIND, AND CODEGEN CANNOT INHERIT IT BECAUSE IT STORES NOTHING PER VARIABLE -- `let w = W2.Two(r, mk(2)); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, on all three backends; the STRUCT and TUPLE spellings of the same rebind were fixed by B-2026-08-29-44 and this one could not be, because `enum_ctor_param_view_payload_slots` derives the masked slots from the ctor EXPRESSION at the `let` and keeps no per-var record for a rebind to copy | — |
+| B-2026-09-01-1 | 2026-09-01 | codegen | low | A SELF-ASSIGNMENT WHOSE RHS IS AN `if`/`match` LEAKS THE OVERWRITTEN VALUE -- `e = if c { pass(e) } else { pass(e) }` loses a block (12 allocs / 11 frees at -O0), the same shape B-2026-08-29-51 fixed for blocks and measured UNTOUCHED by it; MIXED arms leak identically, and like its sibling the leak is clean at -O2 | — |
 
 ### Relocated (2)
 
@@ -208,9 +208,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1922 surfaced
 
 </details>
 
-### Fixed (1846)
+### Fixed (1847)
 
-<details><summary>1846 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1847 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1984,6 +1984,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1922 surfaced
 | B-2026-08-29-48 | interp+codegen | medium | An arm that ASSIGNS the payload to an outer binding and returns THAT later runs the payload's `Drop` body TWICE -- on all four surfaces, so no A/B ga… | d135d02 |
 | B-2026-08-29-49 | interp+codegen | medium | An argument the callee STORES into an outliving place (`fn take(sink: mut ref Vec[Res], r: Res) { sink.push(r); }`) runs the value's `Drop` body ONE… | 0343db57 |
 | B-2026-08-29-50 | interp+codegen | medium | A param moved into a RETURNED AGGREGATE (`fn wrapf(r: Res) -> Hh { Hh { r: r } }`), and a CONDITIONALLY-returned param on BOTH its paths, still run t… | 7b23317 |
+| B-2026-08-29-51 | codegen | low | A self-assignment whose RHS is a BLOCK ending in a passthrough call leaks the argument's heap -- `e = { let z = 1; pass(e) };` loses the `String` (13… | 2378582 |
 | B-2026-08-29-52 | codegen | high | Printing a `Vector[T, N]` gives THREE DIFFERENT ANSWERS -- the interpreter renders the lanes, the JIT prints a raw POINTER (the same one for two diff… | 60465148 |
 | B-2026-08-29-53 | codegen | medium | Compiled `Vector[f16, N].tanh()` returns NaN for x above ~5.5 -- the exp-derived formula computes e^(2x), which overflows f16's exponent range | 2e5490d |
 | B-2026-08-29-54 | codegen | high | A STATIC (associated) FUNCTION'S FRESH-TEMP ARGUMENTS RUN NO `Drop` BODY AT ALL ON THE COMPILED BACKENDS -- `impl H { fn s2(a: R, b: R) -> i64 { 7 }… | 5962bb9 |
