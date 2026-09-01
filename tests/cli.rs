@@ -35557,9 +35557,12 @@ fn test_process_exit_keeps_prior_output_and_status_on_every_surface() {
 ///   `--interp` is NOT a workaround and the message must not offer it. The row
 ///   as filed proposed exactly that wording; it was written before the
 ///   interpreter half changed.
-/// * a NESTED `ref v[0][1]` is handled correctly by the interpreter
-///   (B-2026-09-01-6 tracks giving codegen a lowering), so there the standard
-///   `--interp` pointer is accurate.
+/// * a root codegen has no lowering for — a `Slice` of `Vec` — is handled
+///   correctly by the interpreter, so there the standard `--interp` pointer is
+///   accurate. This case was originally a nested `ref v[0][1]`; B-2026-09-01-6
+///   gave codegen that lowering, so the shape stopped producing a diagnostic
+///   at all and the case moved to one that still declines. The remaining roots
+///   are tracked in that row's follow-up.
 ///
 /// The assertions are deliberately about CONTENT, not the exact sentence: that
 /// the internal string is gone, that the container class is named, and that the
@@ -35589,10 +35592,17 @@ fn ref_binding_codegen_gap_explains_itself() {
              \x20   m.insert(1, 42);\n    let g = ref m[1];\n    println(g);\n}\n",
             false,
         ),
+        // B-2026-09-01-6 lowered the nested VEC chain that used to sit here, so
+        // it no longer produces a diagnostic at all. A `Slice` ROOT is the
+        // nearest shape that still declines — the element index has to shift by
+        // the window's start, which the Vec-rooted lowering does not model — and
+        // the interpreter still handles it, so the `--interp` half of the
+        // message is accurate for it exactly as it was for the nested case.
         (
-            "nested",
-            "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2], [3, 4]];\n\
-             \x20   let g = ref v[0][1];\n    println(g);\n}\n",
+            "slice-root",
+            "fn main() {\n    let v: Vec[Vec[i64]] = [[1, 2]];\n\
+             \x20   let s: Slice[Vec[i64]] = v.as_slice();\n\
+             \x20   let g = ref s[0][1];\n    println(g);\n}\n",
             true,
         ),
     ];

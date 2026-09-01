@@ -230,6 +230,44 @@ fn main() {
     );
 }
 
+/// B-2026-09-01-6 — the interpreter twin of `tests/codegen.rs`'s
+/// `e2e_ref_binding_over_a_nested_vec_chain`, pinned to the same string.
+///
+/// This side was correct throughout — `v[i]` evaluates to the inner
+/// `Value::Array` and the existing arm matches it — so this half is the ORACLE
+/// the compiled side was built against, and it passes before the fix as well.
+/// It is here so the two backends stay pinned to one string as the nested
+/// lowering grows: the remaining ROOTS (an `Array` of `Vec`, a `Vec` of
+/// `Array`, a struct field, a `Slice`) still decline on the compiled side and
+/// are tracked separately.
+#[test]
+fn test_ref_binding_over_a_nested_vec_chain() {
+    assert_eq!(
+        run("fn main() {\n\
+     let d: Vec[Vec[i64]] = [[1, 2], [3, 4]];\n\
+     let g2 = ref d[0][1];\n\
+     println(f\"double {g2}\");\n\
+     let t: Vec[Vec[Vec[i64]]] = [[[5, 6]]];\n\
+     let g3 = ref t[0][0][1];\n\
+     println(f\"triple {g3}\");\n\
+     let q: Vec[Vec[Vec[Vec[i64]]]] = [[[[7, 8]]]];\n\
+     let g4 = ref q[0][0][0][1];\n\
+     println(f\"quad {g4}\");\n\
+     let s: Vec[Vec[String]] = [[\"a\", \"b\"]];\n\
+     let gs = ref s[0][1];\n\
+     println(f\"str {gs}\");\n\
+     let mut m: Vec[Vec[i64]] = [[1, 2]];\n\
+     let ga = ref m[0][1];\n\
+     m[0][1] = 99;\n\
+     println(f\"alias {ga}\");\n\
+     let f: Vec[i64] = [10, 20];\n\
+     let gf = ref f[1];\n\
+     println(f\"flat {gf}\");\n\
+     }"),
+        "double 2\ntriple 6\nquad 8\nstr b\nalias 99\nflat 20\n"
+    );
+}
+
 /// B-2026-08-30-22 — an ASSOCIATED callee that hands its argument straight
 /// back runs ONE `Drop` body, not two.
 ///

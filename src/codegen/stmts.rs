@@ -14471,6 +14471,78 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Element pointer for a NESTED index chain over `Vec[Vec[...]]`
+    /// (B-2026-09-01-6): `ref v[i][j]`, `ref v[i][j][k]`, any depth.
+    ///
+    /// The interpreter always handled these — `v[i]` evaluates to the inner
+    /// `Value::Array`, which its existing arm matches — so this was a codegen
+    /// GAP against a working `--interp` rather than a divergence in either
+    /// direction.
+    ///
+    /// It needs no new address arithmetic. The element pointer of `v[i]` IS
+    /// the inner `Vec` header, and `lower_indexed_elem_ptr_vec_at` is the
+    /// by-pointer core that indexes a header it is handed, so each hop reuses
+    /// one of the two existing lowerings and inherits its bounds check —
+    /// whichever hop is out of range panics, matching the flat spelling.
+    ///
+    /// Returns the element's pointer, its LLVM type, and its `TypeExpr` (which
+    /// the caller registers so a field read THROUGH the borrow can resolve).
+    /// `Ok(None)` for any base this does not model — an `Array` of `Vec`, a
+    /// `Vec` of `Array`, a field or `Map` root — so the caller emits the shared
+    /// decline rather than this guessing at a layout it has not checked.
+    fn nested_vec_index_chain_elem(
+        &mut self,
+        inner_obj: &Expr,
+        inner_idx: &Expr,
+        outer_idx: &Expr,
+    ) -> Result<
+        Option<(
+            inkwell::values::PointerValue<'ctx>,
+            BasicTypeEnum<'ctx>,
+            TypeExpr,
+        )>,
+        String,
+    > {
+        // Resolve the chain BELOW the final index, yielding a pointer to the
+        // element it names and that element's own `TypeExpr` — which, for every
+        // hop but the last, is the `Vec[T]` being indexed next.
+        let (base_ptr, base_te) = match &inner_obj.kind {
+            ExprKind::Identifier(name) => {
+                let Some(te) = self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(name.as_str())
+                    .cloned()
+                else {
+                    return Ok(None);
+                };
+                if !self.var_types.vec_elem_types.contains_key(name.as_str()) {
+                    return Ok(None);
+                }
+                let (ptr, _) = self.lower_indexed_elem_ptr_vec(name, inner_idx)?;
+                (ptr, te)
+            }
+            ExprKind::Index {
+                object: deeper_obj,
+                index: deeper_idx,
+            } => match self.nested_vec_index_chain_elem(deeper_obj, deeper_idx, inner_idx)? {
+                Some((ptr, _, te)) => (ptr, te),
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        // The element being named must live in a `Vec`, so the pointer above is
+        // a `Vec` header we can index.
+        let (Some(elem_ll), Some(elem_te)) = (
+            self.extract_vec_elem_type(&base_te),
+            vec_inner_type_expr(&base_te),
+        ) else {
+            return Ok(None);
+        };
+        let (ptr, ty) = self.lower_indexed_elem_ptr_vec_at(base_ptr, elem_ll, outer_idx)?;
+        Ok(Some((ptr, ty, elem_te)))
+    }
+
     fn try_compile_ref_binding(&mut self, stmt: &Stmt) -> Result<bool, String> {
         let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
             return Ok(false);
@@ -14593,10 +14665,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => return Err(self.ref_binding_gap_msg(None)),
                 }
             }
-            // Any other base shape — a NESTED index (`ref v[0][1]`) is the one
-            // that occurs in practice, and the interpreter handles it, so the
-            // `--interp` half of the message is accurate here (B-2026-09-01-6
-            // tracks giving codegen a lowering).
+            // B-2026-09-01-6 — a NESTED index, `ref v[i][j]` over a
+            // `Vec[Vec[T]]` local. The interpreter always handled this (its
+            // Array arm matches the inner `Value::Array` that `v[i]` evaluates
+            // to), so this was a codegen gap rather than a divergence in
+            // either direction — a build failure against a working `--interp`.
+            //
+            // It composes out of two pieces that already exist: the element
+            // pointer of `v[i]` IS the inner `Vec` header, and
+            // `lower_indexed_elem_ptr_vec_at` is the by-pointer core that
+            // indexes a header it is handed. So the outer hop reuses the named
+            // lowering and the inner hop reuses the pointer one, with the same
+            // bounds check on both — no new GEP arithmetic, and a nested
+            // out-of-range index panics at whichever hop is out of range.
+            ExprKind::Index {
+                object: inner_obj,
+                index: inner_idx,
+            } => match self.nested_vec_index_chain_elem(inner_obj, inner_idx, index)? {
+                Some((ptr, ty, te)) => (ptr, ty, Some(te)),
+                None => return Err(self.ref_binding_gap_msg(None)),
+            },
             _ => return Err(self.ref_binding_gap_msg(None)),
         };
 

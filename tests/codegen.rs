@@ -21546,6 +21546,63 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-6 — `ref v[i][j]` over a `Vec[Vec[T]]` lowers, at any
+    /// depth.
+    ///
+    /// The interpreter always handled this: `v[i]` evaluates to the inner
+    /// `Value::Array`, which its existing arm matches. Codegen had no arm for
+    /// an INDEX base at all, so the whole chain hit the decline and
+    /// `karac build` failed on a program `--interp` ran correctly — a gap
+    /// rather than a divergence in either direction, which is why it was filed
+    /// separately from B-2026-08-31-37 (the message that decline lands on).
+    ///
+    /// No new address arithmetic: the element pointer of `v[i]` IS the inner
+    /// `Vec` header, and `lower_indexed_elem_ptr_vec_at` already indexes a
+    /// header it is handed. So each hop reuses one of the two existing
+    /// lowerings and inherits its bounds check. `triple` and `quad` are here
+    /// because the first cut handled exactly one level — the recursion is what
+    /// makes the rule "any depth" rather than "two".
+    ///
+    /// `alias` is the load-bearing line: a write through the container is
+    /// visible through the borrow, so this is a real pointer into the nested
+    /// buffer and not a copy of the element. `flat` is the control that must
+    /// keep working.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_ref_binding_over_a_nested_vec_chain`, pinned to the same string.
+    #[test]
+    fn e2e_ref_binding_over_a_nested_vec_chain() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+     let d: Vec[Vec[i64]] = [[1, 2], [3, 4]];\n\
+     let g2 = ref d[0][1];\n\
+     println(f\"double {g2}\");\n\
+     let t: Vec[Vec[Vec[i64]]] = [[[5, 6]]];\n\
+     let g3 = ref t[0][0][1];\n\
+     println(f\"triple {g3}\");\n\
+     let q: Vec[Vec[Vec[Vec[i64]]]] = [[[[7, 8]]]];\n\
+     let g4 = ref q[0][0][0][1];\n\
+     println(f\"quad {g4}\");\n\
+     let s: Vec[Vec[String]] = [[\"a\", \"b\"]];\n\
+     let gs = ref s[0][1];\n\
+     println(f\"str {gs}\");\n\
+     let mut m: Vec[Vec[i64]] = [[1, 2]];\n\
+     let ga = ref m[0][1];\n\
+     m[0][1] = 99;\n\
+     println(f\"alias {ga}\");\n\
+     let f: Vec[i64] = [10, 20];\n\
+     let gf = ref f[1];\n\
+     println(f\"flat {gf}\");\n\
+     }",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "double 2\ntriple 6\nquad 8\nstr b\nalias 99\nflat 20\n",
+            "a `ref` binding over a nested Vec chain must read the element"
+        );
+    }
+
     /// The fixture B-2026-08-31-48's two halves share: this E2E and
     /// `tests/interpreter.rs`'s `test_generic_fn_at_nameless_aggregate_args`.
     const NAMELESS_MONO_ARG_SRC: &str = r#"struct H { n: i64 }
