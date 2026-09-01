@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 342 | 6 |
 | run-vs-build | 279 | 22 |
-| leak | 245 | 9 |
+| leak | 245 | 8 |
 | missing-feature | 191 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 158 | 3 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1326 | 39 |
+| codegen | 1326 | 38 |
 | interp | 302 | 25 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1932 surfaced · 48 open · 1853 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1932 surfaced · 47 open · 1854 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (48)
+### Open (47)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -153,7 +153,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1932 surfaced
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-8 | 2026-08-31 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfaces, with and without a rebind; the TUPLE-variant spelling of the identical program is correct everywhere | — |
 | B-2026-08-31-16 | 2026-08-31 | codegen | low | THE DERIVED-Display REFUSAL FOR AN UNSUPPORTED FIELD TYPE DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr — spans and byte offsets included — INTO USER-FACING OUTPUT, running to hundreds of characters for a one-line source construct and never naming the type in source syntax; the refusal itself is correct, and what it needs is a TypeExpr-to-source formatter this file lacks | — |
-| B-2026-08-31-17 | 2026-08-31 | codegen | medium | AN `Option`/`Result` CALL RESULT INTERPOLATED IN AN F-STRING LEAKS ITS PAYLOAD ONCE PER EVALUATION -- `f"{mk(n)}"` where `mk` returns `Option[String]` leaks 20 buffers over 20 iterations, while the `let`-bound spelling of the same value is clean | — |
 | B-2026-08-31-20 | 2026-08-31 | interp | medium | THE INTERPRETER DOES NOT NARROW A FLOAT LITERAL TO THE ANNOTATED PAYLOAD WIDTH INSIDE `Option.Some(...)` -- `let q: Option[f16] = Option.Some(0.1)` prints `Some(0.1)` under `--interp` and `Some(0.0999755859375)` under `karac build`, while every other position narrows on both backends | — |
 | B-2026-08-31-21 | 2026-08-31 | interp+codegen | medium | A DISCARDED `shared` STRUCT LITERAL RUNS NO `Drop` BODY AND LEAKS ITS RC BOX ON ALL THREE BACKENDS -- `let _ = S { .. };`, `S { .. };` and the branch spellings are all silent and strand 41 B, while the same value BOUND (`let s = S { .. };`) is correct at one body and clean everywhere. | — |
 | B-2026-08-31-22 | 2026-08-31 | interp+codegen | medium | A DISCARDED `if`/`else` WHOSE ARMS ARE OWN-`Drop` ENUM CTORS RUNS ONE BODY ON THE INTERPRETER AND NONE ON EITHER COMPILED BACKEND -- `let _ = if c { E.A(mk(8)) } else { E.B };` prints `dE` under `--interp` and nothing under `karac run` / `karac build`, while stranding 6 B; the DIRECT spelling `let _ = E.A(mk(8));` is correct at `dE dR8` on all three. | — |
@@ -210,9 +209,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1932 surfaced
 
 </details>
 
-### Fixed (1853)
+### Fixed (1854)
 
-<details><summary>1853 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1854 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2053,6 +2052,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1932 surfaced
 | B-2026-08-31-15 | typecheck | medium | A COMPARISON METHOD ON A PRIMITIVE RECEIVER IS SILENTLY POISONED, NOT CHECKED — `let s: String = n.cmp(m)` type-checks and PRINTS `Less` into the Str… | 26e3508 |
 | B-2026-08-31-18 | codegen | high | A `Vector[T, N]` OR `Array[T, N]` ENUM PAYLOAD RECONSTRUCTS AS GARBAGE UNDER CODEGEN -- silently, in `match` as well as in Display, so a bound payloa… | 527bdf8 |
 | B-2026-08-31-19 | codegen | medium | `Array[T, N]` HAS NO Display UNDER CODEGEN AT ANY DEPTH, AND THE QUIET HALF IS THE PLAIN ONE -- nested (a `Vec` element, a struct field, a tuple fiel… | c48c0fb |
+| B-2026-08-31-17 | codegen | medium | AN `Option`/`Result` CALL RESULT INTERPOLATED IN AN F-STRING LEAKS ITS PAYLOAD ONCE PER EVALUATION -- `f"{mk(n)}"` where `mk` returns `Option[String]… | 4a58370 |
 | B-2026-08-31-23 | codegen | high | A NESTED `match` ARM THAT MOVES A HEAP LEAF OUT OF A WHOLE-BOUND *BOXED* `Option` PAYLOAD DOUBLE FREES -- the TRANSFER-path twin of B-2026-08-30-52 (… | f6059cf |
 | B-2026-08-31-24 | codegen | high | EVERY ACCESS TO A `Vec[Vector[T, N]]` ELEMENT BUFFER IS EMITTED AT THE VECTOR'S NATURAL ALIGNMENT AGAINST `malloc` MEMORY, SO IT FAULTS ON `vmovaps`… | 33f43c4 |
 | B-2026-08-31-25 | codegen | medium | `Slice[T]` HAS NO Display UNDER CODEGEN AT ANY DEPTH -- `f"{s}"` on a slice is a hard build error where the interpreter prints `[1, 2]`, and it is th… | dc3b493 |
