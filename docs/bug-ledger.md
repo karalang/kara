@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 343 | 5 |
 | run-vs-build | 285 | 22 |
-| leak | 245 | 5 |
+| leak | 246 | 5 |
 | missing-feature | 192 | 1 |
 | double-free | 161 | 0 |
 | codegen-gap | 159 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1335 | 31 |
+| codegen | 1336 | 31 |
 | interp | 308 | 19 |
 | typecheck | 285 | 1 |
 | ownership | 71 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1944 surfaced · 38 open · 1875 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1945 surfaced · 38 open · 1876 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (38)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-30-7 | 2026-08-30 | cli+codegen | medium | The JIT REPL's B.5.3d PASS-THROUGH silently REVERTS every mutation to a `let mut` binding whose type is not snapshot-eligible, and re-runs its RHS (side effects included) on every cell -- `Map[String, i64]`, `Vec[String]` and `Option[i64]` all read back their initializer in the next cell even when the mutation was made in the SAME cell, and a side-effecting initializer printed 3 times across 4 cells; `--interp` is correct on both counts, and the deferral is documented as giving "correct (re-evaluating) semantics", which holds only for an immutable binding with a pure RHS | — |
-| B-2026-08-30-11 | 2026-08-30 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path while the `t` path is clean, because B-2026-08-29-27's gates need EVERY tail to mint and B-2026-08-30-2's owner needs a source binding to inherit a FRAME from; the innermost frame is wrong (a wrapping block's drains before the value escapes -- caught by the self-host seed-run oracle, not by any sweep), so the lead is the SIBLING binding arm's frame | — |
 | B-2026-08-30-13 | 2026-08-30 | codegen | low | AN ASSIGNMENT WHOSE RHS IS A VALUE-POSITION BLOCK DOES NOT FREE THE VALUE IT OVERWRITES AT -O0 -- `let mut s = mkA(n); s = { t };` strands 15 B while `s = mkB(n)` and `s = t` are both clean at BOTH opt levels, so it is one RHS shape missing the old-value drop rather than a missing mechanism; clean at -O2, which is the default, so a default build hides it | — |
 | B-2026-08-30-15 | 2026-08-30 | codegen | medium | A FRESH-TEMP STRUCT SCRUTINEE'S OWN `Drop` BODY NEVER RUNS AT ALL ON EITHER COMPILED BACKEND -- `match mkS() { S { r: r } => .. }` is interp `v7 dS dR7` vs compiled `v7 dR7`, with `dS` missing outright rather than misplaced | — |
 | B-2026-08-30-16 | 2026-08-30 | codegen | low | A FRESH-TEMP `shared enum` SCRUTINEE'S OWN `Drop` BODY STILL RUNS AT THE ENCLOSING SCOPE'S EXIT -- `match mkSe() { .. }` is interp `v1 dSe s1 s2` vs compiled `v1 s1 s2 dSe`; the value-enum half of this was fixed by B-2026-08-29-28, the shared half rides a different channel | — |
@@ -168,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1944 surfaced
 | B-2026-09-01-20 | 2026-09-01 | typecheck | medium | DEFAULT ARGUMENTS ARE FILLED FOR FREE FUNCTIONS ONLY -- `H.f(1)` and `h.g(1)` both fail with `expected 2 argument(s), found 1` for a parameter that has a default, while the identical free function accepts the omitted argument, and design.md scopes the feature to no function kind | — |
 | B-2026-09-01-21 | 2026-09-01 | codegen | medium | A DISCARDED STRUCT LITERAL MIXING A LIVE LOCAL SOURCE WITH A MINTED SIBLING LOSES THE MINTED FIELD'S `Drop` BODY ON BOTH COMPILED BACKENDS -- `S2 { r: t, s: R { id: 9 }, k: 1 };` runs `dR9 dR7` under `--interp` and only `dR7` on `karac run` / `karac build`, because one non-fresh field declines the WHOLE literal at `discarded_owned_literal_tail` | — |
 | B-2026-09-01-22 | 2026-09-01 | codegen | medium | A DISCARDED STRUCT LITERAL BEHIND **TWO** BLOCK WRAPPERS RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `{ { S { r: t, k: 1 } } };` prints `dR7 dR7` on `karac run` / `karac build` against one body under `--interp`, while the ONE-wrapper spelling is correct everywhere | — |
+| B-2026-09-01-23 | 2026-09-01 | codegen | low | THE BRANCH ARM-OWNER SLOT IS ONE PER CONSTRUCT AND RESET EACH PASS, so a branch inside a loop whose owner frame lives OUTSIDE the loop frees only the LAST pass's escaping value -- `while i < 3 { let k = if i > 0 { mkA(n) } else { t }.contains("aaa"); }` strands `iterations - 1` of them (42 B in 2 blocks at 3 iterations, 72 B in 4 at 5); the same branch with the sibling binding declared INSIDE the loop body is clean, which isolates the frame CHOICE rather than the slot as the cause | — |
 
 ### Relocated (2)
 
@@ -200,9 +200,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1944 surfaced
 
 </details>
 
-### Fixed (1875)
+### Fixed (1876)
 
-<details><summary>1875 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1876 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2001,6 +2001,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1944 surfaced
 | B-2026-08-30-8 | codegen | high | A CONSUMED-THEN-REASSIGNED-THEN-RETURNED `Option` LOCAL IS FREED TWICE -- a `match` arm that binds the payload out disarms the binding's scope-exit f… | 10018b3 |
 | B-2026-08-30-9 | interp | medium | The INTERPRETER renders an unsigned `Vector` lane above `i64::MAX` as a SIGNED reinterpretation -- `Vector[u64, 2]` holding `u64::MAX` prints `Vector… | 69708f4 |
 | B-2026-08-30-10 | ownership | medium | A READ-ONLY `match` ARM IS REPORTED AS A MOVE OF ITS SCRUTINEE, so an `Option[String]` read once and then returned draws `value 'b' moved here, used… | ff99609 |
+| B-2026-08-30-11 | codegen | medium | THE MINTING ARM OF A MIXED BRANCH HAS NO OWNER EITHER -- `if c { mkA(n) } else { t }.contains("aaa")` strands the 27 B `mkA` temp on the `c` path whi… | 1c0b4d5f |
 | B-2026-08-30-12 | codegen | medium | A VALUE-POSITION BLOCK WHOSE TAIL NAMES A BINDING IT DECLARED ITSELF LEAKS IT IN A READ-ONLY CONSUMER -- `{ let t = mkB(n); t }.contains("bbb")` stra… | cdb844d4 |
 | B-2026-08-30-14 | interp | high | THE INTERPRETER SILENTLY DISCARDS `return` / `break` / `continue` INSIDE A MATCH ARM WHEN THE SCRUTINEE IS A FRESH TEMP WHOSE ENUM HAS ITS OWN `impl… | facec84 |
 | B-2026-08-30-19 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still… | 4f02313 |

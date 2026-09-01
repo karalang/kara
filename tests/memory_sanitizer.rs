@@ -959,7 +959,7 @@ fn main() {
         );
     }
 
-    /// B-2026-09-01-21 — the arm-owner slot is ONE PER CONSTRUCT and reset each
+    /// B-2026-09-01-23 — the arm-owner slot is ONE PER CONSTRUCT and reset each
     /// pass, so a construct inside a loop whose owner frame lives OUTSIDE the
     /// loop frees only the LAST pass's value. Pinned at its leaking value.
     ///
