@@ -3200,6 +3200,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     // pre-existing on the conventional ABI).
                     self.share_option_shared_ref_for_arg(&a.value);
                     self.share_option_shared_field_ref_for_arg(&a.value, val);
+                    // B-2026-08-30-23 — the BINDING-argument body retraction,
+                    // which this arm never performed. `compile_call` and
+                    // `compile_method_call` both run it; `Type.f(args)` was the
+                    // third dispatch arm again, the same omission
+                    // B-2026-08-29-54 records for the registrar just below.
+                    //
+                    // Visible with no other change: `H.pick(r, false)` over
+                    // `fn pick(a: R, k: bool) -> R { if k { return R { .. }; }
+                    // return a; }` printed `dR1 x=1 dR1` on all four lanes --
+                    // the callee hands `r` back, the result binding owns it and
+                    // drops it, and the caller's dead `r` binding dropped it a
+                    // second time. Both other spellings print `x=1 dR1`.
+                    //
+                    // Retracting only where another owner is CERTAIN is the
+                    // whole rule, and `callee_takes_over_arg_drop_body` is the
+                    // same three-predicate test the other two arms use -- every
+                    // exit hands the param back, the callee-side per-path flip
+                    // owns it, or it is stored somewhere outliving the frame.
+                    // The union-over-return-sites predicate is deliberately NOT
+                    // consulted here: it answers true for a param that escapes
+                    // on one path and dies on another, which is how this row's
+                    // free-function cell lost its body in the first place.
+                    if let ExprKind::Identifier(var_name) = &a.value.kind {
+                        let var_name = var_name.clone();
+                        if self.callee_takes_over_arg_drop_body(&qualified, i) {
+                            self.suppress_container_elem_bodies_for_var(&var_name);
+                            self.suppress_user_drop_body_keeping_memory(&var_name);
+                        }
+                    }
                     // B-2026-08-29-54 — the caller-side owner for a BY-VALUE
                     // owned argument, which this arm never registered at all.
                     // The free-function path (`compile_call`) and the instance-

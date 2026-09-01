@@ -1730,11 +1730,16 @@ pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
 ///      `drop 41` on all three compiled backends — a double body plus a read of
 ///      the dropped value, exactly the defect the union answer exists to
 ///      prevent.
-///   4. No `return` statement anywhere in the body mentions the parameter.
-///      Codegen clears the flag at match arms and block tails but NOT at a
-///      `return` operand (it suppresses those statically instead), so a
-///      `return`-borne escape is outside this mechanism's reach. That shape is
-///      B-2026-08-28-65 / -52 and is deliberately left to them.
+///   4. HISTORICAL, and no longer a condition: this used to read "no `return`
+///      statement anywhere in the body mentions the parameter", on the grounds
+///      that a `return`-borne escape was outside the flag's reach. It is not —
+///      `collect_return_leaves` now folds every `return` operand into the leaf
+///      set below, so the `return` spelling of a conditional hand-back is
+///      analysed exactly like the block-tail one. Kept here as a pointer
+///      because B-2026-08-30-23's plan was written against the old text and
+///      proposed extending the per-path flag to reach these shapes; the leaves
+///      already reach them, and what actually declined that row's reproducer
+///      was condition 3 refusing a leaf that merely CONTAINED a call.
 ///
 /// Paired with `!`[`fn_moves_param_into_outliving_place`] at the call site: a
 /// param stored into `self` or a `ref` param outlives the frame by a route with
@@ -1795,6 +1800,32 @@ pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bo
             }
             ExprKind::Unary { operand, .. } => may_mention(operand, name),
             ExprKind::FieldAccess { object, .. } => may_mention(object, name),
+            // B-2026-08-30-23 — a CALL mentions the parameter exactly when its
+            // callee expression or one of its arguments does. Without these two
+            // arms the catch-all answered `true` for every leaf containing a
+            // call, and condition 3 then declined the whole function.
+            //
+            // That is what kept this row's own reproducer out of the mechanism
+            // built for it. `fn pick(a: R, k: bool) -> R { if k { return R { id:
+            // 98, s: mk(98) }; } return a; }` differs from an admitted program
+            // only by the `mk(98)` in the arm that does NOT hand `a` back — a
+            // call that cannot mention `a`, in the one leaf whose whole job is
+            // to not mention it. Measured: replacing `mk(98)` with a string
+            // literal makes both directions correct on all four lanes with no
+            // compiler change at all, which is what localised the defect here
+            // rather than in the per-path flag the row's plan proposed
+            // extending.
+            //
+            // Faithful rather than permissive: `consume(a)` and `a.take()` both
+            // recurse to the bare identifier and still decline, so no escape
+            // route is admitted that the flag cannot clear. Every other shape
+            // keeps the catch-all.
+            ExprKind::Call { callee, args } => {
+                may_mention(callee, name) || args.iter().any(|a| may_mention(&a.value, name))
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                may_mention(object, name) || args.iter().any(|a| may_mention(&a.value, name))
+            }
             _ => true,
         }
     }

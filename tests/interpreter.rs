@@ -56,6 +56,70 @@ fn run_no_errors(source: &str) -> String {
 /// to free an f-string arm tail at the use site, and the way that goes wrong is
 /// freeing a value someone still reads. This side has no frees to get wrong, so
 /// it is the reference the compiled backends must keep matching.
+/// B-2026-08-30-23 — the interpreter twin of
+/// `codegen_conditional_return_param_drop_matrix` (tests/codegen.rs). Same
+/// program, same absolute expectation, so the two backends are pinned to one
+/// answer rather than to each other.
+///
+/// TWO CELLS ARE HELD OUT, and naming them is the point: the ASSOCIATED
+/// spelling is still wrong under `--interp` in both directions —
+/// `H.apick(R { .. }, true)` runs NO body for the dying argument, and
+/// `H.apick(r, false)` runs TWO for the returned one. Both are compiled-lane
+/// correct, so they are an interpreter-only gap; both are pre-existing, and
+/// both are recorded on the row. Including them here would pin the bug.
+///
+/// The obvious interpreter fix was tried and is a NO-OP, which is worth knowing
+/// before trying it again: `cond_returned_param_drop_names` early-returns for
+/// any dotted callee ("free functions only"), and lifting that for associated
+/// functions changed neither cell — the associated call does not reach that
+/// seeding site at all.
+#[test]
+fn test_conditional_return_param_drop_matrix() {
+    let out = run(
+        "struct R { id: i64, s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n\
+         struct H { n: i64 }\n\
+         fn mk(i: i64) -> String { return f\"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"; }\n\
+         fn fpick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }\n\
+         impl H {\n\
+             fn apick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }\n\
+             fn mpick(ref self, a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }\n\
+         }\n\
+         fn ff_t() { let x = fpick(R { id: 11, s: mk(11) }, true); println(f\"A{x.id}\"); }\n\
+         fn ff_f() { let x = fpick(R { id: 12, s: mk(12) }, false); println(f\"B{x.id}\"); }\n\
+         fn fn_t() { let r = R { id: 13, s: mk(13) }; let x = fpick(r, true); println(f\"C{x.id}\"); }\n\
+         fn fn_f() { let r = R { id: 14, s: mk(14) }; let x = fpick(r, false); println(f\"D{x.id}\"); }\n\
+         fn af_t() { let x = H.apick(R { id: 21, s: mk(21) }, true); println(f\"E{x.id}\"); }\n\
+         fn af_f() { let x = H.apick(R { id: 22, s: mk(22) }, false); println(f\"F{x.id}\"); }\n\
+         fn an_t() { let r = R { id: 23, s: mk(23) }; let x = H.apick(r, true); println(f\"G{x.id}\"); }\n\
+         fn an_f() { let r = R { id: 24, s: mk(24) }; let x = H.apick(r, false); println(f\"I{x.id}\"); }\n\
+         fn mf_t() { let h = H { n: 0 }; let x = h.mpick(R { id: 31, s: mk(31) }, true); println(f\"J{x.id}\"); }\n\
+         fn mf_f() { let h = H { n: 0 }; let x = h.mpick(R { id: 32, s: mk(32) }, false); println(f\"K{x.id}\"); }\n\
+         fn mn_t() { let h = H { n: 0 }; let r = R { id: 33, s: mk(33) }; let x = h.mpick(r, true); println(f\"L{x.id}\"); }\n\
+         fn mn_f() { let h = H { n: 0 }; let r = R { id: 34, s: mk(34) }; let x = h.mpick(r, false); println(f\"M{x.id}\"); }\n\
+         fn main() {\n\
+             ff_t(); ff_f(); fn_t(); fn_f();\n\
+             af_f(); an_t();\n\
+             mf_t(); mf_f(); mn_t(); mn_f();\n\
+             println(\"end\");\n\
+         }\n",
+    );
+    assert_eq!(
+        out,
+        "d11\nA98\nd98\n\
+         B12\nd12\n\
+         d13\nC98\nd98\n\
+         D14\nd14\n\
+         F22\nd22\n\
+         d23\nG98\nd98\n\
+         d31\nJ98\nd98\n\
+         K32\nd32\n\
+         d33\nL98\nd98\n\
+         M34\nd34\n\
+         end\n"
+    );
+}
+
 #[test]
 fn test_branch_tail_fstring_arm_values_round_trip() {
     assert_eq!(

@@ -12920,6 +12920,90 @@ fn main() {
     ///
     /// RED pre-fix as a compile ERROR, not a wrong answer: `error: codegen
     /// failed: Display of `Option[T]` is not yet supported under codegen`.
+    /// B-2026-08-30-23 — the conditional-return parameter matrix: three call
+    /// spellings x two argument shapes x both branch directions, with an ABSOLUTE
+    /// expectation.
+    ///
+    /// `fn pick(a: R, k: bool) -> R {{ if k {{ return R {{ .. }}; }} return a; }}` hands the
+    /// parameter back on one path and lets it die on the other. Correct is one
+    /// `Drop` body per object: at `k = true` the parameter dies inside the callee
+    /// (`d<arg>` before the caller's print), at `k = false` it becomes the result
+    /// and dies at the caller's scope exit (print, then `d<arg>`).
+    ///
+    /// FOUR OF THE TWELVE CELLS WERE WRONG, in two opposite directions, and the row
+    /// as filed reported only one of them:
+    ///
+    ///     free  / fresh / k=true    body LOST      (the row's headline)
+    ///     free  / named / k=false   body DOUBLED
+    ///     assoc / named / k=false   body DOUBLED
+    ///     method/ fresh / k=false   body DOUBLED   (compiled lanes only)
+    ///
+    /// The row's own matrix additionally claimed `free/named/k=true` and
+    /// `assoc/named/k=false` were correct; re-measured here they were not, and its
+    /// claim that the method spelling was a working model to copy was measured
+    /// against one argument shape only.
+    ///
+    /// ALL THREE SPELLINGS ARE IN ONE PROGRAM DELIBERATELY. The three arms have
+    /// drifted apart repeatedly (B-2026-08-28-70 moved the method arm,
+    /// B-2026-08-29-54 the associated one, this row the free one), each time
+    /// because a fix was verified on the spelling it was written for. A single
+    /// expectation over all three is what makes the next drift fail here.
+    ///
+    /// Every cell is wrapped in its own function so the drops are scoped and the
+    /// ordering is unambiguous; reading them at `main` scope would interleave
+    /// twelve objects' bodies at one exit.
+    #[test]
+    fn codegen_conditional_return_param_drop_matrix() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct H { n: i64 }
+fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+fn fpick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
+impl H {
+    fn apick(a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
+    fn mpick(ref self, a: R, k: bool) -> R { if k { return R { id: 98, s: mk(98) }; } return a; }
+}
+fn ff_t() { let x = fpick(R { id: 11, s: mk(11) }, true); println(f"A{x.id}"); }
+fn ff_f() { let x = fpick(R { id: 12, s: mk(12) }, false); println(f"B{x.id}"); }
+fn fn_t() { let r = R { id: 13, s: mk(13) }; let x = fpick(r, true); println(f"C{x.id}"); }
+fn fn_f() { let r = R { id: 14, s: mk(14) }; let x = fpick(r, false); println(f"D{x.id}"); }
+fn af_t() { let x = H.apick(R { id: 21, s: mk(21) }, true); println(f"E{x.id}"); }
+fn af_f() { let x = H.apick(R { id: 22, s: mk(22) }, false); println(f"F{x.id}"); }
+fn an_t() { let r = R { id: 23, s: mk(23) }; let x = H.apick(r, true); println(f"G{x.id}"); }
+fn an_f() { let r = R { id: 24, s: mk(24) }; let x = H.apick(r, false); println(f"I{x.id}"); }
+fn mf_t() { let h = H { n: 0 }; let x = h.mpick(R { id: 31, s: mk(31) }, true); println(f"J{x.id}"); }
+fn mf_f() { let h = H { n: 0 }; let x = h.mpick(R { id: 32, s: mk(32) }, false); println(f"K{x.id}"); }
+fn mn_t() { let h = H { n: 0 }; let r = R { id: 33, s: mk(33) }; let x = h.mpick(r, true); println(f"L{x.id}"); }
+fn mn_f() { let h = H { n: 0 }; let r = R { id: 34, s: mk(34) }; let x = h.mpick(r, false); println(f"M{x.id}"); }
+fn main() {
+    ff_t(); ff_f(); fn_t(); fn_f();
+    af_t(); af_f(); an_t(); an_f();
+    mf_t(); mf_f(); mn_t(); mn_f();
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "d11\nA98\nd98\n\
+             B12\nd12\n\
+             d13\nC98\nd98\n\
+             D14\nd14\n\
+             d21\nE98\nd98\n\
+             F22\nd22\n\
+             d23\nG98\nd98\n\
+             I24\nd24\n\
+             d31\nJ98\nd98\n\
+             K32\nd32\n\
+             d33\nL98\nd98\n\
+             M34\nd34\n\
+             end\n"
+        );
+    }
+
     #[test]
     fn codegen_generic_option_payload_renders_at_its_instantiation() {
         let Some(out) = run_program(
