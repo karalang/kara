@@ -55713,13 +55713,32 @@ fn main() { println(go()); }
             "discarded_branch_literal_over_a_binding_risk_shapes",
             20,
         );
-        // THE SHAPE THAT KEEPS THE GUARD, and the regression this change is
-        // most able to cause. A FIELD projected off a local declared OUTSIDE a
-        // loop is moved once per iteration, but the move retraction is static
-        // and fires once — so admitting it frees the same pointer five times.
-        // Measured `double-free` the moment the guard is dropped wholesale,
-        // against `clean` here. No statement-count matrix reaches this: the
-        // stacked form the guard was originally tuned on is clean either way.
+    }
+
+    /// THE SHAPE THAT KEEPS B-2026-08-29-32'S GUARD, and the regression its
+    /// narrowing (B-2026-08-31-44) is most able to cause. A FIELD projected
+    /// off a local declared OUTSIDE a loop is moved once per iteration, but
+    /// the move retraction is static and fires once — so admitting it frees
+    /// the same pointer five times. Measured `double-free` the moment the
+    /// guard is dropped wholesale, against `clean` here. No statement-count
+    /// matrix reaches this: the stacked form the guard was originally tuned on
+    /// is clean either way.
+    ///
+    /// QUARANTINED AT `-O0`, and its own test rather than a case inside
+    /// `asan_discarded_branch_literal_over_a_binding_frees_once`, because the
+    /// two assert opposite things about the same program (B-2026-09-01-10).
+    /// The declined projection STRANDS 38 B by design — B-2026-09-01-5 owns
+    /// that leak and states why it cannot be closed at the discard site — so
+    /// this program can never be ASAN-clean at `-O0`, where the allocation
+    /// actually happens. At the default `-O2` it passes: the stranded buffer
+    /// is dead, so LLVM deletes the whole chain and there is nothing to
+    /// report. What it gates at BOTH levels is that the decline is a DECLINE
+    /// and not a corruption — no double free, no use-after-free — which is
+    /// the direction that matters while the guard stands. Splitting it out
+    /// keeps the other two cells of that fixture live on the `-O0` leg
+    /// instead of quarantining them along with this one.
+    #[test]
+    fn asan_discarded_branch_literal_field_over_a_loop_outer_local_declines() {
         assert_clean_asan_run_min_allocs(
             r#"
 struct P { a: String, b: i64 }
@@ -55741,6 +55760,246 @@ fn main() { println(go()); }
             "discarded_branch_literal_field_over_a_loop_outer_local_declines",
             10,
         );
+    }
+
+    /// B-2026-09-01-10 (leg 1) — a BLOCK-BODIED arm of a DISCARDED `match`
+    /// stranded whatever its tail named.
+    ///
+    /// `compile_if` has told each arm whether the construct's value has a
+    /// consumer since B-2026-08-29-5; `compile_match` never did, so a braced
+    /// arm compiled through `compile_block_with_frame` as though one existed
+    /// and ran `suppress_block_tail_cleanup` — a HANDOVER — with nothing on
+    /// the receiving end. The BARE spelling of the same arm was already
+    /// correct, because `compile_match`'s own arm-tail hook gates that
+    /// suppression on `owns_result`; only the braces lost the gate, which is
+    /// what identifies the STATEMENT KIND of the arm body as the unit rather
+    /// than the match.
+    ///
+    /// Measured at `KARAC_OPT_LEVEL=0`, 38 B per evaluation for each leaking
+    /// cell and 0 after. Also a `-O0`-only gate in the leak direction, for the
+    /// reason its `if` sibling records: at `-O2` the discarded allocation is
+    /// dead and LLVM deletes the chain. What it gates at BOTH levels is the
+    /// opposite direction — the arm-level owner this fix arms must not free
+    /// something the statement site or the source binding still owns — which
+    /// is what the `guard:` cells are for.
+    #[test]
+    fn asan_discarded_match_braced_arm_owns_what_its_tail_names() {
+        const H: &str = "struct R { id: i64, s: String }\n\
+             fn seed() -> i64 { env.args().len() }\n\
+             fn payload() -> String { f\"payload-{seed()}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\" }\n\
+             fn mk(i: i64) -> R { return R { id: i, s: payload() }; }\n\
+             fn main() { println(go()); }\n";
+        let rows: &[(&str, &str)] = &[
+            // The payload binding handed out of a braced arm — the cell that
+            // failed the `-O0` leg on `main`, in both statement spellings.
+            (
+                "braced-arm-hands-out-a-payload-binding",
+                "fn go() -> i64 { let o: Option[R] = Some(mk(1));\n\
+                 \x20  let _ = match o { Some(r) => { r } None => { mk(9) } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "braced-arm-hands-out-a-payload-binding-bare-statement",
+                "fn go() -> i64 { let o: Option[R] = Some(mk(1));\n\
+                 \x20  match o { Some(r) => { r } None => { mk(9) } };\n\
+                 \x20  1 }\n",
+            ),
+            // An ENCLOSING LOCAL rather than a payload binding: same handover,
+            // different source. The unbraced spelling of this one is a control
+            // below and was clean throughout.
+            (
+                "braced-arm-hands-out-an-enclosing-local",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(41);\n\
+                 \x20  let _ = match n { 9 => { r } _ => { mk(9) } };\n\
+                 \x20  1 }\n",
+            ),
+            // A block with a statement before the tail — the tail is still the
+            // value, so the same handover applies.
+            (
+                "braced-arm-with-a-leading-statement",
+                "fn go() -> i64 { let o: Option[R] = Some(mk(1));\n\
+                 \x20  let _ = match o { Some(r) => { let z = 1; r } None => { mk(9) } };\n\
+                 \x20  1 }\n",
+            ),
+            // The MINTED arm of a declined discarded match, taken. The braced
+            // spelling was already owned; the BARE one had no owner anywhere,
+            // which is the second half this row fixes.
+            (
+                "bare-arm-mints-on-the-taken-path",
+                "fn go() -> i64 { let o: Option[R] = None;\n\
+                 \x20  let _ = match o { Some(r) => r, None => mk(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "braced-arm-mints-on-the-taken-path",
+                "fn go() -> i64 { let o: Option[R] = None;\n\
+                 \x20  let _ = match o { Some(r) => { r } None => { mk(9) } };\n\
+                 \x20  1 }\n",
+            ),
+            // ── double-own guards: a second owner here is a DOUBLE FREE ──
+            //
+            // Every arm QUALIFIES in these, so the discard statement frame
+            // owns the phi and no arm may. They are what keeps the new signal
+            // from being "always discarded".
+            (
+                "guard: all-mint braced match stays statement-owned",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = match n { 1 => { mk(7) } _ => { mk(3) } };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: all-mint bare match stays statement-owned",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = match n { 1 => mk(7), _ => mk(3) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "guard: block-wrapped all-mint match stays statement-owned",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let _ = { match n { 1 => { mk(7) } _ => { mk(3) } } };\n\
+                 \x20  1 }\n",
+            ),
+            // A CONSUMED match is not discarded at all — the binding owns the
+            // value and no arm may register a second owner.
+            (
+                "guard: bound braced match is owned by its binding",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(41);\n\
+                 \x20  let q = match n { 9 => { r } _ => { mk(9) } };\n\
+                 \x20  q.id - q.id + 1 }\n",
+            ),
+            // ── controls, clean before and after ─────────────────────────
+            (
+                "control: bare arm hands out a payload binding",
+                "fn go() -> i64 { let o: Option[R] = Some(mk(1));\n\
+                 \x20  let _ = match o { Some(r) => r, None => mk(9) };\n\
+                 \x20  1 }\n",
+            ),
+            (
+                "control: bare arm hands out an enclosing local",
+                "fn go() -> i64 { let n = seed();\n\
+                 \x20  let r = mk(41);\n\
+                 \x20  let _ = match n { 9 => r, _ => mk(9) };\n\
+                 \x20  1 }\n",
+            ),
+        ];
+        for (label, body) in rows {
+            assert_clean_asan_run(&format!("{H}{body}"), &["1"], label);
+        }
+    }
+
+    /// B-2026-09-01-10 (leg 2) — a BOXED struct payload destructured by
+    /// `if let` / `while let` / `let … else` with a body that only READS the
+    /// bound fields lost them entirely.
+    ///
+    /// The three `let`-family constructs ran
+    /// `suppress_boxed_payload_struct_destructure` unconditionally, on a
+    /// comment claiming it was "self-gated on `boxed_enum_payload_vars`
+    /// membership — only a binding OWNED here is registered, so borrow
+    /// scrutinees no-op". That table is a property of the SCRUTINEE VARIABLE,
+    /// not of the binding mode. When the body only reads, the scrutinee is
+    /// classified `pattern_binding_is_borrow` (via
+    /// `scrutinee_is_readonly_owned_enum_local`), the bindings ALIAS the box
+    /// and `bind_pattern_values` registers no cleanup for them — so disarming
+    /// the box left every bound field with no owner at all.
+    ///
+    /// The `match` spelling has gated this on `!pattern_binding_is_borrow`
+    /// since it was written, which is what makes the asymmetry the axis:
+    /// measured 141 B / 3 blocks for the `if let` over three iterations,
+    /// against a clean `match` on the identical value, and clean again the
+    /// moment the body MOVES a field instead of reading it. That last control
+    /// is in here as the DOUBLE-FREE direction: with the bind owned, the
+    /// disarm must still fire or the binding and the box both free the buffer.
+    #[test]
+    fn asan_iflet_boxed_struct_destructure_readonly_body_frees_once() {
+        // `Holder` is 4 words (String + i64) against `Option`'s 3-word inline
+        // area, so its payload is BOXED — which is what routes it through the
+        // suppressor at issue. A narrower payload stays inline and never
+        // reaches it.
+        const H: &str = r#"struct Holder { name: String, id: i64 }
+fn mkh(i: i64) -> Holder { return Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i }; }
+fn slen(s: String) -> i64 { if s.contains("holder") { s.len() } else { 0 } }
+"#;
+        for (label, body) in [
+            (
+                "iflet_readonly_body",
+                r#"fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        if let Some(Holder { name, id }) = o { println(name.len() + id); }
+        i = i + 1;
+    };
+}"#,
+            ),
+            (
+                "iflet_readonly_body_with_else",
+                r#"fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        if let Some(Holder { name, id }) = o { println(name.len() + id); } else { println("none"); }
+        i = i + 1;
+    };
+}"#,
+            ),
+            (
+                "iflet_readonly_body_rest_pattern",
+                r#"fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        if let Some(Holder { name, .. }) = o { println(name.len() + i); }
+        i = i + 1;
+    };
+}"#,
+            ),
+            (
+                "letelse_readonly_body",
+                r#"fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        let Some(Holder { name, id }) = o else { return; };
+        println(name.len() + id);
+        i = i + 1;
+    };
+}"#,
+            ),
+            // THE DOUBLE-FREE DIRECTION. With the body MOVING a field the bind
+            // is owned, the binding registers its own cleanup, and the disarm
+            // must still fire — clean before this row and after.
+            (
+                "control_iflet_moving_body_still_disarms",
+                r#"fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        if let Some(Holder { name, id }) = o { println(slen(name) + id); }
+        i = i + 1;
+    };
+}"#,
+            ),
+            // The `match` spelling, which was correct throughout — in the same
+            // fixture so the two can never answer differently again.
+            (
+                "control_match_readonly_body",
+                r#"fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(mkh(i));
+        match o {
+            Some(Holder { name, id }) => { println(name.len() + id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}"#,
+            ),
+        ] {
+            assert_clean_asan_run(&format!("{H}{body}"), &["47", "48", "49"], label);
+        }
     }
 
     /// B-2026-08-29-25 — the MEMORY half of the discarded-`if` and

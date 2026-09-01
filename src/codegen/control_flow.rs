@@ -337,15 +337,40 @@ impl<'ctx> super::Codegen<'ctx> {
         // retraction: an arm that binds the leaf out already owns it, so the
         // box's interior drop has to stand down or free it twice.
         self.retract_boxed_leaf_drop_for_consuming_pattern(value, pattern);
-        // Slice 3t: boxed-payload struct-destructure field suppression
-        // (self-gated on `boxed_enum_payload_vars` membership — only a
-        // binding OWNED here is registered, so borrow scrutinees no-op).
-        self.suppress_boxed_payload_struct_destructure(value, pattern);
-        // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split, against
-        // the box staged by `track_freshtemp_boxed_enum_scrutinee` (no named
-        // variable exists for the expr-based entry point to find). No-ops
-        // when the scrutinee is not a fresh-temp boxed one.
-        self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        // Slice 3t: boxed-payload struct-destructure field suppression — zero
+        // the consumed fields inside the box so the binding owns them and the
+        // box's inner walk frees only what the pattern left unbound.
+        //
+        // B-2026-09-01-10 — gated on `optres_bindings_owned`, which is where
+        // the `match` spelling has always had it (control_flow_match.rs's
+        // `if scrut_ref_ptr.is_none() && !pattern_binding_is_borrow`) and
+        // where these three `let`-family paths never did. The comment this
+        // replaces claimed the call was "self-gated on `boxed_enum_payload_vars`
+        // membership — only a binding OWNED here is registered, so borrow
+        // scrutinees no-op", and that is false: `boxed_enum_payload_vars` is a
+        // property of the SCRUTINEE VARIABLE, not of the binding mode, so it
+        // says nothing about whether the arm took ownership.
+        //
+        // The population it got wrong is a BORROW-MODE bind over an owned
+        // local — `scrutinee_is_readonly_owned_enum_local`, i.e. a body that
+        // only READS the bound field. There the bindings alias the box and
+        // register no cleanup of their own (`bind_pattern_values`' Vec/String
+        // track is gated on the same `!pattern_binding_is_borrow`), so
+        // disarming the box left the field with no owner at all: measured
+        // 141 B / 3 blocks for `if let Some(Holder { name, id }) = o {
+        // println(name.len() + id) }` over three iterations, against a clean
+        // `match` on the identical value. Making the body MOVE the field
+        // (`slen(name)`) flips the bind to owned and was clean before and
+        // after — which is what identifies the binding mode as the axis rather
+        // than the construct.
+        if optres_bindings_owned {
+            self.suppress_boxed_payload_struct_destructure(value, pattern);
+            // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split,
+            // against the box staged by `track_freshtemp_boxed_enum_scrutinee`
+            // (no named variable exists for the expr-based entry point to
+            // find). No-ops when the scrutinee is not a fresh-temp boxed one.
+            self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        }
         // B-2026-07-21-8: ref-chain struct clone — fire the per-field
         // cap-zeroing against the CLONE slot (the expr-based suppressors
         // bail on the borrowed root), so the clone's StructDrop frees only
@@ -907,15 +932,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.block_only_borrows_option_agg_payload(value, pattern, body) {
             self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         }
-        // Slice 3t: boxed-payload struct-destructure field suppression
-        // (self-gated on `boxed_enum_payload_vars` membership — only a
-        // binding OWNED here is registered, so borrow scrutinees no-op).
-        self.suppress_boxed_payload_struct_destructure(value, pattern);
-        // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split, against
-        // the box staged by `track_freshtemp_boxed_enum_scrutinee` (no named
-        // variable exists for the expr-based entry point to find). No-ops
-        // when the scrutinee is not a fresh-temp boxed one.
-        self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        // Slice 3t: boxed-payload struct-destructure field suppression — zero
+        // the consumed fields inside the box so the binding owns them and the
+        // box's inner walk frees only what the pattern left unbound.
+        //
+        // B-2026-09-01-10 — gated on `optres_bindings_owned`, the gate the
+        // `match` spelling has always had and these three `let`-family paths
+        // never did. See the `compile_if_let` site for what the ungated call
+        // got wrong and how it was measured.
+        if optres_bindings_owned {
+            self.suppress_boxed_payload_struct_destructure(value, pattern);
+            // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split,
+            // against the box staged by `track_freshtemp_boxed_enum_scrutinee`
+            // (no named variable exists for the expr-based entry point to
+            // find). No-ops when the scrutinee is not a fresh-temp boxed one.
+            self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        }
         // B-2026-08-08-25 — restore after the suppressors, before the body
         // compiles (see the if-let site).
         self.pattern_state
@@ -1431,15 +1463,22 @@ impl<'ctx> super::Codegen<'ctx> {
         self.consume_freshtemp_field_scrutinee(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         self.suppress_inline_option_agg_payload_cleanup(value, pattern);
-        // Slice 3t: boxed-payload struct-destructure field suppression
-        // (self-gated on `boxed_enum_payload_vars` membership — only a
-        // binding OWNED here is registered, so borrow scrutinees no-op).
-        self.suppress_boxed_payload_struct_destructure(value, pattern);
-        // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split, against
-        // the box staged by `track_freshtemp_boxed_enum_scrutinee` (no named
-        // variable exists for the expr-based entry point to find). No-ops
-        // when the scrutinee is not a fresh-temp boxed one.
-        self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        // Slice 3t: boxed-payload struct-destructure field suppression — zero
+        // the consumed fields inside the box so the binding owns them and the
+        // box's inner walk frees only what the pattern left unbound.
+        //
+        // B-2026-09-01-10 — gated on `optres_bindings_owned`, the gate the
+        // `match` spelling has always had and these three `let`-family paths
+        // never did. See the `compile_if_let` site for what the ungated call
+        // got wrong and how it was measured.
+        if optres_bindings_owned {
+            self.suppress_boxed_payload_struct_destructure(value, pattern);
+            // B-2026-08-04-6 — the FRESH-TEMP twin: same per-field split,
+            // against the box staged by `track_freshtemp_boxed_enum_scrutinee`
+            // (no named variable exists for the expr-based entry point to
+            // find). No-ops when the scrutinee is not a fresh-temp boxed one.
+            self.suppress_freshtemp_boxed_payload_struct_destructure(freshtemp_boxed_slot, pattern);
+        }
         // B-2026-07-21-8: ref-chain struct clone — per-field cap-zeroing
         // against the CLONE slot on the match edge (see the if-let site);
         // the else edge diverges with the clone's StructDrop firing

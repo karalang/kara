@@ -72,6 +72,24 @@ impl<'ctx> super::Codegen<'ctx> {
             && arms
                 .iter()
                 .all(|a| self.branch_tail_mints_fresh_owned_temp(&a.body));
+        // B-2026-09-01-10 — does the DISCARD STATEMENT site take ownership of
+        // this match's value? The `compile_if` sibling has asked this since
+        // B-2026-08-29-25 (`discard_stmt_owns_value`) and used it to tell each
+        // arm whether its tail hands the value to anybody; `compile_match`
+        // never asked, so it never set `branch_arm_value_discarded` and a
+        // BLOCK-BODIED arm of a DISCARDED match compiled as though a consumer
+        // existed. `compile_block_with_frame` then ran
+        // `suppress_block_tail_cleanup`, which is a HANDOVER — it takes the
+        // tail's buffer away from whatever owns it — with nothing on the
+        // receiving end.
+        //
+        // The BARE-bodied spelling was already correct because
+        // `compile_match`'s own arm-tail hook gates that same suppression on
+        // `owns_result`; only the braced spelling reached the block compiler
+        // and lost the gate. Measured at `KARAC_OPT_LEVEL=0`: `let _ = match o
+        // { Some(r) => { r } None => { mk(9) } };` strands 38 B per evaluation
+        // while `Some(r) => r,` on the identical value is clean.
+        let discard_stmt_owns_value = !own_value && self.discarded_match_arms_qualify(arms);
         // B-2026-08-28-44 — see the `compile_if` sibling: only what THIS
         // match's arms hand out may arm the merge-point owner.
         self.branch_arm_clone_taken = None;
@@ -1010,22 +1028,34 @@ impl<'ctx> super::Codegen<'ctx> {
             // function's own hook after the drain below; setting the one-shot
             // for those would let a value-position block buried in the body
             // consume it and file its owner under the match's key.
-            if own_value
-                && matches!(
-                    &arm.body.kind,
-                    ExprKind::Block(_)
-                        | ExprKind::Seq(_)
-                        | ExprKind::Unsafe(_)
-                        | ExprKind::LabeledBlock { .. }
-                )
-            {
+            let body_is_block = matches!(
+                &arm.body.kind,
+                ExprKind::Block(_)
+                    | ExprKind::Seq(_)
+                    | ExprKind::Unsafe(_)
+                    | ExprKind::LabeledBlock { .. }
+            );
+            if own_value && body_is_block {
                 self.arm_tail_owner_ctx = match (self.current_branch_expr_span, match_reset_bb) {
                     (Some(span), Some(bb)) => Some((span, arms_all_mint, bb)),
                     _ => None,
                 };
             }
+            // B-2026-09-01-10 — the `compile_if` signal, on the same
+            // directly-a-block gate the arm context above uses: only a body
+            // that reaches `compile_block_with_frame` AS THIS ARM may consume
+            // it, and a value-position block buried inside some other body
+            // shape must get the ordinary treatment. Bare-bodied arms are
+            // covered by this function's own `owns_result` gate after the
+            // drain, so setting it for them would double the answer.
+            self.branch_arm_value_discarded =
+                body_is_block && !own_value && !discard_stmt_owns_value;
             let mut arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
             self.arm_tail_owner_ctx = None;
+            // B-2026-09-01-10 — one-shot, like the context above: the block
+            // compiler `take`s it, and an arm whose body never reached that
+            // compiler must not leave it armed for the next construct.
+            self.branch_arm_value_discarded = false;
             // B-2026-08-30-2 — a BLOCK arm body reports through here; a bare one
             // is picked up from `vecstr_source_disarmed` below. Either way the
             // registration happens after this arm's OWN frame drains, which is
@@ -1207,6 +1237,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 if Self::expr_tail_is_fstring(&arm.body) {
                     if let Some(acc) = self.last_fstr_acc.take() {
                         self.zero_vec_alloca_cap(acc);
+                    }
+                }
+                // B-2026-09-01-10 — the BARE-bodied sibling of the arm-level
+                // owner `compile_block_with_frame` gives a braced arm. When
+                // this match's value is discarded AND the statement site
+                // declined the construct (one arm yields a place, so freeing
+                // the phi could double-free), a bare arm that MINTS its value
+                // has no owner anywhere: `let _ = match o { Some(r) => r, None
+                // => mk(9) };` strands `mk(9)`'s `String` on the None path,
+                // 38 B per evaluation, while the braced spelling of the same
+                // arm is owned. Registered in THIS arm's frame, which drains
+                // immediately below, so the value dies with the arm exactly as
+                // the block path arranges.
+                //
+                // The gate is the same `!own_value && !discard_stmt_owns_value`
+                // the block path is told, and the second half is what keeps
+                // this from doubling: when every arm qualifies, the statement
+                // frame owns the phi and no arm may.
+                if !own_value && !discard_stmt_owns_value && !body_is_block {
+                    if let Some(owned_tail) = self.discarded_arm_owned_aggregate_tail(&arm.body) {
+                        if self.expr_yields_fresh_owned_temp(owned_tail) {
+                            self.materialize_owned_temp(
+                                arm_val,
+                                (owned_tail.span.offset, owned_tail.span.length),
+                            );
+                        }
+                        self.track_discarded_arm_owned_aggregate(owned_tail, arm_val);
                     }
                 }
                 self.drain_top_frame_with_emit();

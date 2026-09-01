@@ -23950,6 +23950,34 @@ fn main() {
                 "let r = mk(18);\nlet _ = if n == 9 { r } else { mk(4) };\nprintln(\"still\");",
                 "dR4\ndR18\nstill\nend\n",
             ),
+            // B-2026-09-01-10 — the `match` spellings of the two rows above.
+            // `compile_match` never told a BLOCK-bodied arm that the
+            // construct's value is discarded, so the braced spellings here
+            // stranded whatever the taken arm named while the bare ones were
+            // already correct; and the minted arm of a match the statement
+            // site DECLINES (one arm yields a place) had no owner in the bare
+            // spelling at all — the compiled backends were silent on `dR9`
+            // where the interpreter fired it.
+            (
+                "match braced arm — mixed branch, both bodies fire once",
+                "let r = mk(18);\nlet _ = match n { 9 => { r } _ => { mk(4) } };\nprintln(\"still\");",
+                "dR4\ndR18\nstill\nend\n",
+            ),
+            (
+                "match braced arm — declined match, minted arm taken",
+                "let o: Option[R] = None;\nlet _ = match o { Some(r) => { r } None => { mk(9) } };",
+                "dR9\nend\n",
+            ),
+            (
+                "match bare arm — declined match, minted arm taken",
+                "let o: Option[R] = None;\nlet _ = match o { Some(r) => r, None => mk(9) };",
+                "dR9\nend\n",
+            ),
+            (
+                "match braced arm — bare statement, payload binding handed out",
+                "let o: Option[R] = Some(mk(1));\nmatch o { Some(r) => { r } None => { mk(9) } };",
+                "dR1\nend\n",
+            ),
         ] {
             let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
             assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");

@@ -148,3 +148,30 @@
 # The copy is a separate allocation from the caller's value — counted, not
 # assumed: the fixture's program reports 168 allocations for 40 iterations, four
 # per call — so the caller-owns contract at the argument site is untouched.
+
+# ── 2026-09-01: the list is NON-EMPTY again, with exactly one entry. ──
+#
+# B-2026-09-01-10 found the leg RED on `main` with THREE failures and nothing
+# quarantined, i.e. the state the ratchet exists to prevent — and the finding
+# behind that was not any one of the three but that NOTHING RUNS THIS LEG. It
+# is not part of the default or `--features llvm` legs, so between 2026-08-06
+# (the last measurement, at 225a4553) and 2026-09-01 several hundred commits
+# landed against a gate nobody turned. Two of the three were real codegen leaks
+# and are fixed rather than listed; this is the third.
+memory_sanitizer_tests::asan_discarded_branch_literal_field_over_a_loop_outer_local_declines  # B-2026-09-01-5
+#
+# It is quarantined rather than fixed because its 38 B is DELIBERATE and its
+# owning row says why: the projection `P { a: t.a, b: 1 }` cannot take the
+# field over at the discard site (the retraction is static and fires once, so a
+# local declared outside a loop and projected each iteration would be freed
+# five times), and closing it needs the field-move takeover extended to named
+# locals on the aggregate-literal path. A leak is the better half of that pair,
+# which is exactly the "add the fixture WITH the bug row that owns it" case the
+# header invites.
+#
+# It became its own `#[test]` in the same commit. It had been one cell of
+# `asan_discarded_branch_literal_over_a_binding_frees_once`, whose other two
+# cells assert real cleanliness — quarantining the whole function to cover this
+# cell would have taken those off the leg too, which is the decay this file
+# documents itself against. Note what the split also fixes: B-2026-09-01-5's
+# prose already cited a test of this name that did not exist.

@@ -16756,6 +16756,26 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.discard_arm_tail_qualifies(Self::block_tail_expr(else_branch))
     }
 
+    /// [`Self::discarded_match_value_tail`]'s `Match` leg, in the form
+    /// `compile_match` can ask it — the sibling of
+    /// [`Self::discarded_if_parts_qualify`], and needed for the same reason:
+    /// that function receives the match's ARMS, not an `Expr` node, and must
+    /// know whether the discard statement site is going to take ownership
+    /// before it decides what to tell each arm.
+    ///
+    /// B-2026-09-01-10. `compile_if` has asked its half of this question
+    /// since B-2026-08-29-25; `compile_match` never asked, so it never set
+    /// `branch_arm_value_discarded` and a BLOCK-bodied arm compiled as though
+    /// its value had a consumer. `compile_block_with_frame` then ran
+    /// `suppress_block_tail_cleanup` — a HANDOVER — with nothing on the
+    /// receiving end, stranding whatever the taken arm named.
+    pub(super) fn discarded_match_arms_qualify(&self, arms: &[MatchArm]) -> bool {
+        !arms.is_empty()
+            && arms
+                .iter()
+                .all(|a| self.discard_arm_tail_qualifies(Self::block_tail_expr(&a.body)))
+    }
+
     /// One arm's worth of [`Self::discarded_match_value_tail`]'s fail-closed
     /// test, shared by its `Match` and `If` legs so the two spellings can
     /// never admit different shapes.
@@ -17107,7 +17127,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Block wrappers are peeled by the two `&self` siblings, so the returned
     /// tail may be nested inside `tail`; the arm's value is the same either
     /// way, since a single-tail wrapper hands its inner value straight out.
-    fn discarded_arm_owned_aggregate_tail<'e>(&self, tail: &'e Expr) -> Option<&'e Expr> {
+    pub(super) fn discarded_arm_owned_aggregate_tail<'e>(
+        &self,
+        tail: &'e Expr,
+    ) -> Option<&'e Expr> {
         if self.expr_yields_fresh_owned_temp(tail) {
             return Some(tail);
         }
@@ -17157,7 +17180,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `arg_escapes_frame: false` is the honest answer at this site — the arm's
     /// value is discarded, so nothing downstream consumes it and no callee
     /// entry-copy is in play.
-    fn track_discarded_arm_owned_aggregate(&mut self, tail: &Expr, val: BasicValueEnum<'ctx>) {
+    pub(super) fn track_discarded_arm_owned_aggregate(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
         let optres_ctor = self
             .enum_name_of_expr(tail)
             .is_some_and(|en| en == "Option" || en == "Result");
