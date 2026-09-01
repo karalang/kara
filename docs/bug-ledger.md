@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 102 | 0 |
 | soundness | 93 | 2 |
 | perf | 87 | 1 |
-| crash | 67 | 1 |
+| crash | 67 | 0 |
 | other | 66 | 2 |
 | use-after-free | 26 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1323 | 39 |
+| codegen | 1323 | 38 |
 | interp | 301 | 24 |
 | typecheck | 283 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1928 surfaced · 47 open · 1850 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1928 surfaced · 46 open · 1851 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (47)
+### Open (46)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -166,7 +166,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1928 surfaced
 | B-2026-08-31-37 | 2026-08-31 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly reachable | — |
 | B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
-| B-2026-08-31-42 | 2026-08-31 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a param or a return; the wasm ABI decomposes the struct into fields, so the `bfloat` field is promoted exactly as a bare param was, and B-2026-08-30-42's signature rewrite does not reach it. `ref self` builds (a pointer is not decomposed) and is a real workaround | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
 | B-2026-08-31-47 | 2026-08-31 | interp | medium | THE INTERPRETER LOSES A `Drop` BODY THAT BOTH COMPILED BACKENDS RUN, IN TWO METHOD-ARG SHAPES -- a fresh enum temp whose payload an arm BINDS but does not return (`t.keep(Box2.Full(mk(7)))` over `fn keep(..) -> i64 { match b { Box2.Full(r) => { return r.id; } .. } }`) prints nothing under `--interp` against one body compiled; and the BARE-STATEMENT discard of a method call returning `Option[R]` loses the body where the `let _ =` spelling of the same call keeps it | — |
@@ -209,9 +208,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1928 surfaced
 
 </details>
 
-### Fixed (1850)
+### Fixed (1851)
 
-<details><summary>1850 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1851 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2061,6 +2060,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1928 surfaced
 | B-2026-08-31-34 | interp+codegen | high | A STRUCT LITERAL WHOSE HEAP FIELD IS A PROJECTION OFF A FRESH TEMP DOUBLE-FREES ON AOT WHILE THE INTERPRETER IS CLEAN -- `let w = V { v: mkv(1).v, b:… | 2b3b966 |
 | B-2026-08-31-36 | interp | medium | THE INTERPRETER BINDS THE WHOLE CONTAINER, NOT THE ELEMENT, FOR `let g = ref c[i]` WHEN `c` IS A `Slice` OR A `Map` -- codegen and the typechecker bo… | 8ba5e95f |
 | B-2026-08-31-41 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[… | c5b5f6a |
+| B-2026-08-31-42 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a pa… | b1be5b9 |
 | B-2026-08-31-44 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE… | 1b5c026 |
 | B-2026-08-31-45 | ownership | low | A SEMICOLON-LESS `return e` IN TAIL POSITION IS REPORTED AS AN UNSUPPORTED BORROW-RETURN FORM -- `fn f(x: ref S) -> ref S { return x }` is rejected w… | c5b5f6a |
 | B-2026-08-31-48 | codegen | high | TWO INSTANTIATIONS OF ONE GENERIC FN AT DIFFERENT `Array`/`Slice`/`Vector` TYPE ARGS COLLIDE ON ONE MONO SYMBOL AND FAIL MODULE VERIFICATION -- `fn i… | 007c279 |
