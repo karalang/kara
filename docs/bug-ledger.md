@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 343 | 5 |
 | run-vs-build | 285 | 21 |
-| leak | 248 | 7 |
+| leak | 248 | 6 |
 | missing-feature | 192 | 0 |
 | double-free | 161 | 0 |
 | codegen-gap | 159 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1338 | 32 |
+| codegen | 1338 | 31 |
 | interp | 308 | 19 |
 | typecheck | 285 | 0 |
 | ownership | 71 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced · 38 open · 1878 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced · 37 open · 1879 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (38)
+### Open (37)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -166,7 +166,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced
 | B-2026-09-01-17 | 2026-09-01 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { .. };` over a local `W` doubles on all three backends because the aggregate-literal source walker resolves a bare NAME and not a field projection, so the disarm e49a85f wired up never names `t` | — |
 | B-2026-09-01-22 | 2026-09-01 | codegen | medium | A DISCARDED STRUCT LITERAL BEHIND **TWO** BLOCK WRAPPERS RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS -- `{ { S { r: t, k: 1 } } };` prints `dR7 dR7` on `karac run` / `karac build` against one body under `--interp`, while the ONE-wrapper spelling is correct everywhere | — |
 | B-2026-09-01-23 | 2026-09-01 | codegen | low | THE BRANCH ARM-OWNER SLOT IS ONE PER CONSTRUCT AND RESET EACH PASS, so a branch inside a loop whose owner frame lives OUTSIDE the loop frees only the LAST pass's escaping value -- `while i < 3 { let k = if i > 0 { mkA(n) } else { t }.contains("aaa"); }` strands `iterations - 1` of them (42 B in 2 blocks at 3 iterations, 72 B in 4 at 5); the same branch with the sibling binding declared INSIDE the loop body is clean, which isolates the frame CHOICE rather than the slot as the cause | — |
-| B-2026-09-01-24 | 2026-09-01 | codegen | medium | A DISCARDED ALL-MINTED STRUCT LITERAL WITH ONE FIELD THAT IS A SCALAR FIELD READ OF A LIVE LOCAL LEAKS EVERY MINTED OBJECT ON BOTH COMPILED BACKENDS -- `S2 { r: R{id:1}, s: R{id:9}, k: t.id };` runs `dR9 dR1 dR7` under `--interp` and only `dR7` on `karac run` / `karac build`, dropping 76 B in 2 allocations under ASAN | — |
 | B-2026-09-01-25 | 2026-09-01 | codegen | medium | THE MEMORY HALF OF B-2026-09-01-21: a DISCARDED aggregate whose fields/elements MIX a live-local source with anything else runs every `Drop` BODY once but never FREES the field heap -- `S2 { r: t, s: mk(9), k: 1 };` leaks 76 B / 2 allocations at -O0, and the TUPLE leg's own `let _ = (t, 20);` leaks 38 B / 1 identically, so the gap is shared by both legs | — |
 
 ### Relocated (2)
@@ -200,9 +199,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced
 
 </details>
 
-### Fixed (1878)
+### Fixed (1879)
 
-<details><summary>1878 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1879 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2084,6 +2083,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1947 surfaced
 | B-2026-09-01-19 | typecheck+interp+codegen | medium | AN OUT-OF-RANGE INTEGER LITERAL WITH A WIDER SUFFIX REACHES A GENERIC PAYLOAD SLOT UNCHECKED, SO THE BACKENDS DISAGREE AND ONE SHAPE FLIPS SIGN -- `O… | f366e42e |
 | B-2026-09-01-20 | typecheck | medium | DEFAULT ARGUMENTS ARE FILLED FOR FREE FUNCTIONS ONLY -- `H.f(1)` and `h.g(1)` both fail with `expected 2 argument(s), found 1` for a parameter that h… | fc67e1f |
 | B-2026-09-01-21 | codegen | medium | A DISCARDED STRUCT LITERAL MIXING A LIVE LOCAL SOURCE WITH A MINTED SIBLING LOSES THE MINTED FIELD'S `Drop` BODY ON BOTH COMPILED BACKENDS -- `S2 { r… | e3b9e67 |
+| B-2026-09-01-24 | codegen | medium | A DISCARDED ALL-MINTED STRUCT LITERAL WITH ONE FIELD THAT IS A SCALAR FIELD READ OF A LIVE LOCAL LEAKS EVERY MINTED OBJECT ON BOTH COMPILED BACKENDS… | 7ef82d3 |
 
 </details>
 
