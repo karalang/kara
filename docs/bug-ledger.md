@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 343 | 6 |
+| miscompile | 343 | 5 |
 | run-vs-build | 283 | 22 |
 | leak | 245 | 6 |
 | missing-feature | 191 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1333 | 33 |
-| interp | 308 | 23 |
-| typecheck | 284 | 1 |
+| codegen | 1333 | 32 |
+| interp | 308 | 22 |
+| typecheck | 284 | 0 |
 | ownership | 71 | 0 |
 | other | 70 | 0 |
 | cli | 68 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1941 surfaced · 41 open · 1869 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1941 surfaced · 40 open · 1870 fixed · 11 wontfix · 2 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (41)
+### Open (40)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -170,7 +170,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1941 surfaced
 | B-2026-09-01-16 | 2026-09-01 | codegen | medium | A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON ALL THREE COMPILED SURFACES -- `println(f"field={readf(h.r)}")` is interp `field=43 drop 40 end` vs compiled `field=43 end drop 40`, against design.md line 866; hoisting the call to its own `let` makes all four agree, and the callee returns `i64`, which is B-2026-08-31-4's own passing CONTROL | — |
 | B-2026-09-01-17 | 2026-09-01 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { .. };` over a local `W` doubles on all three backends because the aggregate-literal source walker resolves a bare NAME and not a field projection, so the disarm e49a85f wired up never names `t` | — |
 | B-2026-09-01-18 | 2026-09-01 | interp | medium | A DISCARDED AGGREGATE LITERAL BEHIND A BLOCK WRAPPER, OR WRITTEN BARE IN STATEMENT POSITION, RUNS ITS CONSUMED LOCAL'S `Drop` BODY TWICE ON THE INTERPRETER AND ONCE ON BOTH COMPILED BACKENDS -- `{ W { r: t, b: 1 } };`, `let _ = { W { r: t, b: 1 } };` and `W { r: t, b: 1 };` all diverge, while the `if` / `match` spellings agree | — |
-| B-2026-09-01-19 | 2026-09-01 | typecheck+interp+codegen | medium | AN OUT-OF-RANGE INTEGER LITERAL WITH A WIDER SUFFIX REACHES A GENERIC PAYLOAD SLOT UNCHECKED, SO THE BACKENDS DISAGREE AND ONE SHAPE FLIPS SIGN -- `Option[u8] = Option.Some(300i64)` is `Some(300)` under `--interp` and `Some(44)` compiled, `Option.Some(-1i64)` is `Some(-1)` against `Some(255)`, and the only diagnostic is a `redundant_suffix` warning that is itself false | — |
 
 ### Relocated (2)
 
@@ -203,9 +202,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1941 surfaced
 
 </details>
 
-### Fixed (1869)
+### Fixed (1870)
 
-<details><summary>1869 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1870 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2078,6 +2077,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1941 surfaced
 | B-2026-09-01-12 | interp+codegen | medium | A SUFFIXED FLOAT LITERAL WHOSE SUFFIX CONTRADICTS THE DESTINATION WIDTH SPLITS THE BACKENDS -- `let d: Option[f32] = Option.Some(0.1f64)` is `Some(0.… | 605208d9 |
 | B-2026-09-01-14 | cli | medium | THE DEFAULT `cargo test` LEG WAS RED ON `main` FOR TWO HOURS BECAUSE A CODEGEN-DIAGNOSTIC ASSERTION IS NOT GATED ON THE llvm FEATURE -- `ref_binding_… | Added `#[cfg(feature = "llvm")]`, the gate the other 98 `ka… |
 | B-2026-09-01-15 | codegen | medium | A NESTED `ref c[i][j]` STILL DECLINES ON FOUR ROOTS THE Vec-ROOTED LOWERING DOES NOT MODEL -- `Array[Vec[T], N]`, `Vec[Array[T, N]]`, a struct FIELD… | 2143f047 |
+| B-2026-09-01-19 | typecheck+interp+codegen | medium | AN OUT-OF-RANGE INTEGER LITERAL WITH A WIDER SUFFIX REACHES A GENERIC PAYLOAD SLOT UNCHECKED, SO THE BACKENDS DISAGREE AND ONE SHAPE FLIPS SIGN -- `O… | f366e42e |
 
 </details>
 
