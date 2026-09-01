@@ -8716,9 +8716,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         // Receiver and scrutinee temps are NOT arguments and
                         // do not share the argument row's live-range end, so a
                         // per-call drain must not claim them (B-2026-08-29-55).
+                        //
+                        // B-2026-08-30-15 adds the STRUCT scrutinee slot, minted
+                        // by `materialize_freshtemp_struct_scrutinee`, on
+                        // exactly the argument above: same one minting site,
+                        // same table row, same "never live past its own
+                        // statement". Without it the body still ran — the
+                        // registration alone fixed the missing-body half — but
+                        // at the enclosing scope's exit, so `if let S { .. } =
+                        // mkS()` measured `v s1 dS dR7` against the
+                        // interpreter's `v dS dR7 s1`: right counts, the wrong
+                        // point, and the same extended lease the paragraph
+                        // above forbids. The `match` path retires its own entry
+                        // at construct exit before this drain ever sees it; this
+                        // is what covers `if let` / `let…else` / `while let`,
+                        // which have no construct-exit firing of their own.
                         || (!call_return_only
                             && (binding_name == "__urecv_drop_tmp"
-                                || binding_name == "__freshtemp_enum_scrut")) =>
+                                || binding_name == "__freshtemp_enum_scrut"
+                                || binding_name == "__freshtemp_struct_scrut")) =>
                     {
                         fired.push((binding_ptr, drop_fn));
                     }
@@ -8761,7 +8777,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// block, while an arm that falls through reaches the merge block and fires
     /// here. The retirement happens after every arm is compiled, so it cannot
     /// take the action away from a diverging arm that already emitted it.
-    pub(super) fn fire_freshtemp_scrutinee_body_at_exit(&mut self, alloca: PointerValue<'ctx>) {
+    ///
+    /// `binding_name` selects which materializer's slot this is —
+    /// `__freshtemp_enum_scrut` or, since B-2026-08-30-15,
+    /// `__freshtemp_struct_scrut`. The pointer alone would already be unique,
+    /// but naming the slot keeps the retirement legible at each call site and
+    /// stops a future third materializer from being retired by accident.
+    pub(super) fn fire_freshtemp_scrutinee_body_at_exit(
+        &mut self,
+        alloca: PointerValue<'ctx>,
+        binding_name: &str,
+    ) {
         if self
             .builder
             .get_insert_block()
@@ -8773,8 +8799,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut due = None;
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             let idx = frame.iter().position(|a| {
-                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, .. }
-                    if binding_name == "__freshtemp_enum_scrut" && *binding_ptr == alloca)
+                matches!(a, CleanupAction::UserDrop { binding_name: bn, binding_ptr, .. }
+                    if bn == binding_name && *binding_ptr == alloca)
             });
             if let Some(i) = idx {
                 if let CleanupAction::UserDrop {

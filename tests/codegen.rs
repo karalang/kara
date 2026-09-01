@@ -17988,6 +17988,116 @@ fn main() {
         );
     }
 
+    /// B-2026-08-30-15 — the STRUCT flavour of the fresh-temp scrutinee, which
+    /// had no owner at all: `materialize_freshtemp_enum_scrutinee` bails at
+    /// `variant_pattern_enum_name` (`None` for a struct pattern) and no sibling
+    /// picked the value up, so the type's own `drop()` never ran under
+    /// `karac build`. Not a placement divergence — the body was ABSENT, which is
+    /// why the B-2026-08-29-28 machinery next door could not have reached it.
+    ///
+    /// THE ROW UNDERSTATED THIS, and the rows below are the corrected
+    /// measurement. It reported only the destructuring arm, where the moved-out
+    /// binding happens to carry the field's body and buffer. The arms that move
+    /// NOTHING out lose both bodies AND leak the payload — pre-fix, compiled:
+    ///
+    ///   wildcard-field   `v`                  vs interp `v dS dR7`
+    ///   whole-value-bind `v7`                 vs interp `v7 dS dR7`
+    ///   all-scalar       `v7`                 vs interp `v7 dS`
+    ///   heap-field-bound `v7[…]`              vs interp `v7[…] dS`
+    ///   if-let           `v`                  vs interp `v dS dR7`
+    ///   let-else         `v … s2`             vs interp `v dS dR7 s1 dS dR7 s2`
+    ///   loop             `w it w it`          vs interp `w dS dR7 it …`
+    ///
+    /// The memory half is pinned separately in
+    /// `memory_sanitizer::asan_freshtemp_struct_scrutinee_frees_its_payload`.
+    ///
+    /// `destructuring-arm-boundary` IS A KNOWN GAP PINNED AS A BOUNDARY, not a
+    /// passing case. An arm that moves a `Drop`-bearing field out is DECLINED by
+    /// the fix, so it still prints `v7 dR7` against the interpreter's
+    /// `v7 dS dR7`. Registering the wrapper anyway makes it `v7 dR7 dS dR7` —
+    /// the missing `dS` appears and `dR7` runs TWICE, a double close for a
+    /// resource type — because the wrapper's field-body step re-runs a body the
+    /// arm binding already owns, and the cap-zeroing suppressor stops the second
+    /// FREE but not the second BODY. That is B-2026-08-31-31, which the BOUND
+    /// spelling exhibits identically; when it lands, this row becomes
+    /// `v7 dS dR7` and the decline gate goes with it. It is pinned HERE so the
+    /// gate cannot be dropped silently.
+    ///
+    /// `no-own-drop-boundary` is the other untouched boundary and points the
+    /// opposite way: a struct with no `Drop` of its own has no wrapper to
+    /// register, and on that shape it is the INTERPRETER that runs no body while
+    /// compiled runs the binding's (`v7 dR7` vs `v7`) — B-2026-08-31-32, an
+    /// interpreter-side row this must not perturb from the codegen side.
+    #[test]
+    fn e2e_freshtemp_struct_scrutinee_runs_its_own_drop_body() {
+        const H: &str = "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct S { r: R }\n\
+             impl Drop for S { fn drop(mut ref self) { println(\"dS\") } }\n\
+             struct Sc { n: i64 }\n\
+             impl Drop for Sc { fn drop(mut ref self) { println(\"dSc\") } }\n\
+             struct Sh { s: String, n: i64 }\n\
+             impl Drop for Sh { fn drop(mut ref self) { println(\"dSh\") } }\n\
+             struct N { r: R }\n\
+             fn mkS() -> S { return S { r: R { id: 7 } } }\n\
+             fn mkSc() -> Sc { return Sc { n: 7 } }\n\
+             fn mkSh() -> Sh { return Sh { s: \"pay\", n: 7 } }\n\
+             fn mkN() -> N { return N { r: R { id: 7 } } }\n";
+        for (label, body, want) in [
+            (
+                "wildcard-field",
+                "match mkS() { S { r: _ } => { println(\"v\") } }\n",
+                "v\ndS\ndR7\npost\n",
+            ),
+            (
+                "whole-value-bind",
+                "match mkS() { s => { println(f\"v{s.r.id}\") } }\n",
+                "v7\ndS\ndR7\npost\n",
+            ),
+            (
+                "all-scalar",
+                "match mkSc() { Sc { n: n } => { println(f\"v{n}\") } }\n",
+                "v7\ndSc\npost\n",
+            ),
+            (
+                "heap-field-bound",
+                "match mkSh() { Sh { s: s, n: n } => { println(f\"v{n}[{s}]\") } }\n",
+                "v7[pay]\ndSh\npost\n",
+            ),
+            (
+                "if-let",
+                "if let S { r: _ } = mkS() { println(\"v\") }\n",
+                "v\ndS\ndR7\npost\n",
+            ),
+            (
+                "let-else",
+                "let S { r: _ } = mkS() else { println(\"miss\"); return };\n\
+                 println(\"s1\")\n",
+                "dS\ndR7\ns1\npost\n",
+            ),
+            (
+                "in-loop-body",
+                "let mut i = 0;\n\
+                 while i < 2 { match mkS() { S { r: _ } => { println(\"w\") } }\n\
+                 \x20   println(\"it\"); i = i + 1; }\n",
+                "w\ndS\ndR7\nit\nw\ndS\ndR7\nit\npost\n",
+            ),
+            (
+                "destructuring-arm-boundary",
+                "match mkS() { S { r: r } => { println(f\"v{r.id}\") } }\n",
+                "v7\ndR7\npost\n",
+            ),
+            (
+                "no-own-drop-boundary",
+                "match mkN() { N { r: r } => { println(f\"v{r.id}\") } }\n",
+                "v7\ndR7\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-30-14, the compiled ORACLE — the twin of
     /// `interpreter::diverging_arm_over_a_freshtemp_scrutinee_keeps_its_control_flow`.
     ///

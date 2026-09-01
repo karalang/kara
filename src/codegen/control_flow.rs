@@ -116,6 +116,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-fresh / non-enum scrutinees.
         let freshtemp_enum =
             self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
+        // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
+        // this construct too: `if let S { r: _ } = mkS() { … }` measured
+        // `v s1` compiled against the interpreter's `v dS dR7`. The registration
+        // is all that is needed here; unlike `match`, this path has no
+        // construct-exit firing of its own and the struct own-wrapper is exactly
+        // what `fire_due_user_drops`' type-keyed clause admits to NLL /
+        // statement-end placement, which is where the interpreter puts it.
+        let freshtemp_struct = if freshtemp_enum.is_none() {
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
+        } else {
+            None
+        };
+        let _ = &freshtemp_struct;
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // Option[Wide]/Result[Wide,_] scrutinee (box-only — the bound payload
         // owns its inner heap). Registers in the enclosing frame, so the box
@@ -774,6 +787,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // scrutinee) is freed wholesale on the `miss_bb` edge below.
         let freshtemp_enum =
             self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
+        // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
+        // this construct too: `if let S { r: _ } = mkS() { … }` measured
+        // `v s1` compiled against the interpreter's `v dS dR7`. The registration
+        // is all that is needed here; unlike `match`, this path has no
+        // construct-exit firing of its own and the struct own-wrapper is exactly
+        // what `fire_due_user_drops`' type-keyed clause admits to NLL /
+        // statement-end placement, which is where the interpreter puts it.
+        let freshtemp_struct = if freshtemp_enum.is_none() {
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
+        } else {
+            None
+        };
+        let _ = &freshtemp_struct;
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee, registered in the per-iteration body frame
         // (drains each iteration). An `Option` loop terminates on `None` (no
@@ -1323,6 +1349,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // on the match edge zeroes the caps of moved-in fields.
         let freshtemp_enum =
             self.materialize_freshtemp_enum_scrutinee(value, pattern, val, did_clone_ref_enum);
+        // B-2026-08-30-15 — the STRUCT flavour of the same gap, which reaches
+        // this construct too: `if let S { r: _ } = mkS() { … }` measured
+        // `v s1` compiled against the interpreter's `v dS dR7`. The registration
+        // is all that is needed here; unlike `match`, this path has no
+        // construct-exit firing of its own and the struct own-wrapper is exactly
+        // what `fire_due_user_drops`' type-keyed clause admits to NLL /
+        // statement-end placement, which is where the interpreter puts it.
+        let freshtemp_struct = if freshtemp_enum.is_none() {
+            self.materialize_freshtemp_struct_scrutinee(value, &[pattern], val)
+        } else {
+            None
+        };
+        let _ = &freshtemp_struct;
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee (box-only). Registers in the enclosing frame,
         // so it frees after the escaped bindings on the match edge and via the

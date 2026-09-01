@@ -65934,4 +65934,63 @@ fn main() {
             "b30-13-block-rhs-assign-old-value-free",
         );
     }
+
+    /// B-2026-08-30-15, the MEMORY half — the part the row that filed it did not
+    /// see. A fresh-temp struct scrutinee had no owner at all, so an arm that
+    /// binds nothing leaked the payload as well as losing both `Drop` bodies:
+    /// `match mkS() { S { r: _ } => … }` over a one-`String` payload measured 9
+    /// allocs / 8 frees, 15 B definitely lost (valgrind, `KARAC_OPT_LEVEL=0`);
+    /// post-fix 10 / 10, clean. The row saw only the DESTRUCTURING arm, where
+    /// the moved-out binding happens to own the field's buffer — which is
+    /// exactly why the leak hid behind it.
+    ///
+    /// WHAT EACH LEG ACTUALLY CATCHES, measured against the pre-fix compiler
+    /// rather than assumed from the loop: at `KARAC_OPT_LEVEL=0` it fails as a
+    /// LEAK — "60 byte(s) leaked in 4 allocation(s)" — and at the default `-O2`
+    /// it fails on the OUTPUT only, the bodies being absent. So the memory half
+    /// rides on the `-O0` leg (`scripts/asan-o0-leg.sh`) like its neighbours,
+    /// and the loop's contribution is four independent payloads in the leak
+    /// count rather than -O2 coverage it does not buy.
+    ///
+    /// The ORDER is asserted, not just the counts, because the whole defect was
+    /// a missing side effect: `dS` before `dR[…]` is the interpreter's sequence
+    /// and all four surfaces agree on it after the fix.
+    #[test]
+    fn asan_freshtemp_struct_scrutinee_frees_its_payload() {
+        assert_clean_asan_run(
+            r#"
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR[{self.s}]"); } }
+struct S { r: R }
+impl Drop for S { fn drop(mut ref self) { println("dS"); } }
+fn mkS(n: i64) -> S { return S { r: R { s: f"payloadpayload{n}" } }; }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match mkS(i) { S { r: _ } => { println(f"w{i}"); } }
+        i = i + 1;
+    }
+    if let S { r: _ } = mkS(9) { println("g"); }
+    println("done");
+}
+"#,
+            &[
+                "w0",
+                "dS",
+                "dR[payloadpayload0]",
+                "w1",
+                "dS",
+                "dR[payloadpayload1]",
+                "w2",
+                "dS",
+                "dR[payloadpayload2]",
+                "g",
+                "dS",
+                "dR[payloadpayload9]",
+                "done",
+            ],
+            "b30-15-freshtemp-struct-scrutinee-payload",
+        );
+    }
 }

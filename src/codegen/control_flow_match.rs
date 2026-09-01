@@ -252,6 +252,17 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
+        // B-2026-08-30-15 — the STRUCT flavour of the same question. Mutually
+        // exclusive with the enum path by construction (that one needs a
+        // variant pattern, this one a user-struct pattern or a struct-returning
+        // callee), but gated on it explicitly so the exclusion survives a future
+        // widening of either resolver.
+        let freshtemp_struct = if scrut_ref_ptr.is_none() && freshtemp_enum.is_none() {
+            let pats: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+            self.materialize_freshtemp_struct_scrutinee(scrutinee, &pats, scrut)
+        } else {
+            None
+        };
         // Oversized-enum-payload §1/§2: a fresh-temp scrutinee whose payload was
         // heap-boxed (Option[Wide] / Result[Wide,_]) needs the box freed too.
         // Mutually exclusive with the user-enum path above — seeded Option /
@@ -781,6 +792,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_destructured_enum_payload_cleanup_at(
                         *alloca,
                         enum_name,
+                        &arm.pattern,
+                    );
+                } else if let Some((alloca, struct_name)) = &freshtemp_struct {
+                    // B-2026-08-30-15 — the struct twin of the line above. An
+                    // arm that MOVES a field out must zero that field's cap in
+                    // the materialized slot, or the wrapper's field cleanup and
+                    // the arm binding both free it. (The field's BODY still runs
+                    // on the husk — B-2026-08-31-31, which the bound spelling
+                    // has too and which this deliberately does not try to fix
+                    // from here.)
+                    self.suppress_destructured_struct_pattern_cleanup_at(
+                        *alloca,
+                        struct_name,
                         &arm.pattern,
                     );
                 } else {
@@ -1446,13 +1470,19 @@ impl<'ctx> super::Codegen<'ctx> {
             // reason this sits at the two tail returns rather than beside
             // `position_at_end(merge_bb)`.
             if let Some((alloca, _)) = freshtemp_enum {
-                self.fire_freshtemp_scrutinee_body_at_exit(alloca);
+                self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_enum_scrut");
+            }
+            if let Some((alloca, _)) = freshtemp_struct {
+                self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_struct_scrut");
             }
             return Ok(merged);
         }
 
         if let Some((alloca, _)) = freshtemp_enum {
-            self.fire_freshtemp_scrutinee_body_at_exit(alloca);
+            self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_enum_scrut");
+        }
+        if let Some((alloca, _)) = freshtemp_struct {
+            self.fire_freshtemp_scrutinee_body_at_exit(alloca, "__freshtemp_struct_scrut");
         }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -12122,6 +12152,220 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_user_drop_var(&enum_name, "__freshtemp_enum_scrut", alloca);
         }
         Some((alloca, enum_name))
+    }
+
+    /// B-2026-08-30-15 — the STRUCT sibling of
+    /// [`Self::materialize_freshtemp_enum_scrutinee`], and the last flavour of
+    /// scrutinee with no owner at all.
+    ///
+    /// `match mkS() { S { r } => … }` over a struct with its own `impl Drop`
+    /// evaluated a value nothing owned: the enum materializer bails at
+    /// `variant_pattern_enum_name`, which is `None` for a struct pattern, and no
+    /// sibling picked it up. So the type's `drop()` — an unlock, a close, a
+    /// flush — simply never ran under `karac build`, while the interpreter ran
+    /// it. Nothing was mis-ORDERED; the body was absent, which is why no
+    /// ordering fix could have reached it.
+    ///
+    /// THE MEASUREMENT IS BROADER THAN THE ROW THAT FILED IT, and the extra
+    /// half is memory, not just bodies. Against the pre-fix compiler:
+    ///
+    ///   match mkS() { S { r: r } => … }   interp `v7 dS dR7`  build `v7 dR7`
+    ///   match mkS() { S { r: _ } => … }   interp `v  dS dR7`  build `v`
+    ///   match mkS() { s        => … }     interp `v7 dS dR7`  build `v7`
+    ///
+    /// The two arms that move nothing out lose BOTH bodies and leak the field's
+    /// buffer (15 B for a one-`String` payload, valgrind, `KARAC_OPT_LEVEL=0`) —
+    /// there is no owner, so there is nothing to run a body OR a free. The row
+    /// only saw the destructuring arm, where the moved-out binding happens to
+    /// carry the field's body and buffer, hiding the memory half.
+    ///
+    /// Gated to types with their OWN `impl Drop`, deliberately. That is the
+    /// defect as filed, and it keeps this off the path of the no-own-`Drop`
+    /// struct whose field body the two backends already disagree about in the
+    /// OPPOSITE direction (interpreter runs none, compiled runs the binding's) —
+    /// B-2026-08-31-32, an interpreter-side row that must not be perturbed from
+    /// here. `track_user_drop_var` registers the `karac_drop_<S>` wrapper, which
+    /// is body + field cleanup + memory in ONE action, so the leak above closes
+    /// with the body rather than needing a second registration.
+    ///
+    /// A DESTRUCTURING ARM KEEPS A KNOWN RESIDUAL, stated because this fix does
+    /// not close it: when an arm moves a field out, the caller's per-arm
+    /// `suppress_destructured_struct_pattern_cleanup_at` zeroes that field's cap
+    /// so the wrapper's walk cannot double-FREE it — but the wrapper still runs
+    /// the field's BODY on the husk, and the two legitimate bodies come out in
+    /// the reverse of the interpreter's order. That is B-2026-08-31-31, which
+    /// the BOUND spelling (`let s = mkS(); match s { … }`) already exhibits
+    /// identically. This fix makes the fresh-temp spelling agree with the bound
+    /// one; -31 then moves both at once. (The row's claim that the bound
+    /// spelling "is the oracle and is clean" is not correct — measured
+    /// `v7 dR7 dS dR7` against the interpreter's `v7 dS dR7`.)
+    pub(super) fn materialize_freshtemp_struct_scrutinee(
+        &mut self,
+        scrutinee: &Expr,
+        patterns: &[&Pattern],
+        val: BasicValueEnum<'ctx>,
+    ) -> Option<(PointerValue<'ctx>, String)> {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+            return None;
+        }
+        if self.scrutinee_is_borrow_call(scrutinee) {
+            return None;
+        }
+        // A value struct arrives as a struct; a `shared` struct is the RC box
+        // pointer and belongs to the RC channel, which already owns it.
+        let BasicValueEnum::StructValue(sv) = val else {
+            return None;
+        };
+        let struct_name = self.freshtemp_struct_scrutinee_type_name(scrutinee, patterns)?;
+        if self.type_decls.shared_types.contains_key(&struct_name) {
+            return None;
+        }
+        // Only the type's OWN `impl Drop` body is unowned here. A type that
+        // merely CONTAINS droppable fields has no wrapper to register and is
+        // left exactly as it was.
+        let has_user_drop = self
+            .program_snapshot
+            .as_deref()
+            .map(|p| p.drop_method_keys.contains_key(&struct_name))
+            .unwrap_or(false);
+        if !has_user_drop {
+            return None;
+        }
+        // AN ARM THAT MOVES A FIELD OUT IS DECLINED, and this is the whole
+        // reason the fix stops short of the row's own headline repro.
+        //
+        // `track_user_drop_var` registers `karac_drop_<S>` — user body, then
+        // field bodies, then memory, as ONE action. When an arm binds a field,
+        // that field's value and its `Drop` belong to the binding, so the
+        // wrapper's field-body step runs the SAME body a second time. Measured:
+        // registering it anyway turns `match mkS() { S { r } => … }` from
+        // `v7 dR7` into `v7 dR7 dS dR7` — the missing `dS` appears, and `dR7`
+        // now runs TWICE. For a `drop()` that closes a handle that is a double
+        // close, so it is a REGRESSION on a shape that is correct today, not a
+        // partial fix. The codebase's own bar says so in as many words: "an
+        // under-suppressed field drop double-frees; an over-suppressed one
+        // leaks."
+        //
+        // The caller's `suppress_destructured_struct_pattern_cleanup_at` cannot
+        // rescue it: that zeroes the moved field's CAP, which stops the second
+        // FREE and not the second BODY. Masking the body needs a per-variable
+        // wrapper variant that does not exist — B-2026-08-31-31, which the BOUND
+        // spelling (`let s = mkS(); match s { … }`) exhibits identically, at
+        // `v7 dR7 dS dR7` against the interpreter's `v7 dS dR7`. When -31 lands,
+        // dropping this gate is the follow-up.
+        //
+        // Everything that moves nothing out — a wildcard field, a bare binding
+        // of the whole value, an all-scalar struct — has no competing owner and
+        // reaches full interpreter parity, which is what this fix delivers.
+        if patterns
+            .iter()
+            .any(|p| self.struct_pattern_binds_a_drop_bearing_field(p, &struct_name))
+        {
+            return None;
+        }
+        let st = *self.type_decls.struct_types.get(&struct_name)?;
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, "__freshtemp_struct_scrut", st.into());
+        let _ = self.builder.build_store(alloca, sv);
+        self.track_user_drop_var(&struct_name, "__freshtemp_struct_scrut", alloca);
+        Some((alloca, struct_name))
+    }
+
+    /// The user-struct type name a fresh-temp scrutinee denotes, for
+    /// [`Self::materialize_freshtemp_struct_scrutinee`].
+    ///
+    /// Two sources, pattern first: a `S { … }` arm names the type directly, and
+    /// `struct_pattern_names_a_user_struct` is the existing predicate that tells
+    /// a real struct pattern from an enum STRUCT-VARIANT pattern spelled the
+    /// same way (the scrutinee-hint rule). A bare-binding or wildcard arm names
+    /// nothing, so fall back to the callee's declared return type — the shape
+    /// `fresh_arg_bare_shared_heap_type` already reads for its own answer.
+    ///
+    /// Returns `None` for a name that is an ENUM (a struct-variant pattern) or
+    /// is not a known struct, so the enum path keeps every case it had.
+    fn freshtemp_struct_scrutinee_type_name(
+        &self,
+        scrutinee: &Expr,
+        patterns: &[&Pattern],
+    ) -> Option<String> {
+        let from_pattern = patterns.iter().find_map(|p| match &p.kind {
+            PatternKind::Struct { path, .. } if self.struct_pattern_names_a_user_struct(p) => {
+                path.last().cloned()
+            }
+            _ => None,
+        });
+        let name = match from_pattern {
+            Some(n) => n,
+            None => match &scrutinee.kind {
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(n) => self.fn_sig.fn_return_type_names.get(n).cloned()?,
+                    _ => return None,
+                },
+                _ => return None,
+            },
+        };
+        if self.type_decls.enum_layouts.contains_key(&name) {
+            return None;
+        }
+        if !self.type_decls.struct_types.contains_key(&name) {
+            return None;
+        }
+        Some(name)
+    }
+
+    /// Does this pattern move a field that CARRIES A `Drop` BODY out of the
+    /// matched struct? The decline condition for
+    /// [`Self::materialize_freshtemp_struct_scrutinee`].
+    ///
+    /// Two narrowings, and both are load-bearing:
+    ///
+    /// - Narrower than [`Self::pattern_binds_anything`], which is also true of a
+    ///   bare `s =>` catch-all. That case binds the WHOLE value and takes
+    ///   nothing out of it, so no other owner competes and it is exactly the
+    ///   case the caller wants to keep.
+    /// - Narrower than "binds any field", because only a field whose type runs a
+    ///   body can be double-run by the wrapper's field step. `S { n }` over an
+    ///   `i64` field moves nothing droppable; declining it would lose the
+    ///   struct's own `dS` for no reason (measured: it did, until this was
+    ///   narrowed). The field's MEMORY needs no protection here — the caller's
+    ///   `suppress_destructured_struct_pattern_cleanup_at` zeroes the moved
+    ///   field's cap, so a `String`/`Vec` field is already safe from a double
+    ///   free; it is the BODY the mask cannot reach.
+    fn struct_pattern_binds_a_drop_bearing_field(&self, pat: &Pattern, struct_name: &str) -> bool {
+        match &pat.kind {
+            PatternKind::Struct { fields, .. } => {
+                let Some(field_names) = self.type_decls.struct_field_names.get(struct_name) else {
+                    // Unknown layout — assume the worst and decline.
+                    return true;
+                };
+                let Some(field_tys) = self.type_decls.struct_field_type_names.get(struct_name)
+                else {
+                    return true;
+                };
+                fields.iter().any(|f| {
+                    let binds = match &f.pattern {
+                        Some(sub) => Self::pattern_binds_anything(sub),
+                        None => true,
+                    };
+                    if !binds {
+                        return false;
+                    }
+                    match field_names.iter().position(|n| n == &f.name) {
+                        Some(idx) => field_tys
+                            .get(idx)
+                            .and_then(|o| o.as_deref())
+                            .is_some_and(|tn| self.type_runs_user_drop(tn, &mut Vec::new())),
+                        // A field the layout does not name — decline rather than
+                        // guess which one moved.
+                        None => true,
+                    }
+                })
+            }
+            PatternKind::Or(alts) => alts
+                .iter()
+                .any(|a| self.struct_pattern_binds_a_drop_bearing_field(a, struct_name)),
+            _ => false,
+        }
     }
 
     /// Oversized-enum-payload follow-up §1/§2
