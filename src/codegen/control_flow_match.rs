@@ -481,6 +481,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
         let mut arm_results: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        // B-2026-08-30-11 — one entry per arm that reaches the merge:
+        // `(what it reported, its value, the block its store belongs in,
+        // whether its tail MINTS)`. Registration is deferred until every arm
+        // has been compiled, because a minting arm's owner has to come from a
+        // SIBLING's frame and no arm knows its siblings' answers while it is
+        // being compiled. See `Codegen::mixed_branch_arm_owner`.
+        #[allow(clippy::type_complexity)]
+        let mut arm_owner_records: Vec<(
+            Option<(Option<BasicTypeEnum<'ctx>>, Option<usize>)>,
+            BasicValueEnum<'ctx>,
+            BasicBlock<'ctx>,
+            bool,
+        )> = Vec::new();
         // B-2026-08-30-49 — signedness of each arm's tail, captured HERE
         // because `arm.body` is in scope at the push site and gone by the
         // merge. Parallel to `arm_results` and pushed with it (one push site).
@@ -1288,12 +1301,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `compile_block_with_frame` and cleared the one-shot, which is
                 // what keeps the two paths from each registering an owner for
                 // the same buffer.
-                if own_value && !arms_all_mint {
-                    if let Some(span) = self.current_branch_expr_span {
-                        let pending = arm_pending.or(arm_disarmed);
-                        self.register_pending_arm_owner(pending, arm_val, span, match_reset_bb);
-                    }
-                }
+                // B-2026-08-30-11 — recorded, not registered: see
+                // `arm_owner_records`. The store still lands in `merge_pred`
+                // below, which is exactly where the immediate registration put
+                // it (the builder sits there), so deferring changes WHEN the
+                // decision is made and not WHERE the IR goes.
+                let arm_owner_pending = if own_value && !arms_all_mint {
+                    arm_pending.or(arm_disarmed)
+                } else {
+                    None
+                };
+                let arm_owner_mints = own_value
+                    && !arms_all_mint
+                    && self.branch_tail_mints_fresh_owned_temp(&arm.body);
                 // Re-read the current bb AFTER drain — the cleanup IR
                 // may have appended new basic blocks (e.g. `cleanup.free`
                 // / `cleanup.skip` for FreeVecBuffer's `cap > 0` guard),
@@ -1303,6 +1323,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // to merge originates from, or LLVM module verification
                 // fails with "PHI node entries do not match predecessors".
                 let merge_pred = self.builder.get_insert_block().unwrap();
+                arm_owner_records.push((arm_owner_pending, arm_val, merge_pred, arm_owner_mints));
                 arm_results.push((arm_val, merge_pred));
                 arm_unsigned.push(self.branch_tail_is_unsigned_int(Some(&arm.body)));
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -1341,6 +1362,19 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(next_bb);
         if next_bb.get_terminator().is_none() {
             self.builder.build_unreachable().unwrap();
+        }
+
+        // B-2026-08-30-11 — every arm is compiled, so a minting arm can now
+        // borrow a sibling's frame. The first arm that reported one answers for
+        // all of them: they hand out one Kāra value with one lifetime, and any
+        // reporting arm's frame held a binding declared before the `match`, so
+        // it outlives the construct by construction.
+        if let Some(span) = self.current_branch_expr_span {
+            let sibling = arm_owner_records.iter().find_map(|(p, _, _, _)| *p);
+            for (pending, val, bb, mints) in arm_owner_records.clone() {
+                let eff = self.mixed_branch_arm_owner(pending, sibling, mints, true);
+                self.register_pending_arm_owner_at(eff, val, span, match_reset_bb, Some(bb));
+            }
         }
 
         self.builder.position_at_end(merge_bb);

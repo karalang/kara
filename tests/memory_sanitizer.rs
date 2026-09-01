@@ -868,53 +868,124 @@ fn main() {
         );
     }
 
-    /// The two shapes still DECLINED after B-2026-08-30-2, pinned at their
-    /// leaking values.
+    /// B-2026-08-30-11 — the MINTING arm of a MIXED branch now has an owner
+    /// too, borrowed from the sibling arm that reported one.
     ///
-    /// They still leak, and they must: the point of the pin is that no fix in
-    /// this family turned any of them into a memory ERROR, which is the failure
-    /// a fail-closed decline exists to prevent. `run_under_asan_no_leak_check`
-    /// is therefore the right runner — a clean exit means no use-after-free and
-    /// no double free, and the leak is the known, deliberate remainder.
+    /// B-2026-08-29-27's consuming gates require EVERY tail to mint, so one
+    /// binding arm declines the whole construct and no gate frees the merged
+    /// value; B-2026-08-30-2's owner replaces the cleanup a disarmed SOURCE
+    /// BINDING gave up, and a minting arm has no source binding to replace. The
+    /// minted buffer therefore reached the merge owned by nobody. Measured
+    /// (valgrind, `KARAC_OPT_LEVEL=0` and `2` identical; per-arm payload sizes
+    /// chosen so the leaked block identifies which arm produced it):
     ///
-    /// The F-STRING ARM rows (`b`, `d`) that used to sit here are GONE: fixed
-    /// by B-2026-08-30-3 and moved to
-    /// `asan_branch_tail_fstring_arm_frees_once`, which asserts they are clean
-    /// rather than pinning them. They were never a producer-side gap needing
-    /// B-2026-08-30-2's owner — the consuming GATE simply did not recognize an
-    /// f-string as a minting tail, so one line in
-    /// `branch_tail_mints_fresh_owned_temp_inner` closed all nine spellings.
-    /// Left as a pointer because the reasoning recorded here — "the owner
-    /// cannot stand in, it keys off the Vec/String MOVE neutralizer" — was
-    /// correct AND led away from the fix.
+    /// | shape | pre |
+    /// |---|---|
+    /// | `if c { mkA(n) } else { t }.contains("aaa")` | 15 B |
+    /// | `match n { 1 => mkA(n), _ => t }.contains("aaa")` | 15 B |
+    /// | `f"[{if c { mkA(n) } else { t }}]"` | 15 B |
     ///
-    /// The MINTING ARM OF A MIXED BRANCH (`m1`, `m2`) has the same shape as the
-    /// fixed population and a frame problem the fixed population does not.
-    /// B-2026-08-29-27's gates require EVERY tail to mint, so a branch with one
-    /// binding arm declines and the other arm's fresh temp is left unowned —
-    /// but there is no source binding to take a frame from, and the innermost
-    /// frame is wrong: when the branch is itself wrapped
-    /// (`fn f() -> String { { match .. } }`) that is the WRAPPER's frame, which
-    /// drains before the value escapes. A draft that used it freed the arm's
-    /// temp inside `f` and the caller freed it again. The self-host seed-run
-    /// oracle caught that, and reducing it gave the wrapper as the whole
-    /// difference — the unwrapped spelling was clean, which is why a
-    /// single-level fixture would have missed it. The promising lead is the
-    /// SIBLING binding arm's frame, which by construction outlives the branch.
+    /// The sibling's frame is the one to borrow and the INNERMOST live frame is
+    /// not: when the branch is itself wrapped, innermost is the WRAPPER's,
+    /// which drains before the value escapes — a draft that used it double-freed
+    /// on the self-host seed-run oracle. `w1` is the tripwire for that: the
+    /// branch is inside a block inside a function whose caller consumes the
+    /// result, which is the nesting a single-level fixture misses.
     ///
-    /// The BLOCK-LOCAL TAIL row (`m3`) that used to sit here is GONE: fixed by
-    /// B-2026-08-30-12 and moved to `asan_block_local_tail_frees_once`, which
-    /// asserts it is clean rather than pinning it. The reasoning recorded here
-    /// was right about the OWNER and right about where the fix belonged — it is
-    /// still declined by construction (the owner replaces a cleanup in a
-    /// still-live frame and a drained block has none, which is what
-    /// `asan_branch_tail_binding_handout_frees_once`'s `i*` rows keep pinned),
-    /// and it was indeed "the consuming GATE's to widen, not this owner's".
-    /// Widening the seven gates is all it took.
+    /// `e1` (an OWNING destination), `a1` (every arm mints, where the consuming
+    /// gates free at the use site and an arm-level owner would be the second
+    /// free) and `b1` (both arms hand out bindings) are the controls that a
+    /// second owner would turn into a double free.
+    ///
+    /// `o1` reads the sibling binding AFTER the branch, which is what makes the
+    /// borrowed frame's lifetime observable: the value is freed at that frame's
+    /// exit, never earlier.
     #[test]
-    fn asan_branch_tail_declined_shapes_do_not_double_free() {
+    fn asan_mixed_branch_minting_arm_frees_once() {
+        assert_clean_asan_run(
+            r#"
+fn mkA(n: i64) -> String { return f"A{n}-aaaaaaaaaaaa"; }
+fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
+fn wrapped(n: i64, c: bool, t: String) -> String { { if c { mkA(n) } else { t } } }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let t1 = mkB(n);
+    let r1 = if c { mkA(n) } else { t1 }.contains("aaa");
+    println(f"r1={r1}");
+
+    let t2 = mkB(n);
+    let r2 = match n { 1 => mkA(n), _ => t2 }.contains("aaa");
+    println(f"r2={r2}");
+
+    let t3 = mkB(n);
+    let r3 = f"[{if c { mkA(n) } else { t3 }}]";
+    println(f"r3={r3.len()}");
+
+    let t4 = mkB(n);
+    let w1 = wrapped(n, c, t4);
+    println(f"w1={w1.len()}");
+
+    let t5 = mkB(n);
+    let e1 = if c { mkA(n) } else { t5 };
+    println(f"e1={e1.len()}");
+
+    let a1 = if c { mkA(n) } else { mkB(n) }.contains("aaa");
+    println(f"a1={a1}");
+
+    let t6 = mkB(n);
+    let u6 = mkB(n + 1);
+    let b1 = if c { u6 } else { t6 }.contains("bbb");
+    println(f"b1={b1}");
+
+    let t7 = mkB(n);
+    let o1 = if not c { mkA(n) } else { f"keep" }.contains("aaa");
+    println(f"o1={o1} {t7}");
+}
+"#,
+            &[
+                "r1=true",
+                "r2=true",
+                "r3=17",
+                "w1=15",
+                "e1=15",
+                "a1=true",
+                "b1=true",
+                "o1=false B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+            ],
+            "asan_mixed_branch_minting_arm",
+        );
+    }
+
+    /// B-2026-09-01-21 — the arm-owner slot is ONE PER CONSTRUCT and reset each
+    /// pass, so a construct inside a loop whose owner frame lives OUTSIDE the
+    /// loop frees only the LAST pass's value. Pinned at its leaking value.
+    ///
+    /// It still leaks, and the point of the pin is that no fix in this family
+    /// turned it into a memory ERROR — `run_under_asan_no_leak_check` is
+    /// therefore the right runner: a clean exit means no use-after-free and no
+    /// double free, and the leak is the known remainder.
+    ///
+    /// B-2026-08-30-11 improved this shape without closing it (measured on the
+    /// three-iteration fixture below: 57 B in 3 blocks before, 42 B in 2
+    /// after; five iterations leave 72 B in 4). The owner slot now
+    /// exists for the minting arm, but `reset_vec_slot_at_block_end` makes it
+    /// mean "THIS pass's escaping value" and the frame holding its cleanup
+    /// drains once, after the loop — so each pass overwrites the previous
+    /// pass's header and only the survivor is freed. The sibling binding's own
+    /// value is stranded the same way, which is why the count is
+    /// `iterations - 1` rather than `iterations - 2`.
+    ///
+    /// `s1` is the CONTROL that isolates the frame choice as the cause: the
+    /// same branch with the sibling binding declared INSIDE the loop body is
+    /// clean, because the borrowed frame is then the body's and drains every
+    /// pass.
+    #[test]
+    fn asan_loop_arm_owner_slot_keeps_only_the_last_pass() {
         if !asan_available() {
-            eprintln!("[asan_branch_tail_declined_shapes] ASAN unavailable — skipping");
+            eprintln!("[asan_loop_arm_owner_slot] ASAN unavailable — skipping");
             return;
         }
         let src = r#"
@@ -923,37 +994,44 @@ fn mkB(n: i64) -> String { return f"B{n}-bbbbbbbbbbbbbbbbbbbbbbbb"; }
 
 fn main() {
     let n: i64 = env.args().len();
-    let c = n > 0;
 
-    let m1 = mkB(n);
-    let rm1 = if c { mkA(n) } else { m1 }.contains("aaa");
-    println(f"m1={rm1} {m1}");
-    let m2 = mkB(n);
-    let rm2 = match n { 1 => mkA(n), _ => m2 }.contains("aaa");
-    println(f"m2={rm2} {m2}");
+    let t = mkB(n);
+    let mut i: i64 = 0;
+    while i < 3 {
+        let k = if i > 0 { mkA(n) } else { t }.contains("aaa");
+        println(f"L{i}={k}");
+        i = i + 1;
+    }
+    println(f"t={t.len()}");
 
+    let mut j: i64 = 0;
+    while j < 3 {
+        let u = mkB(n);
+        let s1 = if j > 0 { mkA(n) } else { u }.contains("aaa");
+        println(f"S{j}={s1}");
+        j = j + 1;
+    }
 }
 "#;
         let Some((stdout, _stderr, status)) =
-            run_under_asan_no_leak_check(src, "asan_branch_tail_declined_shapes")
+            run_under_asan_no_leak_check(src, "asan_loop_arm_owner_slot")
         else {
-            eprintln!("[asan_branch_tail_declined_shapes] setup failed — skipping");
+            eprintln!("[asan_loop_arm_owner_slot] setup failed — skipping");
             return;
         };
         assert!(
             status.success(),
-            "[asan_branch_tail_declined_shapes] ASAN reported a memory error \
-             (exit {:?}). The declined shape must keep LEAKING, not start \
-             dangling or double-freeing.\nstdout:\n{stdout}",
+            "[asan_loop_arm_owner_slot] ASAN reported a memory error (exit {:?}). \
+             The remaining leak must stay a LEAK, not become a dangling read or \
+             a double free.\nstdout:\n{stdout}",
             status.code()
         );
         for want in [
-            "m1=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
-            "m2=true B1-bbbbbbbbbbbbbbbbbbbbbbbb",
+            "L0=false", "L1=true", "L2=true", "t=27", "S0=false", "S1=true", "S2=true",
         ] {
             assert!(
                 stdout.contains(want),
-                "[asan_branch_tail_declined_shapes] missing {want:?}\nstdout:\n{stdout}"
+                "[asan_loop_arm_owner_slot] missing {want:?}\nstdout:\n{stdout}"
             );
         }
     }

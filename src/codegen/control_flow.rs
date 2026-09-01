@@ -2399,9 +2399,6 @@ impl<'ctx> super::Codegen<'ctx> {
             if let (Some(fe), Some(v)) = (then_block.final_expr.as_deref(), then_val) {
                 then_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
-            if let (Some(span), Some(v)) = (self.current_branch_expr_span, then_val) {
-                self.register_pending_arm_owner(then_pending, v, span, Some(pre_branch_bb));
-            }
         }
         let then_end_bb = self.builder.get_insert_block().unwrap();
         if !then_terminated {
@@ -2459,13 +2456,55 @@ impl<'ctx> super::Codegen<'ctx> {
             if let (Some(fe), Some(v)) = (else_tail, else_val) {
                 else_val = Some(self.deepcopy_owned_param_branch_tail(fe, v, own_value)?);
             }
-            if let (Some(span), Some(v)) = (self.current_branch_expr_span, else_val) {
-                self.register_pending_arm_owner(else_pending, v, span, Some(pre_branch_bb));
-            }
         }
         let else_end_bb = self.builder.get_insert_block().unwrap();
         if !else_terminated {
             self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        // B-2026-08-30-11 — register both arms' owners now that both arms are
+        // known, so a MINTING arm can borrow its sibling's frame. Deferred
+        // rather than done per-arm because that is the only order in which the
+        // sibling's answer exists; the stores still land in each arm's own end
+        // block, which is what keeps ownership per-path. See
+        // [`Self::mixed_branch_arm_owner`].
+        if let Some(span) = self.current_branch_expr_span {
+            let then_mints = then_block
+                .final_expr
+                .as_deref()
+                .is_some_and(|fe| self.branch_tail_mints_fresh_owned_temp(fe));
+            let else_mints =
+                else_tail.is_some_and(|fe| self.branch_tail_mints_fresh_owned_temp(fe));
+            let then_eff = self.mixed_branch_arm_owner(
+                then_pending,
+                else_pending,
+                then_mints,
+                !then_terminated,
+            );
+            let else_eff = self.mixed_branch_arm_owner(
+                else_pending,
+                then_pending,
+                else_mints,
+                !else_terminated,
+            );
+            if let Some(v) = then_val {
+                self.register_pending_arm_owner_at(
+                    then_eff,
+                    v,
+                    span,
+                    Some(pre_branch_bb),
+                    Some(then_end_bb),
+                );
+            }
+            if let Some(v) = else_val {
+                self.register_pending_arm_owner_at(
+                    else_eff,
+                    v,
+                    span,
+                    Some(pre_branch_bb),
+                    Some(else_end_bb),
+                );
+            }
         }
 
         self.builder.position_at_end(merge_bb);

@@ -4879,10 +4879,84 @@ impl<'ctx> super::Codegen<'ctx> {
         span: (usize, usize),
         reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     ) {
+        self.register_pending_arm_owner_at(pending, val, span, reset_bb, None)
+    }
+
+    /// [`Self::register_pending_arm_owner`] with an explicit block to emit the
+    /// ownership store into (B-2026-08-30-11).
+    ///
+    /// The plain form emits at the current insert point, which is right when a
+    /// registration happens inside the arm that produced the value. A MIXED
+    /// construct cannot register there: a minting arm has no frame of its own
+    /// to borrow and has to take its SIBLING's, which is not known until every
+    /// arm has been compiled and the builder has long since moved on. Naming
+    /// the block lets the decision wait for all the arms while the store still
+    /// lands on the path whose value it describes.
+    pub(super) fn register_pending_arm_owner_at(
+        &mut self,
+        pending: Option<(Option<BasicTypeEnum<'ctx>>, Option<usize>)>,
+        val: BasicValueEnum<'ctx>,
+        span: (usize, usize),
+        reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+        store_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) {
         let Some((elem_ty, owning_frame)) = pending else {
             return;
         };
-        self.own_escaping_tail_value(val, elem_ty, span, owning_frame, reset_bb);
+        self.own_escaping_tail_value_at(val, elem_ty, span, owning_frame, reset_bb, store_bb);
+    }
+
+    /// B-2026-08-30-11 — what a MIXED branch's arm should register as its
+    /// owner: its own pending record if it has one, otherwise its SIBLING's
+    /// frame when this arm MINTS its value.
+    ///
+    /// B-2026-08-30-2 gave an owner to an arm whose tail hands out a BINDING,
+    /// by replacing the cleanup that binding's disarm gave up — so the record
+    /// carries the frame that held it. A MINTING arm has no source binding, so
+    /// no record and no frame, and one binding arm is enough to make
+    /// B-2026-08-29-27's consuming gates decline the whole construct (they
+    /// require EVERY tail to mint). The minted buffer therefore reached the
+    /// merge owned by nobody: `let t = mkB(n); let k = if c { mkA(n) } else
+    /// { t }.contains("aaa");` stranded `mkA`'s temp on the `c` path while the
+    /// `t` path stayed clean, 27 B per evaluation and unbounded in a loop.
+    ///
+    /// THE SIBLING'S FRAME IS THE ONE TO USE, and the alternative is not merely
+    /// worse but wrong. An owner registered in the INNERMOST live frame lands
+    /// in whatever encloses the branch, which — when the branch is itself
+    /// wrapped — is the WRAPPER's frame, and that drains before the value
+    /// escapes: `fn f(n: Node) -> String { { match n.tok { … } } }` freed the
+    /// arm's temp at the end of `f`'s inner block and the caller freed it
+    /// again. The same `match` without the braces was clean, which is why a
+    /// single-level fixture misses it; the self-host seed-run oracle is what
+    /// caught it. The sibling's frame cannot have that problem: it held a
+    /// BINDING declared before the branch, so it outlives the branch by
+    /// construction. Both arms yield one Kāra value with one lifetime, so
+    /// borrowing it is principled rather than merely safe — and freeing later
+    /// than strictly necessary is a delay, never a use-after-free.
+    ///
+    /// `mints` must be the arm's OWN answer, not the construct's. An arm whose
+    /// tail names an aliased place keeps its own drop and must get no owner
+    /// here, or the two would fire for one buffer.
+    ///
+    /// Returns `None` for a terminated arm (its value never reaches the merge)
+    /// and for the all-mint construct, which reaches this with no sibling
+    /// record at all — there the consuming gates free at the use site and an
+    /// arm-level owner would be the second free.
+    pub(super) fn mixed_branch_arm_owner(
+        &self,
+        own: Option<(Option<BasicTypeEnum<'ctx>>, Option<usize>)>,
+        sibling: Option<(Option<BasicTypeEnum<'ctx>>, Option<usize>)>,
+        mints: bool,
+        reaches_merge: bool,
+    ) -> Option<(Option<BasicTypeEnum<'ctx>>, Option<usize>)> {
+        if !reaches_merge {
+            return None;
+        }
+        match own {
+            Some(rec) => Some(rec),
+            None if mints => sibling,
+            None => None,
+        }
     }
 
     /// B-2026-08-30-2 — store an empty `{ptr,len,cap}` into `slot` at the END of
@@ -4942,6 +5016,21 @@ impl<'ctx> super::Codegen<'ctx> {
         owning_frame: Option<usize>,
         reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     ) {
+        self.own_escaping_tail_value_at(merged, elem_ty, span, owning_frame, reset_bb, None)
+    }
+
+    /// [`Self::own_escaping_tail_value`] with an explicit block for the store;
+    /// see [`Self::register_pending_arm_owner_at`] for why that is a parameter.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn own_escaping_tail_value_at(
+        &mut self,
+        merged: BasicValueEnum<'ctx>,
+        elem_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+        span: (usize, usize),
+        owning_frame: Option<usize>,
+        reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+        store_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) {
         // Only a `{ptr,len,cap}` value has a buffer to own; anything else the
         // arms could hand out is either scalar or owned elsewhere already.
         if merged.get_type() != self.vec_struct_type().into() {
@@ -4973,7 +5062,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         let slot = self.create_entry_alloca(fn_val, "branchown", self.vec_struct_type().into());
-        if self.builder.build_store(slot, merged).is_err() {
+        // The store goes on the path whose value this is. `store_bb` names that
+        // path explicitly for a deferred registration; the block already has
+        // its terminator by then, so the store must go BEFORE it rather than
+        // after — the same positioning `reset_vec_slot_at_block_end` does.
+        let stored = match store_bb {
+            Some(bb) => {
+                let b = self.context.create_builder();
+                match bb.get_terminator() {
+                    Some(term) => b.position_before(&term),
+                    None => b.position_at_end(bb),
+                }
+                b.build_store(slot, merged).is_ok()
+            }
+            None => self.builder.build_store(slot, merged).is_ok(),
+        };
+        if !stored {
             return;
         }
         match owning_frame {
