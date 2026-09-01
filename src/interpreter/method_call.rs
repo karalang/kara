@@ -3826,6 +3826,23 @@ impl<'a> super::Interpreter<'a> {
                                 crate::float_math::atanh_f64,
                                 crate::float_math::atanh_f32
                             ),
+                            // B-2026-08-30-4 — `cbrt` takes the libm shim
+                            // rather than `at_width!(cbrt)`, for the reason
+                            // its three neighbours do: Rust implements this
+                            // one itself instead of calling libm, so
+                            // `f64::cbrt` agreeing with the symbol codegen
+                            // emits is a property of a Rust version, not an
+                            // invariant. Measured on rustc 1.94.1 they ARE
+                            // the same function (both land on the weak
+                            // `cbrt` `compiler_builtins` links in), so this
+                            // line changes nothing today — it is what stops
+                            // the two backends drifting if std ever moves off
+                            // it. See `float_math::classify`'s doc for the
+                            // measurement and for the lane that DID diverge.
+                            "cbrt" => at_width_libm!(
+                                crate::float_math::cbrt_f64,
+                                crate::float_math::cbrt_f32
+                            ),
                             "exp_m1" => at_width!(exp_m1),
                             "ln_1p" => at_width!(ln_1p),
                             _ => unreachable!("float_math unary classify/match drift"),

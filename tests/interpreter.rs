@@ -25352,6 +25352,52 @@ fn test_inverse_hyperbolics_agree_with_the_libm_symbols_codegen_calls() {
 }
 
 #[test]
+fn test_cbrt_agrees_with_the_libm_symbol_codegen_calls() {
+    // B-2026-08-30-4, interpreter half of the oracle pair. `cbrt` was kept
+    // OUT of the float-math table because Rust's `f64::cbrt` disagrees with
+    // the symbol codegen emits; the shim block in `src/float_math.rs` is what
+    // let it in, exactly as it did for the inverse hyperbolics above.
+    //
+    // `cbrt` is not simply a fourth member of that set, though, and the
+    // difference is what this pair exists to hold down. Its two
+    // implementations are BOTH reachable from a Rust program:
+    // `compiler_builtins` ships a weak `cbrt`/`cbrtf` that shadows the
+    // platform libm's wherever a Rust object is in the link, so which one a
+    // lane gets depends on how that lane was linked rather than on what it
+    // asked for. The interpreter and an AOT binary both land on
+    // compiler_builtins'; the JIT resolves through `dlsym`, which cannot see
+    // a local archive symbol, and used to land on the platform's — a
+    // `run == build` split visible on one lane only. See
+    // `tests/lljit_e2e.rs::jit_e2e_cbrt_resolves_the_implementation_the_other_lanes_link`
+    // for that half; here the assertion is the ordinary one, that the
+    // interpreter calls the symbol rather than reimplementing it.
+    //
+    // Expectation COMPUTED from the linked symbol, not hardcoded, for the
+    // reason the test above states. Inputs after the first differ between the
+    // two implementations at BOTH widths (121 of 2000 sampled k/10 values do),
+    // so this fixture is also the one that would catch the interpreter being
+    // moved onto the other implementation. Character-identical to
+    // `tests/codegen.rs::test_e2e_cbrt_agrees_with_the_interpreter`.
+    extern "C" {
+        fn cbrt(x: f64) -> f64;
+        fn cbrtf(x: f32) -> f32;
+    }
+    let cases: &[f64] = &[27.0, 0.2, 1.6, 4.1, 4.7, 5.3, 7.3, 7.9, -10.6];
+    let mut src = String::from("fn main() {\n");
+    let mut want = String::new();
+    for (i, v) in cases.iter().enumerate() {
+        src.push_str(&format!("    let d{i}: f64 = {v:?};\n"));
+        src.push_str(&format!("    println(d{i}.cbrt());\n"));
+        src.push_str(&format!("    let s{i}: f32 = {v:?}f32;\n"));
+        src.push_str(&format!("    println(s{i}.cbrt());\n"));
+        let (wide, narrow) = unsafe { (cbrt(*v), cbrtf(*v as f32) as f64) };
+        want.push_str(&format!("{wide}\n{narrow}\n"));
+    }
+    src.push_str("}\n");
+    assert_eq!(run(&src), want);
+}
+
+#[test]
 fn test_float_helper_block_computes_at_the_receiver_width_at_every_width() {
     // B-2026-08-30-5, interpreter half. Codegen was rounding the irrational
     // `to_degrees` / `to_radians` constant INTO an f16 receiver before

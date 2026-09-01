@@ -3921,6 +3921,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     ("acosh", true) => Some("acoshf"),
                     ("atanh", false) => Some("atanh"),
                     ("atanh", true) => Some("atanhf"),
+                    // B-2026-08-30-4 — no LLVM-18 intrinsic either, so `cbrt`
+                    // takes the direct-libm path its neighbours take.
+                    ("cbrt", false) => Some("cbrt"),
+                    ("cbrt", true) => Some("cbrtf"),
                     ("hypot", false) => Some("hypot"),
                     ("hypot", true) => Some("hypotf"),
                     // Rust's `exp_m1` / `ln_1p` are libm's `expm1` / `log1p`.

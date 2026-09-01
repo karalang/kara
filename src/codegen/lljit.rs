@@ -107,6 +107,19 @@ extern "C" fn rtdyld_layer_with_gdb_listener(
     }
 }
 
+/// The libm names `LLJITEngine::define_compiler_rt_builtins` republishes so the
+/// JIT calls the same implementation the interpreter and AOT lanes link
+/// (B-2026-08-30-4).
+///
+/// Exposed because the invariant is a SET statement, not a fact about one
+/// symbol: `tests/lljit_e2e.rs::
+/// jit_e2e_every_shadowed_libm_symbol_is_exact_or_published` walks every libm
+/// name codegen can emit, finds the ones whose static resolution differs from
+/// `dlsym`'s, and requires each to be either exactly specified by IEEE 754 (so
+/// two implementations cannot disagree) or listed here. That test is what turns
+/// "only `cbrt` is shadowed today" from a measurement into a guard.
+pub const PUBLISHED_LIBM_SYMBOLS: [&str; 2] = ["cbrt", "cbrtf"];
+
 /// RAII wrapper around an LLJIT instance + its thread-safe context.
 ///
 /// Both handles are disposed by `Drop`. The engine is keyed against
@@ -226,6 +239,26 @@ impl LLJITEngine {
     /// AOT was never affected: it links compiler-rt itself, and at its
     /// optimization level the call is usually folded before reaching the linker
     /// (the E2E binary for such a program contains no `__muloti4` at all).
+    ///
+    /// `cbrt` / `cbrtf` JOINED FOR THE OPPOSITE REASON (B-2026-08-30-4), and
+    /// the contrast is the useful part. `__muloti4` is here because `dlsym`
+    /// finds NOTHING; `cbrt` is here because `dlsym` finds the WRONG ONE.
+    /// `compiler_builtins` ships its own weak `cbrt`/`cbrtf`, and that
+    /// definition wins over the platform libm's wherever a Rust object is in
+    /// the link — so the interpreter (inside `karac`) and an AOT binary (which
+    /// links `libkarac_runtime.a`) both call compiler_builtins', while the JIT
+    /// resolved the emitted call through `dlsym` to the platform's. The two
+    /// disagree: measured on x86-64 glibc, `27.0.cbrt()` is `3` on the first
+    /// two lanes and `3.0000000000000004` on the JIT. Publishing the address
+    /// `float_math`'s `c_cbrt` resolves to puts all three back on one
+    /// implementation. `cbrt` is the ONLY name that needs this, and not because
+    /// the shadowing is rare — 20 of the 64 libm names codegen can emit are
+    /// shadowed on this host. The other 18 are exactly specified by IEEE 754
+    /// (`sqrt`, `fabs`, `copysign`, the four integral roundings, `fmod`, `fma`
+    /// and their `f` forms), so two implementations of them cannot disagree;
+    /// `cbrt` is the one inexact member of the set. That is a measurement, and
+    /// `jit_e2e_every_shadowed_libm_symbol_is_exact_or_published` is what keeps
+    /// it true rather than merely true today.
     fn define_compiler_rt_builtins(&self) -> Result<(), String> {
         extern "C" {
             /// `ti_int __muloti4(ti_int a, ti_int b, int *overflow)`.
@@ -235,7 +268,12 @@ impl LLJITEngine {
         // into the host binary in the first place — nothing else in this
         // process references it.
         let muloti4 = __muloti4 as *const () as usize;
-        self.define_absolute_symbols(&[("__muloti4", muloti4)])
+        let (cbrt, cbrtf) = crate::float_math::cbrt_libm_addrs();
+        self.define_absolute_symbols(&[
+            ("__muloti4", muloti4),
+            (PUBLISHED_LIBM_SYMBOLS[0], cbrt),
+            (PUBLISHED_LIBM_SYMBOLS[1], cbrtf),
+        ])
     }
 
     /// Publish `(name, address)` pairs into the main JITDylib as absolute

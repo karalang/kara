@@ -108187,6 +108187,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_cbrt_agrees_with_the_interpreter() {
+        // The COMPILED half of the oracle pair for B-2026-08-30-4, twinned
+        // with `tests/interpreter.rs::
+        // test_cbrt_agrees_with_the_libm_symbol_codegen_calls` — read that one
+        // for why `cbrt` needed a shim at all and why it is not simply a
+        // fourth inverse hyperbolic.
+        //
+        // Under `KARAC_TEST_JIT=1` this fixture also runs on the JIT lane,
+        // which is where the row's real hazard lived: `compiler_builtins`
+        // ships a weak `cbrt`/`cbrtf` that shadows the platform libm's in any
+        // Rust link, so the interpreter and this AOT binary agree while the
+        // JIT — resolving through `dlsym`, which cannot see a local archive
+        // symbol — used to get the other implementation. The unconditional
+        // pin for that lane is `tests/lljit_e2e.rs::
+        // jit_e2e_cbrt_resolves_the_implementation_the_other_lanes_link`.
+        //
+        // Expectation COMPUTED from the linked symbol rather than hardcoded,
+        // as in the inverse-hyperbolic pair: the invariant is that every lane
+        // calls one implementation, not that the answer is these bits on this
+        // host. Verified byte-identical under `karac run --interp`,
+        // `karac run`, `karac build`, and `KARAC_AUTO_PAR=0 karac build`.
+        extern "C" {
+            fn cbrt(x: f64) -> f64;
+            fn cbrtf(x: f32) -> f32;
+        }
+        let cases: &[f64] = &[27.0, 0.2, 1.6, 4.1, 4.7, 5.3, 7.3, 7.9, -10.6];
+        let mut src = String::from("fn main() {\n");
+        let mut want = String::new();
+        for (i, v) in cases.iter().enumerate() {
+            src.push_str(&format!("    let d{i}: f64 = {v:?};\n"));
+            src.push_str(&format!("    println(d{i}.cbrt());\n"));
+            src.push_str(&format!("    let s{i}: f32 = {v:?}f32;\n"));
+            src.push_str(&format!("    println(s{i}.cbrt());\n"));
+            let (wide, narrow) = unsafe { (cbrt(*v), cbrtf(*v as f32) as f64) };
+            want.push_str(&format!("{wide}\n{narrow}\n"));
+        }
+        src.push_str("}\n");
+        assert_eq!(run_program(&src), Some(want));
+    }
+
+    #[test]
     fn test_e2e_vector_unary_math_lane_width_matches_the_interpreter() {
         // The COMPILED half of the oracle pair for B-2026-08-29-40. The bug was
         // the interpreter's (it kept f64 bits in a bf16 lane); codegen was right

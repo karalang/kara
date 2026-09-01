@@ -103,7 +103,7 @@ mod lazyframe;
 mod lljit;
 mod popcount_idiom;
 #[cfg(feature = "llvm")]
-pub use lljit::{LLJITEngine, ResourceTracker};
+pub use lljit::{LLJITEngine, ResourceTracker, PUBLISHED_LIBM_SYMBOLS};
 mod arena;
 mod contracts;
 mod interner;

@@ -293,3 +293,198 @@ fn jit_e2e_par_block_two_spawns() {
     lines.sort();
     assert_eq!(lines, vec!["1", "2"]);
 }
+
+#[test]
+fn jit_e2e_cbrt_resolves_the_implementation_the_other_lanes_link() {
+    // B-2026-08-30-4. `cbrt` is the one float-math name where the host has
+    // TWO implementations and they disagree, so admitting it to the language
+    // opened a `run == build` split on THIS lane alone — which is why the
+    // pin lives here rather than only in the codegen suite's AOT lane.
+    //
+    // `compiler_builtins` ships a weak `cbrt`/`cbrtf` of its own, and that
+    // definition wins over the platform libm's wherever a Rust object is in
+    // the link. The interpreter (inside `karac`) and an AOT binary (which
+    // links `libkarac_runtime.a`) therefore both call compiler_builtins',
+    // while the JIT resolved the emitted call through `dlsym` — which does
+    // not see a LOCAL archive symbol — and got the platform's instead.
+    // Measured on x86-64 glibc: 224 of 400 sampled f64 inputs disagreed, and
+    // `27.0.cbrt()` was `3` on two lanes and `3.0000000000000004` on this
+    // one. `LLJITEngine::define_compiler_rt_builtins` now publishes the
+    // address this binary's own `cbrt` resolves to, which is the same
+    // implementation the other two lanes link.
+    //
+    // The expectation is COMPUTED rather than hardcoded, for the reason the
+    // inverse-hyperbolic pair states: the invariant is "every lane calls one
+    // implementation", not "the answer is these bits on this host". This test
+    // binary is itself a Rust binary, so its `cbrt` is the very definition
+    // the interpreter and AOT lanes use.
+    //
+    // Every input but the first differs between the two implementations at
+    // BOTH widths (found by sweeping k/10 for k in 1..=2000 against a C
+    // program linked with `-lm`: 121 of 2000 do), so all but two of the 18
+    // lines fail if this lane ever resolves the other one again. `27.0` leads
+    // because it is the legible case and differs at f64.
+    extern "C" {
+        fn cbrt(x: f64) -> f64;
+        fn cbrtf(x: f32) -> f32;
+    }
+    let cases: &[f64] = &[27.0, 0.2, 1.6, 4.1, 4.7, 5.3, 7.3, 7.9, -10.6];
+    let mut src = String::from("fn main() {\n");
+    let mut want = String::new();
+    for (i, v) in cases.iter().enumerate() {
+        src.push_str(&format!("    let d{i}: f64 = {v:?};\n"));
+        src.push_str(&format!("    println(d{i}.cbrt());\n"));
+        src.push_str(&format!("    let s{i}: f32 = {v:?}f32;\n"));
+        src.push_str(&format!("    println(s{i}.cbrt());\n"));
+        let (wide, narrow) = unsafe { (cbrt(*v), cbrtf(*v as f32) as f64) };
+        want.push_str(&format!("{wide}\n{narrow}\n"));
+    }
+    src.push_str("}\n");
+    assert_eq!(jit_run_program(&src), Some(want));
+}
+
+#[test]
+fn jit_e2e_every_shadowed_libm_symbol_is_exact_or_published() {
+    // The STRUCTURAL half of B-2026-08-30-4. The fixture above pins one
+    // symbol; this pins the rule that found it, so the next one does not have
+    // to be found the same way — by a value that came out different on one of
+    // four lanes and no failing test anywhere.
+    //
+    // THE RULE. Codegen lowers the float-math table to bare libm names, and
+    // the AOT lane, the interpreter and the JIT resolve those names by three
+    // different mechanisms — a C link against `libkarac_runtime.a`, this
+    // crate's own Rust link, and ORC's `dlsym` over the runner process.
+    // Wherever a Rust object is in the link, `compiler_builtins`' weak
+    // definitions win over the platform libm's; `dlsym` cannot see them,
+    // because an archive symbol arrives with LOCAL linkage. So a name is
+    // SHADOWED when its statically-resolved address differs from what `dlsym`
+    // hands back, and a shadowed name is one where the JIT and the other two
+    // lanes call different code. That is safe only if:
+    //
+    //   (a) IEEE 754 specifies the result exactly, so any two conforming
+    //       implementations agree bit for bit — square root, absolute value,
+    //       sign copy, the integral roundings, remainder and fused
+    //       multiply-add are all in this class; or
+    //   (b) the symbol is republished into the JITDylib by
+    //       `define_compiler_rt_builtins`, which is what `cbrt` needed.
+    //
+    // Anything else is a `run == build` divergence with no test on it.
+    //
+    // Measured here today: 20 of the 64 names are shadowed, 18 of them in
+    // class (a) and `cbrt`/`cbrtf` in class (b) — which is why the exclusion
+    // this row lifted only ever had one member. If a future toolchain ships
+    // its own `sin` or `log`, this fails and names it.
+    //
+    // Taking each address is also what forces the linker to resolve the name
+    // in THIS binary, the same way `define_compiler_rt_builtins` does for
+    // `__muloti4`; a name the host does not have at all is reported by
+    // `dlsym` as null and skipped rather than failed, since there is then
+    // nothing for the two lanes to disagree about.
+    macro_rules! probe {
+        ($($s:ident($($a:ty),*) -> $r:ty),* $(,)?) => {{
+            extern "C" { $(fn $s($(_: $a),*) -> $r;)* }
+            let mut out: Vec<(&'static str, usize, usize)> = Vec::new();
+            $({
+                let statically = $s as *const () as usize;
+                let name = concat!(stringify!($s), "\0");
+                let via_dlsym = unsafe {
+                    libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr() as *const libc::c_char)
+                } as usize;
+                out.push((stringify!($s), statically, via_dlsym));
+            })*
+            out
+        }};
+    }
+
+    // Every libm name codegen can emit: the direct calls in
+    // `codegen::method_call`'s `libm_sym` table, plus the LLVM intrinsics that
+    // lower to a libm call on this target, plus `sqrt`/`abs`/`%`, which are
+    // not in the float-math table but reach the same symbols. Each is declared
+    // with its REAL signature — an approximate one would trip
+    // `clashing_extern_declarations` against the fixture above, which declares
+    // `cbrt`/`cbrtf` for the same reason and must agree.
+    let probes = probe!(
+        sin(f64) -> f64, sinf(f32) -> f32,
+        cos(f64) -> f64, cosf(f32) -> f32,
+        tan(f64) -> f64, tanf(f32) -> f32,
+        asin(f64) -> f64, asinf(f32) -> f32,
+        acos(f64) -> f64, acosf(f32) -> f32,
+        atan(f64) -> f64, atanf(f32) -> f32,
+        atan2(f64, f64) -> f64, atan2f(f32, f32) -> f32,
+        sinh(f64) -> f64, sinhf(f32) -> f32,
+        cosh(f64) -> f64, coshf(f32) -> f32,
+        tanh(f64) -> f64, tanhf(f32) -> f32,
+        asinh(f64) -> f64, asinhf(f32) -> f32,
+        acosh(f64) -> f64, acoshf(f32) -> f32,
+        atanh(f64) -> f64, atanhf(f32) -> f32,
+        exp(f64) -> f64, expf(f32) -> f32,
+        exp2(f64) -> f64, exp2f(f32) -> f32,
+        expm1(f64) -> f64, expm1f(f32) -> f32,
+        log(f64) -> f64, logf(f32) -> f32,
+        log2(f64) -> f64, log2f(f32) -> f32,
+        log10(f64) -> f64, log10f(f32) -> f32,
+        log1p(f64) -> f64, log1pf(f32) -> f32,
+        pow(f64, f64) -> f64, powf(f32, f32) -> f32,
+        sqrt(f64) -> f64, sqrtf(f32) -> f32,
+        cbrt(f64) -> f64, cbrtf(f32) -> f32,
+        hypot(f64, f64) -> f64, hypotf(f32, f32) -> f32,
+        fabs(f64) -> f64, fabsf(f32) -> f32,
+        fmod(f64, f64) -> f64, fmodf(f32, f32) -> f32,
+        fma(f64, f64, f64) -> f64, fmaf(f32, f32, f32) -> f32,
+        floor(f64) -> f64, floorf(f32) -> f32,
+        ceil(f64) -> f64, ceilf(f32) -> f32,
+        round(f64) -> f64, roundf(f32) -> f32,
+        trunc(f64) -> f64, truncf(f32) -> f32,
+        copysign(f64, f64) -> f64, copysignf(f32, f32) -> f32,
+    );
+
+    /// Class (a): IEEE 754 pins the result, so a shadowing implementation
+    /// cannot answer differently. Everything else on the list is
+    /// transcendental — correctly-rounded results are not required and no two
+    /// libms deliver them identically.
+    const IEEE_EXACT: &[&str] = &[
+        "sqrt",
+        "sqrtf",
+        "fabs",
+        "fabsf",
+        "fmod",
+        "fmodf",
+        "fma",
+        "fmaf",
+        "floor",
+        "floorf",
+        "ceil",
+        "ceilf",
+        "round",
+        "roundf",
+        "trunc",
+        "truncf",
+        "copysign",
+        "copysignf",
+    ];
+
+    let published = karac::codegen::PUBLISHED_LIBM_SYMBOLS;
+    let mut unguarded: Vec<&str> = Vec::new();
+    let mut shadowed = 0usize;
+    for (name, statically, via_dlsym) in &probes {
+        if *via_dlsym == 0 || *via_dlsym == *statically {
+            continue;
+        }
+        shadowed += 1;
+        if !IEEE_EXACT.contains(name) && !published.contains(name) {
+            unguarded.push(name);
+        }
+    }
+    assert!(
+        unguarded.is_empty(),
+        "these libm symbols resolve to one implementation in a Rust link and \
+         another through `dlsym`, so the JIT lane calls different code from \
+         `karac build` and `karac run --interp`: {unguarded:?}. Either the \
+         result is exactly specified by IEEE 754 (add it to IEEE_EXACT with \
+         the reason) or the symbol must be republished in \
+         `LLJITEngine::define_compiler_rt_builtins` and listed in \
+         PUBLISHED_LIBM_SYMBOLS, as `cbrt` is. {shadowed} of {} names are \
+         shadowed on this host.",
+        probes.len()
+    );
+}
