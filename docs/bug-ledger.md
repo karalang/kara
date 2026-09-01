@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 7 |
-| run-vs-build | 293 | 16 |
+| run-vs-build | 293 | 15 |
 | leak | 252 | 8 |
 | missing-feature | 192 | 0 |
 | double-free | 162 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1351 | 34 |
+| codegen | 1351 | 33 |
 | interp | 314 | 15 |
 | typecheck | 285 | 0 |
 | ownership | 72 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced · 36 open · 1896 fixed · 11 wontfix · 3 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced · 35 open · 1897 fixed · 11 wontfix · 3 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (36)
+### Open (35)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -163,7 +163,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
 | B-2026-09-01-38 | 2026-09-01 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's `drop` body RUNS ON THE ZEROED FIELD -- `match h { H { r, .. } }` prints `dR[d:3] dH dR[:0]` on both compiled backends | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
-| B-2026-09-01-40 | 2026-09-01 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFACE -- `let h = H { r: R { .. }, n: 4 }; let q = h.n;` is `dH dR3` under `--interp` and `dR3 dH dR3` on jit/build/no-auto-par, with the field fully LIVE in both bodies; the same read spelled INLINE (`println(f"{h.n}")`) agrees | — |
 | B-2026-09-01-41 | 2026-09-01 | codegen | medium | A `Vec[Option[String]]` STRUCT FIELD never frees its elements, while the identical `Vec` held as a LOCAL is clean -- 173 B in 4 allocations over three pushes, no generics and no `Drop` impl | — |
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 
@@ -199,9 +198,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 
 </details>
 
-### Fixed (1896)
+### Fixed (1897)
 
-<details><summary>1896 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1897 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2101,6 +2100,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1964 surfaced
 | B-2026-09-01-28 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program r… | 213f847 |
 | B-2026-09-01-31 | interp | medium | A DISCARDED enum STRUCT-VARIANT literal loses its PAYLOAD's `Drop` body under `--interp` -- `let _ = Sv.Hold { inner: R { . | edaca15 |
 | B-2026-09-01-35 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape… | b3dbcee |
+| B-2026-09-01-40 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFAC… | cf75c62 |
 
 </details>
 
