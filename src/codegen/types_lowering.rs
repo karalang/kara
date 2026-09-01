@@ -364,6 +364,73 @@ impl<'ctx> super::Codegen<'ctx> {
         p.generic_args.is_none() && p.segments.len() == 1 && p.segments[0] == "bf16"
     }
 
+    /// Whether a lowered LLVM type carries a `bfloat` ANYWHERE inside it —
+    /// directly, or through a struct field, array element, vector lane or any
+    /// nesting of those.
+    ///
+    /// Keyed on the LLVM type rather than the source `TypeExpr` (which is what
+    /// [`Self::type_expr_is_bf16`] does for the scalar case) because the shapes
+    /// that reach a parameter slot are not all spelled in source: a monomorph's
+    /// substituted struct, a `layout`-grouped aggregate, a tuple, an
+    /// `Array[T, N]`. All of them arrive here already lowered, and the failure
+    /// this predicate exists to prevent is a property of the lowered type — the
+    /// wasm ABI promotes a `bfloat` it finds in a signature no matter which
+    /// source construct put it there.
+    ///
+    /// `f16` is deliberately NOT matched. It lowers to `half`, a distinct LLVM
+    /// type that wasm selects perfectly well; the comparison is against
+    /// `bf16_type()` exactly, never against "some 16-bit float".
+    pub(super) fn llvm_type_has_bf16(&self, ty: BasicTypeEnum<'ctx>) -> bool {
+        match ty {
+            BasicTypeEnum::FloatType(f) => f == self.context.bf16_type(),
+            BasicTypeEnum::StructType(st) => (0..st.count_fields())
+                .filter_map(|i| st.get_field_type_at_index(i))
+                .any(|f| self.llvm_type_has_bf16(f)),
+            BasicTypeEnum::ArrayType(at) => self.llvm_type_has_bf16(at.get_element_type()),
+            BasicTypeEnum::VectorType(vt) => self.llvm_type_has_bf16(vt.get_element_type()),
+            // A pointer is opaque: whatever it addresses is not decomposed by
+            // the ABI, which is exactly why a `ref` param builds today.
+            BasicTypeEnum::IntType(_)
+            | BasicTypeEnum::PointerType(_)
+            | BasicTypeEnum::ScalableVectorType(_) => false,
+        }
+    }
+
+    /// The bf16-free twin of a lowered type: identical in size, alignment and
+    /// field offsets, with every `bfloat` leaf replaced by `i16`.
+    ///
+    /// `bfloat` and `i16` are both 2 bytes with 2-byte alignment, so a struct
+    /// and its twin have byte-identical layout and a value of one can be
+    /// reinterpreted as the other through memory
+    /// ([`Self::reinterpret_value_as`]) with no conversion and no rounding.
+    /// That is what makes this safe to use as a wasm ABI: the bits that cross
+    /// the boundary are the same bits, and only the type LLVM is asked to
+    /// classify changes (B-2026-08-31-42).
+    ///
+    /// The twin struct is anonymous even when the original is named. Nothing
+    /// downstream matches on its identity — it exists only for the duration of
+    /// the boundary, and both ends reinterpret it back to the real type
+    /// immediately.
+    pub(super) fn bf16_free_twin_type(&self, ty: BasicTypeEnum<'ctx>) -> BasicTypeEnum<'ctx> {
+        match ty {
+            BasicTypeEnum::FloatType(f) if f == self.context.bf16_type() => {
+                self.context.i16_type().into()
+            }
+            BasicTypeEnum::StructType(st) => {
+                let fields: Vec<BasicTypeEnum<'ctx>> = (0..st.count_fields())
+                    .filter_map(|i| st.get_field_type_at_index(i))
+                    .map(|f| self.bf16_free_twin_type(f))
+                    .collect();
+                self.context.struct_type(&fields, st.is_packed()).into()
+            }
+            BasicTypeEnum::ArrayType(at) => self
+                .bf16_free_twin_type(at.get_element_type())
+                .array_type(at.len())
+                .into(),
+            other => other,
+        }
+    }
+
     pub(super) fn llvm_type_for_type_expr(&self, ty: &TypeExpr) -> BasicTypeEnum<'ctx> {
         match &ty.kind {
             TypeKind::Path(path) => {

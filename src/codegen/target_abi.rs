@@ -132,6 +132,26 @@ pub(crate) struct TargetAbi<'ctx> {
     /// attribute (x86-64 only) is attached after `add_function`. Distinct from
     /// `arm64_coerced_struct_params` (register coercion for ≤ 16 B, AArch64).
     pub(crate) indirect_struct_params: HashMap<String, Vec<(usize, String)>>,
+    /// Per-function record of wasm parameter positions whose declared LLVM type
+    /// was swapped for a **bf16-free twin** (B-2026-08-31-42): fn name →
+    /// per-position `Some(real_type)`.
+    ///
+    /// Sibling of `fn_wasm_bf16_abi`, which handles the BARE `bf16` scalar
+    /// param. This one handles the aggregate that CONTAINS one — a struct, a
+    /// tuple, an `Array[T, N]`, a by-value `self`, at any nesting depth. wasm
+    /// decomposes an aggregate parameter into its fields, so a `bfloat` field
+    /// is promoted to `f32` exactly as a bare `bfloat` param was, and the
+    /// prologue's demote back lowers to the unselectable `fp_to_bf16`. Measured
+    /// size-independent: a six-field struct aborts as readily as a one-field
+    /// one, so this is not the small-struct-decomposition rule it first looks
+    /// like.
+    ///
+    /// The stored type is the REAL one; the declared parameter is its twin. The
+    /// prologue reinterprets twin → real, the call sites real → twin, and both
+    /// reinterpretations are through memory over identical layouts, so no bit
+    /// changes. Empty on every non-wasm target and for every function with no
+    /// bf16-bearing aggregate parameter.
+    pub(crate) fn_wasm_bf16_agg_params: HashMap<String, Vec<Option<BasicTypeEnum<'ctx>>>>,
     /// Exported fn names whose signature adapts a `#[repr(C)]` struct param or
     /// return to the target C ABI (register coercion, indirect `byval`, or
     /// `sret`). An internal Kāra call to one would need matching arg/return

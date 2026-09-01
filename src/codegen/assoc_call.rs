@@ -3339,6 +3339,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // receiver as the first source arg, matching param 0).
             self.pack_niche_abi_args(&qualified, &mut compiled_args);
             self.pack_wasm_bf16_args(&qualified, &mut compiled_args);
+            self.pack_wasm_bf16_agg_args(&qualified, &mut compiled_args);
             let call_site = self
                 .builder
                 .build_call(fn_val, &compiled_args, "usercall")

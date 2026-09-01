@@ -2429,6 +2429,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // conventional shape.
         self.pack_niche_abi_args(&name, &mut compiled_args);
         self.pack_wasm_bf16_args(&name, &mut compiled_args);
+        self.pack_wasm_bf16_agg_args(&name, &mut compiled_args);
 
         // Scalar width coercion at the call-arg boundary — internal
         // values default to i64/f64 widths while the callee's params
@@ -5422,6 +5423,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     *slot = packed.into();
                 }
             }
+        }
+    }
+
+    /// wasm bf16 AGGREGATE arg pack (B-2026-08-31-42): positions the callee
+    /// declares as a bf16-free twin receive the argument reinterpreted into
+    /// that twin.
+    ///
+    /// Same positional contract as [`Self::pack_wasm_bf16_args`], and called
+    /// from the same four surfaces, so a bf16-bearing struct reaches every
+    /// callee in the shape that callee declared. The reinterpretation is a
+    /// store/load through memory over two types with identical size, alignment
+    /// and field offsets — no conversion, no rounding, the same bytes.
+    ///
+    /// No-op for a callee with no record, which is every callee on every
+    /// non-wasm target and every wasm callee with no bf16-bearing aggregate
+    /// parameter.
+    pub(super) fn pack_wasm_bf16_agg_args(
+        &mut self,
+        callee: &str,
+        compiled_args: &mut [BasicMetadataValueEnum<'ctx>],
+    ) {
+        let Some(agg) = self.target_abi.fn_wasm_bf16_agg_params.get(callee).cloned() else {
+            return;
+        };
+        for (i, real) in agg.iter().enumerate() {
+            if real.is_none() {
+                continue;
+            }
+            let Some(slot) = compiled_args.get_mut(i) else {
+                continue;
+            };
+            let cur: BasicValueEnum<'ctx> = match *slot {
+                BasicMetadataValueEnum::StructValue(v) => v.into(),
+                BasicMetadataValueEnum::ArrayValue(v) => v.into(),
+                BasicMetadataValueEnum::VectorValue(v) => v.into(),
+                _ => continue,
+            };
+            let twin = self.bf16_free_twin_type(cur.get_type());
+            let packed = self.reinterpret_value_as(cur, twin);
+            *slot = packed.into();
         }
     }
 

@@ -548,6 +548,59 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // B-2026-08-31-42 — the same problem one level in: an AGGREGATE that
+        // CONTAINS a `bf16`.
+        //
+        // The rewrite above only sees a parameter whose source type IS `bf16`.
+        // wasm decomposes an aggregate parameter into its fields, so a struct's
+        // `bfloat` field becomes a `bfloat` at the boundary and is promoted to
+        // `f32` exactly as a bare parameter was — same `Cannot select:
+        // fp_to_bf16`, same exit 134 with no span. Measured on `main` with the
+        // scalar fix in place: a one-field struct, a two-field struct, a
+        // SIX-field struct, a nested struct, a `(bf16, i64)` tuple, an
+        // `Array[Box, 2]` and a by-value `self` all abort; `ref self`, a `ref`
+        // param and a `Vec[Box]` all build, because a pointer is not
+        // decomposed. Size-independence is why this is keyed on "contains a
+        // `bfloat`" rather than on any register-classification rule.
+        //
+        // The parameter keeps its by-value shape — only its declared TYPE moves
+        // to a bf16-free twin with identical layout, which the prologue
+        // reinterprets straight back. Passing indirectly would have been the
+        // other option, but `indirect_struct_params` is `is_export`-gated and
+        // marks the function ABI-adapted, which rejects internal Kāra calls to
+        // it; a bf16 aggregate is ordinary Kāra code that any caller may call.
+        if crate::target::active_target_is_wasm() {
+            let mut agg: Vec<Option<BasicTypeEnum<'ctx>>> = vec![None; param_types.len()];
+            let mut any = false;
+            for (i, slot) in param_types.iter_mut().enumerate() {
+                let real: BasicTypeEnum<'ctx> = match *slot {
+                    BasicMetadataTypeEnum::StructType(t) => t.into(),
+                    BasicMetadataTypeEnum::ArrayType(t) => t.into(),
+                    BasicMetadataTypeEnum::VectorType(t) => t.into(),
+                    _ => continue,
+                };
+                if !self.llvm_type_has_bf16(real) {
+                    continue;
+                }
+                let twin = self.bf16_free_twin_type(real);
+                *slot = match twin {
+                    BasicTypeEnum::StructType(t) => t.into(),
+                    BasicTypeEnum::ArrayType(t) => t.into(),
+                    BasicTypeEnum::VectorType(t) => t.into(),
+                    // A twin of a struct/array/vector is one of those three; a
+                    // scalar here would mean the twin builder changed shape.
+                    _ => continue,
+                };
+                agg[i] = Some(real);
+                any = true;
+            }
+            if any {
+                self.target_abi
+                    .fn_wasm_bf16_agg_params
+                    .insert(func.name.clone(), agg);
+            }
+        }
+
         // A2 slice 2b.3: a coroutine-compiled network-boundary fn is a *ramp*.
         // It takes a hidden trailing `ptr` completion-slot param (the caller
         // `park_slot_new`s it and waits on it; the body signals it) and returns
@@ -1929,6 +1982,22 @@ impl<'ctx> super::Codegen<'ctx> {
                             &format!("{param_name}.bf16"),
                         )
                         .unwrap()
+                } else {
+                    param_val
+                };
+                // B-2026-08-31-42 wasm bf16 AGGREGATE param unpack: the
+                // position is declared as a bf16-free twin, so reinterpret it
+                // back to the real type before the alloca below. Identical
+                // layout, so this is a memory round-trip and not a conversion —
+                // the same 16 bits per `bfloat` field, no rounding. Everything
+                // downstream then sees the struct it has always seen.
+                let param_val = if let Some(real) = self
+                    .target_abi
+                    .fn_wasm_bf16_agg_params
+                    .get(&func.name)
+                    .and_then(|agg| agg.get(i).copied().flatten())
+                {
+                    self.reinterpret_value_as(param_val, real)
                 } else {
                     param_val
                 };

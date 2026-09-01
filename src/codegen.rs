@@ -6197,6 +6197,7 @@ impl<'ctx> Codegen<'ctx> {
                     && driver::native_target_is_windows_x86_64(),
                 arm64_coerced_struct_params: HashMap::new(),
                 indirect_struct_params: HashMap::new(),
+                fn_wasm_bf16_agg_params: HashMap::new(),
                 abi_adapted_export_names: std::collections::HashSet::new(),
                 arm64_coerced_struct_returns: HashMap::new(),
                 sret_struct_returns: HashMap::new(),

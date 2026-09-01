@@ -1925,6 +1925,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // representative of whichever override is active at runtime.
         self.pack_niche_abi_args(&impl_key, &mut call_args);
         self.pack_wasm_bf16_args(&impl_key, &mut call_args);
+        self.pack_wasm_bf16_agg_args(&impl_key, &mut call_args);
 
         // 4. Indirect call through the loaded fn pointer.
         let call = self

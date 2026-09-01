@@ -8106,6 +8106,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // with declared params 1..N.
                 self.pack_niche_abi_args(&qualified, &mut compiled_args);
                 self.pack_wasm_bf16_args(&qualified, &mut compiled_args);
+                self.pack_wasm_bf16_agg_args(&qualified, &mut compiled_args);
                 // Scalar width coercion at the method-arg boundary —
                 // mirrors the free-fn site in `call_dispatch.rs`
                 // (`p.scale(2)` against `fn scale(self, k: i8)` would

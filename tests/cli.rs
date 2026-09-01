@@ -22101,6 +22101,153 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-08-31-42 — an AGGREGATE that CONTAINS a `bf16` crosses a wasm
+/// function boundary by value, builds, and computes the native values.
+///
+/// Sibling of `wasm_bf16_signature_positions_build_and_match_native`, one level
+/// in. That row rewrote a BARE `bf16` in a signature to `i16`; this one is the
+/// struct, tuple or array that HOLDS one. wasm decomposes an aggregate
+/// parameter into its fields, so a `bfloat` field is promoted to `f32` exactly
+/// as a bare parameter was, and the demote back lowers to the same
+/// unselectable `fp_to_bf16` — same `LLVM ERROR`, same exit 134 with no span.
+/// Codegen now declares such a position as a bf16-free TWIN type (every
+/// `bfloat` leaf replaced by `i16`, identical size, alignment and field
+/// offsets) and reinterprets through memory at both ends.
+///
+/// Measured pre-fix, with B-2026-08-30-42's scalar fix already in place: a
+/// one-field struct, a two-field struct, a SIX-field struct, a nested struct, a
+/// `(bf16, i64)` tuple, an `Array[Box, 2]` and a by-value `self` all aborted.
+/// The size-independence is why the twin is keyed on "contains a `bfloat`"
+/// rather than on any register-classification rule — a
+/// small-struct-decomposition story would have predicted the six-field case
+/// building, and it does not.
+///
+/// The shapes here are the ones that can break a layout-preserving twin rather
+/// than merely a missing one:
+///   * `M` puts `bf16` at NON-FIRST field positions among `i64`/`i32`/`f64`, so
+///     a twin that shifted an offset would corrupt a neighbour, not just itself;
+///   * `Mix` holds an `f16` AND a `bf16` in one struct — the twin must rewrite
+///     the `bfloat` and leave the `half` alone, since `f16` is a legal wasm type
+///     that was never affected;
+///   * `many` takes aggregates at argument positions 1 and 3 with scalars
+///     around them, so the pack has to be positional rather than uniform;
+///   * `Outer` nests a struct AND an `Array[bf16, 3]`, the two recursive arms of
+///     the twin builder;
+///   * `by_val_self` is a by-value receiver, which reaches the param list at
+///     index 0 — an off-by-one in the pack lands on `self`;
+///   * `roundtrip` uses values that ROUND in bf16 (1.1 has no exact bf16
+///     form), so a bitcast that silently became a conversion would show.
+///
+/// `ref_only` rides along as the control: a pointer is not decomposed, so it
+/// built before this fix and must keep building.
+#[test]
+fn wasm_bf16_aggregate_params_build_and_match_native() {
+    let tmp = wasm_test_dir("bf16aggabi");
+    let path = tmp.join("bf16_agg_abi.kara");
+    std::fs::write(
+        &path,
+        r#"
+pub struct Box { v: bf16 }
+pub struct M { a: i64, v: bf16, b: i32, w: bf16, c: f64 }
+pub struct Mix { h: f16, b: bf16, n: i16 }
+pub struct Inner { v: bf16, k: i64 }
+pub struct Outer { i: Inner, arr: Array[bf16, 3], tag: i64 }
+
+impl Box {
+    pub fn by_val_self(self) -> bf16 { return self.v }
+    pub fn ref_only(ref self) -> bf16 { return self.v }
+}
+
+pub fn one(b: Box) -> bf16 { return b.v }
+pub fn widen(b: Box) -> f32 { return b.v as f32 }
+pub fn make() -> Box { return Box { v: 2.5 } }
+pub fn fields(m: M) -> f64 {
+    return (m.a as f64) + (m.v as f64) + (m.b as f64) + (m.w as f64) + m.c
+}
+pub fn mixed16(m: Mix) -> f64 {
+    return (m.h as f64) * 100.0 + (m.b as f64) * 10.0 + (m.n as f64)
+}
+pub fn many(x: i64, b: Box, y: bf16, c: Box, z: f64) -> f64 {
+    return (x as f64) + (b.v as f64) * 10.0 + (y as f64) * 100.0
+        + (c.v as f64) * 1000.0 + z
+}
+pub fn nested(o: Outer) -> f64 with panics {
+    return (o.i.v as f64) + (o.i.k as f64) + (o.arr[0] as f64) * 10.0
+        + (o.arr[2] as f64) * 100.0 + (o.tag as f64)
+}
+pub fn pair(t: (bf16, i64)) -> f64 { return (t.0 as f64) + (t.1 as f64) }
+pub fn roundtrip(b: Box) -> bf16 { return b.v }
+
+fn main() {
+    println(f"one {one(Box { v: 1.5 })}");
+    println(f"widen {widen(Box { v: 1.5 })}");
+    println(f"make {make().v}");
+    println(f"fields {fields(M { a: 7, v: 1.25, b: 3, w: 2.5, c: 0.5 })}");
+    println(f"mixed {mixed16(Mix { h: 1.5, b: 2.5, n: 7i16 })}");
+    println(f"many {many(1, Box { v: 2.0 }, 3.0, Box { v: 4.0 }, 0.5)}");
+    let o = Outer { i: Inner { v: 1.5, k: 2 }, arr: [3.0, 4.0, 5.0], tag: 9 };
+    println(f"nested {nested(o)}");
+    println(f"pair {pair((1.5, 2))}");
+    println(f"selfval {Box { v: 6.5 }.by_val_self()}");
+    println(f"selfref {Box { v: 7.5 }.ref_only()}");
+    println(f"round {roundtrip(Box { v: 1.1 })}");
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    if let Some(reason) = wasm_build_skip_reason(&out) {
+        eprintln!("skip: wasm_bf16_aggregate_params_build_and_match_native — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Pre-fix this did not fail — it DIED. `report_fatal_error` raises SIGABRT,
+    // so `status.success()` is false with no exit code at all; naming both keeps
+    // a future signal-death from reading as an ordinary compile error.
+    assert!(
+        out.status.success(),
+        "a bf16-bearing aggregate in a wasm signature must build (exit={:?}, \
+         signal-death means the `Cannot select: fp_to_bf16` abort is back): {stderr}",
+        out.status.code(),
+    );
+
+    let wasm_path = tmp.join("bf16_agg_abi.wasm");
+    let Some(node_out) = run_wasm_under_node(&tmp, &wasm_path) else {
+        eprintln!("skip: wasm_bf16_aggregate_params_build_and_match_native — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "bf16 aggregate module failed under node:wasi: stdout={node_stdout} \
+         stderr={node_stderr}",
+    );
+    // Every line measured identical under `karac build` on the native target.
+    // `round 1.1015625` is bf16's nearest value to 1.1 — the point of including
+    // it is that a "bitcast" that had become a conversion would not produce it.
+    assert_eq!(
+        node_stdout,
+        "one 1.5\nwiden 1.5\nmake 2.5\nfields 14.25\nmixed 182\nmany 4321.5\n\
+         nested 542.5\npair 3.5\nselfval 6.5\nselfref 7.5\nround 1.1015625\n",
+        "a bf16-bearing aggregate across a wasm boundary must compute the native \
+         values; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 fn run_wasm_under_node(
     tmp: &std::path::Path,
     wasm: &std::path::Path,
