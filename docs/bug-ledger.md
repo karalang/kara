@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 306 |
 | leak | 252 |
 | missing-feature | 193 |
-| double-free | 163 |
+| double-free | 164 |
 | codegen-gap | 159 |
 | diagnostics | 116 |
 | false-positive | 102 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1364 |
+| codegen | 1365 |
 | interp | 323 |
 | typecheck | 286 |
 | ownership | 72 |
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
 | B-2026-09-02-6 | 2026-09-02 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an assignment that runs on SOME iterations leaves it `false` for all later ones and a later iteration's freshly-declared target loses its own `Drop` body. Identical output before and after B-2026-08-30-53 (that fix neither causes nor cures it), and the limitation has been in the mechanism since B-2026-08-28-51 | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
-| B-2026-09-02-11 | 2026-09-02 | codegen | medium | A READ-ONLY `match v[i]` ARM STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON ALL THREE COMPILED SURFACES -- `index got 4 dR3 dE dR3` against `--interp`'s `index got 4 dE dR3`. The arm consumes nothing, so B-2026-08-31-3's rule accepts it; the extra body is the DEFENSIVE COPY's payload, one level in from the enum wrapper B-2026-08-29-37 already withheld on the same clone. Valgrind-clean, so bodies-only | — |
 | B-2026-09-02-13 | 2026-09-02 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelling `let x = mk(1);` of the identical value prints `dB dW7`, so the two differ only in whether the value is named | — |
 | B-2026-09-02-14 | 2026-09-02 | interp+codegen | medium | A BOUND `Option`/`Result` LOCAL WHOSE `if let` MISSES LOSES ITS PAYLOAD'S `Drop` BODY ON ALL FOUR SURFACES -- the pattern's payload-walk retraction is applied statically, before the match test, so on the miss edge it has handed the body to a binding that never happened; the same local with no `if let` at all runs the body correctly, which is what makes this a retraction bug rather than a missing registration | — |
+| B-2026-09-02-15 | 2026-09-02 | codegen | high | THE `if let` / `while let` / `let ... else` SPELLINGS OF AN INDEXED-ELEMENT SCRUTINEE DOUBLE FREE THE ELEMENT'S BUFFER -- `if let E.A(r) = v[0] { .. }` aborts with `free(): double free detected in tcache 2` on all three compiled surfaces where `--interp` prints `A got 4 dE dR3 B`; the three `control_flow.rs` sites never call `clone_owned_vec_index_element`, so `materialize_freshtemp_enum_scrutinee`'s `heap_index` leg drop-tracks a SHALLOW copy that still aliases the container's slot. Crashes with the payload UNBOUND and with no `impl Drop` anywhere, so it is pure memory | — |
 
 ### Relocated
 
@@ -2120,6 +2120,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-7 | interp | medium | A `while let` ARM THAT BINDS ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE PER PASS UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the com… | 51491e9 |
 | B-2026-09-02-8 | interp+codegen | medium | AN `Option`-ENVELOPED STRUCT PATTERN THAT BINDS ONLY THE NON-`Drop` FIELD LOSES THE PAYLOAD'S `Drop` BODY IN THE INTERPRETER on both the `if let` and… | b86bef0 |
 | B-2026-09-02-10 | codegen | medium | B-2026-08-01-19's OVER-SUPPRESSION TRADE IS NOW A VISIBLE DIVERGENCE: a param view assigned into ONE field silences EVERY Drop-bearing field's body o… | d3f7d4b |
+| B-2026-09-02-11 | codegen | medium | A READ-ONLY `match v[i]` ARM STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON ALL THREE COMPILED SURFACES -- `index got 4 dR3 dE dR3` against `--interp`… | 788361f |
 | B-2026-09-02-12 | interp+codegen | medium | AN `Option`/`Result` SCRUTINEE WHOSE NON-MATCHING ARM CARRIES A `Drop` TYPE LOSES THAT PAYLOAD'S BODY ON ALL FOUR SURFACES -- and through `if let` as… | eac05d2 |
 
 </details>
