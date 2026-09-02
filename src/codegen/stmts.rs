@@ -13720,6 +13720,17 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(root) => self.fn_ctx.current_fn_param_names.contains(root),
             None => return,
         };
+        // B-2026-09-02-25 — may the TOP-LEVEL leaves of this destructure be
+        // recorded as param views (see the marking site)? Only for a source
+        // written as a bare parameter name, which is exactly the shape the
+        // interpreter's `let_destructures_owned_param` admits. A projection
+        // source (`let (r, k) = h.pe`) satisfies `owner_runs_bodies` — its root
+        // is a param — but the interpreter's gate wants an IDENTIFIER and
+        // declines, so marking here would leave that shape at one body compiled
+        // and two interpreted. It is at two on every surface today; keeping the
+        // two gates the same keeps it agreed, which is the trade this row's own
+        // opener made.
+        let mark_views = owner_runs_bodies && matches!(&value.kind, ExprKind::Identifier(_));
         let Some(elems) = self.place_chain_tuple_tes(value) else {
             return;
         };
@@ -13729,7 +13740,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(value) else {
             return;
         };
-        self.place_source_tuple_leaf_cleanups(pats, &elems, base_ptr, tuple_ty, owner_runs_bodies);
+        self.place_source_tuple_leaf_cleanups(
+            pats,
+            &elems,
+            base_ptr,
+            tuple_ty,
+            owner_runs_bodies,
+            mark_views,
+        );
     }
 
     /// Per-leaf half of [`Self::finish_place_source_tuple_destructure`], split
@@ -13756,6 +13774,7 @@ impl<'ctx> super::Codegen<'ctx> {
         base_ptr: PointerValue<'ctx>,
         tuple_ty: StructType<'ctx>,
         owner_runs_bodies: bool,
+        mark_views: bool,
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             let Some(te) = elems.get(idx).cloned() else {
@@ -13807,12 +13826,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 else {
                     continue;
                 };
+                // `mark_views: false` — a NESTED leaf is not marked. The
+                // interpreter's twin takes the top-level elements of the
+                // pattern only, for the same reason: a nested tuple element of
+                // a by-value param resolves to an EMPTY element `TypeExpr`
+                // today (a tuple param registers no `tuple_var_elem_type_exprs`
+                // at all), so this recursion never reaches such a leaf and
+                // marking on one side alone would split the backends on
+                // `let ((r, a), b) = t; let m = r;`. Filed separately; it is at
+                // two bodies on every surface.
                 self.place_source_tuple_leaf_cleanups(
                     inner_pats,
                     inner_tes,
                     inner_ptr,
                     inner_ty,
                     owner_runs_bodies,
+                    false,
                 );
                 continue;
             }
@@ -13928,6 +13957,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_var_from_type_expr(name, &te);
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 self.track_destructure_leaf_cleanup(name, slot.ptr, !owner_runs_bodies);
+            }
+            // B-2026-09-02-25 — the `let` spelling of B-2026-08-31-7's rule.
+            //
+            // `owner_runs_bodies` means the SOURCE runs this element's user
+            // `Drop` body (a by-value tuple param, whose entry copy's tuple drop
+            // walks the elements), which is exactly why the line above passes
+            // `false` and registers the leaf for MEMORY only. But the leaf was
+            // never recorded as a param VIEW, so a later whole-value rebind
+            // (`let m = r;`) failed `rhs_is_param_view` at the let-site and
+            // minted a second body: `b5 dR5 dR5` where one is due, agreed on all
+            // four surfaces, while the `match` spelling of the identical
+            // signature was already correct at one.
+            //
+            // View-ness and MEMORY stay separate here, as they do at the arm
+            // site: the `zero_tuple_elem_cap_at` below still hands this
+            // element's buffer to the leaf. This records only who runs the
+            // body, which under `owner_runs_bodies` is the source.
+            if mark_views {
+                self.payload_vars.param_view_locals.insert(name.clone());
             }
             self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
         }

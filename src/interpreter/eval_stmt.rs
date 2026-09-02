@@ -2190,9 +2190,66 @@ impl<'a> super::Interpreter<'a> {
         let ExprKind::Identifier(n) = &value.kind else {
             return false;
         };
-        self.owned_param_names_stack
+        if !self
+            .owned_param_names_stack
             .last()
             .is_some_and(|params| params.contains(n.as_str()))
+        {
+            return false;
+        }
+        // B-2026-09-02-25 — retracting this destructure's OWN slots is only
+        // half the hand-off. The names it binds are views of the callee's entry
+        // copy too, and every sibling branch above says so by inserting into
+        // `owned_param_names_stack`; this one returned `true` without it. So
+        // `let (r, k) = t; let m = r;` failed `src_is_view` at the rebind and
+        // minted a second owner — `b5 dR5 dR5` against a due `b5 dR5` — while
+        // `match t { (r, k) => { let m = r; … } }` over the identical signature
+        // was already correct (B-2026-08-31-7).
+        //
+        // THREE RESTRICTIONS, each one holding the two backends to the same
+        // answer rather than trading an agreed-wrong cell for a divergence —
+        // the trade this row's own opener declined. Every one is measured.
+        //
+        //  * TUPLE SPELLINGS ONLY. Codegen's tuple destructure is fixed in the
+        //    same commit, so `Tuple` converges at one body on all four
+        //    surfaces, and `TupleVariant` (`let W.A(r) = w else { … }`)
+        //    converges because codegen was ALREADY at one there — the
+        //    interpreter was the lone doubler. The `Struct` spelling
+        //    (`let S { r, k } = s;`) is at two everywhere and its codegen half
+        //    is different machinery: `finish_owned_struct_destructure`
+        //    TRANSFERS the body to the leaf instead of leaving it with the
+        //    source, so its rebind has to MOVE a body, not withhold one.
+        //  * A SEEDED PARAM SOURCE, not an inherited view. See
+        //    `owned_param_seed_names_stack` — codegen cannot see through a
+        //    tuple whole-rebind at all.
+        //  * TOP-LEVEL elements of the pattern. A nested element
+        //    (`let ((r, a), b) = t;`) resolves to an empty element `TypeExpr`
+        //    on the compiled side, so its leaf is never reached there.
+        //
+        // The two shapes the last two restrictions hold back are at two bodies
+        // on every surface today, and filed.
+        let seeded_param = self
+            .owned_param_seed_names_stack
+            .last()
+            .is_some_and(|seed| seed.contains(n.as_str()));
+        let top_level: &[Pattern] = match &pattern.kind {
+            PatternKind::Tuple(elems) => elems,
+            PatternKind::TupleVariant { patterns, .. } => patterns,
+            _ => &[],
+        };
+        if seeded_param {
+            let names: Vec<String> = top_level
+                .iter()
+                .filter_map(|p| match &p.kind {
+                    PatternKind::Binding(b) => Some(b.clone()),
+                    _ => None,
+                })
+                .collect();
+            if let Some(top) = self.owned_param_names_stack.last_mut() {
+                top.extend(names);
+            }
+        }
+        true
     }
 
     /// B-2026-08-29-47 — does this `let` initializer read a field out of a

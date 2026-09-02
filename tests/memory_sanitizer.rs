@@ -412,10 +412,13 @@ mod memory_sanitizer_tests {
     /// giving the double free back.
     ///
     /// NOT WIDENED TO THE SIBLING ROWS, which were measured byte-identical
-    /// before and after this change and stay open: B-2026-09-02-25 (the
-    /// `let (r, k) = t` spelling) and B-2026-09-02-26 (a LOCAL tuple scrutinee)
-    /// are about the `Drop` BODY count, not the heap, and go through different
-    /// machinery.
+    /// before and after this change: B-2026-09-02-25 (the `let (r, k) = t`
+    /// spelling) and B-2026-09-02-26 (a LOCAL tuple scrutinee) are about the
+    /// `Drop` BODY count, not the heap, and go through different machinery.
+    /// (-25 has since been fixed on its own, by the marking pinned in
+    /// `asan_let_tuple_destructure_leaf_has_one_owner` just below; -26 is still
+    /// open. The independence recorded here is what made the two commits safe to
+    /// land separately.)
     #[test]
     fn asan_tuple_element_whole_move_out_disarms_the_tuple() {
         assert_clean_asan_run(
@@ -459,6 +462,69 @@ mod memory_sanitizer_tests {
                 "end",
             ],
             "b32-tuple-elem-whole-move-out",
+        );
+    }
+
+    /// B-2026-09-02-25 — the `let`-destructure spelling of the same rule, on a
+    /// HEAP-CARRYING element.
+    ///
+    /// The fix records a `let (r, k) = t;` leaf in `param_view_locals`, which
+    /// moves the later `let m = r;` off the body-registering path and onto the
+    /// memory-only one. Body counting is pinned by the E2E twins; what only ASAN
+    /// can answer is whether the buffers still have exactly one owner once that
+    /// registration changes — a withheld body is also a withheld drop action, and
+    /// the leaf's memory arrives by `zero_tuple_elem_cap_at` handing the element
+    /// away from the source's tuple drop.
+    ///
+    /// `two` carries the shape most likely to go wrong: the rebound element and
+    /// an untouched sibling in the same tuple, so a cap-zero that reached one
+    /// index too far would free `q`'s buffers twice. `chain` re-moves the view a
+    /// second time, and `letelse` covers the enum spelling the same commit
+    /// converged.
+    ///
+    /// The transcript is asserted alongside so the case fails if the bodies stop
+    /// running rather than merely staying memory-clean — the `Drop` body reads
+    /// both heap fields, so a premature free is a use-after-free here rather than
+    /// a silent leak.
+    #[test]
+    fn asan_let_tuple_destructure_leaf_has_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.name}:{self.xs.len()}\") } }\n\
+             enum W { A(R), B }\n\
+             fn mk(id: i64) -> R {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return R { id: id, name: f\"n{id}\", xs: v }\n\
+             }\n\
+             fn one(t: (R, i64)) { let (r, k) = t; let m = r; println(f\"  one{m.xs.len()}:{m.name}\") }\n\
+             fn chain(t: (R, i64)) { let (r, k) = t; let m = r; let m2 = m; println(f\"  chain:{m2.name}\") }\n\
+             fn two(t: (R, R)) { let (r, q) = t; let m = r; println(f\"  two:{m.name}:{q.name}\") }\n\
+             fn letelse(w: W) { let W.A(r) = w else { return }; let m = r; println(f\"  le:{m.name}\") }\n\
+             fn norebind(t: (R, i64)) { let (r, k) = t; println(f\"  nr{r.xs.len()}:{r.name}\") }\n\
+             fn main() {\n\
+             \x20   one((mk(1), 0));\n\
+             \x20   chain((mk(2), 0));\n\
+             \x20   two((mk(3), mk(4)));\n\
+             \x20   letelse(W.A(mk(5)));\n\
+             \x20   norebind((mk(6), 0));\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "one1:n1",
+                "dR1:n1:1",
+                "  chain:n2",
+                "dR2:n2:1",
+                "  two:n3:n4",
+                "dR3:n3:1",
+                "dR4:n4:1",
+                "  le:n5",
+                "dR5:n5:1",
+                "  nr1:n6",
+                "dR6:n6:1",
+                "end",
+            ],
+            "b25-let-tuple-destructure-single-owner",
         );
     }
 

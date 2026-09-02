@@ -34311,6 +34311,144 @@ done
     );
 }
 
+/// B-2026-09-02-25 — THE `let` SPELLING OF B-2026-08-31-7's RULE, which the
+/// `match` spelling got and this one did not.
+///
+/// `let (r, k) = t;` over an owned TUPLE PARAM binds views of the callee's entry
+/// copy exactly as `match t { (r, k) => … }` does, so a later whole rebind
+/// (`let m = r;`) must inherit the withholding. It did not: `param` below printed
+/// `b1 dR1 dR1` where one body is due — agreed on all four surfaces — while
+/// `arm`, the identical signature written as a match, was already correct at one.
+///
+/// TWO HALVES, LANDED TOGETHER because either alone is a divergence:
+/// - THIS BACKEND: `let_destructures_owned_param` returned `true` for a `Tuple`
+///   pattern over an owned-param RHS — correctly retracting the destructure's OWN
+///   slots — without inserting the bound names into `owned_param_names_stack` the
+///   way every sibling branch does. So `r` was not a known view and the rebind
+///   minted a second owner.
+/// - CODEGEN: `place_source_tuple_leaf_cleanups` already registers such a leaf for
+///   MEMORY only, but never recorded it in `param_view_locals`, so the let-site's
+///   `rhs_is_param_view` said no.
+///
+/// `letelse` is the cell that shows the two halves are one rule: codegen was
+/// ALREADY at one body there and this backend was the lone doubler, so it
+/// converges from this side alone.
+///
+/// THE PINNED-AT-TWO CELLS ARE THE POINT, and each is held back by a measurement
+/// rather than by taste. All four surfaces agree at two bodies on every one of
+/// them, and marking a view on ONE side would turn that agreement into a
+/// run-vs-build split:
+/// - `structpat` — `let S { r, k } = s;`. Its codegen half is different
+///   machinery: `finish_owned_struct_destructure` TRANSFERS the body to the leaf
+///   rather than leaving it with the source, so the rebind there has to MOVE a
+///   body, not withhold one.
+/// - `nested` — `let ((r, a), b) = t;`. A tuple PARAM registers no
+///   `tuple_var_elem_type_exprs`, so its nested element resolves to an EMPTY
+///   `TypeExpr` and the compiled recursion never reaches the leaf.
+/// - `viewsrc` — `let t2 = t; let (r, k) = t2;`. Codegen cannot see through a
+///   tuple whole-rebind at all (`t2.0.id` still fails to lower), which is why the
+///   propagation here reads `owned_param_seed_names_stack` — the frame's params
+///   AS SEEDED — rather than the union that has grown to include inherited views.
+/// - `proj` — `let (r, k) = h.pe;`. A projection source satisfies codegen's
+///   `owner_runs_bodies` (its root is a param) but not this backend's gate, which
+///   wants a bare identifier.
+///
+/// `norebind` and `local` are the over-reach controls: withholding a body fails
+/// by running none, and both must stay at exactly one.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_let_tuple_destructure_of_owned_param_is_a_view`, pinned to the same
+/// string.
+#[test]
+fn test_let_tuple_destructure_of_owned_param_is_a_view() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S { r: R, k: i64 }
+struct H { pe: (R, i64) }
+enum W { A(R), B }
+
+fn s1(t: (R, i64))  { let (r, k) = t; let m = r; println(f"  b{m.id}") }
+fn s2(t: (R, i64))  { let (r, k) = t; let m = r; let m2 = m; println(f"  b{m2.id}") }
+fn s3(t: (R, R))    { let (r, q) = t; let m = r; println(f"  b{m.id}_{q.id}") }
+fn s4(w: W)         { let W.A(r) = w else { return }; let m = r; println(f"  b{m.id}") }
+fn s5(t: (R, i64))  { let (r, k) = t; println(f"  b{r.id}") }
+fn s6(t: (R, i64))  { match t { (r, k) => { let m = r; println(f"  b{m.id}") } } }
+fn s7()             { let t = (R { id: 7 }, 0); let (r, k) = t; let m = r; println(f"  b{m.id}") }
+fn s8(s: S)         { let S { r, k } = s; let m = r; println(f"  b{m.id}") }
+fn s9(t: ((R, i64), i64)) { let ((r, a), b) = t; let m = r; println(f"  b{m.id}") }
+fn s10(t: (R, i64)) { let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
+fn s11(h: H)        { let (r, k) = h.pe; let m = r; println(f"  b{m.id}") }
+
+fn main() {
+    println("param");      s1((R { id: 1 }, 0));            println("param end")
+    println("chained");    s2((R { id: 2 }, 0));            println("chained end")
+    println("two");        s3((R { id: 3 }, R { id: 4 }));  println("two end")
+    println("letelse");    s4(W.A(R { id: 5 }));            println("letelse end")
+    println("norebind");   s5((R { id: 6 }, 0));            println("norebind end")
+    println("arm");        s6((R { id: 8 }, 0));            println("arm end")
+    println("local");      s7();                            println("local end")
+    println("structpat");  s8(S { r: R { id: 9 }, k: 0 });  println("structpat end")
+    println("nested");     s9(((R { id: 10 }, 0), 0));      println("nested end")
+    println("viewsrc");    s10((R { id: 11 }, 0));          println("viewsrc end")
+    println("proj");       s11(H { pe: (R { id: 12 }, 0) });println("proj end")
+    println("done")
+}
+"#),
+        r#"param
+  b1
+dR1
+param end
+chained
+  b2
+dR2
+chained end
+two
+  b3_4
+dR3
+dR4
+two end
+letelse
+  b5
+dR5
+letelse end
+norebind
+  b6
+dR6
+norebind end
+arm
+  b8
+dR8
+arm end
+local
+  b7
+dR7
+local end
+structpat
+  b9
+dR9
+dR9
+structpat end
+nested
+  b10
+dR10
+dR10
+nested end
+viewsrc
+  b11
+dR11
+dR11
+viewsrc end
+proj
+  b12
+dR12
+dR12
+proj end
+done
+"#
+    );
+}
+
 /// B-2026-08-31-7 (the hazard the fix above had to clear first) — A `let` STARTS
 /// A NEW GENERATION OF ITS NAMES, so a stale param-VIEW mark must not survive it.
 ///
