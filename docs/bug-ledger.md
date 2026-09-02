@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 160 |
 | diagnostics | 120 |
 | false-positive | 105 |
-| soundness | 94 |
+| soundness | 95 |
 | perf | 87 |
 | other | 71 |
 | crash | 70 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1388 |
+| codegen | 1389 |
 | interp | 333 |
-| typecheck | 288 |
+| typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
 | cli | 70 |
@@ -158,10 +158,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-31 | 2026-09-02 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, .. }` in a nested expression position loses 15 B per evaluation at both opt levels where the BRACED `=> { s }` spelling is now clean. Excluded by that fix's block-bodied-arm condition, which is load-bearing: dropping it fails BOTH `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free` and `selfhost_codegen_matches_seed_run`, because a bare-armed match is also how the generic-enum debox hands a value out of its frame | — |
 | B-2026-09-02-38 | 2026-09-02 | interp+codegen | medium | THE `let S { r, k } = s` SPELLING OF B-2026-09-02-25 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b9 dR9 dR9` where one is due, while the TUPLE spelling of the same shape is now correct. The struct half is different machinery: codegen TRANSFERS the body to the leaf instead of leaving it with the source, so its rebind has to MOVE a body, not withhold one | — |
 | B-2026-09-02-41 | 2026-09-02 | interp+codegen | medium | THE TWO-STEP DESTRUCTURE OF A NESTED TUPLE FIELD SPLITS THE BACKENDS -- `let (inner, y) = h.pe; let (r, x) = inner; let m = r;` runs ONE `Drop` body under `--interp` and TWO on `karac run` / `karac build` / `KARAC_AUTO_PAR=0`. The interpreter is right; the compiled side records nothing for the tuple-typed leaf under an owner-runs-bodies source | — |
-| B-2026-09-02-42 | 2026-09-02 | typecheck | medium | A BODY TYPE ANNOTATION THAT NAMES A GENERIC PARAMETER POISONS EVERY LATER BOUNDED USE OF THAT VALUE: one `let w: T = v;` makes the next bounded call fail as `trait bound 'T: Copy' is not satisfied; 'T' does not implement 'Copy'` -- on an impl block or signature that DECLARES the bound. Deleting the annotation compiles. Hits impl METHODS (E0236) and FREE generic functions (E0200) alike, on Copy / Ord / Add, and the `where`-clause form degrades further to `no method 'set' on type 'Box'`. Blocks run and build. | — |
 | B-2026-09-02-43 | 2026-09-02 | codegen | medium | A LOCAL STRUCT'S PROJECTION DESTRUCTURE RUNS THE ELEMENT'S `Drop` BODY ON A CAP-ZEROED HUSK, BEFORE THE LIVE READ, and then again -- `let h = H { pe: (mk(21), 0) }; let (r, k) = h.pe;` prints `dR21//0` (empty String, zero-length Vec) then the read then the real body on all three compiled surfaces, where `--interp` runs one body on the live value. valgrind-clean, so only a `Drop` body that RENDERS its fields can see it | — |
 | B-2026-09-02-44 | 2026-09-02 | interp+codegen | medium | A WHOLE-REBIND OF A STRUCT PARAM BEFORE PROJECTING STILL DOUBLES THE ELEMENT'S `Drop` BODY -- `let h2 = h; let (r, k) = h2.pe; let m = r;` runs TWO bodies on all four surfaces where one is due, while the direct spelling `let (r, k) = h.pe` is correct since B-2026-09-02-40. Same missing widening as B-2026-09-02-25's `viewsrc` cell, one hop further in | — |
 | B-2026-09-02-46 | 2026-09-02 | codegen | medium | A BOXED ENUM PAYLOAD INSIDE A MONOMORPH LEAKS ITS BOX WHENEVER THE ARM BINDS AND READS IT -- 48 bytes per CALL, on `Option` and `Result` alike, for a free fn and a method alike; the non-generic twin is clean, and so is the same monomorph when the arm does NOT read the payload | — |
+| B-2026-09-02-47 | 2026-09-02 | typecheck+codegen | high | AN IMPL-LEVEL BOUND IS NEVER DISCHARGED AT AN ASSOCIATED-FUNCTION CALL SITE -- `impl[T: Copy] Pair[T] { fn twin(v: T) }` accepts `Pair.twin(<non-Copy>)`, so a body that legitimately relies on `Copy` performs a DOUBLE MOVE. Produces a RUN-vs-BUILD divergence with silent wrong output on both compiled backends: interp prints `hello hello`, JIT and AOT print `hello ` (the second field's String is empty). The remainder of B-2026-08-22-10, whose fix covered bounds on the associated fn's OWN params but not bounds inherited from the IMPL BLOCK. | — |
 
 ### Relocated
 
@@ -2151,6 +2151,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-37 | codegen | high | AN `Array[String, N]` AS AN `Option` PAYLOAD IS A SILENT MISCOMPILE UNDER CODEGEN -- its elements render EMPTY (`[, ]`) when the `Option` crosses a f… | 2e891ef |
 | B-2026-09-02-39 | codegen | medium | A TUPLE PARAM REGISTERS NO ELEMENT `TypeExpr`s AND A TUPLE WHOLE-REBIND CARRIES NONE, so any element a NAME cannot spell renders as an EMPTY path: `t… | b1ae9745 |
 | B-2026-09-02-40 | interp+codegen | medium | A PROJECTION SOURCE `let (r, k) = h.pe; let m = r;` STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b12 dR12 dR12` where one is due,… | f9bf80d8 |
+| B-2026-09-02-42 | typecheck | medium | A BODY TYPE ANNOTATION THAT NAMES A GENERIC PARAMETER POISONS EVERY LATER BOUNDED USE OF THAT VALUE: one `let w: T = v;` makes the next bounded call… | a7c8af7 |
 | B-2026-09-02-45 | codegen | high | A FUNCTION PARAMETER'S `Option`/`Result` PAYLOAD TYPE OUTLIVES ITS FUNCTION AND IS INHERITED BY ANY SAME-NAMED BINDING LATER IN THE PROGRAM -- an UNU… | 76fd9e1 |
 
 </details>
