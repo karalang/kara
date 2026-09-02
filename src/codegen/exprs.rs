@@ -1330,6 +1330,43 @@ impl<'ctx> super::Codegen<'ctx> {
                     // fresh-temp slot so the drain below frees only the
                     // temp's unread remainder.
                     self.consume_freshtemp_field_move(e);
+                    // B-2026-08-30-18 — the EXPLICIT-`return` twin of
+                    // B-2026-08-02-23 leg 2, which exists only at the tail site
+                    // (`suppress_cleanup_for_tail_return`). Every binding named
+                    // inside a returned AGGREGATE LITERAL is moved into the
+                    // returned value, so its Drop-BODIES action must retract
+                    // exactly as it does at the let-RHS, consuming-argument and
+                    // bare-tail positions.
+                    //
+                    // Without it `return Box3 { xs: v }` over
+                    // `struct Box3 { xs: Vec[R] }` ran the element bodies TWICE
+                    // — `mid dR14 v14 dR14 post` against the interpreter's
+                    // `mid v14 dR14 post`, on all three compiled surfaces. The
+                    // two working spellings both route the value through
+                    // something this hook set already covers: `let bx = …;
+                    // return bx` disarms via the bare-Identifier arm below, and
+                    // the bare tail `Box3 { xs: v }` reaches leg 2 directly. So
+                    // the return-position literal was the only spelling with no
+                    // owner for the bodies half.
+                    //
+                    // BODIES ONLY, and that asymmetry is why this stayed quiet:
+                    // the MEMORY half is already transferred by
+                    // `suppress_source_vec_cleanup_for_arg` above (which
+                    // recurses into literal fields), so the buffer had exactly
+                    // one owner and valgrind reported 0 errors and 0 leaked
+                    // bytes. What doubled was the observable side effect — a
+                    // `Drop` that closes, releases or logs fired twice.
+                    //
+                    // Static and flow-insensitive like every sibling: a
+                    // conditional return disarms on all paths, which can only
+                    // under-fire.
+                    if matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)) {
+                        let mut sources = Vec::new();
+                        Self::collect_aggregate_literal_sources(e, &mut sources);
+                        for n in sources {
+                            self.suppress_user_drop_for_var(&n);
+                        }
+                    }
                     // B-2026-08-06-14 — `return b.v;` handing out a direct
                     // `shared` field of a CALLER-RETAINS struct param. The
                     // caller's +1 is still live, so the returned handle is an

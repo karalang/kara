@@ -38559,6 +38559,100 @@ fn if_let_miss_drops_the_scrutinee_temp_before_the_else_arm() {
     }
 }
 
+/// B-2026-08-30-18 — the ORACLE half of the return-position aggregate
+/// literal. An aggregate literal built directly at an explicit `return`,
+/// carrying a `Vec` of `Drop` elements moved in from a named local, runs
+/// each element's body exactly ONCE, at the caller's binding death.
+///
+/// This half was already GREEN before the fix — the compiled backends ran
+/// the body twice (`mid dR14 v14 dR14 post` against this `mid v14 dR14
+/// post`) because their explicit-`return` hook set was missing
+/// B-2026-08-02-23 leg 2's aggregate-literal source disarm. It is pinned
+/// here for the same reason as the sibling below: it is the oracle the
+/// compiled half was moved onto, so a future change that "reconciles" the
+/// two by moving the interpreter has to break this first.
+///
+/// The parity twin of
+/// `codegen::test_e2e_aggregate_literal_at_explicit_return_single_fire`.
+#[test]
+fn aggregate_literal_at_explicit_return_fires_element_bodies_once() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         struct Box3 { xs: Vec[R] }\n\
+         struct Two { xs: Vec[R], ys: Vec[R] }\n\
+         fn build(k: i64) -> Box3 {\n\
+             let mut v: Vec[R] = Vec.new();\n\
+             v.push(R { id: k, tag: f\"t\" });\n\
+             println(\"mid\");\n\
+             return Box3 { xs: v }\n\
+         }\n\
+         fn build_tuple(k: i64) -> (Vec[R], i64) {\n\
+             let mut v: Vec[R] = Vec.new();\n\
+             v.push(R { id: k, tag: f\"t\" });\n\
+             return (v, 7)\n\
+         }\n\
+         fn build_two(k: i64) -> Two {\n\
+             let mut a: Vec[R] = Vec.new();\n\
+             a.push(R { id: k, tag: f\"t\" });\n\
+             let mut b: Vec[R] = Vec.new();\n\
+             b.push(R { id: k + 1, tag: f\"u\" });\n\
+             return Two { xs: a, ys: b }\n\
+         }\n\
+         fn build_cond(k: i64) -> Box3 {\n\
+             let mut v: Vec[R] = Vec.new();\n\
+             v.push(R { id: k, tag: f\"t\" });\n\
+             if k > 0 { return Box3 { xs: v } }\n\
+             return Box3 { xs: v }\n\
+         }\n";
+    for (label, body, want) in [
+        // The row's own repro: the struct literal at the return site.
+        (
+            "struct-literal-at-return",
+            "let a: Box3 = build(14); println(f\"v{a.xs[0].id}\")\n",
+            "mid\nv14\ndR14\n",
+        ),
+        // A TUPLE literal in the same position — the other aggregate form
+        // the disarm walks.
+        (
+            "tuple-literal-at-return",
+            "let t: (Vec[R], i64) = build_tuple(20); println(f\"t{t.1}\")\n",
+            "t7\ndR20\n",
+        ),
+        // Two independent sources moved into ONE literal.
+        (
+            "two-vec-fields",
+            "let w: Two = build_two(30); println(f\"w{w.xs[0].id}{w.ys[0].id}\")\n",
+            "w3031\ndR31\ndR30\n",
+        ),
+        // A CONDITIONAL return: the compiled disarm is static, so it has to
+        // cover every returning path rather than the syntactic tail alone.
+        (
+            "conditional-return",
+            "let c: Box3 = build_cond(40); println(f\"c{c.xs[0].id}\")\n",
+            "c40\ndR40\n",
+        ),
+        // The two spellings that were ALREADY correct on every surface,
+        // kept as boundaries: routing through a named binding, and the bare
+        // tail with no `return` at all. A fix that over-disarms would show
+        // up here as a MISSING body.
+        (
+            "named-binding-then-return",
+            "let a: Box3 = { let mut v: Vec[R] = Vec.new(); v.push(R { id: 50, tag: f\"t\" }); let bx: Box3 = Box3 { xs: v }; bx };\n\
+             println(f\"v{a.xs[0].id}\")\n",
+            "v50\ndR50\n",
+        ),
+        (
+            "bare-tail-literal",
+            "let a: Box3 = { let mut v: Vec[R] = Vec.new(); v.push(R { id: 60, tag: f\"t\" }); Box3 { xs: v } };\n\
+             println(f\"v{a.xs[0].id}\")\n",
+            "v60\ndR60\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-29-28 — a FRESH-TEMP scrutinee's own `impl Drop` body runs at
 /// the CONSTRUCT's exit, not at the end of the enclosing block.
 ///

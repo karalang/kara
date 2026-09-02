@@ -115593,6 +115593,106 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_aggregate_literal_at_explicit_return_single_fire() {
+        // B-2026-08-30-18 — an aggregate literal built DIRECTLY at an
+        // explicit `return`, carrying a `Vec` of `Drop` elements moved in from
+        // a named local. The explicit-`return` hook set mirrors the tail set
+        // in `suppress_cleanup_for_tail_return` but was missing
+        // B-2026-08-02-23 leg 2's aggregate-literal source disarm, so the
+        // source's Drop-BODIES action stayed armed and fired once at the
+        // callee's exit AND again at the caller's, on all three compiled
+        // surfaces:
+        //
+        //     pre-fix  `mid dR14 v14 dR14 post`
+        //     --interp `mid v14 dR14 post`
+        //
+        // The two working spellings both routed the value through something
+        // already covered — `let bx = …; return bx` through the
+        // bare-Identifier arm, the bare tail `Box3 { xs: v }` through leg 2
+        // itself — so the return-position literal was the only spelling with
+        // no owner for the bodies half.
+        //
+        // BODIES ONLY, which is why nothing crashed and this needed a
+        // fire-COUNT oracle to see: the MEMORY half was already transferred by
+        // `suppress_source_vec_cleanup_for_arg`, so the buffer had exactly one
+        // owner and valgrind reported 0 errors and 0 leaked bytes. What
+        // doubled was the observable side effect.
+        //
+        // Four shapes, each doubling pre-fix and each firing exactly once now:
+        // the struct literal, a TUPLE literal at the same position, a
+        // two-`Vec`-field literal (two independent sources in one literal),
+        // and a CONDITIONAL return (the disarm is static, so it must cover
+        // every returning path).
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Box3 { xs: Vec[R] }
+struct Two { xs: Vec[R], ys: Vec[R] }
+
+fn build(k: i64) -> Box3 {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    println("mid");
+    return Box3 { xs: v }
+}
+
+fn build_tuple(k: i64) -> (Vec[R], i64) {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    return (v, 7)
+}
+
+fn build_two(k: i64) -> Two {
+    let mut a: Vec[R] = Vec.new();
+    a.push(R { id: k, tag: f"t" });
+    let mut b: Vec[R] = Vec.new();
+    b.push(R { id: k + 1, tag: f"u" });
+    return Two { xs: a, ys: b }
+}
+
+fn build_cond(k: i64) -> Box3 {
+    let mut v: Vec[R] = Vec.new();
+    v.push(R { id: k, tag: f"t" });
+    if k > 0 {
+        return Box3 { xs: v }
+    }
+    return Box3 { xs: v }
+}
+
+fn main() {
+    {
+        let a: Box3 = build(14);
+        println(f"v{a.xs[0].id}");
+    }
+    println("A");
+    {
+        let t: (Vec[R], i64) = build_tuple(20);
+        println(f"t{t.1}");
+    }
+    println("B");
+    {
+        let w: Two = build_two(30);
+        println(f"w{w.xs[0].id}{w.ys[0].id}");
+    }
+    println("C");
+    {
+        let c: Box3 = build_cond(40);
+        println(f"c{c.xs[0].id}");
+    }
+    println("D");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "mid\nv14\ndR14\nA\nt7\ndR20\nB\nw3031\ndR31\ndR30\nC\nc40\ndR40\nD"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_nested_literal_move_source_disarm() {
         // B-2026-08-02-23 leg 1 — the aggregate-literal source disarm was
         // depth-1: `v.push(Outer { inner: Inner { xs: xs } })` inspected only
