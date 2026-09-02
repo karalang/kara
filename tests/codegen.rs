@@ -128802,22 +128802,23 @@ fn main() {
                 // A SECOND pre-existing divergence this control turned up,
                 // in the other direction and on the other backend: when the
                 // pattern binds only the NON-`Drop` field, the INTERPRETER
-                // runs no body while both compiled backends correctly run
-                // one. Filed as B-2026-09-02-8. It is not this fix's doing —
-                // the `match` row below is the same program with the same
-                // interpreter answer, and the `match` leg never reached the
-                // call this fix gates.
-                "control: binding only the NON-`Drop` field [interp: B-2026-09-02-8]",
+                // ran no body while both compiled backends correctly ran one.
+                // That was B-2026-09-02-8, since closed — the shape-only
+                // retraction gate read a PARTIAL destructure as a full
+                // consume — and the two columns now agree. The full matrix
+                // for that shape is
+                // `e2e_an_optres_partial_destructure_keeps_the_payload_body`.
+                "control: binding only the NON-`Drop` field [B-2026-09-02-8]",
                 "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
                  if let Some(H { n, .. }) = o { println(f\"{n}\") }",
-                "4\nend\n",
+                "4\ndR47\nend\n",
                 "4\ndR47\nend\n",
             ),
             (
-                "control: the `match` twin of the row above [interp: B-2026-09-02-8]",
+                "control: the `match` twin of the row above [B-2026-09-02-8]",
                 "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
                  match o { Some(H { n, .. }) => println(f\"{n}\"), None => {} }",
-                "4\nend\n",
+                "4\ndR47\nend\n",
                 "4\ndR47\nend\n",
             ),
             (
@@ -129050,16 +129051,19 @@ fn main() {
             ),
             (
                 // The `while let` spelling of B-2026-09-02-8, which was filed
-                // off the `if let` one. Untouched by this fix (nothing binds
-                // the `Drop`-bearing field, so neither the disarm nor the stash
-                // is in play) and pinned so the two spellings close together.
-                "control: binds only the NON-`Drop` field [interp: B-2026-09-02-8]",
+                // off the `if let` one and closed with it: the two spellings
+                // did close together, as this row was written to check.
+                // Untouched by the `while let` fix above (nothing binds the
+                // `Drop`-bearing field, so neither the disarm nor the stash is
+                // in play) and kept as the cross-check that the retraction gate
+                // reaches this spelling too.
+                "control: binds only the NON-`Drop` field [B-2026-09-02-8]",
                 "let mut y: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
                  while let Some(H { n, .. }) = y {\n\
                  println(f\"{n}\");\n\
                  y = None;\n\
                  }",
-                "4\nend\n",
+                "4\ndR47\nend\n",
                 "4\ndR47\nend\n",
             ),
         ];
@@ -129077,6 +129081,173 @@ fn main() {
             );
             if let Some(aot) = run_program(&src) {
                 assert_eq!(aot, *want_compiled, "{label}: compiled transcript");
+            }
+        }
+    }
+
+    /// B-2026-09-02-8 — AN `Option`/`Result` PARTIAL DESTRUCTURE THAT BINDS
+    /// ONLY A NON-`Drop` FIELD LOST THE PAYLOAD'S `Drop` BODY.
+    ///
+    /// Retracting a source's payload-bodies walk is a HAND-OFF: the pattern
+    /// moves the `Drop`-bearing payload out and its new binding runs the body
+    /// instead. The Option/Result leg of that decision was SHAPE-only on both
+    /// backends — `pattern_claims_ownership` / `pattern_consumes_field` over
+    /// the whole sub-pattern — so `Some(H { n, .. })`, binding an `i64` beside
+    /// an untouched `Drop`-bearing `r: R`, counted as a consume. The walk was
+    /// retracted and nothing took over: the interpreter's own arm stash is
+    /// filtered by what the bindings actually own and came out empty, and the
+    /// `let ... else` binding that escapes owns nothing either. The body ran
+    /// nowhere.
+    ///
+    /// THE SHAPE-ONLY TEST SURVIVES FOR A BARE BINDING, deliberately. `Some(r)`
+    /// names a payload whose declared type is a generic parameter, invisible to
+    /// both backends, and the original justification does hold there: an
+    /// `Option[i64]` source registers no walk, so retracting it is a no-op.
+    /// Only a DESTRUCTURE has field types to consult, and only a destructure
+    /// can name a position the source's walk was covering for. Both backends
+    /// therefore consult declared field types for a struct sub-pattern and fall
+    /// back to the shape answer for everything else.
+    ///
+    /// THE ROW SPANNED TWO FAILURE MODES AND ONE FIX SETTLES BOTH, which is
+    /// what it predicted. `if let` and `match` were interpreter-only
+    /// divergences (compiled ran the body); `let ... else` lost the body on ALL
+    /// FOUR surfaces — agreed-and-wrong, invisible to the A/B rule — because
+    /// there the compiled retraction is not gated away by
+    /// B-2026-08-31-38's `optres_bindings_owned` (the flag is TRUE on that leg).
+    /// One predicate, applied at both backends' retraction sites, closes them
+    /// together.
+    ///
+    /// BODIES ONLY, now measured rather than assumed — the row asked for this
+    /// explicitly. `valgrind --leak-check=full` at `KARAC_OPT_LEVEL=0` on the
+    /// `let ... else` program: 13 allocs / 13 frees pre-fix, 14/14 post (the
+    /// extra pair is the restored body's own f-string), 0 errors both times.
+    /// The buffer was never stranded; only the user-visible body was lost.
+    ///
+    /// ALL THREE OF THE ROW'S "NOT MEASURED" SHAPES ARE ROWS HERE: the `Result`
+    /// envelope, an enum STRUCT-VARIANT payload (`Some(V.A { n, .. })`, which is
+    /// why the declaration lookup resolves a two-segment path as well as a
+    /// struct name), and a second non-`Drop` field bound alongside the first.
+    #[test]
+    fn e2e_an_optres_partial_destructure_keeps_the_payload_body() {
+        const PRELUDE: &str = "fn pad(t: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-bytes-\");\n\
+             s.push_str(f\"{t}\");\n\
+             return s;\n\
+             }\n\
+             struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s.len()}\"); } }\n\
+             struct H { r: R, n: i64 }\n\
+             struct H3 { r: R, n: i64, m: i64 }\n\
+             enum V { A { r: R, n: i64 }, B }\n";
+        // One `R` is constructed in every row, so exactly ONE body is due.
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "if let, binds only the non-`Drop` field",
+                "let a: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 if let Some(H { n, .. }) = a { println(f\"A{n}\"); }",
+                "A4\ndR47\nend\n",
+            ),
+            (
+                "match, the same",
+                "let b: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 match b { Some(H { n, .. }) => println(f\"B{n}\"), None => {} }",
+                "B4\ndR47\nend\n",
+            ),
+            (
+                // The agreed-and-wrong leg: no A/B gate could see this one,
+                // because all four surfaces printed the same missing body.
+                // The source dies at the destructure (nothing bound out of it
+                // survives), so its body fires there — ahead of the println,
+                // on every surface.
+                "let ... else, which lost the body on ALL FOUR surfaces",
+                "let e: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 let Some(H { n, .. }) = e else { return };\n\
+                 println(f\"E{n}\");",
+                "dR47\nE4\nend\n",
+            ),
+            (
+                "over `Result` rather than `Option`",
+                "let a: Result[H, i64] = Ok(H { r: R { s: pad(1) }, n: 4 });\n\
+                 if let Ok(H { n, .. }) = a { println(f\"R{n}\"); }",
+                "R4\ndR47\nend\n",
+            ),
+            (
+                // Two path segments, so the declaration lookup has to resolve
+                // an enum STRUCT VARIANT and not just a struct name.
+                "an enum struct-variant payload in the same position",
+                "let a: Option[V] = Some(V.A { r: R { s: pad(1) }, n: 4 });\n\
+                 if let Some(V.A { n, .. }) = a { println(f\"V{n}\"); }",
+                "V4\ndR47\nend\n",
+            ),
+            (
+                "a SECOND non-`Drop` field bound alongside the first",
+                "let a: Option[H3] = Some(H3 { r: R { s: pad(1) }, n: 4, m: 5 });\n\
+                 if let Some(H3 { n, m, .. }) = a { println(f\"T{n}{m}\"); }",
+                "T45\ndR47\nend\n",
+            ),
+            (
+                // THE GATE on the other side: binding the `Drop` field DOES
+                // hand the payload over, so the retraction must still fire or
+                // the body runs twice.
+                "control: binding the `Drop` field still retracts",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 if let Some(H { r, .. }) = o { println(f\"F{r.s.len()}\"); }",
+                "F47\ndR47\nend\n",
+            ),
+            (
+                "control: the `let ... else` spelling of the row above",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 let Some(H { r, .. }) = o else { return };\n\
+                 println(f\"F{r.s.len()}\");",
+                "F47\ndR47\nend\n",
+            ),
+            (
+                // A BARE binding keeps the shape answer — the payload's type is
+                // a generic parameter neither backend can read here — so this
+                // row is what proves the narrowing did not reach it.
+                "control: a bare whole-payload binding",
+                "let o: Option[R] = Some(R { s: pad(1) });\n\
+                 let Some(r) = o else { return };\n\
+                 println(f\"W{r.s.len()}\");",
+                "W47\ndR47\nend\n",
+            ),
+            (
+                "control: mixed — the `Drop` field AND a scalar",
+                "let a: Option[H3] = Some(H3 { r: R { s: pad(1) }, n: 4, m: 5 });\n\
+                 if let Some(H3 { r, n, .. }) = a { println(f\"M{n}{r.s.len()}\"); }",
+                "M447\ndR47\nend\n",
+            ),
+            (
+                "control: no `Option` envelope, correct throughout",
+                "let c: H = H { r: R { s: pad(1) }, n: 4 };\n\
+                 if let H { n, .. } = c { println(f\"C{n}\"); }",
+                "C4\ndR47\nend\n",
+            ),
+            (
+                "control: binds nothing, correct throughout",
+                "let g: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 if let Some(H { .. }) = g { println(\"G\"); }",
+                "G\ndR47\nend\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: the interpreter must run the payload body exactly once"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backends must agree with the interpreter"
+                );
             }
         }
     }

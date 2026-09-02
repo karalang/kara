@@ -17515,6 +17515,85 @@ fn test_string_char_at_and_count_interpreter() {
 }
 
 #[test]
+fn test_optres_partial_destructure_keeps_the_payload_drop_body() {
+    // B-2026-09-02-8 — an `Option`/`Result` pattern that destructures the
+    // payload but binds only a NON-`Drop` field lost the payload's body.
+    //
+    // Retracting a source's payload-bodies walk is a HAND-OFF, and the
+    // Option/Result leg decided it SHAPE-only: `Some(H { n, .. })`, binding an
+    // `i64` beside an untouched `Drop`-bearing `r: R`, counted as a consume.
+    // The walk was retracted and nothing took over — the arm stash is filtered
+    // by what the bindings actually own and came out empty — so the body ran
+    // nowhere. Both backends now consult the payload's DECLARED field types.
+    //
+    // On the DEFAULT leg because half the fix is the interpreter's, and the
+    // cross-backend matrix
+    // (`e2e_an_optres_partial_destructure_keeps_the_payload_body`) is gated on
+    // `--features llvm`.
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s}\"); } }\n\
+         struct H { r: R, n: i64 }\n";
+    let if_let = format!(
+        "{PRELUDE}fn main() {{\n\
+         let a: Option[H] = Some(H {{ r: R {{ s: \"a\" }}, n: 4 }});\n\
+         if let Some(H {{ n, .. }}) = a {{ println(f\"A{{n}}\"); }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&if_let), "A4\ndRa\nend\n");
+
+    let matched = format!(
+        "{PRELUDE}fn main() {{\n\
+         let b: Option[H] = Some(H {{ r: R {{ s: \"b\" }}, n: 5 }});\n\
+         match b {{ Some(H {{ n, .. }}) => println(f\"B{{n}}\"), None => {{}} }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&matched), "B5\ndRb\nend\n");
+
+    // The leg that was agreed-and-wrong across all four surfaces, so no A/B
+    // gate could have caught it. The source dies at the destructure, so its
+    // body fires ahead of the println.
+    let let_else = format!(
+        "{PRELUDE}fn main() {{\n\
+         let e: Option[H] = Some(H {{ r: R {{ s: \"c\" }}, n: 6 }});\n\
+         let Some(H {{ n, .. }}) = e else {{ return }};\n\
+         println(f\"E{{n}}\");\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&let_else), "dRc\nE6\nend\n");
+
+    // THE GATE on the other side: binding the `Drop` field DOES hand the
+    // payload over, so the retraction must still fire or the body runs twice.
+    let binds_drop_field = format!(
+        "{PRELUDE}fn main() {{\n\
+         let o: Option[H] = Some(H {{ r: R {{ s: \"d\" }}, n: 7 }});\n\
+         if let Some(H {{ r, .. }}) = o {{ println(f\"F{{r.s}}\"); }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&binds_drop_field), "Fd\ndRd\nend\n");
+
+    // A BARE binding keeps the shape answer — the payload type is a generic
+    // parameter neither backend can read — so this proves the narrowing did
+    // not reach it.
+    let bare = format!(
+        "{PRELUDE}fn main() {{\n\
+         let o: Option[R] = Some(R {{ s: \"e\" }});\n\
+         let Some(r) = o else {{ return }};\n\
+         println(f\"W{{r.s}}\");\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&bare), "We\ndRe\nend\n");
+
+    // CONTROL: no envelope, correct throughout.
+    let no_envelope = format!(
+        "{PRELUDE}fn main() {{\n\
+         let c: H = H {{ r: R {{ s: \"f\" }}, n: 8 }};\n\
+         if let H {{ n, .. }} = c {{ println(f\"C{{n}}\"); }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&no_envelope), "C8\ndRf\nend\n");
+}
+
+#[test]
 fn test_while_let_binding_runs_the_payload_drop_body_once_per_pass() {
     // B-2026-09-02-7 — a `while let` arm that BINDS its payload ran the
     // payload's `Drop` body TWICE PER PASS on this backend, where both

@@ -1045,7 +1045,9 @@ impl<'a> super::Interpreter<'a> {
             return match &pattern.kind {
                 PatternKind::TupleVariant { patterns, .. } => {
                     matches!(variant.as_str(), "Some" | "Ok" | "Err")
-                        && patterns.iter().any(Self::pattern_claims_ownership)
+                        && patterns
+                            .iter()
+                            .any(|sub| self.optres_sub_takes_drop_bearing(sub))
                 }
                 _ => false,
             };
@@ -1080,6 +1082,81 @@ impl<'a> super::Interpreter<'a> {
                 .get(pos)
                 .map(|(_, te)| self.type_expr_runs_user_drop(te))
                 .unwrap_or(false)
+        })
+    }
+
+    /// B-2026-09-02-8 — does an `Option`/`Result` payload sub-pattern bind out
+    /// a position whose DECLARED type runs a user `Drop` body?
+    ///
+    /// The caller's shape-only test (`pattern_claims_ownership` on the whole
+    /// sub-pattern) over-approximates, and its own comment argued that this is
+    /// harmless because "the move-out set this feeds is a no-op for a binding
+    /// whose walk never registered". That holds when the SOURCE owes nothing.
+    /// It fails for a PARTIAL destructure of a payload that does:
+    /// `if let Some(H { n, .. }) = a`, with `n: i64` beside a `Drop`-bearing
+    /// `r: R`, retracted `a`'s payload walk while the arm stash — filtered by
+    /// what the bindings actually own — came out empty, so the body ran
+    /// nowhere. The disarm and the stash have to answer the same question or
+    /// the body fires twice or not at all; this is the question.
+    ///
+    /// A BARE binding keeps the shape answer, deliberately. `Some(r)` names a
+    /// payload whose declared type is a generic parameter, invisible to both
+    /// backends, and there the original reasoning does hold: an `Option[i64]`
+    /// source registers no walk, so retracting it is a no-op. Only a
+    /// DESTRUCTURE has field types to consult, and only a destructure could
+    /// name a position the source's walk was covering for.
+    ///
+    /// Codegen twin: `optres_sub_takes_drop_bearing` in `control_flow_match.rs`,
+    /// arm-for-arm the same, reading the same two declaration sources.
+    fn optres_sub_takes_drop_bearing(&self, sub: &Pattern) -> bool {
+        let PatternKind::Struct { path, fields, .. } = &sub.kind else {
+            return Self::pattern_claims_ownership(sub);
+        };
+        // An unknown name (a builtin, an opaque type) has no field types to
+        // read, so it keeps the shape answer rather than silently declining.
+        let Some(decls) = self.destructured_field_decls(path) else {
+            return Self::pattern_claims_ownership(sub);
+        };
+        fields.iter().any(|fp| {
+            fp.pattern
+                .as_ref()
+                .is_none_or(Self::pattern_claims_ownership)
+                && decls.iter().any(|(n, te)| {
+                    n.as_deref() == Some(fp.name.as_str()) && self.type_expr_runs_user_drop(te)
+                })
+        })
+    }
+
+    /// Field declarations behind a struct-destructure pattern's path — a plain
+    /// `struct S { .. }` (`["S"]`) or an enum STRUCT VARIANT (`["E", "A"]`).
+    /// `None` when the program declares no such type, which is what sends
+    /// [`Self::optres_sub_takes_drop_bearing`] back to the shape-only answer.
+    ///
+    /// Both sources are consulted, user program then baked stdlib, matching
+    /// `variant_payload_decls` — a pattern over a stdlib struct must not read
+    /// as undeclared just because it is not in the user's own items.
+    fn destructured_field_decls(&self, path: &[String]) -> Option<Vec<(Option<String>, TypeExpr)>> {
+        if path.len() >= 2 {
+            if let Some(d) = self.variant_payload_decls(&path[path.len() - 2], path.last()?) {
+                return Some(d);
+            }
+        }
+        let name = path.last()?;
+        fn scan(items: &[Item], name: &str) -> Option<Vec<(Option<String>, TypeExpr)>> {
+            items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == name => Some(
+                    s.fields
+                        .iter()
+                        .map(|f| (Some(f.name.clone()), f.ty.clone()))
+                        .collect(),
+                ),
+                _ => None,
+            })
+        }
+        scan(&self.program.items, name).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, name))
         })
     }
 

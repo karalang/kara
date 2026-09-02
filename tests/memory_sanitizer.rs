@@ -66796,6 +66796,62 @@ fn main() {
         );
     }
 
+    /// B-2026-09-02-8 — the memory half of the partial-destructure fix, which
+    /// the row asked for by name ("row E's memory side has NOT been measured
+    /// and should be, since a body that never runs on any backend may or may
+    /// not mean the buffer is also stranded").
+    ///
+    /// It does not: `valgrind --leak-check=full` at `KARAC_OPT_LEVEL=0` on the
+    /// `let ... else` program reads 13 allocs / 13 frees PRE-fix and 14/14
+    /// post, 0 errors both times — the extra pair being the restored body's own
+    /// f-string. So the defect was bodies-only and the fix adds a body, not a
+    /// free.
+    ///
+    /// Which is exactly why this test is worth having: restoring a body that
+    /// was not running is the shape that turns a silent omission into a
+    /// use-after-free if the payload it reads has already been reclaimed. The
+    /// bodies here READ `self.s.len()` through the payload's heap buffer, and
+    /// the loop reallocates on every pass so a stale pointer lands on
+    /// poisoned or reused memory rather than on quiet garbage.
+    #[test]
+    fn asan_optres_partial_destructure_body_reads_live_memory() {
+        assert_clean_asan_run(
+            r#"
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s.len()}"); } }
+struct H { r: R, n: i64 }
+fn viaelse(t: i64) -> i64 {
+    let e: Option[H] = Some(H { r: R { s: pad(t) }, n: 4 });
+    let Some(H { n, .. }) = e else { return 0 };
+    return n;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let a: Option[H] = Some(H { r: R { s: pad(i) }, n: 4 });
+        if let Some(H { n, .. }) = a { println(f"A{n}") }
+        let b: Option[H] = Some(H { r: R { s: pad(i) }, n: 5 });
+        match b { Some(H { n, .. }) => println(f"B{n}"), None => {} }
+        println(f"E{viaelse(i)}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "A4", "dR47", "B5", "dR47", "dR47", "E4", "A4", "dR47", "B5", "dR47", "dR47", "E4",
+                "A4", "dR47", "B5", "dR47", "dR47", "E4", "done",
+            ],
+            "b0902-8-partial-destructure-body-live",
+        );
+    }
+
     #[test]
     fn asan_field_param_view_sibling_bodies_free_exactly_once() {
         // B-2026-09-02-10 — the heap half of the per-FIELD param-view fix.

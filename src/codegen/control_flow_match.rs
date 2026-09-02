@@ -11207,10 +11207,122 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return;
         }
-        if !patterns.iter().any(pattern_consumes_field) {
+        if !patterns
+            .iter()
+            .any(|sub| self.optres_sub_takes_drop_bearing(sub))
+        {
             return;
         }
         self.suppress_container_elem_bodies_for_var(&name);
+    }
+
+    /// B-2026-09-02-8 — does an `Option`/`Result` payload sub-pattern bind out
+    /// a position whose DECLARED type runs a user `Drop` body?
+    ///
+    /// The caller's shape-only test (`pattern_consumes_field` on the whole
+    /// sub-pattern) over-approximates. That is harmless when the SOURCE owes
+    /// nothing, and wrong for a PARTIAL destructure of a payload that does:
+    /// `let Some(H { n, .. }) = e else { … }`, with `n: i64` beside a
+    /// `Drop`-bearing `r: R`, retracted `e`'s container-element bodies while
+    /// the escaped binding `n` owned nothing — so the body ran on NO backend,
+    /// an agreed-and-wrong answer no A/B gate could see.
+    ///
+    /// A BARE binding keeps the shape answer, deliberately: `Some(r)` names a
+    /// payload whose declared type is a generic parameter, invisible here, and
+    /// there the over-approximation is genuinely a no-op — an `Option[i64]`
+    /// source registers no element-bodies action to retract. Only a
+    /// DESTRUCTURE has field types to consult, and only a destructure can name
+    /// a position the source's walk was covering for.
+    ///
+    /// Interpreter twin: `optres_sub_takes_drop_bearing` in `pattern_match.rs`,
+    /// arm-for-arm the same and reading the same two declaration sources.
+    fn optres_sub_takes_drop_bearing(&self, sub: &Pattern) -> bool {
+        let PatternKind::Struct { path, fields, .. } = &sub.kind else {
+            return pattern_consumes_field(sub);
+        };
+        // An unknown name (a builtin, an opaque type) has no field types to
+        // read, so it keeps the shape answer rather than silently declining.
+        let Some(decls) = self.destructured_field_decls(path) else {
+            return pattern_consumes_field(sub);
+        };
+        fields.iter().any(|fp| {
+            fp.pattern.as_ref().is_none_or(pattern_consumes_field)
+                && decls.iter().any(|(n, te)| {
+                    n.as_deref() == Some(fp.name.as_str()) && self.elem_te_runs_user_drop(te)
+                })
+        })
+    }
+
+    /// Field declarations behind a struct-destructure pattern's path — a plain
+    /// `struct S { .. }` (`["S"]`) or an enum STRUCT VARIANT (`["E", "A"]`).
+    /// `None` when no such type is declared, which is what sends
+    /// [`Self::optres_sub_takes_drop_bearing`] back to the shape-only answer.
+    ///
+    /// Program snapshot then baked stdlib, the same two sources
+    /// `struct_field_type_exprs` and `enum_variant_field_type_exprs` consult.
+    fn destructured_field_decls(
+        &self,
+        path: &[String],
+    ) -> Option<Vec<(Option<String>, crate::ast::TypeExpr)>> {
+        fn variant(
+            items: &[Item],
+            enum_name: &str,
+            variant: &str,
+        ) -> Option<Vec<(Option<String>, crate::ast::TypeExpr)>> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) if e.name == enum_name => e
+                    .variants
+                    .iter()
+                    .find(|v| v.name == variant)
+                    .map(|v| match &v.kind {
+                        VariantKind::Unit => Vec::new(),
+                        VariantKind::Tuple(tys) => tys.iter().map(|t| (None, t.clone())).collect(),
+                        VariantKind::Struct(fs) => fs
+                            .iter()
+                            .map(|f| (Some(f.name.clone()), f.ty.clone()))
+                            .collect(),
+                    }),
+                _ => None,
+            })
+        }
+        fn strukt(
+            items: &[Item],
+            name: &str,
+        ) -> Option<Vec<(Option<String>, crate::ast::TypeExpr)>> {
+            items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == name => Some(
+                    s.fields
+                        .iter()
+                        .map(|f| (Some(f.name.clone()), f.ty.clone()))
+                        .collect(),
+                ),
+                _ => None,
+            })
+        }
+        let last = path.last()?;
+        if path.len() >= 2 {
+            let en = &path[path.len() - 2];
+            if let Some(d) = self
+                .program_snapshot
+                .as_ref()
+                .and_then(|p| variant(&p.items, en, last))
+                .or_else(|| {
+                    crate::prelude::STDLIB_PROGRAMS
+                        .iter()
+                        .find_map(|(_, p)| variant(&p.items, en, last))
+                })
+            {
+                return Some(d);
+            }
+        }
+        self.program_snapshot
+            .as_ref()
+            .and_then(|p| strukt(&p.items, last))
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .find_map(|(_, p)| strukt(&p.items, last))
+            })
     }
 
     /// B-2026-08-04-2 — a whole-payload match binding taken out of a
