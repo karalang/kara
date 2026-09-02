@@ -297,6 +297,24 @@ pub(crate) struct PayloadVars<'ctx> {
     /// the let-site `FieldAccess` has in hand); cleared per function alongside
     /// `param_view_locals`.
     pub(crate) param_view_struct_fields: HashMap<String, HashSet<String>>,
+    /// B-2026-09-02-27 — for a bare-tuple element binding, a pointer to the
+    /// element's slot INSIDE the scrutinee tuple's alloca.
+    ///
+    /// B-2026-09-02-23 made the tuple the single owner of its element, which is
+    /// correct and is what fixed the systematic double free. It left one hole:
+    /// moving a heap FIELD out of the binding (`let n = r.name;`) hands that
+    /// buffer to `n`, but the disarm that normally stops the old owner freeing
+    /// it (`zero_struct_field_move_cap`) writes into the BINDING's alloca --
+    /// and the binding is a separate copy. The tuple's own
+    /// `__karac_drop_tuple_*` reads its own slot, still sees a live `cap`, and
+    /// frees the buffer `n` now owns.
+    ///
+    /// This records where that authoritative slot is, so the move-out site can
+    /// zero the field there too. Recorded only for a flat tuple pattern over an
+    /// IDENTIFIER scrutinee, which is where the element's address is knowable;
+    /// a projection scrutinee (`match s.t`) has no such slot in hand and is
+    /// left as-is. Cleared per function alongside `param_view_locals`.
+    pub(crate) bare_tuple_elem_slots: HashMap<String, inkwell::values::PointerValue<'ctx>>,
 }
 
 /// One queued per-field neutralization against a payload box whose user `Drop`

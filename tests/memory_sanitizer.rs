@@ -322,6 +322,57 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-02-27 — MOVING A HEAP FIELD OUT OF A BARE-TUPLE ELEMENT
+    /// BINDING MUST DISARM THAT FIELD IN THE TUPLE, NOT IN THE COPY.
+    ///
+    /// B-2026-09-02-23 made the tuple the single owner of its element. Every
+    /// existing move-out disarm (`zero_struct_field_move_cap`) writes into the
+    /// SOURCE BINDING's alloca -- which for a tuple element is a bit-copy, not
+    /// the slot `__karac_drop_tuple_*` reads. So `let n = r.name;` handed the
+    /// buffer to `n` and left the tuple freeing it as well: a double free at
+    /// BOTH optimization levels (unlike -23's class, which `-O2` masked),
+    /// against a correct `--interp`.
+    ///
+    /// THE CONTROL IS THE POINT, because the fix suppresses a free and the
+    /// failure mode of over-reaching is a leak (LSan catches it here):
+    /// - `bare` — the identical move off a plain by-value param, never in a
+    ///   tuple. Clean before and after; it must keep zeroing its own slot and
+    ///   must not start leaking.
+    /// - `noMove` — the same binding with the field only READ, never moved out.
+    ///   The tuple must still free it exactly once.
+    ///
+    /// The `Vec` field is moved out as well as the `String`, so the fix is
+    /// exercised on both heap kinds rather than only on the one the row's
+    /// repro happened to use.
+    #[test]
+    fn asan_tuple_element_field_move_out_disarms_the_tuple() {
+        assert_clean_asan_run(
+            "struct H { id: i64, xs: Vec[i64], name: String }\n\
+             fn mk(id: i64) -> H {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return H { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             fn moveStr(t: (H, i64)) {\n\
+             \x20   match t { (r, k) => { let n = r.name; println(f\"  s{r.xs.len()}:{n}\") } }\n\
+             }\n\
+             fn moveVec(t: (H, i64)) {\n\
+             \x20   match t { (r, k) => { let w = r.xs; println(f\"  v{w.len()}:{r.name}\") } }\n\
+             }\n\
+             fn bare(h: H) { let n = h.name; println(f\"  bare{h.xs.len()}:{n}\") }\n\
+             fn noMove(t: (H, i64)) { match t { (r, k) => { println(f\"  nm{r.xs.len()}:{r.name}\") } } }\n\
+             fn main() {\n\
+             \x20   moveStr((mk(1), 0));\n\
+             \x20   moveVec((mk(2), 0));\n\
+             \x20   bare(mk(3));\n\
+             \x20   noMove((mk(4), 0));\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &["s1:n1", "  v1:n2", "  bare1:n3", "  nm1:n4", "end"],
+            "b27-tuple-elem-field-move-out",
+        );
+    }
+
     /// B-2026-09-01-33 — the heap-carrying producer-call argument under
     /// ASAN + LSan.
     ///

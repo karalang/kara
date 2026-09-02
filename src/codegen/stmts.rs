@@ -9113,6 +9113,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                         &src_type,
                                         &disarm_field,
                                     );
+                                    // B-2026-09-02-27 — and, when the source is
+                                    // a bare-tuple ELEMENT binding, zero the
+                                    // moved field's `cap` in the TUPLE's slot
+                                    // as well.
+                                    //
+                                    // The binding is a bit-copy of the tuple's
+                                    // element and, since B-2026-09-02-23, owns
+                                    // nothing: the tuple's own
+                                    // `__karac_drop_tuple_*` is the single
+                                    // owner. Every existing move-out disarm
+                                    // writes into the SOURCE BINDING's alloca,
+                                    // which for a tuple element is the copy and
+                                    // not the slot the drop reads -- so
+                                    // `let n = r.name;` handed the buffer to
+                                    // `n` and left the tuple still freeing it.
+                                    // Measured `b1:n1` then
+                                    // `free(): double free detected in tcache 2`
+                                    // at BOTH optimization levels, against a
+                                    // correct `--interp`; the same move off a
+                                    // bare by-value param is clean, which is
+                                    // what put the axis on the tuple element.
+                                    if let Some(elem_ptr) =
+                                        self.payload_vars.bare_tuple_elem_slots.get(src).copied()
+                                    {
+                                        self.zero_struct_field_move_cap(
+                                            elem_ptr,
+                                            &src_type,
+                                            &disarm_field,
+                                        );
+                                    }
                                 }
                             }
                         }

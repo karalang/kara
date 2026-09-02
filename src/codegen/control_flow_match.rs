@@ -705,6 +705,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         .current_bare_tuple_bindings
                         .extend(bt_all);
                 }
+                // B-2026-09-02-27 — and, for a FLAT tuple pattern over an
+                // IDENTIFIER scrutinee, where each element actually LIVES.
+                // With the tuple now the single owner (-23), a later
+                // `let n = r.name;` has to zero the moved field's `cap` in the
+                // TUPLE's slot; zeroing it in the binding's own alloca -- a
+                // separate copy -- leaves the tuple's drop still freeing the
+                // buffer the `let` gave away. See `bare_tuple_elem_slots`.
+                if let (ExprKind::Identifier(sname), PatternKind::Tuple(elems)) =
+                    (&scrutinee.kind, &arm.pattern.kind)
+                {
+                    if let Some(slot) = self.variables.get(sname.as_str()).copied() {
+                        if let inkwell::types::BasicTypeEnum::StructType(tup_ty) = slot.ty {
+                            for (i, ep) in elems.iter().enumerate() {
+                                let PatternKind::Binding(bn) = &ep.kind else {
+                                    continue;
+                                };
+                                if i >= tup_ty.count_fields() as usize {
+                                    continue;
+                                }
+                                if let Ok(ep_ptr) = self
+                                    .builder
+                                    .build_struct_gep(tup_ty, slot.ptr, i as u32, "bt.elem")
+                                {
+                                    self.payload_vars
+                                        .bare_tuple_elem_slots
+                                        .insert(bn.clone(), ep_ptr);
+                                }
+                            }
+                        }
+                    }
+                }
                 // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
                 // `match` inside this body binds through the same field.
                 let saved_arm_borrows = self.pattern_state.pattern_binding_arm_only_borrows;

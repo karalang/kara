@@ -6176,6 +6176,7 @@ impl<'ctx> Codegen<'ctx> {
                 deferred_payload_box_ptrs: HashMap::new(),
                 pending_box_field_zeroes: HashMap::new(),
                 param_view_locals: HashSet::new(),
+                bare_tuple_elem_slots: HashMap::new(),
                 param_view_struct_fields: HashMap::new(),
             },
             drop_rc: DropRc {
