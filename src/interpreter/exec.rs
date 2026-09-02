@@ -637,23 +637,26 @@ pub(crate) fn cancelled_sentinel() -> Value {
 /// rather than `cfg`-ing it out keeps this doc comment's contrast with the
 /// shadow-aware sibling meaningful wherever someone reads it.
 #[cfg_attr(not(feature = "llvm"), allow(dead_code))]
-pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
-    compute_block_last_use_inner(block, false)
-}
-
-/// B-2026-08-30-51 — [`compute_block_last_use`] with a SHADOWED name's
-/// never-read endpoint at its LAST `let` rather than its first.
+/// B-2026-08-30-51 / B-2026-08-31-6 — a SHADOWED name's never-read endpoint is
+/// its LAST `let`, not its first, and BOTH backends now ask for that.
 ///
-/// The interpreter needs this because its shadow slots are created AT the
-/// shadowing `let`: an endpoint pinned to the first `let` precedes the surviving
-/// slot's existence, so that slot never fires by NLL and drains at scope exit
-/// instead. It has no outlining, so the hazard that keeps codegen on the other
-/// variant cannot arise here.
-pub(crate) fn compute_block_last_use_shadow_aware(block: &Block) -> HashMap<String, usize> {
-    compute_block_last_use_inner(block, true)
-}
-
-fn compute_block_last_use_inner(block: &Block, shadow_aware: bool) -> HashMap<String, usize> {
+/// It was two entry points until B-2026-08-31-6. The interpreter needed the
+/// last-`let` endpoint because its shadow slots are created AT the shadowing
+/// `let`, so an endpoint pinned to the first one precedes the surviving slot's
+/// existence and that slot never fires by NLL at all. Codegen was held on the
+/// first-`let` endpoint by a hazard that no longer exists: an auto-par group
+/// SWALLOWED the firing point of every statement it covered (see
+/// `par_group_swallows_nll_drop`), which made the correct endpoint the
+/// worst-of-four under outlining and the wrong one merely wrong. With the
+/// swallowing closed, the last-`let` endpoint is right in both columns —
+/// measured on B-2026-08-31-6's own program, where `KARAC_AUTO_PAR=0` went from
+/// `dR3 mid c=0 dR4` to the interpreter's `dR4 dR3 mid c=0`.
+///
+/// Collapsing the two is the point, not a tidy-up: a per-backend endpoint is a
+/// run-vs-build divergence held in place by a `bool`, and every drop-position
+/// row in the ledger is some version of the two backends answering one question
+/// differently. One function, one answer.
+pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
     // Collect every binding the block introduces.
     let mut owned: HashSet<String> = HashSet::new();
     for stmt in &block.stmts {
@@ -772,11 +775,10 @@ fn compute_block_last_use_inner(block: &Block, shadow_aware: bool) -> HashMap<St
     let mut filled_here: HashSet<String> = HashSet::new();
     let mut note_unread = |n: String, idx: usize, last_use: &mut HashMap<String, usize>| {
         if last_use.contains_key(&n) {
-            // Only the SHADOW-AWARE caller lets a later `let` of a name this
-            // loop already filled move the endpoint forward; the plain one
-            // keeps the first, which is what `or_insert` did before
-            // B-2026-08-30-51. See the two entry points for why they differ.
-            if !shadow_aware || !filled_here.contains(&n) {
+            // A later `let` of a name THIS loop already filled moves the
+            // endpoint forward; a real read recorded earlier still wins, which
+            // is what the pre-B-2026-08-30-51 `or_insert` was protecting.
+            if !filled_here.contains(&n) {
                 return;
             }
         }

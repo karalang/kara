@@ -18,8 +18,8 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::exec::{
-    compute_block_last_use_shadow_aware, push_drops_for_stmt, CleanupAction, ControlFlow,
-    ErrDeferEntry, EvalResult, ExitPath,
+    compute_block_last_use, push_drops_for_stmt, CleanupAction, ControlFlow, ErrDeferEntry,
+    EvalResult, ExitPath,
 };
 use super::value::{EnumData, Value};
 use super::{ConsoleSeg, ConsoleStream, Interpreter};
@@ -136,7 +136,7 @@ impl<'a> super::Interpreter<'a> {
         // defer/errdefer body) stay in `cleanup` and drain via the
         // unified LIFO at scope exit, preserving the program-order
         // interleave with Defers for that case.
-        let last_use = compute_block_last_use_shadow_aware(block);
+        let last_use = compute_block_last_use(block);
 
         for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
             // B-2026-08-30-33 — the interpreter twin of codegen's

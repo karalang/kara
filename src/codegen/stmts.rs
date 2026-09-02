@@ -1599,7 +1599,25 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let mut i = 0;
         while i < n {
-            if let Some((group, return_slots)) = group_starts.get(&i).cloned() {
+            // B-2026-08-31-4 / B-2026-08-31-6 — decline a group that would
+            // SWALLOW an NLL drop point. See `par_group_swallows_nll_drop`.
+            let dispatch = match group_starts.get(&i) {
+                Some((group, _))
+                    if auto_par_user_drop_last_use
+                        .as_ref()
+                        .is_some_and(|lu| self.par_group_swallows_nll_drop(group, lu)) =>
+                {
+                    // Its statements must reach the SEQUENTIAL arm below, so
+                    // uncover them; `group_starts` is only ever read at the
+                    // group's minimum index, which this iteration has passed.
+                    for s in &group.statement_indices {
+                        covered.remove(s);
+                    }
+                    None
+                }
+                other => other.cloned(),
+            };
+            if let Some((group, return_slots)) = dispatch {
                 let group_stmts: Vec<Stmt> = group
                     .statement_indices
                     .iter()
@@ -1945,6 +1963,62 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Would dispatching `group` SWALLOW an NLL drop point that the sequential
+    /// build performs at one of the statements it covers? (B-2026-08-31-6, and
+    /// B-2026-08-31-4 as the shape that made it observable outside the
+    /// shadowed-binding case the original row measured.)
+    ///
+    /// THE MECHANISM, corrected. `compile_function_body`'s statement loop calls
+    /// `fire_due_user_drops` only in its SEQUENTIAL arm; the group-dispatch arm
+    /// jumps `i` past `max_idx` and the mid-group arm just increments, so
+    /// neither ever reaches the per-statement fire. A binding whose live-range
+    /// end lands on a covered index therefore has no firing point at all and
+    /// falls through to the scope-exit drain. (B-2026-08-31-6 attributed this
+    /// to `fire_due_user_drops`' terminated-insert-block early return; that
+    /// guard is real but is not what fires here — the call is simply never
+    /// made. The loop's own comment says so: "Group-dispatched indices are
+    /// skipped (conservative: a binding whose last use falls inside a par group
+    /// drains at scope exit as before)".)
+    ///
+    /// WHY SKIPPING THE GROUP IS THE FIX RATHER THAN A RETREAT. Auto-par is not
+    /// permitted to move observable output: design.md § Determinism —
+    /// "`writes(Stdout)` / `writes(Stderr)` are deliberately non-conflicting
+    /// with themselves … console output that does end up inside a parallel
+    /// region is captured per branch and replayed at the join in source order.
+    /// Either way the observable order is the sequential one." A `Drop` body
+    /// that prints is such output, and the body is emitted in the PARENT, after
+    /// the join — outside the per-branch capture the replay orders. So firing
+    /// the swallowed drops at the region BOUNDARY recovers the count and still
+    /// lands them after every replayed line: measured `str xyz str end dE`
+    /// against the interpreter's `str xyz dE str end`. Only running the
+    /// statement sequentially puts the body back in its specified place, and
+    /// the sequential fallback is always semantically valid here — the four
+    /// existing `continue`s in the group planner rest on the same property,
+    /// stated at the un-typeable-slot one: "the analyzer's parallelization is
+    /// an optimization hint, not a semantic requirement".
+    ///
+    /// NARROW BY CONSTRUCTION. The frame is consulted at DISPATCH time, so this
+    /// sees exactly the actions statements before the group left pending, and
+    /// asks `nll_fireable_binding` — the same admission predicate the firing
+    /// pass uses, shared rather than copied. A group covering no such binding's
+    /// last use is dispatched unchanged, so a program with no `impl Drop`
+    /// (`user_drop_wrapper_fns` empty ⇒ `auto_par_user_drop_last_use` is
+    /// `None`) never reaches this at all.
+    fn par_group_swallows_nll_drop(
+        &self,
+        group: &ParallelGroup,
+        last_use: &HashMap<String, usize>,
+    ) -> bool {
+        let Some(frame) = self.drop_rc.scope_cleanup_actions.last() else {
+            return false;
+        };
+        frame.iter().any(|a| {
+            self.nll_fireable_binding(a)
+                .and_then(|n| last_use.get(n))
+                .is_some_and(|lu| group.statement_indices.contains(lu))
+        })
     }
 
     /// True iff `stmt` is a top-level `par { ... }` expression statement.

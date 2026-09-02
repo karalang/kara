@@ -147,10 +147,27 @@ mod memory_sanitizer_tests {
     /// of this case alone as evidence that the ordering is sound -- the
     /// transcript is what makes it evidence.
     ///
-    /// `_auto_par` is load-bearing: the sequential harness cannot reach the
-    /// shape at all. Without outlining the bodies action fires at its NLL point
-    /// and never enters the drain, so the two halves never meet
-    /// (B-2026-08-31-6).
+    /// TWO CASES, because B-2026-08-31-6's fix changed which one reaches the
+    /// drain. This used to say "`_auto_par` is load-bearing: the sequential
+    /// harness cannot reach the shape at all. Without outlining the bodies
+    /// action fires at its NLL point and never enters the drain, so the two
+    /// halves never meet." That was true, and it stopped being true: a group no
+    /// longer swallows the firing point of a statement it covers, so under
+    /// auto-par the walk ALSO fires at the NLL point now, and case 1 --
+    /// unchanged except for its transcript, which moved from `a10 b1 done dR10`
+    /// to the interpreter's `a10 dR10 b1 done` -- no longer exercises the
+    /// drain at all.
+    ///
+    /// Case 1 is kept anyway (it is the historical fixture, and a regression
+    /// that re-defers the walk fails it on the transcript), but on its own it
+    /// would leave B-2026-09-02-1 UNGUARDED. Case 2 restores the guard by
+    /// reaching the drain the one way that survives the fix: reading `a` in the
+    /// block's FINAL EXPRESSION pins its endpoint to `scope_exit`, which
+    /// `fire_due_user_drops` never matches (it is only ever called with an
+    /// index below the statement count), so the walk and the memory drop meet
+    /// in the LIFO drain exactly as before. Verified to reach it, on all four
+    /// surfaces: `a10 b1 done10 dR10` -- the body after the final expression,
+    /// with the correct id rather than a freed-block read.
     #[test]
     fn asan_par_field_bodies_walk_does_not_read_freed_buffer() {
         assert_clean_asan_run_min_allocs_auto_par(
@@ -171,8 +188,34 @@ mod memory_sanitizer_tests {
              \x20   println(f\"b{b.len()}\");\n\
              \x20   println(f\"done\");\n\
              }\n",
-            &["a10", "b1", "done", "dR10"],
+            &["a10", "dR10", "b1", "done"],
             "b1-par-field-bodies-after-free",
+            1,
+        );
+        // Case 2 — `a` read in the block's FINAL EXPRESSION, so its endpoint
+        // pins to `scope_exit` and the bodies walk still meets the struct's
+        // memory drop in the scope-exit LIFO drain. This is the case that
+        // actually guards B-2026-09-02-1 now; see this test's doc.
+        assert_clean_asan_run_min_allocs_auto_par(
+            "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct Box3 { xs: Vec[R] }\n\
+             fn build(k: i64) -> Box3 {\n\
+             \x20   let mut v: Vec[R] = Vec.new();\n\
+             \x20   v.push(R { id: k, tag: f\"t\" });\n\
+             \x20   let bx: Box3 = Box3 { xs: v };\n\
+             \x20   return bx\n\
+             }\n\
+             fn mk_v() -> Vec[String] { let mut n: Vec[String] = Vec.new(); n.push(f\"aa\"); return n }\n\
+             fn main() {\n\
+             \x20   let a: Box3 = build(10);\n\
+             \x20   println(f\"a{a.xs[0].id}\");\n\
+             \x20   let b: Vec[String] = mk_v();\n\
+             \x20   println(f\"b{b.len()}\");\n\
+             \x20   println(f\"done{a.xs[0].id}\")\n\
+             }\n",
+            &["a10", "b1", "done10", "dR10"],
+            "b1-par-field-bodies-drain-order",
             1,
         );
     }

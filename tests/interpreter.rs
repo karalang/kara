@@ -54600,3 +54600,84 @@ fn pattern_spellings_agree_on_a_field_only_drop_payload() {
         "while-let: one body per iteration"
     );
 }
+
+/// B-2026-08-31-4 / B-2026-08-31-6 — the ORACLE side of the auto-par
+/// swallowing pins in `tests/par_codegen.rs`. The interpreter has no
+/// outlining, so it has always fired these at the live-range end; the value of
+/// having it here is that the two files now assert the SAME string, which is
+/// what makes the compiled pin a run-vs-build check rather than a snapshot of
+/// whatever codegen happened to do.
+///
+/// design.md § Drop ordering: "Destructors fire at each binding's live-range
+/// end, not at lexical scope end … a value whose last use is mid-scope is
+/// dropped at that use and does not appear in the end-of-scope stack at all."
+#[test]
+fn nll_drop_point_at_a_call_that_last_uses_the_binding() {
+    assert_eq!(
+        run("struct S { e: E }\n\
+             enum E { A(Vec[String]), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             fn mkv() -> Vec[String] {\n\
+             \x20   let mut v: Vec[String] = Vec.new();\n\
+             \x20   v.push(\"xyz\");\n\
+             \x20   return v\n\
+             }\n\
+             fn ret_str(s: ref S) -> String {\n\
+             \x20   match s.e { E.A(v) => { let m = v; return m[0] } E.B => { return \"n\" } }\n\
+             }\n\
+             fn ret_i64(s: ref S) -> i64 {\n\
+             \x20   match s.e { E.A(v) => { let m = v; return m.len() } E.B => { return 0 } }\n\
+             }\n\
+             fn c_i64() {\n\
+             \x20   println(\"i64\");\n\
+             \x20   let s = S { e: E.A(mkv()) };\n\
+             \x20   println(f\"{ret_i64(s)}\");\n\
+             \x20   println(\"i64 end\");\n\
+             }\n\
+             fn c_str() {\n\
+             \x20   println(\"str\");\n\
+             \x20   let s = S { e: E.A(mkv()) };\n\
+             \x20   println(f\"{ret_str(s)}\");\n\
+             \x20   println(\"str end\");\n\
+             }\n\
+             fn main() { c_i64(); c_str(); println(\"end\"); }\n"),
+        "i64\n1\ndE\ni64 end\nstr\nxyz\ndE\nstr end\nend\n",
+        "the callee's return type does not move the caller's drop point"
+    );
+
+    // The two neighbouring spellings, same oracle as the compiled pin.
+    assert_eq!(
+        run("struct R { id: i64, v: Vec[String] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             fn mk(id: i64) -> R {\n\
+             \x20   let mut v: Vec[String] = Vec.new();\n\
+             \x20   v.push(\"p\");\n\
+             \x20   return R { id: id, v: v }\n\
+             }\n\
+             fn use_r(r: ref R) -> String { return r.v[0] }\n\
+             fn before_group() {\n\
+             \x20   println(\"B\");\n\
+             \x20   let r = mk(1);\n\
+             \x20   println(f\"{use_r(r)}\");\n\
+             \x20   println(\"B end\");\n\
+             }\n\
+             fn both_inside() {\n\
+             \x20   println(\"D\");\n\
+             \x20   let r = mk(7);\n\
+             \x20   let s = use_r(r);\n\
+             \x20   println(s);\n\
+             \x20   println(\"D end\");\n\
+             }\n\
+             fn staggered() {\n\
+             \x20   println(\"E\");\n\
+             \x20   let a = mk(8);\n\
+             \x20   let b = mk(9);\n\
+             \x20   println(f\"{use_r(a)}\");\n\
+             \x20   println(f\"{use_r(b)}\");\n\
+             \x20   println(\"E end\");\n\
+             }\n\
+             fn main() { before_group(); both_inside(); staggered(); println(\"end\"); }\n"),
+        "B\np\ndR1\nB end\nD\ndR7\np\nD end\nE\np\ndR8\np\ndR9\nE end\nend\n",
+        "each binding dies at its own live-range end"
+    );
+}

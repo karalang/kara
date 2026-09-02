@@ -45753,33 +45753,45 @@ fn main() {
                      \x20   println(\"mid\");\n\
                      }}"
                 ),
-                // PINNED AT A DEFECT, and DELIBERATELY DIFFERENT from the
-                // interpreter twin, which expects `dR9 dR8 mid`. With NEITHER
-                // generation read, the endpoint comes from
-                // `compute_block_last_use`'s never-read fallback, and codegen
-                // reads the variant that pins it to the FIRST `let` — so the
-                // first generation fires before the shadowing `let` and the
-                // second, whose slot did not exist at that index, drains at
-                // scope exit.
+                // NO LONGER PINNED AT A DEFECT (B-2026-08-31-6, fixed), and
+                // no longer different from the interpreter twin: both now
+                // expect `dR9 dR8 mid`.
                 //
-                // The shadow-aware fallback the interpreter uses puts both at
-                // the last `let` and produces `dR9 dR8 mid` here too. Feeding
-                // it to codegen was tried, landed in B-2026-08-30-51, and
-                // REGRESSED auto-par programs (B-2026-08-31-5): an outlined
-                // `__par_branch_*` region leaves the insert block terminated
-                // across the statements it spans, so an endpoint moved INTO
-                // that span never fires and the body lands at function exit.
+                // With NEITHER generation read the endpoint comes from
+                // `compute_block_last_use`'s never-read fallback. Codegen used
+                // to read a variant pinning it to the FIRST `let`, so the first
+                // generation fired before the shadowing `let` and the second,
+                // whose slot did not exist at that index, drained at scope exit
+                // — the `dR8 mid dR9` this used to assert. The shadow-aware
+                // variant the interpreter uses puts both at the LAST `let`.
                 //
-                // NOTE THIS HARNESS COMPILES SEQUENTIALLY, so the expectation
-                // above is the no-outlining one and this pin CANNOT see that
-                // regression. Through `karac build`, where auto-par is on by
-                // default, the same program prints `dR3 dR4 mid c=0` — both
-                // bodies ahead of the statement, better than what is pinned
-                // here. The full four-way measurement (sequential vs auto-par,
-                // each fallback) is on B-2026-08-31-5's successor row; neither
-                // fallback is right in both, which is why this is pinned at a
-                // defect rather than fixed.
-                "dR8\nmid\ndR9\n",
+                // Feeding that to codegen was tried, landed in B-2026-08-30-51
+                // and was reverted in B-2026-08-31-5 because it REGRESSED
+                // auto-par programs: an outlined region left the statements it
+                // spanned with no firing point, so an endpoint moved INTO that
+                // span never fired. That was the swallowing, and it is fixed —
+                // a group covering a pending drop's endpoint is now declined
+                // (`par_group_swallows_nll_drop`). With the hazard gone there
+                // is one fallback and one entry point for both backends, and
+                // the sequential column this harness compiles agrees with the
+                // interpreter: measured `dR8 mid dR9` before, `dR9 dR8 mid`
+                // after, against the interpreter's unchanged `dR9 dR8 mid`.
+                //
+                // WHAT IS STILL NOT PINNED HERE: this harness compiles
+                // SEQUENTIALLY, so it cannot see the auto-par column at all.
+                // For THIS three-statement program that column agrees anyway
+                // (`dR9 dR8 mid` on all four surfaces, measured) — nothing here
+                // forms a group over the two `let`s. Put a statement before
+                // them and more after, so groups do form, and a residual
+                // appears: `dR3 dR4 mid c=0` under auto-par against the
+                // interpreter's and the sequential build's `dR4 dR3 mid c=0` —
+                // right position, LIFO order reversed, because neither
+                // generation is read, so neither is published as a return slot
+                // and each fires inside its own branch at its own `let`
+                // instead of both at the shared name-keyed endpoint. That
+                // residual is its own row, and it needs `tests/par_codegen.rs`
+                // to be seen.
+                "dR9\ndR8\nmid\n",
             ),
             (
                 "shadow-inside-nested-block",

@@ -241,11 +241,19 @@ fn main() {{
     /// returning `String` or `i64`, a `Vec` built in place, or no later binding
     /// never met the hazard. The later binding does not have to be READ.
     ///
-    /// WHAT THIS DOES NOT ASSERT: the body's POSITION. Under auto-par it still
-    /// runs at scope exit (`done` then `dR10`) where the interpreter and
-    /// `KARAC_AUTO_PAR=0` run it at the NLL point. That residual divergence is
-    /// B-2026-08-31-6 and is deliberately left alone -- this row is the
-    /// memory-safety half, separately fixable and separately fixed.
+    /// THE POSITION IS NOW ASSERTED TOO (B-2026-08-31-6, fixed). This used to
+    /// read "WHAT THIS DOES NOT ASSERT: the body's POSITION", because under
+    /// auto-par the body ran at scope exit (`done` then `dR10`) where the
+    /// interpreter and `KARAC_AUTO_PAR=0` ran it at the NLL point, and that
+    /// residual was left alone as separately fixable. It has been separately
+    /// fixed: a group no longer swallows the firing point of a statement it
+    /// covers (`par_group_swallows_nll_drop`), so the four non-control rows
+    /// moved from the deferred transcript to the interpreter's. Measured on
+    /// the pre-fix compiler, all three columns at once: interpreter and
+    /// `KARAC_AUTO_PAR=0` both printed `a10 dR10 b1 done` while `karac build`
+    /// printed `a10 b1 done dR10` -- so the values these rows used to pin were
+    /// the auto-par divergence, not a third correct answer. All eight rows now
+    /// agree with the interpreter.
     ///
     /// The exact transcript is the RIGHT check and, for this defect, the only
     /// one that works: pre-fix the id is whatever the freed block now holds --
@@ -269,22 +277,22 @@ fn main() {{
             (
                 "later binding from a Vec-returning call",
                 "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\")",
-                "a10\nb1\ndone\ndR10\n",
+                "a10\ndR10\nb1\ndone\n",
             ),
             (
                 "later binding from a call returning a struct wrapping a Vec",
                 "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: WrapV = mk_w(); println(f\"b{b.ys.len()}\"); println(f\"done\")",
-                "a10\nb1\ndone\ndR10\n",
+                "a10\ndR10\nb1\ndone\n",
             ),
             (
                 "later binding never read",
                 "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"done\")",
-                "a10\ndone\ndR10\n",
+                "a10\ndR10\ndone\n",
             ),
             (
                 "two elements: both bodies, both correct",
                 "let a: Box3 = build2(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\")",
-                "a10\nb1\ndone\ndR10\ndR11\n",
+                "a10\ndR10\ndR11\nb1\ndone\n",
             ),
             (
                 "call returning String (control)",
@@ -12519,6 +12527,144 @@ fn main() {
                 out, "kara 1\ndR7\npost\n",
                 "a Drop-valued Map slot's value-bodies walk must still precede \
                  its handle free; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-08-31-4 / B-2026-08-31-6 — a binding whose NLL live-range end
+    /// falls on a statement an auto-par group COVERS used to have no firing
+    /// point at all: `compile_function_body` calls `fire_due_user_drops` only
+    /// from its sequential arm, so the drop fell through to the scope-exit
+    /// drain. `s`'s last use is the `ret_str(s)` call, and design.md § Drop
+    /// ordering is explicit — "a value whose last use is mid-scope is dropped
+    /// at that use and does not appear in the end-of-scope stack at all".
+    ///
+    /// The `i64`-returning twin below is the control: identical shape, and it
+    /// was ALREADY correct, because its call site did not land inside a group.
+    /// That asymmetry is what made the row read as a return-type bug rather
+    /// than an outlining one.
+    ///
+    /// This belongs here rather than in `tests/codegen.rs`, which compiles
+    /// sequentially and so only ever sees the column that was already right —
+    /// the reason B-2026-08-31-5 shipped without a pin for this.
+    #[test]
+    fn test_e2e_auto_par_group_does_not_swallow_a_covered_nll_drop_point() {
+        let out = run_program(
+            r#"
+struct S { e: E }
+enum E { A(Vec[String]), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+fn mkv() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("xyz");
+    return v
+}
+
+fn ret_str(s: ref S) -> String {
+    match s.e {
+        E.A(v) => { let m = v; return m[0] }
+        E.B => { return "n" }
+    }
+}
+
+fn ret_i64(s: ref S) -> i64 {
+    match s.e {
+        E.A(v) => { let m = v; return m.len() }
+        E.B => { return 0 }
+    }
+}
+
+fn c_i64() {
+    println("i64");
+    let s = S { e: E.A(mkv()) };
+    println(f"{ret_i64(s)}");
+    println("i64 end");
+}
+
+fn c_str() {
+    println("str");
+    let s = S { e: E.A(mkv()) };
+    println(f"{ret_str(s)}");
+    println("str end");
+}
+
+fn main() {
+    c_i64();
+    c_str();
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "i64\n1\ndE\ni64 end\nstr\nxyz\ndE\nstr end\nend\n",
+                "`s` dies at the call that last uses it on BOTH columns; a \
+                 group covering that statement must not defer it to scope \
+                 exit. Pre-fix the heap-returning half read \
+                 `str xyz str end dE`; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-08-31-4, the two neighbouring spellings — the binding declared
+    /// before the covering group, and one declared and last-used inside it.
+    /// Both were swallowed the same way and both are pinned here because the
+    /// dispatch-time frame check sees them by different routes: the first is
+    /// already a pending action when the group is planned, the second reaches
+    /// the sequential arm only because the group was declined for the first.
+    #[test]
+    fn test_e2e_auto_par_covered_nll_drop_point_neighbouring_spellings() {
+        let out = run_program(
+            r#"
+struct R { id: i64, v: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn mk(id: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    v.push("p");
+    return R { id: id, v: v }
+}
+
+fn use_r(r: ref R) -> String { return r.v[0] }
+
+fn before_group() {
+    println("B");
+    let r = mk(1);
+    println(f"{use_r(r)}");
+    println("B end");
+}
+
+fn both_inside() {
+    println("D");
+    let r = mk(7);
+    let s = use_r(r);
+    println(s);
+    println("D end");
+}
+
+fn staggered() {
+    println("E");
+    let a = mk(8);
+    let b = mk(9);
+    println(f"{use_r(a)}");
+    println(f"{use_r(b)}");
+    println("E end");
+}
+
+fn main() {
+    before_group();
+    both_inside();
+    staggered();
+    println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "B\np\ndR1\nB end\nD\ndR7\np\nD end\nE\np\ndR8\np\ndR9\nE end\nend\n",
+                "every one of these drops fires at its binding's live-range \
+                 end under auto-par, matching the interpreter; got {out:?}"
             );
         }
     }

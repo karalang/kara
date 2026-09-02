@@ -8998,6 +8998,56 @@ impl<'ctx> super::Codegen<'ctx> {
     /// no user body is unobservable in output and only retimes a free, which
     /// buys nothing to offset the risk of moving a release earlier in the RC
     /// machinery's most heavily special-cased path.
+    /// Is `a` an action this pass would fire at its binding's NLL live-range
+    /// end — and if so, which binding does it belong to?
+    ///
+    /// The admission rule lives here, in ONE place, because two callers ask
+    /// different questions of it. [`Self::fire_due_user_drops`] asks "is this
+    /// action due at THIS statement". `compile_function_body`'s auto-par group
+    /// planner asks "would dispatching a group over these statement indices
+    /// SWALLOW a firing the sequential build performs" — the B-2026-08-31-6
+    /// mechanism, where the group arms never reach the per-statement fire at
+    /// all. A second, hand-copied predicate is exactly the drift
+    /// [`UserDropKind`]'s doc-comment warns about, and it fails silently in
+    /// the same way: both answers are still a legal SINGLE fire, so only the
+    /// observable POSITION moves and no count-based test can see it.
+    pub(super) fn nll_fireable_binding<'a>(&self, a: &'a CleanupAction<'ctx>) -> Option<&'a str> {
+        match a {
+            // B-2026-08-09-3 — the RC tier rides this channel via `RcDec`,
+            // restricted to shared types carrying their OWN `impl Drop`.
+            CleanupAction::RcDec {
+                name, heap_type, ..
+            } => self
+                .struct_name_for_heap_type(*heap_type)
+                .is_some_and(|n| self.drop_rc.user_drop_wrapper_fns.contains_key(&n))
+                .then_some(name.as_str()),
+            // B-2026-07-30-11 / B-2026-08-27-8 (container element bodies),
+            // B-2026-07-31-5 (a value enum's own body) — see
+            // `fire_due_user_drops`' doc for why each clause is admitted.
+            CleanupAction::UserDrop {
+                binding_name,
+                type_name,
+                kind,
+                ..
+            } => (*kind == UserDropKind::ContainerElemBodies
+                || (self
+                    .type_decls
+                    .struct_types
+                    .contains_key(type_name.as_str())
+                    && !self
+                        .type_decls
+                        .shared_types
+                        .contains_key(type_name.as_str()))
+                || self
+                    .type_decls
+                    .enum_layouts
+                    .get(type_name.as_str())
+                    .is_some_and(|l| !l.is_shared))
+            .then_some(binding_name.as_str()),
+            _ => None,
+        }
+    }
+
     pub(super) fn fire_due_user_drops(
         &mut self,
         last_use: &std::collections::HashMap<String, usize>,
@@ -9054,9 +9104,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         ptr,
                         heap_type,
                     } if last_use.get(name.as_str()).copied() == Some(stmt_idx)
-                        && self.struct_name_for_heap_type(*heap_type).is_some_and(|n| {
-                            self.drop_rc.user_drop_wrapper_fns.contains_key(&n)
-                        }) =>
+                        && self.nll_fireable_binding(a).is_some() =>
                     {
                         Some(DueDrop::Rc {
                             name: name.clone(),
@@ -9071,27 +9119,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         type_name,
                         kind,
                     } if last_use.get(binding_name.as_str()).copied() == Some(stmt_idx)
-                        // B-2026-07-30-11 / B-2026-08-27-8 — see the container
-                        // paragraph in this method's doc.
-                        && (*kind == UserDropKind::ContainerElemBodies
-                            || (self.type_decls.struct_types.contains_key(type_name.as_str())
-                                && !self.type_decls.shared_types.contains_key(type_name.as_str()))
-                            // B-2026-07-31-5 — a value ENUM's own `impl Drop`
-                            // body belongs on this channel too. Its
-                            // `karac_drop_<E>` wrapper is BODY-ONLY (the wrapper
-                            // emitter's field-bodies and struct-memory steps
-                            // both decline for an enum name; the payload memory
-                            // is the separate scope-exit `EnumDrop`), so firing
-                            // it early frees nothing early. Without this clause
-                            // the body ran at scope exit while the interpreter
-                            // ran it at the NLL point — measured `DS|mid` vs
-                            // `mid|DS`. Shared enums are excluded for the same
-                            // reason shared structs are: refcount-driven drop.
-                            || self
-                                .type_decls
-                                    .enum_layouts
-                                .get(type_name.as_str())
-                                .is_some_and(|l| !l.is_shared)) =>
+                        // The admission clauses (container element bodies, a
+                        // non-shared struct, a value enum's own body) live in
+                        // `nll_fireable_binding` so the auto-par group planner
+                        // asks the SAME question this pass answers.
+                        && self.nll_fireable_binding(a).is_some() =>
                     {
                         Some(DueDrop::User {
                             name: binding_name.clone(),
