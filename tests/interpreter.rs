@@ -25314,11 +25314,98 @@ fn test_f16_arithmetic_results_are_representable_in_f16() {
 //   * `cosh`, and with it `sinh` / `log10` / `atan`, DID round but computed in
 //     f64 first, landing 1 ULP off codegen on 34 of 160 f32 samples.
 //
-// Both are fixed by one rule, so both are pinned here. Every value below is
-// `karac run`'s, and the f64 pair at the end is the boundary: f64 must NOT move,
-// since a fix that computed everything at f32 would visibly truncate it.
+// Both are fixed by one rule, so both are pinned here. The f64 pair at the end
+// is the boundary: f64 must NOT move, since a fix that computed everything at
+// f32 would visibly truncate it.
+//
+// THE TRANSCENDENTAL LINES ARE NOT FROZEN DIGITS, and that is B-2026-09-01-48.
+// They were, and the digits were glibc's, so this test failed on every
+// `Test (macos-latest)` run: `coshf` is not correctly rounded on every
+// platform's libm. Measured 2026-09-01 — `cosh(2.0f32)` is 3.7621958255767822
+// under glibc and 3.762195587158203 under Apple's libm, and the f64 value
+// 3.7621956910836314 is 1.04e-7 from the second against 1.34e-7 from the
+// first, so macOS returns the CORRECTLY-ROUNDED f32 and glibc is the 1-ULP-off
+// one. No single literal can hold on both hosts.
+//
+// So the oracle for those lines is Rust's own `f32` method. That is not a
+// weakening: `f32::cosh` lowers to the same `coshf` codegen emits, so the
+// assertion still reads "the interpreter agreed with the symbol codegen calls"
+// — the property B-2026-08-29-41 fixed — it just stops spelling that symbol's
+// answer as one host's decimal digits. The width-visible methods
+// (`to_degrees` / `to_radians` / `recip`) stay literal: they are a single
+// correctly-rounded multiply or divide, identical on any IEEE host, and their
+// pre-fix failure was f64's 17 digits appearing on an f16 line, not 1 ULP.
+//
+// NOT `assert_prints_float_near`, this file's other answer to the same
+// macOS/Linux last-ULP split (see its use on `asinh` above). That helper is
+// right where the last ULP is the noise; here the last ULP is the SIGNAL —
+// f64-then-round differs from the f32 symbol by exactly one — so a tolerant
+// compare would admit the very regression being guarded. Exact equality
+// against a per-host oracle is the stronger tool, and the available one,
+// because Rust reaches the same symbol.
+//
+// ANTI-VACUITY. Whether a given receiver discriminates the two routes AT ALL
+// is itself platform-dependent, and the four this test shipped with do not
+// discriminate on macOS — measured, all four agree there, so on that host the
+// test could only ever have been checking the frozen digits. Three receivers
+// that DO discriminate on Apple's libm are added below, and the assertion at
+// the end fails the test if none of the samples separates the routes on the
+// host it is running on. Without it a future libm could make every sample
+// agree and this would pass while testing nothing.
 #[test]
 fn test_scalar_float_methods_compute_at_the_declared_width() {
+    // The f32 transcendental samples, as (receiver, f32-width answer).
+    // `2.0` / `0.2857…` are the historical receivers (they separate the
+    // routes under glibc); `1.22` / `1.175` / `0.057` were found by sweeping
+    // i/1000 for i in 1..4000 and separate them under Apple's libm.
+    let a: f32 = 2.0;
+    // The Kāra source spells this `0.2857142984867096f32` — the f64 digits of
+    // the same f32. Kept short here because `clippy::excessive_precision`
+    // rejects the long form on an `f32` binding; bit-identical either way.
+    let s: f32 = 0.2857143;
+    let c1: f32 = 1.22;
+    let c2: f32 = 1.175;
+    let c3: f32 = 0.057;
+    let samples: [(f32, f32, f32); 7] = [
+        (a, a.cosh(), (a as f64).cosh() as f32),
+        (s, s.sinh(), (s as f64).sinh() as f32),
+        (s, s.log10(), (s as f64).log10() as f32),
+        (s, s.atan(), (s as f64).atan() as f32),
+        (c1, c1.cosh(), (c1 as f64).cosh() as f32),
+        (c2, c2.sinh(), (c2 as f64).sinh() as f32),
+        (c3, c3.atan(), (c3 as f64).atan() as f32),
+    ];
+
+    // Kāra prints a narrow float by widening to f64, so the expected text for
+    // an f32 result is that f64's shortest round-tripping form.
+    let f32_line = |v: f32| format!("{}\n", v as f64);
+
+    let expected = format!(
+        "114.59156036376953\n\
+         0.03490658476948738\n\
+         {cosh_a}\
+         114.5625\n\
+         114.5\n\
+         0.333984375\n\
+         0.3333333432674408\n\
+         {sinh_s}\
+         {log10_s}\
+         {atan_s}\
+         {cosh_c1}\
+         {sinh_c2}\
+         {atan_c3}\
+         114.59155902616465\n\
+         {cosh_d}\n",
+        cosh_a = f32_line(samples[0].1),
+        sinh_s = f32_line(samples[1].1),
+        log10_s = f32_line(samples[2].1),
+        atan_s = f32_line(samples[3].1),
+        cosh_c1 = f32_line(samples[4].1),
+        sinh_c2 = f32_line(samples[5].1),
+        atan_c3 = f32_line(samples[6].1),
+        cosh_d = (2.0f64).cosh(),
+    );
+
     assert_eq!(
         run("fn main() {\n\
              \x20   let a: f32 = 2.0f32;\n\
@@ -25337,22 +25424,32 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
              \x20   println(s.sinh());\n\
              \x20   println(s.log10());\n\
              \x20   println(s.atan());\n\
+             \x20   let c1: f32 = 1.22f32;\n\
+             \x20   println(c1.cosh());\n\
+             \x20   let c2: f32 = 1.175f32;\n\
+             \x20   println(c2.sinh());\n\
+             \x20   let c3: f32 = 0.057f32;\n\
+             \x20   println(c3.atan());\n\
              \x20   let d: f64 = 2.0;\n\
              \x20   println(d.to_degrees());\n\
              \x20   println(d.cosh());\n\
              }\n"),
-        "114.59156036376953\n\
-         0.03490658476948738\n\
-         3.7621958255767822\n\
-         114.5625\n\
-         114.5\n\
-         0.333984375\n\
-         0.3333333432674408\n\
-         0.2896174490451813\n\
-         -0.5440680384635925\n\
-         0.2782996594905853\n\
-         114.59155902616465\n\
-         3.7621956910836314\n"
+        expected
+    );
+
+    // The check that keeps the above honest: at least one receiver must
+    // actually separate "computed at f32 width" from "computed at f64 and
+    // rounded", or a tree-walk that took the f64 shortcut would satisfy every
+    // line and this test would pass while testing nothing. If this fires,
+    // sweep for a receiver that discriminates on the new host and add it —
+    // do not delete the assertion.
+    assert!(
+        samples
+            .iter()
+            .any(|(_, at_width, via_f64)| at_width.to_bits() != via_f64.to_bits()),
+        "no sample separates the f32-width route from compute-in-f64-then-round \
+         on this host, so the test cannot observe the regression it exists for; \
+         add a discriminating receiver"
     );
 }
 
