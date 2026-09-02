@@ -4620,6 +4620,14 @@ impl<'a> super::Interpreter<'a> {
         fn_name: &str,
         args: &[crate::ast::CallArg],
     ) {
+        // B-2026-09-01-44 — resolved ONCE, and through the shared resolver
+        // rather than the three inline `Item::Function` scans that used to sit
+        // in the closure below. An ASSOCIATED callee reaches this function
+        // under its bare method name, so those scans answered "not a
+        // passthrough" for `H.apick(r, k)` while answering correctly for the
+        // free-function twin `fpick(r, k)` — the caller then kept `r` armed and
+        // the result binding ran the body a second time.
+        let callee = self.callee_fn_for_param_ownership(fn_name);
         let passthrough: Vec<(String, bool)> = args
             .iter()
             .enumerate()
@@ -4638,22 +4646,16 @@ impl<'a> super::Interpreter<'a> {
                 // `take(mut sink, Res { id: 1 })` ran one body and
                 // `take(mut sink, carg)` ran two — the binding's NLL fire at
                 // the call plus the container's at its drain.
-                let escapes_into_outliving_place = self.program.items.iter().any(|item| {
-                    matches!(item, crate::ast::Item::Function(f)
-                        if f.name == fn_name
-                            && crate::ast::fn_moves_param_into_outliving_place(f, i))
-                });
-                let is_passthrough = self.program.items.iter().any(|item| {
-                    // B-2026-08-09-15 — `fn_returns_param_payload` is the same
-                    // rule one level down: the callee hands back not the param
-                    // but something a `match` arm bound OUT of it, so the param
-                    // reaches no return site and `fn_returns_param` is blind to
-                    // it while the value still leaves the frame. Codegen's twin
-                    // is `callee_returns_enum_arg_payload`.
-                    matches!(item, crate::ast::Item::Function(f)
-                            if f.name == fn_name
-                                && (crate::ast::fn_returns_param(f, i)
-                                    || crate::ast::fn_returns_param_payload(f, i)))
+                let escapes_into_outliving_place =
+                    callee.is_some_and(|f| crate::ast::fn_moves_param_into_outliving_place(f, i));
+                // B-2026-08-09-15 — `fn_returns_param_payload` is the same
+                // rule one level down: the callee hands back not the param but
+                // something a `match` arm bound OUT of it, so the param reaches
+                // no return site and `fn_returns_param` is blind to it while
+                // the value still leaves the frame. Codegen's twin is
+                // `callee_returns_enum_arg_payload`.
+                let is_passthrough = callee.is_some_and(|f| {
+                    crate::ast::fn_returns_param(f, i) || crate::ast::fn_returns_param_payload(f, i)
                 });
                 if !is_passthrough && !escapes_into_outliving_place {
                     return None;
@@ -4681,11 +4683,9 @@ impl<'a> super::Interpreter<'a> {
                 // licenses the whole-value disarm directly rather than only the
                 // container-walk one.
                 let callee_owns_body = escapes_into_outliving_place
-                    || self.program.items.iter().any(|item| {
-                        matches!(item, crate::ast::Item::Function(f)
-                            if f.name == fn_name
-                                && (crate::ast::fn_always_returns_param(f, i)
-                                    || crate::ast::fn_conditionally_returns_param_bare(f, i)))
+                    || callee.is_some_and(|f| {
+                        crate::ast::fn_always_returns_param(f, i)
+                            || crate::ast::fn_conditionally_returns_param_bare(f, i)
                     });
                 Some((n.clone(), callee_owns_body))
             })

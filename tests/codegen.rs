@@ -13004,6 +13004,36 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-44 — the compiled half of
+    /// `test_assoc_fn_two_by_value_params_drop_matrix` (tests/interpreter.rs).
+    ///
+    /// These lanes were already correct when the interpreter lost the dying
+    /// param's body, which is what made the gap an A/B divergence rather than a
+    /// shared one. Pinned here so the fix cannot later be "restored" by
+    /// weakening this side to match a regressed interpreter.
+    #[test]
+    fn codegen_assoc_fn_two_by_value_params_drop_matrix() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct H { n: i64 }
+fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+
+impl H {
+    fn two(a: R, b: R, k: bool) -> R { if k { return b; } return a; }
+}
+
+fn t_t() { let x = H.two(R { id: 41, s: mk(41) }, R { id: 42, s: mk(42) }, true); println(f"T{x.id}"); }
+fn t_f() { let x = H.two(R { id: 43, s: mk(43) }, R { id: 44, s: mk(44) }, false); println(f"T{x.id}"); }
+
+fn main() { t_t(); t_f(); println("end"); }
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "d41\nT42\nd42\nd44\nT43\nd43\nend\n");
+    }
+
     #[test]
     fn codegen_generic_option_payload_renders_at_its_instantiation() {
         let Some(out) = run_program(

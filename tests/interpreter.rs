@@ -61,18 +61,16 @@ fn run_no_errors(source: &str) -> String {
 /// program, same absolute expectation, so the two backends are pinned to one
 /// answer rather than to each other.
 ///
-/// TWO CELLS ARE HELD OUT, and naming them is the point: the ASSOCIATED
-/// spelling is still wrong under `--interp` in both directions —
-/// `H.apick(R { .. }, true)` runs NO body for the dying argument, and
-/// `H.apick(r, false)` runs TWO for the returned one. Both are compiled-lane
-/// correct, so they are an interpreter-only gap; both are pre-existing, and
-/// both are recorded on the row. Including them here would pin the bug.
-///
-/// The obvious interpreter fix was tried and is a NO-OP, which is worth knowing
-/// before trying it again: `cond_returned_param_drop_names` early-returns for
-/// any dotted callee ("free functions only"), and lifting that for associated
-/// functions changed neither cell — the associated call does not reach that
-/// seeding site at all.
+/// ALL TWELVE CELLS ARE PINNED since B-2026-09-01-44. Two were held out here
+/// while the ASSOCIATED spelling was wrong under `--interp` in both directions
+/// — `H.apick(R { .. }, true)` ran NO body for the dying argument and
+/// `H.apick(r, false)` ran TWO for the returned one, against correct compiled
+/// lanes. The cause was not a missing protocol but a missing NAME: an
+/// associated call is dispatched by `eval_call`'s free-function arm under the
+/// callee's BARE name, so the helpers there that scan `program.items` for an
+/// `Item::Function` found nothing. `callee_fn_for_param_ownership` resolves it,
+/// and the associated spelling now matches the free-function one exactly, which
+/// is what the neighbouring rows of this table assert.
 #[test]
 fn test_conditional_return_param_drop_matrix() {
     let out = run(
@@ -99,7 +97,7 @@ fn test_conditional_return_param_drop_matrix() {
          fn mn_f() { let h = H { n: 0 }; let r = R { id: 34, s: mk(34) }; let x = h.mpick(r, false); println(f\"M{x.id}\"); }\n\
          fn main() {\n\
              ff_t(); ff_f(); fn_t(); fn_f();\n\
-             af_f(); an_t();\n\
+             af_t(); af_f(); an_t(); an_f();\n\
              mf_t(); mf_f(); mn_t(); mn_f();\n\
              println(\"end\");\n\
          }\n",
@@ -110,13 +108,49 @@ fn test_conditional_return_param_drop_matrix() {
          B12\nd12\n\
          d13\nC98\nd98\n\
          D14\nd14\n\
+         d21\nE98\nd98\n\
          F22\nd22\n\
          d23\nG98\nd98\n\
+         I24\nd24\n\
          d31\nJ98\nd98\n\
          K32\nd32\n\
          d33\nL98\nd98\n\
          M34\nd34\n\
          end\n"
+    );
+}
+
+/// B-2026-09-01-44 — an ASSOCIATED function with TWO by-value params, exactly
+/// one of which is handed back on each path.
+///
+/// The matrix above varies the CALL spelling against one single-param callee;
+/// this varies the CALLEE instead, and it is the shape that says the fix is a
+/// name resolution rather than a per-parameter special case: whichever of `a`
+/// and `b` dies inside must run its body once, and the other must run it once
+/// at the caller's result binding. Before the fix the dying one ran no body in
+/// either direction (`T42 d42`, `T43 d43`), while the compiled lanes were
+/// already correct — so this is also the interpreter half of an A/B pair.
+///
+/// Twin of `codegen_assoc_fn_two_by_value_params_drop_matrix` (tests/codegen.rs),
+/// pinned to the same string.
+#[test]
+fn test_assoc_fn_two_by_value_params_drop_matrix() {
+    assert_eq!(
+        run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"d{self.id}") } }
+struct H { n: i64 }
+fn mk(i: i64) -> String { return f"pay-{i}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; }
+
+impl H {
+    fn two(a: R, b: R, k: bool) -> R { if k { return b; } return a; }
+}
+
+fn t_t() { let x = H.two(R { id: 41, s: mk(41) }, R { id: 42, s: mk(42) }, true); println(f"T{x.id}"); }
+fn t_f() { let x = H.two(R { id: 43, s: mk(43) }, R { id: 44, s: mk(44) }, false); println(f"T{x.id}"); }
+
+fn main() { t_t(); t_f(); println("end"); }
+"#),
+        "d41\nT42\nd42\nd44\nT43\nd43\nend\n"
     );
 }
 

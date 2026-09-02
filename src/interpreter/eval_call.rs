@@ -2562,16 +2562,16 @@ impl<'a> super::Interpreter<'a> {
     /// through the RC path and never this drain, and the enum-payload channel
     /// is a different registration this row does not touch.
     fn cond_returned_param_drop_names(&self, fn_name: &str) -> Vec<String> {
-        // Free functions only — the method caller path does not stand down for
-        // a conditionally-returned arg, so flipping ownership there yields two
-        // bodies. See the codegen twin's comment (B-2026-08-28-70).
-        if fn_name.contains('.') {
-            return Vec::new();
-        }
-        let Some(f) = self.program.items.iter().find_map(|item| match item {
-            crate::ast::Item::Function(f) if f.name == fn_name => Some(f),
-            _ => None,
-        }) else {
+        // Free functions and ASSOCIATED functions — never an instance method,
+        // whose caller path does not stand down for a conditionally-returned
+        // arg, so flipping ownership there yields two bodies. See the codegen
+        // twin's comment (B-2026-08-28-70). The exclusion lives in
+        // `callee_fn_for_param_ownership` now rather than in a `contains('.')`
+        // test here, which never fired: this arm receives the callee's OWN
+        // name, and `register_impl_methods` stores an impl method's bare name
+        // even though its env key is qualified. That is what left the
+        // associated spelling with no owner for a dying param (B-2026-09-01-44).
+        let Some(f) = self.callee_fn_for_param_ownership(fn_name) else {
             return Vec::new();
         };
         // Generics are claimed like any other shape since B-2026-08-28-71.
@@ -3173,7 +3173,62 @@ impl<'a> super::Interpreter<'a> {
     ///
     /// Trait-impl methods are excluded: they are dispatched through the trait,
     /// not reachable as the `Type.method` callee this resolves.
+    /// B-2026-09-01-44 — the free function OR ASSOCIATED function behind the
+    /// bare callee name that reaches `eval_call`'s `Value::Function` arm.
+    ///
+    /// An associated call `H.apick(a, k)` is dispatched by that arm, not by
+    /// `method_call.rs`: its callee Path resolves through the env key
+    /// `"H.apick"` to a `Value::Function` whose `name` field is the BARE
+    /// `"apick"` (`register_impl_methods` stores the method's own name). So a
+    /// helper in that arm that scans `program.items` for an `Item::Function`
+    /// named `"apick"` finds nothing and silently answers as it would for a
+    /// closure — which is how the SAME callee got one ownership protocol under
+    /// its free-function spelling and none at all under its associated one.
+    ///
+    /// Ambiguity is FAIL-CLOSED, for the reason `declared_param_tys_of_fn`
+    /// gives at the same problem: two types both defining `apick` cannot be
+    /// told apart from the name, and picking one arbitrarily would move a
+    /// `Drop` body against the wrong signature. A free function wins outright,
+    /// matching the callee resolution a bare `apick(...)` call would perform.
+    ///
+    /// INSTANCE methods are excluded (`self_param.is_none()`). They do not
+    /// reach this arm at all — `t.mpick(x)` is dispatched by `method_call.rs`,
+    /// whose frame owns a deliberately WIDER param set
+    /// (`method_param_drop_names`) precisely because a method's arguments reach
+    /// no caller-side fire in this backend. Admitting them here could therefore
+    /// only mis-answer for a spelling this arm never sees, and would double the
+    /// body if it ever did.
+    pub(crate) fn callee_fn_for_param_ownership(
+        &self,
+        name: &str,
+    ) -> Option<&crate::ast::Function> {
+        self.callee_fn_by_bare_name(name, /* assoc_only = */ true)
+    }
+
+    /// B-2026-08-30-22 — the same resolution with instance methods ADMITTED,
+    /// for `run_fresh_temp_arg_drops`' passthrough and escape guards.
+    ///
+    /// Those guards only ever DECLINE to fire a body the caller would otherwise
+    /// run, so admitting a method is safe in the direction that matters there
+    /// and was measured to stop `H.id(a: R) -> R` running its argument's body
+    /// twice. The ownership TRANSFERS that
+    /// [`Self::callee_fn_for_param_ownership`] drives move a body BETWEEN
+    /// frames and so cannot admit one. Hence a flag rather than a second copy
+    /// of this walk: two near-identical resolvers differing by one line is the
+    /// shape the free and associated spellings drifted apart in to begin with.
     fn callee_fn_for_ownership_guard(&self, name: &str) -> Option<&crate::ast::Function> {
+        self.callee_fn_by_bare_name(name, /* assoc_only = */ false)
+    }
+
+    /// The one bare-name callee resolution both of the above share: a free
+    /// function first — a bare `apick(...)` call would resolve that way too —
+    /// then a single unambiguous INHERENT impl method. `assoc_only` drops the
+    /// methods that take a receiver.
+    fn callee_fn_by_bare_name(
+        &self,
+        name: &str,
+        assoc_only: bool,
+    ) -> Option<&crate::ast::Function> {
         if let Some(f) = self.program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == name => Some(f),
             _ => None,
@@ -3192,7 +3247,7 @@ impl<'a> super::Interpreter<'a> {
                 crate::ast::ImplItem::Method(f) => Some(f),
                 _ => None,
             }) {
-                if m.name != name {
+                if m.name != name || (assoc_only && m.self_param.is_some()) {
                     continue;
                 }
                 if found.is_some() {
