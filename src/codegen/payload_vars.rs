@@ -310,11 +310,28 @@ pub(crate) struct PayloadVars<'ctx> {
     /// frees the buffer `n` now owns.
     ///
     /// This records where that authoritative slot is, so the move-out site can
-    /// zero the field there too. Recorded only for a flat tuple pattern over an
-    /// IDENTIFIER scrutinee, which is where the element's address is knowable;
-    /// a projection scrutinee (`match s.t`) has no such slot in hand and is
-    /// left as-is. Cleared per function alongside `param_view_locals`.
-    pub(crate) bare_tuple_elem_slots: HashMap<String, inkwell::values::PointerValue<'ctx>>,
+    /// zero the field there too.
+    ///
+    /// REACH (B-2026-09-02-34, widened after the first cut of this fix
+    /// landed): any scrutinee
+    /// whose element address is resolvable through `field_chain_place_ptr` +
+    /// `place_chain_aggregate_llvm_type` — an identifier, an owned `self`, a
+    /// struct FIELD (`match w.t`), a tuple index, a `vec[i]` element — and any
+    /// depth of BARE-TUPLE nesting, since the element of an element is still
+    /// addressable. The first cut took an identifier scrutinee and a flat
+    /// pattern only, which left `match w.t { (r, k) => … }` aborting on all
+    /// four compiled surfaces and `((r, j), k)` aborting on jit and `-O0`.
+    /// `field_chain_place_ptr` declines a `ref` root, and that is the one
+    /// deliberate exclusion: a borrowed source's owner is the caller, so the
+    /// callee must not write into it.
+    ///
+    /// Keyed by the binding's FULL identity — `(name, binding slot)` — for the
+    /// reason `optres_payload_bodies_flags` is: a name alone collides across
+    /// sibling arms and scopes that reuse it, and a slot alone collides with
+    /// any re-home that hands one binding's slot to another name.
+    /// Cleared per function alongside `param_view_locals`.
+    pub(crate) bare_tuple_elem_slots:
+        HashMap<(String, inkwell::values::PointerValue<'ctx>), inkwell::values::PointerValue<'ctx>>,
 }
 
 /// One queued per-field neutralization against a payload box whose user `Drop`

@@ -130515,6 +130515,180 @@ fn main() {
         }
     }
 
+    /// B-2026-09-02-34 (B-2026-09-02-27 REACH) — TWO SCRUTINEE SHAPES THE FIRST FIX LEFT
+    /// DOUBLE-FREEING.
+    ///
+    /// `e49aa9e` established the mechanism: a bare-tuple arm binding is a
+    /// bit-copy VIEW of the tuple's element (B-2026-09-02-23 made the tuple's
+    /// own `__karac_drop_tuple_*` the single owner), so `let n = r.name`
+    /// cap-zeroes storage no drop reads while the tuple's walk still frees the
+    /// buffer `n` now owns. `bare_tuple_elem_slots` records the element's real
+    /// home and the move-out site zeroes there too.
+    ///
+    /// It recorded that home only for a FLAT tuple pattern over an IDENTIFIER
+    /// scrutinee. Two shapes therefore stayed broken, and this fixture is what
+    /// pins them — each measured aborting on `e49aa9e` itself:
+    ///
+    ///   `match w.t { (r, k) => … }`      a PROJECTION scrutinee — aborts on
+    ///                                    jit, `-O0`, `-O2` and no-auto-par
+    ///   `match t { ((r, j), k) => … }`   a NESTED bare tuple — aborts on jit
+    ///                                    and `-O0`; `-O2` folds it away
+    ///
+    /// Both are addressable by the same mechanism, so the widening is to the
+    /// RECORDER, not to the model: `record_bare_tuple_elem_sources` resolves
+    /// the scrutinee through `field_chain_place_ptr` +
+    /// `place_chain_aggregate_llvm_type` — the pair every other place-rooted
+    /// suppression already uses — and recurses through bare-tuple nesting.
+    /// That also picks up an owned `self`, a tuple index and a `vec[i]`
+    /// element for free, since those are arms of the same resolver.
+    ///
+    /// `field_chain_place_ptr` declines a `ref` root, which is the one
+    /// deliberate exclusion and is checked below: a borrowed source's owner is
+    /// the caller, so the callee must not write into it.
+    ///
+    /// The `let (r, k) = t;` spelling was correct before either fix and stays
+    /// so: `finish_place_source_tuple_destructure` transfers the element
+    /// outright there, so the binding IS the owner and its own cap-zero is the
+    /// whole story. That control is what puts the axis on the match-arm
+    /// binding rather than on tuple destructuring.
+    ///
+    /// EVERY FIELD IS A REAL HEAP BUFFER (`pad` → 45 bytes), and `tag` is the
+    /// sibling the move does NOT take, read through at every cell: an
+    /// over-broad suppression that neutralized the whole element instead of the
+    /// one field would leak `tag` rather than abort, and the ASAN twin
+    /// (`asan_bare_tuple_elem_field_move_out_frees_exactly_once`) is what
+    /// catches that direction.
+    #[test]
+    fn e2e_bare_tuple_elem_field_move_out_frees_once() {
+        const PRELUDE: &str = "fn pad(t: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-byte\");\n\
+             s.push_str(f\"{t}\");\n\
+             return s;\n\
+         }\n\
+         struct H { id: i64, xs: Vec[i64], tag: String, name: String }\n\
+         fn mk(id: i64) -> H {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(id);\n\
+             return H { id: id, xs: v, tag: pad(id), name: pad(id) };\n\
+         }\n\
+         struct W { t: (H, i64) }\n\
+         fn take(t: (H, i64)) {\n\
+             match t { (r, k) => { let n = r.name; println(f\"p{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}\"); } }\n\
+         }\n\
+         fn nested(t: ((H, i64), i64)) {\n\
+             match t { ((r, j), k) => { let n = r.name; println(f\"q{n.len()}:{r.tag.len()}:{j}:{k}\"); } }\n\
+         }\n\
+         fn refscrut(t: ref (H, i64)) {\n\
+             match t { (r, k) => { println(f\"s{r.name.len()}:{k}\"); } }\n\
+         }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "control: a tuple PARAM's element (covered by `e49aa9e`)",
+                "take((mk(1), 0));",
+                "p45:45:1:0\nafter\n",
+            ),
+            (
+                "control: a tuple LOCAL's element (covered by `e49aa9e`)",
+                "let t = (mk(2), 5);\n\
+                 match t { (r, k) => { let n = r.name; println(f\"l{n.len()}:{r.tag.len()}:{k}\"); } }",
+                "l45:45:5\nafter\n",
+            ),
+            (
+                "THE GAP: a PROJECTION scrutinee (`match w.t`)",
+                "let w = W { t: (mk(3), 9) };\n\
+                 match w.t { (r, k) => { let n = r.name; println(f\"w{n.len()}:{r.tag.len()}:{k}\"); } }",
+                "w45:45:9\nafter\n",
+            ),
+            (
+                // `-O2` folds this one away, so it is the shape most able to
+                // look fixed on a default build while still aborting under the
+                // JIT and at `-O0`.
+                "THE GAP: a NESTED bare tuple (`((r, j), k)`)",
+                "nested(((mk(4), 7), 8));",
+                "q45:45:7:8\nafter\n",
+            ),
+            (
+                // BOTH heap fields moved out of one element: the mirror has to
+                // be per-field and cumulative, not a one-shot.
+                "both heap fields moved out of the same element",
+                "let t = (mk(5), 1);\n\
+                 match t { (r, k) => { let n = r.name; let g = r.tag; println(f\"b{n.len()}:{g.len()}:{k}\"); } }",
+                "b45:45:1\nafter\n",
+            ),
+            (
+                // The control that puts the axis on the MATCH arm: this
+                // spelling transfers the element to the binding outright and
+                // was correct on all four surfaces before the fix.
+                "control: the `let (r, k) = t;` destructure spelling",
+                "let t = (mk(6), 2);\n\
+                 let (r, k) = t;\n\
+                 let n = r.name;\n\
+                 println(f\"d{n.len()}:{r.tag.len()}:{k}\");",
+                "d45:45:2\nafter\n",
+            ),
+            (
+                // No move at all: the tuple owns and frees every field, which
+                // is the state B-2026-09-02-23 established. Pins that the
+                // mirror fires only for a field actually moved out.
+                "control: an arm that only READS the element's fields",
+                "let t = (mk(7), 3);\n\
+                 match t { (r, k) => { println(f\"n{r.name.len()}:{r.tag.len()}:{k}\"); } }",
+                "n45:45:3\nafter\n",
+            ),
+            (
+                // A `ref` tuple param: `field_chain_place_ptr` bails on a
+                // borrowed root, so nothing is recorded and the callee never
+                // writes into the caller's storage — the caller reads the
+                // field back afterwards to prove it.
+                "control: a `ref` tuple scrutinee is never written into",
+                "let t = (mk(8), 4);\n\
+                 refscrut(t);\n\
+                 println(f\"after8:{t.0.name.len()}\");",
+                "s45:4\nafter8:45\nafter\n",
+            ),
+            (
+                // Two struct elements, only one moved from: the sibling
+                // element keeps both of its buffers and the tuple frees them.
+                "control: a sibling element the move never touched",
+                "let t = (mk(9), mk(10));\n\
+                 match t { (a, b) => { let n = a.name; println(f\"e{n.len()}:{b.name.len()}:{b.tag.len()}\"); } }",
+                "e45:46:46\nafter\n",
+            ),
+            (
+                // Looped, so a mirror recorded once and gone stale on the
+                // second iteration shows up.
+                "the same arm inside a loop",
+                "let mut i = 0;\n\
+                 while i < 3 {\n\
+                     let t = (mk(i), i);\n\
+                     match t { (r, k) => { let n = r.name; println(f\"c{n.len()}:{r.tag.len()}:{k}\"); } }\n\
+                     i = i + 1;\n\
+                 }",
+                "c45:45:0\nc45:45:1\nc45:45:2\nafter\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: interpreter transcript"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backends must agree with the interpreter"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-31-23 — A CONSUMING ARM OVER A BOXED USER-ENUM PAYLOAD
     /// DOUBLE FREED, WHILE THE SAME ARM OVER A BOXED STRUCT PAYLOAD WAS FINE.
     ///

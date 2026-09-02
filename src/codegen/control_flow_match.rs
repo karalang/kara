@@ -705,37 +705,6 @@ impl<'ctx> super::Codegen<'ctx> {
                         .current_bare_tuple_bindings
                         .extend(bt_all);
                 }
-                // B-2026-09-02-27 — and, for a FLAT tuple pattern over an
-                // IDENTIFIER scrutinee, where each element actually LIVES.
-                // With the tuple now the single owner (-23), a later
-                // `let n = r.name;` has to zero the moved field's `cap` in the
-                // TUPLE's slot; zeroing it in the binding's own alloca -- a
-                // separate copy -- leaves the tuple's drop still freeing the
-                // buffer the `let` gave away. See `bare_tuple_elem_slots`.
-                if let (ExprKind::Identifier(sname), PatternKind::Tuple(elems)) =
-                    (&scrutinee.kind, &arm.pattern.kind)
-                {
-                    if let Some(slot) = self.variables.get(sname.as_str()).copied() {
-                        if let inkwell::types::BasicTypeEnum::StructType(tup_ty) = slot.ty {
-                            for (i, ep) in elems.iter().enumerate() {
-                                let PatternKind::Binding(bn) = &ep.kind else {
-                                    continue;
-                                };
-                                if i >= tup_ty.count_fields() as usize {
-                                    continue;
-                                }
-                                if let Ok(ep_ptr) = self
-                                    .builder
-                                    .build_struct_gep(tup_ty, slot.ptr, i as u32, "bt.elem")
-                                {
-                                    self.payload_vars
-                                        .bare_tuple_elem_slots
-                                        .insert(bn.clone(), ep_ptr);
-                                }
-                            }
-                        }
-                    }
-                }
                 // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
                 // `match` inside this body binds through the same field.
                 let saved_arm_borrows = self.pattern_state.pattern_binding_arm_only_borrows;
@@ -790,6 +759,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         saved_arm_borrowed_names.clone();
                     self.pattern_state.current_variant_payload_bindings.clear();
                     self.pattern_state.current_bare_tuple_bindings.clear();
+                    // B-2026-09-02-27 — record where each bare-tuple element
+                    // binding's value REALLY lives, now that the binding's own
+                    // alloca exists. The arm binds a bit-copy of the element;
+                    // the source is the tuple's own storage, and a later
+                    // per-field move-out has to neutralize BOTH.
+                    self.record_bare_tuple_elem_sources(&arm.pattern, scrutinee);
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)
                     // MOVES `x` gets a deep clone + owned tracking — the
@@ -2353,6 +2328,100 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// B-2026-09-02-27 / B-2026-09-02-34 — record, for each bare-tuple element
+    /// binding
+    /// this arm just bound, the pointer at which the SOURCE tuple's element
+    /// really lives.
+    ///
+    /// B-2026-09-02-23 made the tuple's own `__karac_drop_tuple_*` the single
+    /// owner of every element, which makes the arm binding a bit-copy VIEW. A
+    /// per-field move-out (`let n = r.name`) then cap-zeroes the view — storage
+    /// no drop reads — while the tuple's walk still finds a live `cap` at
+    /// `t.0.name` and frees the buffer `n` now owns: `free(): double free
+    /// detected in tcache 2` on jit / `-O0` / `-O2` / no-auto-par, against a
+    /// correct `--interp`. Measured for a tuple PARAM, a tuple LOCAL, and a
+    /// tuple STRUCT FIELD; the `let (r, k) = t;` spelling is correct on all
+    /// four because `finish_place_source_tuple_destructure` transfers the
+    /// element outright there.
+    ///
+    /// This is the mirror `zero_struct_field_move_cap_impl`'s deboxed-payload
+    /// caller already performs for the box: across a COPY there is no cleanup
+    /// action to retract, only data the owner's drop will read, so the move
+    /// site has to write the neutralization in both places. A field the move
+    /// did NOT take keeps its live `cap` and the tuple still frees it — which
+    /// is what keeps this narrower than retracting the element's walk (the
+    /// whole-element question is B-2026-09-02-24's).
+    ///
+    /// BARE-TUPLE nesting only, but to any depth: `((r, j), k)` recurses
+    /// through the inner tuple's own GEP, because the element of an element is
+    /// still addressable. A binding under a `TupleVariant` / `Struct`
+    /// sub-pattern is NOT — that is a payload position with its own owner — so
+    /// the walk stops there, exactly where `collect_bare_tuple_binding_names`
+    /// stops. `field_chain_place_ptr` bails on a `ref` root, which is the same
+    /// rule from the other direction: a borrowed source's owner is the caller
+    /// and the callee must not write into it.
+    pub(super) fn record_bare_tuple_elem_sources(&mut self, pattern: &Pattern, scrutinee: &Expr) {
+        if !matches!(&pattern.kind, PatternKind::Tuple(_)) {
+            return;
+        }
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(scrutinee) else {
+            return;
+        };
+        let Some(base) = self.field_chain_place_ptr(scrutinee) else {
+            return;
+        };
+        self.record_bare_tuple_elem_sources_at(pattern, base, tuple_ty);
+    }
+
+    /// The recursive half of [`Self::record_bare_tuple_elem_sources`], carrying
+    /// the pointer and LLVM type of the tuple this level addresses.
+    fn record_bare_tuple_elem_sources_at(
+        &mut self,
+        pattern: &Pattern,
+        base: PointerValue<'ctx>,
+        tuple_ty: StructType<'ctx>,
+    ) {
+        let PatternKind::Tuple(pats) = &pattern.kind else {
+            return;
+        };
+        for (idx, p) in pats.iter().enumerate() {
+            let Ok(elem_ptr) = self
+                .builder
+                .build_struct_gep(tuple_ty, base, idx as u32, "btup.src")
+            else {
+                continue;
+            };
+            match &p.kind {
+                PatternKind::Tuple(_) => {
+                    if let Some(BasicTypeEnum::StructType(inner)) =
+                        tuple_ty.get_field_type_at_index(idx as u32)
+                    {
+                        self.record_bare_tuple_elem_sources_at(p, elem_ptr, inner);
+                    }
+                }
+                PatternKind::Binding(name) => {
+                    let Some(slot) = self.variables.get(name.as_str()).copied() else {
+                        continue;
+                    };
+                    // Only an element the arm holds INLINE. A pointer slot is
+                    // either a borrow shim that already aliases the source
+                    // (nothing to mirror) or an RC box the refcount machinery
+                    // owns.
+                    if !matches!(slot.ty, BasicTypeEnum::StructType(_)) {
+                        continue;
+                    }
+                    if elem_ptr == slot.ptr {
+                        continue;
+                    }
+                    self.payload_vars
+                        .bare_tuple_elem_slots
+                        .insert((name.clone(), slot.ptr), elem_ptr);
+                }
+                _ => {}
+            }
         }
     }
 

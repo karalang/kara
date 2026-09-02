@@ -67469,6 +67469,94 @@ fn main() {
     }
 
     #[test]
+    fn asan_bare_tuple_elem_field_move_out_frees_exactly_once() {
+        // B-2026-09-02-34 (B-2026-09-02-27 REACH) — the two scrutinee shapes `e49aa9e` left
+        // double-freeing: a PROJECTION scrutinee (`match w.t`) and a NESTED
+        // bare tuple (`((r, j), k)`). Its recorder took a flat pattern over an
+        // identifier scrutinee only; this is the ASAN half of the widening,
+        // and the E2E twin is `e2e_bare_tuple_elem_field_move_out_frees_once`.
+        //
+        // The mechanism is `e49aa9e`'s and unchanged: the arm binding is a
+        // bit-copy of the tuple's element (B-2026-09-02-23 made the tuple's
+        // own `__karac_drop_tuple_*` the single owner), so `let n = r.name`
+        // cap-zeroes storage no drop reads while the tuple's walk still frees
+        // `t.0.name` — the buffer `n` now owns. What changed is only WHICH
+        // scrutinees can name that home.
+        //
+        // This is the test that says the mirror is EXACT rather than merely
+        // quiet: the field the move did NOT take (`tag`) must still be freed
+        // by the tuple, so an over-broad suppression shows up here as a LEAK
+        // where the original defect showed up as a double free.
+        //
+        // `tag` is the untouched sibling String — 45 bytes, past any
+        // small-string threshold — read through at every cell, so it is real
+        // heap traffic in both directions. `xs` is deliberately `Vec[i64]` and
+        // not `Vec[String]`: a tuple PARAM carrying a `Vec[String]` leaks that
+        // Vec's ELEMENTS on `main` today, with or without any move-out
+        // (B-2026-09-02-35), which would drown this assertion in a leak that is
+        // not this row's.
+        //
+        // All four source shapes the sweep separated: a tuple PARAM and a
+        // tuple LOCAL (both already covered by `e49aa9e`), plus the two it
+        // left broken — a tuple STRUCT FIELD and a NESTED bare tuple. Looped,
+        // so a mirror that fires once and then goes stale between iterations
+        // is caught.
+        assert_clean_asan_run(
+            r#"
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-byte");
+    s.push_str(f"{t}");
+    return s;
+}
+struct H { id: i64, xs: Vec[i64], tag: String, name: String }
+fn mk(id: i64) -> H {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(id);
+    v.push(id);
+    return H { id: id, xs: v, tag: pad(id), name: pad(id) };
+}
+struct W { t: (H, i64) }
+fn take(t: (H, i64)) {
+    match t { (r, k) => { let n = r.name; println(f"p{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
+}
+fn nested(t: ((H, i64), i64)) {
+    match t { ((r, j), k) => { let n = r.name; println(f"q{n.len()}:{r.tag.len()}:{r.xs.len()}:{j}:{k}"); } }
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        take((mk(1), 0));
+        let t = (mk(2), 5);
+        match t { (r, k) => { let n = r.name; println(f"l{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
+        let w = W { t: (mk(3), 9) };
+        match w.t { (r, k) => { let n = r.name; println(f"w{n.len()}:{r.tag.len()}:{r.xs.len()}:{k}"); } }
+        nested(((mk(4), 7), 8));
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "p45:45:2:0",
+                "l45:45:2:5",
+                "w45:45:2:9",
+                "q45:45:2:7:8",
+                "p45:45:2:0",
+                "l45:45:2:5",
+                "w45:45:2:9",
+                "q45:45:2:7:8",
+                "p45:45:2:0",
+                "l45:45:2:5",
+                "w45:45:2:9",
+                "q45:45:2:7:8",
+                "done",
+            ],
+            "b0902-27-bare-tuple-elem-field-move-out",
+        );
+    }
+
+    #[test]
     fn asan_field_param_view_sibling_bodies_free_exactly_once() {
         // B-2026-09-02-10 — the heap half of the per-FIELD param-view fix.
         //

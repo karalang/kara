@@ -9134,8 +9134,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // correct `--interp`; the same move off a
                                     // bare by-value param is clean, which is
                                     // what put the axis on the tuple element.
-                                    if let Some(elem_ptr) =
-                                        self.payload_vars.bare_tuple_elem_slots.get(src).copied()
+                                    if let Some(elem_ptr) = self
+                                        .payload_vars
+                                        .bare_tuple_elem_slots
+                                        .get(&(src.to_string(), src_slot.ptr))
+                                        .copied()
                                     {
                                         self.zero_struct_field_move_cap(
                                             elem_ptr,
