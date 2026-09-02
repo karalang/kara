@@ -34342,9 +34342,13 @@ done
 ///   machinery: `finish_owned_struct_destructure` TRANSFERS the body to the leaf
 ///   rather than leaving it with the source, so the rebind there has to MOVE a
 ///   body, not withhold one.
-/// - `nested` — `let ((r, a), b) = t;`. A tuple PARAM registers no
-///   `tuple_var_elem_type_exprs`, so its nested element resolves to an EMPTY
-///   `TypeExpr` and the compiled recursion never reaches the leaf.
+/// - `nested` — `let ((r, a), b) = t;`. FIXED SINCE, by B-2026-09-02-39: a tuple
+///   PARAM used to register no `tuple_var_elem_type_exprs`, so its nested
+///   element resolved to an EMPTY `TypeExpr` and the compiled recursion never
+///   reached the leaf. Registering the param's declared element types made it
+///   reachable, and the two backends were lifted together in that commit — one
+///   body here now. Kept in this list because the cell is what proved the
+///   restriction was a REACHABILITY limit rather than an ownership judgement.
 /// - `viewsrc` — `let t2 = t; let (r, k) = t2;`. Codegen cannot see through a
 ///   tuple whole-rebind at all (`t2.0.id` still fails to lower), which is why the
 ///   propagation here reads `owned_param_seed_names_stack` — the frame's params
@@ -34432,7 +34436,6 @@ structpat end
 nested
   b10
 dR10
-dR10
 nested end
 viewsrc
   b11
@@ -34445,6 +34448,86 @@ dR12
 dR12
 proj end
 done
+"#
+    );
+}
+
+/// B-2026-09-02-39 — A TUPLE PARAM'S ELEMENT TYPES WERE NEVER RECORDED, so
+/// any element a NAME cannot spell was invisible to codegen.
+///
+/// `tuple_var_elem_type_exprs` — the registry `place_chain_tuple_tes` prefers
+/// and every tuple-element consumer reads through — was populated from
+/// exactly ONE place: a tuple ANNOTATION on a `let`. A by-value tuple PARAM
+/// has a full declared type and registered nothing; a whole rebind and a
+/// destructure leaf inherited nothing. The names-derived fallback covers a
+/// FLAT element by name and renders anything a name cannot spell — a NESTED
+/// tuple above all — as an EMPTY `Path`, which every consumer reads as "no
+/// such leaf" and skips.
+///
+/// `param` / `rebind` / `leaf` all FAILED TO LOWER before this fix, with
+/// `cannot resolve field 'id' on this receiver (its type was not recorded for
+/// codegen)`, while `--interp` printed every one of them.
+///
+/// THE CONTROLS ARE WHAT LOCALIZED THE FAULT, and they are the reason the fix
+/// is a registration rather than anything downstream:
+/// - `flat` — `t.0.id` on a flat tuple param. Always worked; the NAME
+///   spelling suffices for a single-segment path.
+/// - `annotated` — the identical nested read off an ANNOTATED LOCAL. Already
+///   lowered and printed BEFORE the fix, which proves the whole consumer
+///   chain handles a nested element correctly once the `TypeExpr`s are
+///   present. An annotation is therefore also a working user-side workaround.
+///
+/// `reuse_param` / `reuse_local` are the hygiene half, and they are not
+/// decoration. `tuple_var_elem_tes()` prefers this registry WHOLESALE, so a
+/// stale entry does not merely add detail — it WINS over the next function's
+/// correct names-derived spelling. Nothing cleared the registry per function;
+/// the leak predates this row (the annotated-`let` site has always written
+/// there), but registering every tuple param turns a shape you had to
+/// construct on purpose into one any two functions sharing a param name would
+/// hit. These two cells reuse the name `t` at a DIFFERENT tuple type and must
+/// both print their own.
+///
+/// THIS BACKEND WAS RIGHT THROUGHOUT — every cell below printed correctly
+/// before the fix. It is pinned as the ORACLE the compiled backends converged
+/// to, so a future change that moves this side is caught as loudly as one that
+/// moves theirs.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_tuple_param_element_types_are_recorded`, pinned to the same string.
+#[test]
+fn test_tuple_param_element_types_are_recorded() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+struct Z { tag: String }
+
+// FAILING TODAY
+fn q1(t: ((R, i64), i64)) { println(f"q1 {t.0.0.id}") }
+fn q2(t: (R, i64))        { let t2 = t; println(f"q2 {t2.0.id}") }
+fn q3(t: ((R, i64), i64)) { let (inner, y) = t; println(f"q3 {inner.0.id}") }
+// CONTROLS THAT WORK
+fn q4(t: (R, i64))        { println(f"q4 {t.0.id}") }
+fn q5() { let t: ((R, i64), i64) = ((R { id: 5 }, 0), 0); println(f"q5 {t.0.0.id}") }
+// CROSS-FUNCTION NAME REUSE: `t` is a DIFFERENT tuple type here
+fn q6(t: (Z, i64))        { println(f"q6 {t.0.tag}") }
+fn q7() { let t = (Z { tag: "z7" }, 0); println(f"q7 {t.0.tag}") }
+
+fn main() {
+    q1(((R { id: 1 }, 0), 0))
+    q2((R { id: 2 }, 0))
+    q3(((R { id: 3 }, 0), 0))
+    q4((R { id: 4 }, 0))
+    q5()
+    q6((Z { tag: "z6" }, 0))
+    q7()
+}
+"#),
+        r#"q1 1
+q2 2
+q3 3
+q4 4
+q5 5
+q6 z6
+q7 z7
 "#
     );
 }

@@ -1602,6 +1602,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // String comparator). Repopulated below from params and at let sites.
         self.type_decls.enum_inst_var_types.clear();
         self.var_types.tuple_var_elem_tes.clear();
+        // B-2026-09-02-39 — same per-function reset, and now load-bearing.
+        // `tuple_var_elem_tes()` prefers this registry WHOLESALE (an annotation
+        // is full-fidelity), so a stale entry does not merely add detail — it
+        // WINS over the next function's correct names-derived spelling. The leak
+        // predates this commit (the annotated-`let` site has always written here
+        // and nothing cleared it), but registering every by-value tuple PARAM
+        // above turns a shape you had to construct on purpose into one any two
+        // functions sharing a param name would hit.
+        self.var_types.tuple_var_elem_type_exprs.clear();
         self.var_types.array_var_elem_te.clear();
         self.tuple_moved_elem_bodies.clear();
         self.tuple_moved_elem_payload_bodies.clear();
@@ -2376,6 +2385,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.var_types
                         .tuple_var_elem_type_names
                         .insert(param_name.clone(), elem_names);
+                    // B-2026-09-02-39 — and the FULL element `TypeExpr`s beside
+                    // them. The names above map a `Path` element to its first
+                    // segment and everything else to `None`, which renders as an
+                    // EMPTY path; every consumer reads that as "no such leaf" and
+                    // skips it. So a NESTED tuple element of a by-value tuple
+                    // param was invisible: `t.0.0.id` failed to lower outright
+                    // ("cannot resolve field ... its type was not recorded for
+                    // codegen") while `--interp` printed it, and the
+                    // `let ((r, a), b) = t;` destructure walker bailed one step
+                    // before its leaf, leaving B-2026-09-02-25's param-view
+                    // marking unreachable there.
+                    //
+                    // A param's DECLARED type is full-fidelity by construction —
+                    // the same standard the annotated-`let` site meets, and the
+                    // reason `tuple_var_elem_tes` may prefer this registry
+                    // wholesale. That equivalence is measured, not assumed: an
+                    // annotated LOCAL of the identical nested type
+                    // (`let t: ((R, i64), i64) = …; t.0.0.id`) already lowered
+                    // and printed before this change, which is what puts the
+                    // fault on the missing registration rather than on anything
+                    // downstream of it.
+                    self.var_types
+                        .tuple_var_elem_type_exprs
+                        .insert(param_name.clone(), elems.clone());
                     if let BasicTypeEnum::StructType(agg_ty) = param_val.get_type() {
                         self.make_tuple_param_callee_owned(elems, agg_ty, alloca);
                     }

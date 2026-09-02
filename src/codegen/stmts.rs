@@ -8563,6 +8563,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             _ => None,
                         })
+                        // B-2026-09-02-39 — a WHOLE REBIND (`let t2 = t;`)
+                        // carried nothing at all, so `t2` began life as an
+                        // unknown tuple: `t2.0.id` failed to lower even where
+                        // `t.0.id` had just worked. The source's own record is
+                        // exactly as good for the destination — a move copies
+                        // the value, not its type — so inherit it.
+                        .or_else(|| match &value.kind {
+                            ExprKind::Identifier(src) => self
+                                .var_types
+                                .tuple_var_elem_type_names
+                                .get(src.as_str())
+                                .cloned(),
+                            _ => None,
+                        })
                         // B-2026-08-28-3 — a tuple bound from a CALL
                         // (`let q = make();` where `make -> (R, i64)`) matched
                         // neither source above, so `q.0.id` hit the loud
@@ -8608,6 +8622,27 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.var_types
                             .tuple_var_elem_type_exprs
                             .insert(var_name.clone(), elems.clone());
+                    } else if let ExprKind::Identifier(src) = &value.kind {
+                        // B-2026-09-02-39 — the `TypeExpr` half of the rebind
+                        // inheritance above. Needed as well as the names half,
+                        // and for the shape names cannot express: `let t2 = t;`
+                        // over a NESTED tuple has no name spelling for element 0
+                        // at all, so without this `t2` keeps the empty-path
+                        // rendering its source was fixed out of.
+                        //
+                        // Annotation still wins (the `if` above): an explicit
+                        // type on the rebind is the author's, and is what the
+                        // pre-existing site has always preferred.
+                        if let Some(tes) = self
+                            .var_types
+                            .tuple_var_elem_type_exprs
+                            .get(src.as_str())
+                            .cloned()
+                        {
+                            self.var_types
+                                .tuple_var_elem_type_exprs
+                                .insert(var_name.clone(), tes);
+                        }
                     }
                 }
                 // B-2026-06-10-6: a let-bound `Option[String]` /
@@ -13841,7 +13876,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     inner_ptr,
                     inner_ty,
                     owner_runs_bodies,
-                    false,
+                    mark_views,
                 );
                 continue;
             }
@@ -13869,6 +13904,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // undestructured control runs it on every surface), so the leaf can
             // only take the body by taking the element with it.
             if let TypeKind::Tuple(inner_tes) = &te.kind {
+                // B-2026-09-02-39 — record the leaf's own element `TypeExpr`s
+                // BEFORE the ownership question below, because they answer a
+                // different one. The arm underneath decides who FREES this
+                // element and runs its bodies; this decides whether the element
+                // can be NAMED at all, and `let (inner, y) = t; inner.0.id`
+                // needs that whichever way ownership falls. Registered on both
+                // legs for exactly that reason — under `owner_runs_bodies` the
+                // arm below records nothing, which is why the read failed to
+                // lower there while the same read off `t` directly worked.
+                self.var_types
+                    .tuple_var_elem_type_exprs
+                    .insert(name.clone(), inner_tes.clone());
                 if !owner_runs_bodies {
                     let inner_tes = inner_tes.clone();
                     self.register_var_from_type_expr(name, &te);

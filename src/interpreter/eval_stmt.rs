@@ -2078,6 +2078,30 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-02-39 — the binding names a TUPLE pattern reaches, descending
+    /// through nested `Tuple` elements and stopping everywhere else.
+    ///
+    /// The stop set is not a style choice: it mirrors codegen's
+    /// `place_source_tuple_leaf_cleanups`, whose recursion descends into a
+    /// `PatternKind::Tuple` element and no other kind. A `Struct` or
+    /// `TupleVariant` sub-pattern is a different ownership shape with its own
+    /// machinery, and marking one here would mark a name the compiled side
+    /// never marks.
+    fn collect_tuple_pattern_binding_names(pattern: &Pattern, out: &mut Vec<String>) {
+        let elems: &[Pattern] = match &pattern.kind {
+            PatternKind::Tuple(elems) => elems,
+            PatternKind::TupleVariant { patterns, .. } => patterns,
+            _ => return,
+        };
+        for p in elems {
+            match &p.kind {
+                PatternKind::Binding(b) => out.push(b.clone()),
+                PatternKind::Tuple(_) => Self::collect_tuple_pattern_binding_names(p, out),
+                _ => {}
+            }
+        }
+    }
+
     fn let_destructures_owned_param(&mut self, stmt: &Stmt) -> bool {
         let (pattern, value) = match &stmt.kind {
             StmtKind::Let { pattern, value, .. } => (pattern, value),
@@ -2222,29 +2246,24 @@ impl<'a> super::Interpreter<'a> {
         //  * A SEEDED PARAM SOURCE, not an inherited view. See
         //    `owned_param_seed_names_stack` — codegen cannot see through a
         //    tuple whole-rebind at all.
-        //  * TOP-LEVEL elements of the pattern. A nested element
-        //    (`let ((r, a), b) = t;`) resolves to an empty element `TypeExpr`
-        //    on the compiled side, so its leaf is never reached there.
+        //  * NESTED TUPLE ELEMENTS ARE INCLUDED, but only since B-2026-09-02-39.
+        //    They were held back at first because a nested element of a by-value
+        //    tuple param resolved to an EMPTY `TypeExpr` on the compiled side,
+        //    so its leaf was never reached there and marking here alone split
+        //    the backends — measured, `let ((r, a), b) = t; let m = r;` went to
+        //    one body compiled and stayed at two interpreted. -39 registers the
+        //    param's declared element types, which makes the compiled leaf
+        //    reachable, and the two sides move together again.
         //
-        // The two shapes the last two restrictions hold back are at two bodies
-        // on every surface today, and filed.
+        // The shape the seeded-param restriction holds back is at two bodies on
+        // every surface today, and filed.
         let seeded_param = self
             .owned_param_seed_names_stack
             .last()
             .is_some_and(|seed| seed.contains(n.as_str()));
-        let top_level: &[Pattern] = match &pattern.kind {
-            PatternKind::Tuple(elems) => elems,
-            PatternKind::TupleVariant { patterns, .. } => patterns,
-            _ => &[],
-        };
         if seeded_param {
-            let names: Vec<String> = top_level
-                .iter()
-                .filter_map(|p| match &p.kind {
-                    PatternKind::Binding(b) => Some(b.clone()),
-                    _ => None,
-                })
-                .collect();
+            let mut names: Vec<String> = Vec::new();
+            Self::collect_tuple_pattern_binding_names(pattern, &mut names);
             if let Some(top) = self.owned_param_names_stack.last_mut() {
                 top.extend(names);
             }
