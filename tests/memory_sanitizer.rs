@@ -1788,6 +1788,46 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-41 — a struct's `Vec` FIELD, pushed to inside a loop whose
+    /// body also makes an unrelated heap temporary, never freed anything: the
+    /// field's whole `Vec`, buffer and every element. The row measured 173 B in
+    /// 4 allocations for three iterations, scaling by one element per iteration
+    /// (158 / 173 / 188 B at 2 / 3 / 4), so the field's cleanup was not firing
+    /// at all rather than firing at a stale length.
+    ///
+    /// THE CONJUNCTION IS THE FIXTURE, because removing any one condition made
+    /// the row's program clean and would make this case vacuous:
+    ///   1. the struct local is declared OUTSIDE the loop,
+    ///   2. its `Vec` field is pushed to INSIDE it, and
+    ///   3. the loop body also produces a heap temporary — the `println`
+    ///      f-string, which touches nothing the struct owns.
+    ///
+    /// The third is the one that reads like a coincidence and is not: dropping
+    /// that one line made the identical program clean at every iteration count
+    /// the row measured.
+    #[test]
+    fn asan_struct_vec_field_pushed_in_a_loop_with_a_temp_is_freed() {
+        let Some((out, status)) = run_under_asan(
+            r#"struct Bag { xs: Vec[Option[String]] }
+
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    let mut i = 0;
+    while i < 3 {
+        b.xs.push(Some(f"payloadpayload{i}"));
+        println(f"{i}");
+        i = i + 1;
+    }
+}
+"#,
+            "asan_struct_vec_field_pushed_in_a_loop_with_a_temp_is_freed",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(out, "0\n1\n2\n", "unexpected transcript:\n{out}");
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///
