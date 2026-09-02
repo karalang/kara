@@ -4894,7 +4894,7 @@ impl<'ctx> super::Codegen<'ctx> {
         span: (usize, usize),
         reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     ) {
-        self.register_pending_arm_owner_at(pending, val, span, reset_bb, None)
+        self.register_pending_arm_owner_at(pending, val, span, reset_bb, None, false)
     }
 
     /// [`Self::register_pending_arm_owner`] with an explicit block to emit the
@@ -4914,11 +4914,20 @@ impl<'ctx> super::Codegen<'ctx> {
         span: (usize, usize),
         reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
         store_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+        rehome_drained_frame: bool,
     ) {
         let Some((elem_ty, owning_frame)) = pending else {
             return;
         };
-        self.own_escaping_tail_value_at(val, elem_ty, span, owning_frame, reset_bb, store_bb);
+        self.own_escaping_tail_value_at(
+            val,
+            elem_ty,
+            span,
+            owning_frame,
+            reset_bb,
+            store_bb,
+            rehome_drained_frame,
+        );
     }
 
     /// B-2026-08-30-11 — what a MIXED branch's arm should register as its
@@ -5031,7 +5040,7 @@ impl<'ctx> super::Codegen<'ctx> {
         owning_frame: Option<usize>,
         reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     ) {
-        self.own_escaping_tail_value_at(merged, elem_ty, span, owning_frame, reset_bb, None)
+        self.own_escaping_tail_value_at(merged, elem_ty, span, owning_frame, reset_bb, None, false)
     }
 
     /// [`Self::own_escaping_tail_value`] with an explicit block for the store;
@@ -5045,6 +5054,7 @@ impl<'ctx> super::Codegen<'ctx> {
         owning_frame: Option<usize>,
         reset_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
         store_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+        rehome_drained_frame: bool,
     ) {
         // Only a `{ptr,len,cap}` value has a buffer to own; anything else the
         // arms could hand out is either scalar or owned elsewhere already.
@@ -5070,7 +5080,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // source binding that OUTLIVES the hand-out and can still be read. A
         // block-local tail has no later reader, so it is the consuming gate's
         // to widen, not this owner's — tracked separately.
-        if owning_frame.is_some_and(|f| f >= self.drop_rc.scope_cleanup_actions.len()) {
+        // B-2026-09-01-26 — `rehome_drained_frame` is the ONE population where a
+        // drained source frame does not mean "somebody else already owns this".
+        // A `match` registers its arm owners AFTER every arm has drained
+        // (B-2026-08-30-11, so a minting arm can borrow a sibling's frame), and
+        // an arm whose tail hands out a PATTERN BINDING recorded that binding's
+        // own arm-local frame — which by then is gone. The guard below then
+        // declined, and in a NESTED expression position (an f-string hole, a
+        // call argument) nothing downstream registers an owner either, so the
+        // moved-out payload was freed by nobody. The `let`-bound spelling is
+        // clean only because the binding owns the result.
+        //
+        // Re-homing to the innermost LIVE frame is safe here for the reason the
+        // guard's own note gives for why it is not safe generally: the shapes it
+        // protects are producer-side desugars that arrange ownership themselves,
+        // and those register through the IMMEDIATE path from
+        // `compile_block_with_frame`, never through the match's deferred one.
+        let frame_drained =
+            owning_frame.is_some_and(|f| f >= self.drop_rc.scope_cleanup_actions.len());
+        let owning_frame = if frame_drained && rehome_drained_frame {
+            None
+        } else {
+            owning_frame
+        };
+        if frame_drained && !rehome_drained_frame {
             return;
         }
         let Some(fn_val) = self.current_fn else {

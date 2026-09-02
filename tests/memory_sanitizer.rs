@@ -1978,6 +1978,68 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-26 — a `match` in a NESTED EXPRESSION position leaked the
+    /// heap payload its arm moved out, while the `let`-bound spelling of the
+    /// same match was clean. 15 B per evaluation, at BOTH opt levels, and
+    /// unbounded in a loop.
+    ///
+    /// The owner exists and never got registered. A `match` defers its arm
+    /// owners until every arm has drained (B-2026-08-30-11, so a minting arm
+    /// can borrow a sibling's frame), and an arm handing out a PATTERN BINDING
+    /// records that binding's own arm-local frame — which by then is gone, so
+    /// `own_escaping_tail_value_at`'s drained-frame guard declined. Under a
+    /// `let` the destination owns the result and nothing is lost; in a nested
+    /// position nothing downstream registers an owner either.
+    ///
+    /// FIVE LEGS PER ITERATION, three that leaked and two controls:
+    ///   - `fstr` — the match interpolated into an f-string, the row's shape.
+    ///   - the `sink(match …)` CALL ARGUMENT, which contributes to `total`.
+    ///   - `named` — the same nested position over a NAMED enum local, which
+    ///     is what shows the defect is the position and not a fresh-temp
+    ///     scrutinee.
+    ///   - `let` — THE ORIGINAL CONTROL, clean before and after.
+    ///   - `whole` — `match plain { t => { t } }`, a WHOLE-VALUE rebind of a
+    ///     plain `String` local. It is the double-free control: the value
+    ///     already has an owner downstream, and an earlier version of this fix
+    ///     that re-homed every arm turned this leg into
+    ///     `free(): double free detected in tcache 2` at both opt levels.
+    #[test]
+    fn asan_nested_match_owns_its_moved_out_payload() {
+        let Some((out, status)) = run_under_asan(
+            r#"enum Ve { A(String), B }
+impl Drop for Ve { fn drop(mut ref self) { println("dVe") } }
+fn mkVe(n: i64) -> Ve { return Ve.A(f"payloadpayload{n}") }
+fn sink(s: String) -> i64 { return s.len() }
+
+fn main() {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 3 {
+        println(f"fstr[{match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } }}]");
+        total = total + sink(match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } });
+        let v = mkVe(i);
+        println(f"named[{match v { Ve.A(s) => { s } Ve.B => { "none".to_string() } }}]");
+        let out = match mkVe(i) { Ve.A(s) => { s } Ve.B => { "none".to_string() } };
+        println(f"let[{out}]");
+        let plain = f"plainplainplain{i}";
+        println(f"whole[{match plain { t => { t } }}]");
+        i = i + 1;
+    }
+    println(f"total {total}");
+}
+"#,
+            "asan_nested_match_owns_its_moved_out_payload",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(
+            out,
+            "dVe\nfstr[payloadpayload0]\ndVe\nnamed[payloadpayload0]\ndVe\ndVe\nlet[payloadpayload0]\nwhole[plainplainplain0]\ndVe\nfstr[payloadpayload1]\ndVe\nnamed[payloadpayload1]\ndVe\ndVe\nlet[payloadpayload1]\nwhole[plainplainplain1]\ndVe\nfstr[payloadpayload2]\ndVe\nnamed[payloadpayload2]\ndVe\ndVe\nlet[payloadpayload2]\nwhole[plainplainplain2]\ntotal 45\n",
+            "unexpected transcript:\n{out}"
+        );
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///

@@ -519,6 +519,7 @@ impl<'ctx> super::Codegen<'ctx> {
             BasicValueEnum<'ctx>,
             BasicBlock<'ctx>,
             bool,
+            bool,
         )> = Vec::new();
         // B-2026-08-30-49 — signedness of each arm's tail, captured HERE
         // because `arm.body` is in scope at the push site and gone by the
@@ -1425,6 +1426,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // below, which is exactly where the immediate registration put
                 // it (the builder sits there), so deferring changes WHEN the
                 // decision is made and not WHERE the IR goes.
+                let arm_pending_is_block = arm_pending.is_some();
                 let arm_owner_pending = if own_value && !arms_all_mint {
                     arm_pending.or(arm_disarmed)
                 } else {
@@ -1442,7 +1444,48 @@ impl<'ctx> super::Codegen<'ctx> {
                 // to merge originates from, or LLVM module verification
                 // fails with "PHI node entries do not match predecessors".
                 let merge_pred = self.builder.get_insert_block().unwrap();
-                arm_owner_records.push((arm_owner_pending, arm_val, merge_pred, arm_owner_mints));
+                // B-2026-09-01-26 — may this arm's owner be re-homed to the
+                // innermost LIVE frame when the frame its record names has
+                // already drained? Three conditions, and each was established by
+                // a FAILURE rather than by argument. See
+                // `own_escaping_tail_value_at` for what the re-home does.
+                //
+                // (1) THE ARM DESTRUCTURES A VARIANT PAYLOAD. Re-homing a
+                // WHOLE-VALUE rebind — `match s { t => { t } }` over a plain
+                // `String` local — turned that shape from clean into
+                // `free(): double free detected in tcache 2` at both opt levels:
+                // the value already has an owner downstream. A payload moved OUT
+                // of an enum has no second owner, because the enum's own payload
+                // cleanup was disarmed by the handover and the arm-local frame
+                // that recorded the binding is gone by the time this deferred
+                // registration runs.
+                //
+                // (2) THE ARM IS BLOCK-BODIED, i.e. it reported through
+                // `compile_block_with_frame`'s `arm_pending_tail_owner` rather
+                // than through the bare-tail `vecstr_source_disarmed` channel.
+                // This is the condition that excludes the generic-enum debox
+                // shape, `fn get[T](o: Opt[T], d: T) -> T { match o { Opt.Yes(v) => v, .. } }`,
+                // whose value escapes the frame entirely: without it,
+                // `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free`
+                // AND `selfhost_codegen_matches_seed_run` both fail. It is also
+                // why the BARE arm spelling of this row's own leak stays open —
+                // it needs a discriminator this record does not carry, not a
+                // looser gate.
+                //
+                // (3) NOT THE FUNCTION'S TAIL RETURN. Belt-and-braces: condition
+                // (2) already covers the escaping shape that was measured, and
+                // this excludes the rest of that position on the same reasoning
+                // rather than on a measurement of its own.
+                let arm_rehome = arm_pending_is_block
+                    && tail.is_none()
+                    && self.variant_pattern_enum_name(&arm.pattern).is_some();
+                arm_owner_records.push((
+                    arm_owner_pending,
+                    arm_val,
+                    merge_pred,
+                    arm_owner_mints,
+                    arm_rehome,
+                ));
                 arm_results.push((arm_val, merge_pred));
                 arm_unsigned.push(self.branch_tail_is_unsigned_int(Some(&arm.body)));
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
@@ -1489,10 +1532,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // reporting arm's frame held a binding declared before the `match`, so
         // it outlives the construct by construction.
         if let Some(span) = self.current_branch_expr_span {
-            let sibling = arm_owner_records.iter().find_map(|(p, _, _, _)| *p);
-            for (pending, val, bb, mints) in arm_owner_records.clone() {
+            let sibling = arm_owner_records.iter().find_map(|(p, _, _, _, _)| *p);
+            for (pending, val, bb, mints, rehome) in arm_owner_records.clone() {
                 let eff = self.mixed_branch_arm_owner(pending, sibling, mints, true);
-                self.register_pending_arm_owner_at(eff, val, span, match_reset_bb, Some(bb));
+                self.register_pending_arm_owner_at(
+                    eff,
+                    val,
+                    span,
+                    match_reset_bb,
+                    Some(bb),
+                    rehome,
+                );
             }
         }
 

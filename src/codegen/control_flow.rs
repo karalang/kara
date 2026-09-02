@@ -2808,6 +2808,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span,
                     Some(pre_branch_bb),
                     Some(then_end_bb),
+                    false,
                 );
             }
             if let Some(v) = else_val {
@@ -2817,6 +2818,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     span,
                     Some(pre_branch_bb),
                     Some(else_end_bb),
+                    false,
                 );
             }
         }
