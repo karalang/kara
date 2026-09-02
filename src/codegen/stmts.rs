@@ -11248,6 +11248,44 @@ impl<'ctx> super::Codegen<'ctx> {
                         if lhs_is_tracked_value_enum {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         }
+                    } else if let Some(flag) = self
+                        .drop_rc
+                        .cond_move_drop_flags
+                        .get(name.as_str())
+                        .copied()
+                    {
+                        // B-2026-08-30-53 second measurement — RE-ARM the flag
+                        // when the same target later receives a value that is
+                        // NOT a param view.
+                        //
+                        // The flag replaced an all-paths retraction, and the
+                        // retraction had a counterpart the flag did not:
+                        // `rearm_container_bodies_for_name` re-registers the
+                        // action on every assignment to a name, so a target that
+                        // held a view and is then given a FRESH value got its
+                        // body back for free. With the flag the action is never
+                        // removed and therefore never re-registered, so the
+                        // stale `false` silenced the fresh value's body
+                        // instead: `out = r; out = R { id: 5, .. };` printed
+                        // `dR0 m1 m2 dE dR8 v5`, losing `dR5` against the
+                        // interpreter's `dR0 m1 m2 dR5 dE dR8 v5`. That is a
+                        // regression the first cut of this fix introduced and
+                        // this line is its other half.
+                        //
+                        // Ordered AFTER the store and after the displacement
+                        // fire, which is what makes both halves right at
+                        // `out = R { id: 5, .. }`: the displacement reads the
+                        // `false` left by the view assignment and correctly
+                        // skips the caller's value, and only then does the
+                        // target become the owner of something of its own
+                        // again.
+                        //
+                        // Confined to bindings that ALREADY have a flag, so a
+                        // program with no param-view assignment emits nothing
+                        // new — verified by instrumenting this arm on the
+                        // B-2026-09-02-1 auto-par repro, where it never fires.
+                        let bool_t = self.context.bool_type();
+                        let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
                     }
                     // Tensor move (`w = other`, an owned tensor binding moved
                     // into `w`): after the store both slots hold the same block

@@ -38739,6 +38739,14 @@ fn conditional_param_view_assign_keeps_the_targets_own_body() {
                  i = i + 1;\n\
              }\n\
              return acc\n\
+         }\n\
+         fn refreshed(b: E) -> i64 {\n\
+             let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             match b { E.A(r) => { out = r; } E.B => { } }\n\
+             println(\"m1\");\n\
+             out = R { id: 5, tag: f\"t5\" };\n\
+             println(\"m2\");\n\
+             return out.id\n\
          }\n";
     for (label, body, want) in [
         // The row's repro: the arm is NOT taken, so `out` still owns its
@@ -38776,6 +38784,16 @@ fn conditional_param_view_assign_keeps_the_targets_own_body() {
             "unconditional-assign",
             "println(f\"d{uncond(R { id: 9, tag: f\"t9\" })}\")\n",
             "dR2\ndR9\nd9\n",
+        ),
+        // The RE-ARM row. A target that held a view and is then given a FRESH
+        // value owns that value and must run its body. The interpreter has
+        // always been right here; it is pinned because codegen's first cut of
+        // the flag lost `dR5`, having replaced a retraction that
+        // `rearm_container_bodies_for_name` used to undo on every assignment.
+        (
+            "view-then-fresh-value",
+            "println(f\"f{refreshed(E.A(R { id: 8, tag: f\"t8\" }))}\")\n",
+            "dR0\nm1\nm2\ndR5\ndE\ndR8\nf5\n",
         ),
     ] {
         let src = format!("{H}fn main() {{ {body} }}\n");

@@ -115659,13 +115659,23 @@ fn main() {
         // `emit_user_drop_call_guarded` reading it at both fire sites. The
         // taken path is byte-identical to the retraction it replaces.
         //
-        // Six shapes. `a` is the row's repro (arm not taken) and `e` is its
+        // Seven shapes. `a` is the row's repro (arm not taken) and `e` is its
         // in-loop sibling, both of which lost the body entirely before. `b` is
         // the taken path, unchanged and the reason the retraction exists — the
         // displacement fire still prints `dR0` at the assignment, ahead of
         // `mid`. `c` (a FRESH value assigned in the arm) and `d` (an
         // unconditional param-view assign) were already correct on all four
         // surfaces and are the boundaries an over-eager fix would move.
+        //
+        // `f` is the RE-ARM row, and it is here because the first cut of this
+        // fix broke it: the retraction it replaced had a counterpart the flag
+        // did not, since `rearm_container_bodies_for_name` re-registers the
+        // action on every assignment to a name, so a target that held a view
+        // and is then given a FRESH value got its body back for free. With the
+        // action never removed it is never re-registered either, and the stale
+        // `false` silenced the fresh value's body — `dR5` lost. The flag is now
+        // re-armed on any assignment whose RHS is not a param view. Nothing in
+        // the suite covered this shape, which is why the first cut shipped.
         let out = run_program(
             r#"
 struct R { id: i64, tag: String }
@@ -115704,6 +115714,15 @@ fn looped(b: E) -> i64 {
     return acc
 }
 
+fn refreshed(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"t0" };
+    match b { E.A(r) => { out = r; } E.B => { } }
+    println("m1");
+    out = R { id: 5, tag: f"t5" };
+    println("m2");
+    return out.id
+}
+
 fn main() {
     println(f"a{dies(E.B)}");
     println("-");
@@ -115714,13 +115733,15 @@ fn main() {
     println(f"d{uncond(R { id: 9, tag: f"t9" })}");
     println("-");
     println(f"e{looped(E.B)}");
+    println("-");
+    println(f"f{refreshed(E.A(R { id: 8, tag: f"t8" }))}");
 }
 "#,
         );
         if let Some(out) = out {
             assert_eq!(
                 out.trim(),
-                "mid\ndR0\ndE\na0\n-\ndR0\nmid\ndE\ndR5\nb5\n-\ndR1\ndE\nc1\n-\ndR2\ndR9\nd9\n-\ndR90\ndR91\ndE\ne181"
+                "mid\ndR0\ndE\na0\n-\ndR0\nmid\ndE\ndR5\nb5\n-\ndR1\ndE\nc1\n-\ndR2\ndR9\nd9\n-\ndR90\ndR91\ndE\ne181\n-\ndR0\nm1\nm2\ndR5\ndE\ndR8\nf5"
             );
         }
     }
