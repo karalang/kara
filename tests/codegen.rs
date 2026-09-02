@@ -12146,10 +12146,16 @@ end
     ///
     /// THE FIVE CONTROLS ARE THE POINT, because the fix withholds a body and the
     /// failure mode of over-reaching is a body that never runs at all:
-    /// - `tup` — a plain TUPLE pattern over an owned param's tuple field. Both
-    ///   backends run two bodies here and the fix deliberately does not touch it
-    ///   (codegen only view-marks VARIANT payload bindings); withholding would turn
-    ///   an agreed answer into a new divergence.
+    /// - `tup` — a plain TUPLE pattern over an owned param's tuple field. NO LONGER A
+    ///   CONTROL. It ran two bodies on every surface when this test was written, and
+    ///   this bullet recorded that -31-1 deliberately left it alone: codegen
+    ///   view-marked only VARIANT payload bindings, so withholding on the interpreter
+    ///   alone would have turned an agreed answer into a new divergence.
+    ///   B-2026-08-31-7 repaired the codegen side instead —
+    ///   `collect_bare_tuple_binding_names` marks a bare-tuple element bound out of an
+    ///   owned-param scrutinee as a param VIEW too, without routing it to the arm
+    ///   channel a variant payload takes — so both columns moved to ONE body together
+    ///   and the expectation below now carries `dR6` once.
     /// - `ref` — a `ref` param, not owned, so no caller-retains: the arm keeps its slot.
     /// - `local` — an owned LOCAL projection, where the arm binding really is the owner.
     /// - `fresh` — a fresh-temp scrutinee, likewise.
@@ -12235,7 +12241,6 @@ sv end
 tup
   b6
 dR6
-dR6
 tup end
 ref
   b7
@@ -12258,6 +12263,189 @@ norebind
 dE
 dR10
 norebind end
+done
+"#
+        );
+    }
+
+    /// B-2026-08-31-7 — A BARE-TUPLE ELEMENT BOUND OUT OF AN OWNED PARAM IS A
+    /// VIEW, AND A REBIND OF IT MUST INHERIT THAT.
+    ///
+    /// `match t { (r, k) => { let m = r; … } }` over `fn s1(t: (R, i64))` printed
+    /// `b1 dR1 dR1` on all three compiled surfaces against `--interp`'s correct
+    /// `b1 dR1`; the PROJECTED spelling `match s.t { … }` over `fn s1c(s: W)`
+    /// printed `b3 dR3 dR3` on ALL FOUR, agreed and — by one-value-one-body —
+    /// agreed-wrong. One `R` is constructed and passed by value, so one body is
+    /// due in each.
+    ///
+    /// The two halves are one mechanism seen from two sides. Codegen wrote
+    /// `param_view_locals` only from the VARIANT-payload site, so a bare-tuple
+    /// element never became a view and `let m = r` minted a second owner; the
+    /// interpreter's projection branch admitted only `TupleVariant`/`Struct`
+    /// patterns, so it minted one too for the `s.t` spelling. Its bare-identifier
+    /// branch has always had the wider reach, which is why `s1` alone diverged.
+    ///
+    /// THE CONTROLS ARE THE POINT, because the fix WITHHOLDS a body and the
+    /// failure mode of over-reaching is a body that never runs:
+    /// - `norebind` / `norebind_proj` — the same arms without the rebind, correct
+    ///   before and after. They are what put the axis on the rebind rather than on
+    ///   the pattern, and they prove the element WALK still owns the single body.
+    /// - `consumed` — the arm moves the element into a by-value callee. Already at
+    ///   one body, and marking `r` a view must not disturb the transfer.
+    /// - `local` — a LOCAL tuple, not a param. Nobody else owns it, so caller-
+    ///   retains does not apply and this shape is deliberately NOT fixed here; it
+    ///   still runs two bodies on every surface (filed separately). Pinned so the
+    ///   marking is not quietly widened to locals without a measurement.
+    ///
+    /// The ENUM twins of the two fixed shapes were already correct on all four
+    /// surfaces before this row, which is what shows the tuple family was simply
+    /// behind the enum family rather than that a new rule was invented.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_bare_tuple_element_of_owned_param_is_a_view`, pinned to the same
+    /// string.
+    #[test]
+    fn e2e_bare_tuple_element_of_owned_param_is_a_view() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { t: (R, i64) }
+
+fn sink(x: R) { println(f"  sank{x.id}") }
+
+fn s1(t: (R, i64))       { match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn s1b(t: (R, i64))      { match t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s1c(s: W)             { match s.t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn s1d(s: W)             { match s.t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s1e(t: (R, i64))      { match t { (r, k) => { sink(r); } } }
+fn s1f() { let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+
+fn main() {
+    println("param");          s1((R { id: 1 }, 0));           println("param end");
+    println("norebind");       s1b((R { id: 2 }, 0));          println("norebind end");
+    println("proj");           s1c(W { t: (R { id: 3 }, 0) }); println("proj end");
+    println("norebind_proj");  s1d(W { t: (R { id: 4 }, 0) }); println("norebind_proj end");
+    println("consumed");       s1e((R { id: 5 }, 0));          println("consumed end");
+    println("local");          s1f();                          println("local end");
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"param
+  b1
+dR1
+param end
+norebind
+  b2
+dR2
+norebind end
+proj
+  b3
+dR3
+proj end
+norebind_proj
+  b4
+dR4
+norebind_proj end
+consumed
+  sank5
+dR5
+consumed end
+local
+  b6
+dR6
+dR6
+local end
+done
+"#
+        );
+    }
+
+    /// B-2026-08-31-7 (the hazard the fix above had to clear first) — A `let`
+    /// STARTS A NEW GENERATION OF ITS NAMES, so a stale param-VIEW mark must not
+    /// survive it.
+    ///
+    /// `param_view_locals` (codegen) and `owned_param_names_stack`'s top frame
+    /// (interpreter) were both write-only: every site inserted, none removed, and
+    /// each was cleared only at function entry. A name marked a view by an earlier
+    /// construct therefore stayed one across a later, unrelated `let` of the SAME
+    /// NAME — and view-ness means "someone else runs the body", so the fresh
+    /// value's body ran NOWHERE.
+    ///
+    /// FOUND ON THE ENUM PATH, which predates -31-7 entirely: `enum` below printed
+    /// `arm2 fresh98 dR2` where `dR98` is due as well, on `--interp` and both
+    /// compiled backends alike. Both were wrong and AGREED, which is exactly why
+    /// it stayed invisible — no run-vs-build signal to trip over.
+    ///
+    /// It surfaced only because -31-7's tuple marking was probed for over-reach:
+    /// the `tuple` case below regressed the moment bare-tuple elements were marked,
+    /// and the enum control proved the hazard belonged to the mechanism rather than
+    /// to the new caller. Repairing codegen alone would have converted an
+    /// agreed-wrong answer into a fresh divergence, so both sides land together.
+    ///
+    /// `selfrebind` is the exemption that keeps the clear honest: `let r = r;`
+    /// reads the very generation being cleared and must still inherit its
+    /// view-ness — one body, not two.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_a_let_clears_a_stale_param_view_mark`, pinned to the same string.
+    #[test]
+    fn e2e_a_let_clears_a_stale_param_view_mark() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+
+fn tup(t: (R, i64)) {
+    match t { (r, k) => { println(f"  arm{r.id}"); } }
+    let r = R { id: 99 };
+    let m = r;
+    println(f"  fresh{m.id}")
+}
+
+fn enu(t: E) {
+    match t { E.A(r) => { let m = r; println(f"  arm{m.id}"); } E.B => { } }
+    let r = R { id: 98 };
+    let m2 = r;
+    println(f"  fresh{m2.id}")
+}
+
+fn selfrebind(t: (R, i64)) {
+    match t { (r, k) => { let r = r; println(f"  arm{r.id}"); } }
+}
+
+fn main() {
+    println("tuple");      tup((R { id: 1 }, 0));  println("tuple end");
+    println("enum");       enu(E.A(R { id: 2 }));  println("enum end");
+    println("selfrebind"); selfrebind((R { id: 3 }, 0)); println("selfrebind end");
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"tuple
+  arm1
+  fresh99
+dR99
+dR1
+tuple end
+enum
+  arm2
+  fresh98
+dR98
+dR2
+enum end
+selfrebind
+  arm3
+dR3
+selfrebind end
 done
 "#
         );

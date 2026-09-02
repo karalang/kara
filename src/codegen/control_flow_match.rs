@@ -667,6 +667,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         .current_variant_payload_bindings
                         .extend(vp_names);
                 }
+                // B-2026-08-31-7 — and the complement, for VIEW-NESS rather
+                // than for the arm channel. A bare-tuple element bound out of
+                // an owned-param scrutinee (`match t { (r, k) => … }`, and the
+                // projected `match s.t { … }`) is a view of the callee's entry
+                // copy on exactly the terms the payload above is; the element
+                // walk stays the single body owner, and a REBIND of the
+                // element must inherit that rather than mint a second one.
+                // See `collect_bare_tuple_binding_names` for the measurements.
+                // Deliberately kept OUT of `current_variant_payload_bindings`:
+                // that set routes to the UserDrop channel, which is the one
+                // thing a tuple element must not do.
+                if self.pattern_state.pattern_binding_scrutinee_is_owned_param {
+                    let mut bt_names: Vec<String> = Vec::new();
+                    Self::collect_bare_tuple_binding_names(&arm.pattern, false, &mut bt_names);
+                    self.payload_vars.param_view_locals.extend(bt_names);
+                }
                 // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
                 // `match` inside this body binds through the same field.
                 let saved_arm_borrows = self.pattern_state.pattern_binding_arm_only_borrows;
@@ -2172,6 +2188,65 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::Tuple(ps) | PatternKind::Or(ps) => {
                 for p in ps {
                     Self::collect_variant_payload_binding_names(p, in_payload, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The binding names this pattern introduces from BARE-TUPLE element
+    /// positions — the exact complement of
+    /// [`Self::collect_variant_payload_binding_names`], which walks the same
+    /// tree and deliberately skips these (a tuple scrutinee's element walk
+    /// stays armed and must remain the single body owner, so a tuple element
+    /// must never reach the UserDrop arm channel).
+    ///
+    /// B-2026-08-31-7 — being excluded from that set is right for the ARM
+    /// CHANNEL and wrong for VIEW-NESS, and the two had been conflated.
+    /// `match t { (r, k) => { let m = r; … } }` over `fn s1(t: (R, i64))`
+    /// binds `r` out of the callee's entry copy on exactly the terms an enum
+    /// payload binds out of `match e { E.A(r) => … }`: the caller retains, the
+    /// tuple's element walk is the single fire. But `param_view_locals` was
+    /// only ever written from the variant-payload site, so `let m = r` reached
+    /// the let site's `rhs_is_param_view` test knowing nothing about `r`, took
+    /// the full `track_user_drop_var` channel, and ran the body the element
+    /// walk was already running — measured `b1 dR1 dR1` on all three compiled
+    /// backends against `--interp`'s `b1 dR1`, and `b7 dR7 dR7` on ALL FOUR
+    /// surfaces for the projected spelling `match s.t { (r, k) => … }` over
+    /// `fn s1c(s: W)`. The same arm WITHOUT the rebind is correct everywhere,
+    /// which is what puts the axis on the rebind rather than on the pattern.
+    ///
+    /// Feeding these names to `param_view_locals` — and NOT to
+    /// `current_variant_payload_bindings` — is what separates the two
+    /// questions: the walk keeps the body (unchanged), and a rebind of the
+    /// element inherits view-ness instead of minting a second owner. The enum
+    /// twins of both shapes already answer one on every surface, so this
+    /// brings the tuple family level with them rather than inventing a rule.
+    ///
+    /// Stops at `TupleVariant` / `Struct`: bindings under those ARE payload
+    /// positions and the sibling collector owns them, so the two sets stay
+    /// disjoint by construction.
+    pub(super) fn collect_bare_tuple_binding_names(
+        pattern: &Pattern,
+        in_bare_tuple: bool,
+        out: &mut Vec<String>,
+    ) {
+        match &pattern.kind {
+            PatternKind::Binding(n) if in_bare_tuple => out.push(n.clone()),
+            PatternKind::AtBinding { name, pattern, .. } => {
+                if in_bare_tuple {
+                    out.push(name.clone());
+                }
+                Self::collect_bare_tuple_binding_names(pattern, in_bare_tuple, out);
+            }
+            PatternKind::Tuple(ps) => {
+                for p in ps {
+                    Self::collect_bare_tuple_binding_names(p, true, out);
+                }
+            }
+            PatternKind::Or(ps) => {
+                for p in ps {
+                    Self::collect_bare_tuple_binding_names(p, in_bare_tuple, out);
                 }
             }
             _ => {}

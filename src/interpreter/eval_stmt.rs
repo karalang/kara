@@ -234,6 +234,25 @@ impl<'a> super::Interpreter<'a> {
             // is about to shadow. It has to happen here: evaluating the `let`
             // overwrites the slot, and the old value is then unreachable.
             let shadowed_before = self.snapshot_shadowed_bindings(stmt);
+            // B-2026-08-31-7 — the interpreter twin of codegen's
+            // `clear_stale_param_view_marks`, and it has to land with it.
+            // `owned_param_names_stack`'s top frame is this frame's view set,
+            // and — exactly like `param_view_locals` on the other side — every
+            // site inserted into it and none removed, so a name marked a view
+            // by an earlier construct stayed one across a later, unrelated
+            // `let` of the SAME NAME. View-ness means "the caller runs the
+            // body", so the fresh value's body ran nowhere:
+            //
+            //   match t { E.A(r) => { let m = r; … } E.B => {} }
+            //   let r = R { id: 98 };   // fresh, unrelated, same name
+            //   let m2 = r;             // `src_is_view` reads the STALE mark
+            //
+            // printed `arm2 fresh98 dR2` where `dR98` is due as well. Both
+            // backends had it and agreed, which is why it stayed invisible;
+            // repairing only codegen would have converted an agreed-wrong
+            // answer into a fresh divergence, the trade this file's match-arm
+            // comment already warns against.
+            self.clear_stale_param_view_marks(stmt);
             let stmt_result = self.eval_stmt_cf(stmt);
             let cf_opt = match stmt_result {
                 Ok(_) => self.pending_cf.take(),
@@ -2020,6 +2039,43 @@ impl<'a> super::Interpreter<'a> {
             visited_any = true;
         }
         visited_any
+    }
+
+    /// Drop any stale param-VIEW mark carried by the names this `let`
+    /// re-binds, so [`Self::let_destructures_owned_param`] classifies the new
+    /// generation on its own RHS. Twin of codegen's
+    /// `clear_stale_param_view_marks`; see the call site in `eval_block_inner`
+    /// for the measurement.
+    ///
+    /// Exempts the self-rebind `let r = r;`, whose RHS reads the very
+    /// generation being cleared and is meant to inherit its view-ness.
+    fn clear_stale_param_view_marks(&mut self, stmt: &Stmt) {
+        let (pattern, value) = match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                (pattern, value)
+            }
+            _ => return,
+        };
+        let self_rebind = match &value.kind {
+            ExprKind::Identifier(src) => Some(src.as_str()),
+            _ => None,
+        };
+        let names: Vec<String> = pattern
+            .binding_names()
+            .into_iter()
+            .filter(|n| self_rebind != Some(n.as_str()))
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        if let Some(top) = self.owned_param_names_stack.last_mut() {
+            for n in &names {
+                top.remove(n);
+            }
+        }
+        for n in &names {
+            self.param_view_struct_fields.retain(|(root, _)| root != n);
+        }
     }
 
     fn let_destructures_owned_param(&mut self, stmt: &Stmt) -> bool {

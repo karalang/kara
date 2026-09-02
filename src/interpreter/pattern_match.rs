@@ -145,17 +145,30 @@ impl<'a> super::Interpreter<'a> {
                 // two sides now answer the same question, which is what keeps
                 // them agreeing by construction rather than by coincidence.
                 //
-                // RESTRICTED TO VARIANT PATTERNS, and that is load-bearing:
-                // codegen inserts into `param_view_locals` only for bindings in
-                // `current_variant_payload_bindings`, so a plain TUPLE pattern
-                // over an owned param's tuple field (`match s.t { (r, k) => … }`)
-                // keeps its slot there. Both backends run two bodies for that
-                // shape today; withholding here would turn an agreed answer
-                // into a fresh divergence, which is the worse of the two. The
-                // bare-Identifier branch above deliberately keeps its wider
-                // pattern reach — that is its long-standing behaviour, and
-                // narrowing it is a separate question with its own measurements
-                // (it over-suppresses a tuple param today, filed separately).
+                // BARE TUPLE PATTERNS ARE ADMITTED TOO, since B-2026-08-31-7.
+                // They were excluded here on purpose, and the reason has since
+                // been repaired rather than merely overruled: codegen wrote
+                // `param_view_locals` only from the variant-payload site, so a
+                // tuple element kept its slot on BOTH sides and
+                // `match s.t { (r, k) => { let m = r; … } }` over an owned
+                // struct param ran two bodies on all four surfaces — agreed,
+                // and by the one-value-one-body rule agreed-and-wrong.
+                // Withholding here alone would have turned that agreed answer
+                // into a fresh divergence, which is the worse of the two.
+                // `collect_bare_tuple_binding_names` now marks the codegen side
+                // as well, so admitting the pattern here moves both columns to
+                // one body together instead of moving the divergence around.
+                //
+                // The old note here also claimed the bare-Identifier branch
+                // above "over-suppresses a tuple param today, filed
+                // separately". No such row exists, and the eight-shape matrix
+                // measured for -31-7 found no over-suppression to file: the
+                // wide reach is the CORRECT column for `match t { (r, k) =>
+                // { let m = r; … } }` (one body, against two on every compiled
+                // surface), and an arm that MOVES the element into a by-value
+                // callee is at one everywhere. Recorded here because a
+                // dangling "filed separately" reads as a known-and-tracked
+                // remainder when it is neither.
                 let scrutinee_is_owned_param_name = scrutinee_place.is_some_and(|sp| {
                     matches!(&sp.kind, ExprKind::Identifier(n)
                         if self.owned_param_names_stack
@@ -165,7 +178,9 @@ impl<'a> super::Interpreter<'a> {
                 let scrutinee_projects_owned_param = !scrutinee_is_owned_param_name
                     && matches!(
                         arm.pattern.kind,
-                        PatternKind::TupleVariant { .. } | PatternKind::Struct { .. }
+                        PatternKind::TupleVariant { .. }
+                            | PatternKind::Struct { .. }
+                            | PatternKind::Tuple(..)
                     )
                     && scrutinee_place.is_some_and(|sp| self.place_root_is_owned_param(sp));
                 if scrutinee_is_owned_param_name || scrutinee_projects_owned_param {

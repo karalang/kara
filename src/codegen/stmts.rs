@@ -3647,6 +3647,35 @@ impl<'ctx> super::Codegen<'ctx> {
         result
     }
 
+    /// Drop any stale `param_view_locals` mark carried by the names this
+    /// `let` re-binds. See the call site in [`Self::compile_stmt_inner`] for
+    /// the measurement; in short, that set is function-scoped and write-only,
+    /// so a view mark left by an earlier construct silenced the `Drop` body of
+    /// a later, unrelated binding that happened to share the name.
+    ///
+    /// Exempts the self-rebind `let r = r;`, whose RHS reads the very
+    /// generation being cleared and is supposed to inherit its view-ness.
+    /// A pattern destructure (`let (a, b) = …`) clears every name it binds.
+    fn clear_stale_param_view_marks(&mut self, stmt: &Stmt) {
+        let (pattern, value) = match &stmt.kind {
+            StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                (pattern, Some(value))
+            }
+            _ => return,
+        };
+        let self_rebind = match value.map(|v| &v.kind) {
+            Some(ExprKind::Identifier(src)) => Some(src.as_str()),
+            _ => None,
+        };
+        for name in pattern.binding_names() {
+            if self_rebind == Some(name.as_str()) {
+                continue;
+            }
+            self.payload_vars.param_view_locals.remove(&name);
+            self.payload_vars.param_view_struct_fields.remove(&name);
+        }
+    }
+
     fn compile_stmt_inner(&mut self, stmt: &Stmt) -> Result<(), String> {
         // B-2026-08-28-51 — the other two escaping sites: `let x = <expr>;` and
         // `return <expr>;`. Seeded before the statement compiles, so a branch
@@ -3654,6 +3683,37 @@ impl<'ctx> super::Codegen<'ctx> {
         // rule and same two positions as the interpreter's
         // `note_escaping_stmt_sites`.
         self.note_escaping_stmt_sites(stmt);
+        // B-2026-08-31-7 — a `let` starts a NEW GENERATION of its names, so
+        // clear any stale param-VIEW mark they carry before the arms below
+        // re-classify this RHS.
+        //
+        // `param_view_locals` is function-scoped and, until now, write-only:
+        // every site inserts, none removes, and the set is cleared only at
+        // function entry. A name marked a view by an earlier construct
+        // therefore kept that mark over a later, unrelated `let` of the SAME
+        // NAME — and view-ness means "someone else runs the body", so the
+        // fresh value's `Drop` body ran NOWHERE. Measured on the enum path,
+        // which predates this row and is where the leak was found:
+        //
+        //   fn f(t: E) {
+        //       match t { E.A(r) => { let m = r; … } E.B => {} }
+        //       let r = R { id: 98 };   // fresh, unrelated, same name
+        //       let m2 = r;
+        //       …
+        //   }
+        //
+        // printed `arm2 fresh98 dR2` where `dR2` AND `dR98` are due — on
+        // `--interp` and both compiled backends alike. Found while checking
+        // that -31-7's tuple marking did not over-reach: it reproduced there
+        // too, and the enum control proved the hazard was the mechanism's,
+        // not the new caller's. Fixing it here rather than declining to mark
+        // tuples is what keeps the row's fix from propagating a known-wrong
+        // rule to a second family.
+        //
+        // The self-rebind `let r = r;` is exempt: that RHS reads the very
+        // generation being cleared, so dropping the mark first would lose the
+        // view-ness the rebind is supposed to inherit.
+        self.clear_stale_param_view_marks(stmt);
         // B-2026-08-30-28 / -33 — disarm a conditionally-stored parameter's
         // per-path body flag at the statement that hands the value to a new
         // owner. Placed at the INNERMOST statement, so the `false` lands in the
