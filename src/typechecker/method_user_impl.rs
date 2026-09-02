@@ -433,6 +433,43 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
 
+        // Normalize a still-generic type argument to the ONE spelling the
+        // impl-table machinery recognizes, before ANY of it runs
+        // (B-2026-09-02-42).
+        //
+        // Both `impl_bounds_discharge` (which filters candidates) and
+        // `first_unsatisfied_bound` (which explains why none survived) skip a
+        // `Type::TypeParam` argument on purpose: inside a generic body the
+        // bound cannot be discharged yet, so it defers to the instantiation
+        // site. Neither recognizes the OTHER spelling of the same parameter,
+        // and both then discharge it against the impl table, where a type
+        // parameter has no entry and so fails every bound. `items.rs`'s
+        // associated-fn arm documents that asymmetry in the same words.
+        //
+        // Both spellings genuinely reach here for one parameter: a SIGNATURE
+        // position lowers `T` to `TypeParam("T")`, while a function-BODY
+        // annotation (`let w: T = v;`) deliberately leaves
+        // `Named { name: "T", args: [] }` — type params are excluded from
+        // `current_body_dim_scope` on purpose, the Named-vs-TypeParam trap of
+        // B-2026-07-13-5 leg B. So this cannot be fixed by lowering body
+        // annotations differently, the way the associated-fn case was; the
+        // consumer has to accept both, exactly as `same_type_param` taught the
+        // arithmetic arms in fe82c7b.
+        //
+        // Scoped by `enclosing_bounds`, which `collect_param_bounds`
+        // pre-populates with EVERY generic param name (bounded or not) and
+        // documents as doubling as the names-in-scope set. That is what makes
+        // this safe in the direction that matters: a `Named` naming a real
+        // nominal type is never in that map, so a concrete receiver argument
+        // still has its bounds checked here rather than silently deferred.
+        let type_args: Vec<Type> = type_args
+            .iter()
+            .map(|a| match self.type_param_name(a) {
+                Some(name) => Type::TypeParam(name.clone()),
+                None => a.clone(),
+            })
+            .collect();
+
         // Look up method on the receiver type with inherent-beats-trait
         // priority per design.md § Method Resolution Step 3, plus
         // conditional-impl filtering against the receiver's concrete

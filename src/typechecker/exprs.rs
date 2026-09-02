@@ -2517,12 +2517,29 @@ impl<'a> super::TypeChecker<'a> {
                 // diagnostic (slice 2a) handles this; don't double-report.
                 continue;
             };
-            if matches!(
-                concrete_ty,
-                Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
-            ) {
+            if matches!(concrete_ty, Type::TypeVar(_) | Type::Error)
+                || self.type_param_name(concrete_ty).is_some()
+            {
                 // Unresolved metavar / propagating-param / already-error —
                 // upstream diagnostics handle. Avoid noise.
+                //
+                // `type_param_name` rather than a bare `TypeParam(_)` match:
+                // the SAME parameter reaches here under two spellings, and a
+                // bare match sees only one (B-2026-09-02-42). A signature
+                // position lowers `T` to `TypeParam("T")`, while a function-
+                // BODY annotation (`let w: T = v;`) deliberately leaves
+                // `Named { name: "T", args: [] }` — type params are excluded
+                // from `current_body_dim_scope` on purpose, the Named-vs-
+                // TypeParam trap of B-2026-07-13-5 leg B — so a value whose
+                // type flowed from an annotation arrived as `Named` and was
+                // discharged against the impl table, where a type parameter
+                // has no entry and so fails every bound. That reported a
+                // still-generic `T` as not implementing its own declared
+                // bound at a FREE generic function's call site (E0200), the
+                // sibling of the method-resolution gate's E0236.
+                //
+                // Scoped by `enclosing_bounds`, so a `Named` naming a real
+                // nominal type is untouched and still has its bounds checked.
                 continue;
             }
             for bound in bounds {

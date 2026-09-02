@@ -48753,3 +48753,173 @@ fn main() { println("x"); }
         "an unbounded T must still be non-Copy at an index read; got {errs:?}"
     );
 }
+
+// ── Named-vs-TypeParam at the method-bound gate (B-2026-09-02-42) ────
+
+/// A body type annotation naming the impl's own type parameter must not
+/// poison later bounded method calls on that value.
+///
+/// Third consumer of the Named-vs-TypeParam trap after fe82c7b's two
+/// arithmetic arms: a SIGNATURE position lowers `T` to `TypeParam("T")`, a
+/// function-BODY annotation deliberately leaves `Named { name: "T" }`, and
+/// `Type` compares them structurally. Two consumers were blind to it here --
+/// `impl_bounds_discharge` filtered the impl out, and `first_unsatisfied_bound`
+/// then reported the impl's OWN declared bound as unsatisfied.
+#[test]
+fn a_body_annotation_naming_the_impl_type_param_does_not_poison_method_calls() {
+    let src = r#"
+struct Box[T] { v: T }
+impl[T: Copy] Box[T] {
+    fn set(mut ref self, v: T) { self.v = v; }
+    fn make(v: T) -> Box[T] {
+        let w: T = v;
+        let mut b = Box { v: w };
+        b.set(v);
+        return b;
+    }
+}
+fn main() { let b = Box.make(5); println(f"{b.v}"); }
+"#;
+    // `typecheck_ok` asserts the program has no type errors at all.
+    typecheck_ok(src);
+}
+
+/// The same through a container, which is the idiomatic spelling
+/// (`let mut xs: Vec[T] = Vec.new();`) and so the shape that actually blocked
+/// a generic Fenwick tree in kata 307.
+#[test]
+fn a_body_annotated_container_of_t_does_not_poison_method_calls() {
+    let src = r#"
+struct Bag[T] { xs: Vec[T] }
+impl[T: Copy] Bag[T] {
+    fn add(mut ref self, v: T) { self.xs.push(v); }
+    fn make(v: T) -> Bag[T] {
+        let mut xs: Vec[T] = Vec.new();
+        let mut b = Bag { xs: xs };
+        b.add(v);
+        return b;
+    }
+}
+fn main() { let b = Bag.make(7); println(f"{b.xs.len()}"); }
+"#;
+    // `typecheck_ok` asserts the program has no type errors at all.
+    typecheck_ok(src);
+}
+
+/// The control the row supplied: the identical program with the annotation
+/// deleted always compiled. The fix's whole claim is that the two agree, so
+/// pin the control too -- if it ever breaks, "they agree" stops meaning
+/// anything.
+#[test]
+fn the_unannotated_spelling_still_compiles() {
+    let src = r#"
+struct Box[T] { v: T }
+impl[T: Copy] Box[T] {
+    fn set(mut ref self, v: T) { self.v = v; }
+    fn make(v: T) -> Box[T] {
+        let w = v;
+        let mut b = Box { v: w };
+        b.set(v);
+        return b;
+    }
+}
+fn main() { let b = Box.make(5); println(f"{b.v}"); }
+"#;
+    // `typecheck_ok` asserts the program has no type errors at all.
+    typecheck_ok(src);
+}
+
+/// The direction that makes the fix safe rather than merely permissive: a
+/// CONCRETE receiver argument must still have its bounds checked. `f64` is
+/// deliberately not `Ord`, and it reaches the gate through a body annotation
+/// -- the very path being normalized -- so this is the case that would break
+/// if the normalization keyed on spelling instead of on scope.
+#[test]
+fn a_body_annotated_concrete_type_still_fails_an_unsatisfied_bound() {
+    let src = r#"
+struct W[T] { v: T }
+impl[T: Ord] W[T] { fn cmp(ref self) -> bool { return true; } }
+fn make() -> W[f64] { let x: f64 = 1.5; let w = W { v: x }; return w; }
+fn main() { let w = make(); println(f"{w.cmp()}"); }
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        errs.iter().any(|e| e.message.contains("Ord")),
+        "an unsatisfied bound on a concrete type must still be reported; got {errs:?}",
+    );
+}
+
+/// ...and the same for a non-`Copy` struct, which is the bound the repro uses.
+#[test]
+fn a_non_copy_struct_still_fails_a_copy_bound() {
+    let src = r#"
+struct Holder { s: String }
+struct Box[T] { v: T }
+impl[T: Copy] Box[T] { fn get(ref self) -> bool { return true; } }
+fn main() {
+    let b = Box { v: Holder { s: "x".to_string() } };
+    println(f"{b.get()}");
+}
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        errs.iter().any(|e| e.message.contains("Copy")),
+        "a non-Copy struct must still fail a Copy bound; got {errs:?}",
+    );
+}
+
+/// The free-function half of B-2026-09-02-42, added when the row was amended
+/// mid-fix to widen past impl methods. A DIFFERENT code path from the method
+/// gate — the call-site where-clause discharge in `exprs.rs` — with the same
+/// one-spelling blindness, and it reports E0200 where the method path reports
+/// E0236.
+#[test]
+fn a_body_annotation_naming_t_does_not_poison_a_free_generic_call() {
+    let src = r#"
+fn need_copy[T: Copy](a: T, b: T) -> i64 { let x = a; let y = a; return 1; }
+fn caller[T: Copy](v: T) -> i64 { let w: T = v; return need_copy(w, v); }
+fn main() { println(f"{caller(3)}"); }
+"#;
+    typecheck_ok(src);
+}
+
+/// The same through a `where` clause rather than an inline bound, on both
+/// sides — the row notes the where-clause spelling degraded further, to a
+/// bare "no method" on the impl path.
+#[test]
+fn a_body_annotation_naming_t_does_not_poison_a_where_clause_bound() {
+    typecheck_ok(
+        r#"
+fn need_copy[T](a: T, b: T) -> i64 where T: Copy { let x = a; return 1; }
+fn caller[T: Copy](v: T) -> i64 { let w: T = v; return need_copy(w, v); }
+fn main() { println(f"{caller(3)}"); }
+"#,
+    );
+    typecheck_ok(
+        r#"
+struct Box[T] { v: T }
+impl[T] Box[T] where T: Copy {
+    fn set(mut ref self, v: T) { self.v = v; }
+    fn make(v: T) -> Box[T] { let w: T = v; let mut b = Box { v: w }; b.set(v); return b; }
+}
+fn main() { let b = Box.make(5); println(f"{b.v}"); }
+"#,
+    );
+}
+
+/// The free-fn path's safety direction: a CONCRETE argument that genuinely
+/// fails the bound must still be rejected there too.
+#[test]
+fn a_free_generic_call_still_rejects_a_concrete_unsatisfied_bound() {
+    let errs = typecheck_errors(
+        r#"
+struct Holder { s: String }
+fn need_copy[T: Copy](a: T) -> i64 { return 1; }
+fn main() { let h = Holder { s: "x".to_string() }; println(f"{need_copy(h)}"); }
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("Copy")),
+        "a non-Copy argument must still fail; got {errs:?}",
+    );
+}
