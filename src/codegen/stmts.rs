@@ -11872,7 +11872,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let ExprKind::Identifier(src) = &value.kind {
                                 if !self.borrow_vars.ref_params.contains_key(src) {
                                     if let Some(src_slot) = self.variables.get(src).copied() {
-                                        self.zero_struct_move_caps(src_slot.ptr, &soa.struct_name);
+                                        // B-2026-09-02-20 — see the helper.
+                                        let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
+                                        self.zero_struct_move_caps(vp, &soa.struct_name);
                                     }
                                 }
                             }
@@ -11942,7 +11944,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             };
                             if let Some(sname) = elem_struct.filter(|_| container_owns) {
                                 if let Some(src_slot) = self.variables.get(src).copied() {
-                                    self.zero_struct_move_caps(src_slot.ptr, &sname);
+                                    // B-2026-09-02-20 — see the helper.
+                                    let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
+                                    self.zero_struct_move_caps(vp, &sname);
                                 }
                                 // B-2026-08-26-31 — the BODIES half of the
                                 // same move. `zero_struct_move_caps` disarms

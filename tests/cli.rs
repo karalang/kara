@@ -4421,6 +4421,140 @@ fn test_stdin_lines_run_and_build_parity() {
 /// left-before-right on 12 of 12 — the assertion fails deterministically if
 /// the capture regresses. 20_000 iterations is ~0.4 s in the tree-walk
 /// interpreter, generous margin over the microseconds branch 1 needs.
+/// B-2026-09-02-20 / -21 — the move-suppression cap-zeroing must go THROUGH an
+/// RC-fallback box, not GEP the handle slot as if it were the value.
+///
+/// A binding the ownership pass promotes to RC keeps its value in a heap
+/// `{ i64 rc, T }` box; its alloca is an 8-byte `ptr` handle. The cap-zeroing
+/// that disarms a moved-from source walked the binding's slot AS the struct, so
+/// under RC it stored four `i64 0`s at offsets 16/24/40/48 of an 8-byte
+/// alloca — out-of-bounds stack writes landing on whatever alloca followed.
+///
+/// THIS TEST LIVES IN `cli.rs`, AND THAT IS THE POINT. The wild stores are dead
+/// from LLVM's point of view, so `-O2` deletes them by DSE and the defect is
+/// invisible on the default `karac build` lane every `tests/codegen.rs` fixture
+/// uses. It is only observable where the optimizer does not run: `karac run`
+/// (LLJIT, `OptimizationLevel::None`) and `KARAC_OPT_LEVEL=0 karac build`.
+/// `KARAC_OPT_LEVEL` is read in-process at compile time, so a `codegen.rs`
+/// fixture could not set it without changing the opt level of every test
+/// compiling concurrently — shelling out is what makes the level per-fixture.
+/// Same masking, and the same reason for the same placement, as
+/// B-2026-08-04-19.
+///
+/// Two shapes, one root cause. `f` is the wrong-VALUE face: the clobber lands
+/// on `out`, so `out.id` read 0 instead of 5 right after `out = p`, and the sum
+/// came back `a91` against the interpreter's `a96` (`karac run` SIGSEGV'd
+/// outright, exit 139). `g` is the non-TERMINATION face: the clobber lands on
+/// the `for`-range induction variable, which stops advancing at the disarming
+/// iteration and repeats it forever under `karac run`.
+///
+/// Both need all three ingredients together — the value declared INSIDE the
+/// loop, the conditional param-view assignment, and a struct with heap fields
+/// to zero — because it is the conditional-move-in-a-loop that makes the
+/// ownership pass promote the parameter to RC in the first place.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit() {
+    use std::process::Command;
+
+    let tmp = scratch_project("rc-move-suppression-o0");
+    let src = "struct R { id: i64, tag: String, xs: Vec[String] }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(n: i64) -> R {\n\
+               \x20   let mut v: Vec[String] = Vec.new();\n\
+               \x20   v.push(f\"pay-{n}\");\n\
+               \x20   return R { id: n, tag: f\"tag-{n}\", xs: v }\n\
+               }\n\
+               fn f(p: R) -> i64 {\n\
+               \x20   let mut i: i64 = 0;\n\
+               \x20   let mut acc: i64 = 0;\n\
+               \x20   while i < 2 {\n\
+               \x20       let mut out: R = mk(90 + i);\n\
+               \x20       if i == 0 { out = p; }\n\
+               \x20       acc = acc + out.id;\n\
+               \x20       i = i + 1;\n\
+               \x20   }\n\
+               \x20   return acc\n\
+               }\n\
+               fn g(q: R) -> i64 {\n\
+               \x20   let mut acc: i64 = 0;\n\
+               \x20   for k in 0..3 {\n\
+               \x20       let mut o: R = mk(40 + k);\n\
+               \x20       if k == 1 { o = q; }\n\
+               \x20       acc = acc + o.id;\n\
+               \x20   }\n\
+               \x20   return acc\n\
+               }\n\
+               fn main() {\n\
+               \x20   println(f\"a{f(mk(5))}\");\n\
+               \x20   println(f\"b{g(mk(7))}\");\n\
+               }\n";
+    write(&tmp.join("rc.kara"), src);
+
+    // The interpreter is the oracle: it has no slot layout to corrupt.
+    let want = {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .args(["run", "--interp", "rc.kara"])
+            .output()
+            .expect("spawn karac run --interp");
+        assert!(
+            out.status.success(),
+            "interpreter run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_eq!(
+        want, "dR90\ndR91\ndR5\na96\ndR40\ndR41\ndR42\ndR7\nb89\n",
+        "oracle drifted — the fixture, not the compiler, needs re-measuring"
+    );
+
+    // `karac run` — the LLJIT lane, which runs at OptimizationLevel::None.
+    // Pre-fix this exited 139 (SIGSEGV) partway through `f`, so the status
+    // assertion is as load-bearing as the output one.
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "rc.kara"])
+        .output()
+        .expect("spawn karac run");
+    assert!(
+        out.status.success(),
+        "karac run (JIT) died: status {:?}, stderr {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        want,
+        "JIT lane must match the interpreter"
+    );
+
+    // `KARAC_OPT_LEVEL=0 karac build` — the same unoptimized surface reached
+    // through AOT, which is where the wrong VALUE (`a91`) showed up. Skips
+    // gracefully when the runtime archive is absent and the link fails.
+    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .env("KARAC_OPT_LEVEL", "0")
+        .args(["build", "rc.kara"])
+        .output();
+    let exe = tmp.join("rc");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let out = Command::new(&exe).output().expect("run -O0 binary");
+        assert!(
+            out.status.success(),
+            "-O0 binary died: status {:?}",
+            out.status.code()
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_OPT_LEVEL=0 build must match the interpreter"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_eprintln_under_par_replays_in_source_order_run_and_build() {

@@ -8933,6 +8933,53 @@ impl<'ctx> super::Codegen<'ctx> {
         self.zero_struct_field_move_cap_in(cur_ptr, &cur_name, field, Some(cur_ty));
     }
 
+    /// B-2026-09-02-20 — the pointer to a moved-from binding's VALUE, seeing
+    /// through an RC-fallback box.
+    ///
+    /// A binding the ownership pass promoted to RC does not hold its value in
+    /// its alloca: the alloca is a `ptr` HANDLE and the value lives at field 1
+    /// of a heap `{ i64 rc, T }` box. The move-suppression arms below zero
+    /// caps by GEPping the binding's slot AS the value, which under RC walks a
+    /// 56-byte struct layout over an 8-byte pointer slot and stores zeros PAST
+    /// THE END OF THE ALLOCA — four out-of-bounds stack writes that land on
+    /// whatever alloca follows.
+    ///
+    /// It hid because the stores are dead from LLVM's point of view, so `-O2`
+    /// deletes them by DSE and only the unoptimized lanes execute them: the
+    /// JIT (which runs at `OptimizationLevel::None`) and
+    /// `KARAC_OPT_LEVEL=0 karac build`. Same masking as B-2026-08-04-19.
+    ///
+    /// Zeroing through the box is the RIGHT answer rather than declining: the
+    /// assignment handed the value's buffers to the destination, and the box's
+    /// own drop still runs, so leaving its caps intact double-frees them.
+    /// [`Self::get_data_ptr`] already resolves exactly this pointer — its own
+    /// doc cites B-2026-06-13-1, the same header-vs-value confusion one call
+    /// site over — so this is a reuse, not a new mechanism.
+    ///
+    /// Used by every site that hands a SOURCE BINDING'S SLOT to the cap-zeroing
+    /// walkers: the two arms below, and the three SoA / element-assignment
+    /// sites in `exprs.rs` and `stmts.rs`. Only the first two have a measured
+    /// repro (B-2026-09-02-20 / -21); the others are the same call shape with
+    /// the same information in scope, and routing them through here is a no-op
+    /// unless the binding is RC-promoted — in which case the direct slot GEP
+    /// they used before is an out-of-bounds write by construction.
+    ///
+    /// The Vec/String and tuple/aggregate arms need nothing: they gate on
+    /// `slot.ty` holding the value INLINE, which an RC handle (a bare `ptr`)
+    /// fails, so they decline on their own.
+    pub(super) fn move_suppression_value_ptr(
+        &self,
+        var_name: &str,
+        slot_ptr: PointerValue<'ctx>,
+    ) -> PointerValue<'ctx> {
+        if self.drop_rc.rc_fallback_heap_types.contains_key(var_name) {
+            if let Some(p) = self.get_data_ptr(var_name) {
+                return p;
+            }
+        }
+        slot_ptr
+    }
+
     pub(super) fn suppress_source_vec_cleanup_for_arg_ex(
         &mut self,
         arg_expr: &Expr,
@@ -9515,7 +9562,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cloned()
             {
                 if !layout.is_shared {
-                    self.zero_enum_payload_caps(slot.ptr, &layout);
+                    let vptr = self.move_suppression_value_ptr(var_name, slot.ptr);
+                    self.zero_enum_payload_caps(vptr, &layout);
                     return;
                 }
             }
@@ -9549,7 +9597,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .enum_inst_var_types
                     .get(var_name)
                     .map(|i| self.generic_struct_subst_from_inst(&type_name, i));
-                self.zero_struct_move_caps_mono(slot.ptr, &type_name, subst.as_ref());
+                let vptr = self.move_suppression_value_ptr(var_name, slot.ptr);
+                self.zero_struct_move_caps_mono(vptr, &type_name, subst.as_ref());
                 // B-2026-08-06-10, whole-payload sibling of the field move-out
                 // mirror above. `x` here is a deboxed COPY of a payload box the
                 // CALLER owns (`fn f(h: Option[H]) { match h { Some(x) => x } }`

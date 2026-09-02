@@ -5062,7 +5062,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(src) = &args[0].value.kind {
                     if !self.borrow_vars.ref_params.contains_key(src) {
                         if let Some(src_slot) = self.variables.get(src).copied() {
-                            self.zero_struct_move_caps(src_slot.ptr, &soa.struct_name);
+                            // B-2026-09-02-20 — through the RC box when the
+                            // source is RC-promoted; the raw slot otherwise.
+                            let vp = self.move_suppression_value_ptr(src, src_slot.ptr);
+                            self.zero_struct_move_caps(vp, &soa.struct_name);
                         }
                     }
                 }
