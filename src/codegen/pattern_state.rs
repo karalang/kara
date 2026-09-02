@@ -131,6 +131,21 @@ pub(crate) struct PatternState<'ctx> {
     /// runs it twice.
     pub(crate) pattern_binding_arm_borrowed_only_names: std::collections::HashSet<String>,
     pub(crate) pattern_binding_scrutinee_is_owned_param: bool,
+    /// B-2026-09-02-11 — true while binding a pattern whose scrutinee is a
+    /// heap `Vec`/`Array` INDEX read (`match v[i] { … }`, `match h.xs[i] { … }`).
+    ///
+    /// That scrutinee is compiled as a DEFENSIVE DEEP CLONE of an element the
+    /// container still owns (`clone_owned_vec_index_element`), so a payload
+    /// bound out of it is a view of a copy the source language never named.
+    /// Its `Drop` BODY belongs to the container's own fire — the element runs
+    /// it at the container's death — so the pattern-binding registration goes
+    /// MEMORY-ONLY (`track_struct_var`), exactly as the owned-param
+    /// caller-retains case above does.
+    ///
+    /// This is the PAYLOAD-level twin of B-2026-08-29-37, which withheld the
+    /// enum's OWN body on the same clone one level out: the copy is freed, the
+    /// copy is not mourned.
+    pub(crate) pattern_binding_scrutinee_is_owned_elem_clone: bool,
     /// B-2026-08-02-25 (match-arm leg) — the `(slot, walker)` of the armed
     /// `__karac_dropelems_opt_*` / `__karac_dropelems_res_*` payload-bodies
     /// action on a NAMED `Option`/`Result` scrutinee, sampled BEFORE the arm's

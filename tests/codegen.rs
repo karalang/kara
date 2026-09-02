@@ -11635,7 +11635,6 @@ dR2
 loop end
 index
 got 4
-dR3
 dE
 dR3
 index end
@@ -11689,12 +11688,19 @@ end
     /// `v[i]` is a borrow of an element the container still owns, so no arm
     /// binding may be consumed out of it — and `let m = r` is a consume just as
     /// much as `eat(r)` is. So that leg reads THROUGH the binding instead. The
-    /// expectation is unchanged: the compiled output was `index got 4 dR3 dE
-    /// dR3` with the rebind and is `index got 4 dR3 dE dR3` without it, which is
-    /// what shows the leg still exercises the defensive copy rather than having
-    /// been quietly weakened. The other three legs are untouched — a `ref`-chain
-    /// field, a `for`-loop element and a fresh temp are all owned or borrowed
-    /// places the rule has nothing to say about.
+    /// other three legs are untouched — a `ref`-chain field, a `for`-loop
+    /// element and a fresh temp are all owned or borrowed places the rule has
+    /// nothing to say about.
+    ///
+    /// B-2026-09-02-11 then CHANGED the `index` leg's expectation, and the
+    /// reason is worth keeping: `got 4 dR3 dE dR3` was never the interpreter's
+    /// answer for the read-only spelling, only for the `let m = r` one this
+    /// fixture used to carry. The migration above left the compiled string
+    /// pinned to the old program's count, so the leg silently asserted a
+    /// two-body answer against a one-body source. It is now `got 4 dE dR3` on
+    /// every surface — the container destroys its element once, at its own NLL
+    /// death, and the defensive clone's payload binding no longer mourns a copy
+    /// the source never named.
     #[test]
     fn e2e_defensive_scrutinee_copy_does_not_rerun_the_enum_own_drop_body() {
         let Some(out) = run_program(SCRUTINEE_CLONE_DROP_BODY_SRC) else {
@@ -11766,6 +11772,212 @@ end
         assert!(
             fresh.contains("call void @karac_drop_E("),
             "a fresh owned temp lost its user Drop body — B-2026-07-11-26 \
+             regressed:\n{fresh}"
+        );
+    }
+
+    /// The B-2026-09-02-11 fixture, shared by the E2E and its IR guard so the
+    /// two can never drift onto different programs. See
+    /// `e2e_index_element_clone_does_not_rerun_the_payload_drop_body`.
+    const INDEX_ELEM_CLONE_PAYLOAD_BODY_SRC: &str = r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+enum Q { A(P), B }
+impl Drop for Q { fn drop(mut ref self) { println("dQ") } }
+
+fn mk(n: i64) -> E { let mut v: Vec[i64] = Vec.new(); v.push(n); return E.A(R { id: n, v: v }) }
+fn mkq(n: i64) -> Q { return Q.A(P { id: n }) }
+
+fn leg_bare() {
+    println("bare");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    match v[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("bare end");
+}
+
+fn leg_field_rooted() {
+    println("field");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let h = H { xs: v };
+    match h.xs[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("field end");
+}
+
+fn leg_scalar_payload() {
+    println("scalar");
+    let mut v: Vec[Q] = Vec.new();
+    v.push(mkq(3));
+    match v[0] { Q.A(p) => { println(f"got {p.id}"); } Q.B => { } }
+    println("scalar end");
+}
+
+fn leg_unbound() {
+    println("wild");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    match v[0] { E.A(_) => { println("got"); } E.B => { } }
+    println("wild end");
+}
+
+fn leg_fresh() {
+    println("fresh");
+    match mk(5) { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("fresh end");
+}
+
+fn leg_local() {
+    println("local");
+    let e = mk(6);
+    match e { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("local end");
+}
+
+fn main() {
+    leg_bare();
+    leg_field_rooted();
+    leg_scalar_payload();
+    leg_unbound();
+    leg_fresh();
+    leg_local();
+    println("end");
+}
+"#;
+
+    /// The interpreter's answer, and the oracle: it never clones an element, so
+    /// each `Drop` body fires exactly as often as the source program says.
+    const INDEX_ELEM_CLONE_PAYLOAD_BODY_EXPECTED: &str = r#"bare
+got 2
+dE
+dR1
+bare end
+field
+got 3
+dE
+dR2
+field end
+scalar
+got 3
+dQ
+dP3
+scalar end
+wild
+got
+dE
+dR4
+wild end
+fresh
+got 6
+dR5
+dE
+fresh end
+local
+got 7
+dE
+dR6
+local end
+end
+"#;
+
+    /// B-2026-09-02-11 — A DEFENSIVE COPY OF AN INDEXED ELEMENT MUST NOT RUN ITS
+    /// PAYLOAD'S `Drop` BODY EITHER. The payload-level twin of
+    /// `e2e_defensive_scrutinee_copy_does_not_rerun_the_enum_own_drop_body`,
+    /// one level in from the enum wrapper that row already withheld.
+    ///
+    /// `match v[i]` stages the element into a deep clone
+    /// (`clone_owned_vec_index_element`) so an arm binding never aliases the
+    /// container's buffer. B-2026-08-29-37 stopped the ENUM's own body from
+    /// running on that clone; the PAYLOAD's body is a different call — the
+    /// field/payload walk, not the type wrapper — and it was never withheld, so
+    /// `bind_pattern_values` registered the full `karac_drop_<T>` wrapper on the
+    /// clone's binding while the container went on running the element's own
+    /// body at its NLL death. Measured on `7ecebf2`: `bare` printed
+    /// `got 2 dR1 dE dR1` against `--interp`'s `got 2 dE dR1`, on all three
+    /// compiled surfaces (JIT, default `karac build`, `KARAC_AUTO_PAR=0`).
+    ///
+    /// SIX LEGS, three that were wrong and three controls, because the fix
+    /// withholds a body and the failure mode of over-reaching is a body that
+    /// never runs at all:
+    ///   - `bare` — `match v[0]`, the shape the row reported.
+    ///   - `field` — `match h.xs[0]`, the FIELD-ROOTED index
+    ///     (`expr_is_heap_vec_index_field_rooted`), a separate predicate that
+    ///     would have been missed by keying on the bare spelling alone.
+    ///   - `scalar` — a payload struct with NO heap at all. It doubles for the
+    ///     same reason, which is what shows the defect is about body
+    ///     registration rather than about buffer ownership.
+    ///   - `wild` — THE UNBOUND CONTROL. `E.A(_)` binds nothing, so no
+    ///     registration was ever made and this leg was already correct; it
+    ///     catches a fix that silences the container's own fire instead.
+    ///   - `fresh` — `match mk(5)`, a genuine owned temp with no other owner.
+    ///     Its payload body MUST still run at the binding (B-2026-07-11-26's
+    ///     population), so an over-reaching gate loses it here.
+    ///   - `local` — a named local scrutinee, likewise owned by the arm's
+    ///     binding rather than by a container.
+    #[test]
+    fn e2e_index_element_clone_does_not_rerun_the_payload_drop_body() {
+        let Some(out) = run_program(INDEX_ELEM_CLONE_PAYLOAD_BODY_SRC) else {
+            return;
+        };
+        assert_eq!(out, INDEX_ELEM_CLONE_PAYLOAD_BODY_EXPECTED);
+    }
+
+    /// The ANTI-VACUITY GUARD for the E2E above: the fix must withhold the
+    /// BODY, not the memory cleanup, and an output comparison cannot tell those
+    /// apart (the clone's buffer leaking is silent).
+    ///
+    /// So assert the two halves separately against `leg_bare`'s IR: the element
+    /// clone IS still emitted and a struct cleanup IS still registered on the
+    /// binding, while the user body wrapper is NOT. `leg_fresh` is the paired
+    /// positive — the same enum, the same arm shape, a genuine owned temp —
+    /// so "no `karac_drop_R` anywhere" cannot pass by losing the call entirely.
+    #[test]
+    fn ir_index_element_clone_keeps_memory_cleanup_and_drops_the_payload_body() {
+        let ir = ir_for(INDEX_ELEM_CLONE_PAYLOAD_BODY_SRC);
+        let body_of = |sym: &str| -> String {
+            let mut out = String::new();
+            let mut inside = false;
+            for l in ir.lines() {
+                if !inside && l.starts_with("define") && l.contains(sym) {
+                    inside = true;
+                }
+                if inside {
+                    out.push_str(l);
+                    out.push('\n');
+                    if l == "}" {
+                        break;
+                    }
+                }
+            }
+            assert!(!out.is_empty(), "no define block for {sym}\n{ir}");
+            out
+        };
+
+        let bare = body_of("@leg_bare(");
+        // The element clone still happens — this is what keeps the binding off
+        // the container's buffer.
+        assert!(
+            bare.contains("karac_vec_clone") || bare.contains("elem.clone"),
+            "the indexed-element clone stopped being emitted, so the E2E twin \
+             is now vacuous:\n{bare}"
+        );
+        // …but the payload's user `Drop` body is NOT run on it.
+        assert!(
+            !bare.contains("call void @karac_drop_R("),
+            "B-2026-09-02-11: the payload's Drop body runs on a defensive copy \
+             of an element the container still owns:\n{bare}"
+        );
+
+        // The control: a genuine fresh temp keeps its payload body.
+        let fresh = body_of("@leg_fresh(");
+        assert!(
+            fresh.contains("call void @karac_drop_R("),
+            "a fresh owned temp lost its payload Drop body — B-2026-07-11-26 \
              regressed:\n{fresh}"
         );
     }

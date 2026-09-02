@@ -35,6 +35,7 @@ pub(super) type ScrutineeShapeFlags<'ctx> = (
     bool,
     Option<(PointerValue<'ctx>, inkwell::values::FunctionValue<'ctx>)>,
     Option<PointerValue<'ctx>>,
+    bool,
 );
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1141,6 +1142,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.pattern_state
                 .pattern_binding_scrutinee_payload_bodies_src,
             self.pattern_state.pattern_binding_scrutinee_optres_slot,
+            self.pattern_state
+                .pattern_binding_scrutinee_is_owned_elem_clone,
         );
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp =
@@ -1148,6 +1151,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-01-13 — see `compile_match`'s twin derivation.
         self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-09-02-11 — see `compile_match`'s twin derivation.
+        self.pattern_state
+            .pattern_binding_scrutinee_is_owned_elem_clone = self.expr_is_heap_vec_index(scrutinee)
+            || self.expr_is_heap_vec_index_field_rooted(scrutinee);
         // B-2026-08-02-25 (match-arm leg) + B-2026-08-04-1 (its fresh-temp
         // twin) — see `compile_match`'s twin derivation. Named source first;
         // a fresh temp has no armed walk to sample, so it falls through to the
@@ -1190,6 +1197,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_payload_bodies_src = saved.5;
         self.pattern_state.pattern_binding_scrutinee_optres_slot = saved.6;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_owned_elem_clone = saved.7;
     }
 
     /// B-2026-08-04-2 — the scrutinee's `Option`/`Result` slot: a named

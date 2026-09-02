@@ -33436,6 +33436,15 @@ fn test_enum_walker_rearm_after_move_reassign() {
 /// Recording the expectation on BOTH sides means a future change that alters
 /// the interpreter's count has to argue with a test rather than silently
 /// re-baseline the codegen twin.
+///
+/// B-2026-09-02-11 migrated the `index` leg to a READ-ONLY arm, so this program
+/// is now byte-identical to the codegen twin's (it had already migrated for
+/// B-2026-08-31-3, which rejects a consume out of a `v[i]` scrutinee — and
+/// `let m = r` is a consume). The leg's expectation drops one `dR3` with it:
+/// nothing is moved out of the container, so the element is destroyed exactly
+/// once, at `v`'s NLL death. The compiled backends printed the extra one until
+/// B-2026-09-02-11 — the clone's payload binding ran a body the container was
+/// already going to run.
 #[test]
 fn test_scrutinee_clone_does_not_rerun_the_enum_own_drop_body() {
     assert_eq!(
@@ -33476,7 +33485,7 @@ fn leg_vec_index() {
     println("index");
     let mut v = Vec.new();
     v.push(mk(3));
-    match v[0] { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    match v[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
     println("index end");
 }
 
@@ -33508,7 +33517,6 @@ dR2
 loop end
 index
 got 4
-dR3
 dE
 dR3
 index end
@@ -33517,6 +33525,125 @@ got 5
 dR4
 dE
 fresh end
+end
+"#
+    );
+}
+
+/// B-2026-09-02-11 (interpreter twin / ORACLE) — the interpreter never clones an
+/// indexed element, so a read-only arm over `v[i]` runs the payload's `Drop`
+/// body exactly once: at the container's own NLL death, not at the arm's.
+///
+/// Pinned to the same program and the same string as `tests/codegen.rs`'s
+/// `e2e_index_element_clone_does_not_rerun_the_payload_drop_body`, whose doc
+/// carries the leg-by-leg rationale. Recording the count on BOTH sides is what
+/// stops a future change from re-baselining the codegen twin against whatever
+/// the compiled backends happen to print — which is exactly how the `index` leg
+/// of the B-2026-08-29-37 fixture came to assert a two-body answer for a
+/// one-body source.
+#[test]
+fn test_index_element_clone_does_not_rerun_the_payload_drop_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+
+struct P { id: i64 }
+impl Drop for P { fn drop(mut ref self) { println(f"dP{self.id}") } }
+enum Q { A(P), B }
+impl Drop for Q { fn drop(mut ref self) { println("dQ") } }
+
+fn mk(n: i64) -> E { let mut v: Vec[i64] = Vec.new(); v.push(n); return E.A(R { id: n, v: v }) }
+fn mkq(n: i64) -> Q { return Q.A(P { id: n }) }
+
+fn leg_bare() {
+    println("bare");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    match v[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("bare end");
+}
+
+fn leg_field_rooted() {
+    println("field");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let h = H { xs: v };
+    match h.xs[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("field end");
+}
+
+fn leg_scalar_payload() {
+    println("scalar");
+    let mut v: Vec[Q] = Vec.new();
+    v.push(mkq(3));
+    match v[0] { Q.A(p) => { println(f"got {p.id}"); } Q.B => { } }
+    println("scalar end");
+}
+
+fn leg_unbound() {
+    println("wild");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    match v[0] { E.A(_) => { println("got"); } E.B => { } }
+    println("wild end");
+}
+
+fn leg_fresh() {
+    println("fresh");
+    match mk(5) { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("fresh end");
+}
+
+fn leg_local() {
+    println("local");
+    let e = mk(6);
+    match e { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
+    println("local end");
+}
+
+fn main() {
+    leg_bare();
+    leg_field_rooted();
+    leg_scalar_payload();
+    leg_unbound();
+    leg_fresh();
+    leg_local();
+    println("end");
+}
+"#),
+        r#"bare
+got 2
+dE
+dR1
+bare end
+field
+got 3
+dE
+dR2
+field end
+scalar
+got 3
+dQ
+dP3
+scalar end
+wild
+got
+dE
+dR4
+wild end
+fresh
+got 6
+dR5
+dE
+fresh end
+local
+got 7
+dE
+dR6
+local end
 end
 "#
     );

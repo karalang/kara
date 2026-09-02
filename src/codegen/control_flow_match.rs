@@ -461,6 +461,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_owned_param_flag = self.pattern_state.pattern_binding_scrutinee_is_owned_param;
         self.pattern_state.pattern_binding_scrutinee_is_owned_param =
             self.scrutinee_is_owned_param_binding(scrutinee);
+        // B-2026-09-02-11 — scrutinee is a heap-element INDEX read, so what the
+        // arms destructure is the defensive deep clone made just below
+        // (`clone_owned_vec_index_element` / the field-rooted sibling). The
+        // container still owns the element and runs its payload's body at its
+        // own death, so a body on the clone's binding is a second fire.
+        let saved_owned_elem_clone_flag = self
+            .pattern_state
+            .pattern_binding_scrutinee_is_owned_elem_clone;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_owned_elem_clone = self.expr_is_heap_vec_index(scrutinee)
+            || self.expr_is_heap_vec_index_field_rooted(scrutinee);
         // B-2026-08-02-25 (match-arm leg) — the source binding's payload-bodies
         // walk is armed HERE, before any arm's suppressor runs. A consuming arm
         // retracts it; for a BOXED payload that walk is the body's only fire
@@ -1460,6 +1471,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_state
             .pattern_binding_scrutinee_is_fresh_owning_temp = saved_fresh_temp_flag;
         self.pattern_state.pattern_binding_scrutinee_is_owned_param = saved_owned_param_flag;
+        self.pattern_state
+            .pattern_binding_scrutinee_is_owned_elem_clone = saved_owned_elem_clone_flag;
         self.pattern_state
             .pattern_binding_scrutinee_payload_bodies_src = saved_bodies_src;
         self.pattern_state.pattern_binding_scrutinee_optres_slot = saved_optres_slot;

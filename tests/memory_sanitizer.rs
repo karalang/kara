@@ -1589,6 +1589,65 @@ fn main() {
         );
     }
 
+    /// B-2026-09-02-11 — the memory half of "withhold the payload's body, keep
+    /// the copy", one level in from the row above.
+    ///
+    /// The fix routes an indexed-element clone's payload binding from the
+    /// `karac_drop_<T>` wrapper (body + field cleanup) to the memory-only
+    /// `track_struct_var` channel, exactly as the owned-param caller-retains
+    /// case already did. The wrapper was freeing the clone's buffers, so the
+    /// failure mode the change could have introduced is a leak of precisely
+    /// those — invisible to any output comparison, and what LSan is here for.
+    ///
+    /// The `match` runs three times over the same element, so the clone is made
+    /// and destroyed three times while the container keeps owning the original.
+    /// A `Vec[String]` payload puts real element buffers behind each clone: a
+    /// lost memory registration leaks six of them, and a double registration
+    /// frees the container's out from under it.
+    #[test]
+    fn asan_indexed_element_clone_frees_once_without_rerunning_the_body() {
+        let Some((out, status)) = run_under_asan(
+            r#"struct R { id: i64, v: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+
+fn mk(n: i64) -> E {
+    let mut v: Vec[String] = Vec.new();
+    v.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    v.push(f"tag{n}");
+    return E.A(R { id: n, v: v })
+}
+
+fn main() {
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(7));
+    let mut i = 0;
+    while i < 3 {
+        match xs[0] { E.A(r) => { println(f"n{r.id} {r.v.len()}"); } E.B => { } }
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            "asan_indexed_element_clone_frees_once_without_rerunning_the_body",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        // One `dR7` — the container's, at its own NLL death. Four would be the
+        // pre-fix count (one per clone plus the container's).
+        assert_eq!(
+            out.matches("dR7").count(),
+            1,
+            "unexpected Drop body count:\n{out}"
+        );
+        assert_eq!(
+            out.matches("n7 2").count(),
+            3,
+            "the clone did not carry a live payload on every pass:\n{out}"
+        );
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///

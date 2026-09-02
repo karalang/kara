@@ -1095,12 +1095,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if payload_of_owned_param {
                                     self.payload_vars.param_view_locals.insert(name.clone());
                                 }
+                                // B-2026-09-02-11 — the same split for a
+                                // heap-ELEMENT index scrutinee. `match v[i]`
+                                // destructures a defensive deep clone of an
+                                // element the container still owns, so the
+                                // container runs the payload's body at its own
+                                // death and a body here is the second fire —
+                                // measured `got 4 dR3 dE dR3` on all three
+                                // compiled surfaces against `--interp`'s
+                                // `got 4 dE dR3`. Memory-only keeps the CLONE's
+                                // own buffer freed (the same free the wrapper
+                                // was doing), so this is a bodies-only change.
                                 if self.drop_rc.user_drop_wrapper_fns.contains_key(tn)
                                     && self
                                         .pattern_state
                                         .current_variant_payload_bindings
                                         .contains(name.as_str())
                                     && !self.pattern_state.pattern_binding_scrutinee_is_owned_param
+                                    && !self
+                                        .pattern_state
+                                        .pattern_binding_scrutinee_is_owned_elem_clone
                                 {
                                     let tn_owned = tn.to_string();
                                     let name_owned = name.clone();
