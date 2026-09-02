@@ -44,6 +44,31 @@ pub(crate) fn binding_only_read_through(name: &str, e: &Expr) -> bool {
     t.verdict()
 }
 
+/// B-2026-08-31-3 — [`binding_only_read_through`] with a callee-mode oracle.
+///
+/// Identical except that a bare `name` handed to a FREE call whose parameter at
+/// that position is a borrow counts as a read rather than a use, which is what
+/// design.md's use-predicate table says ("`f(v)` where `f`'s parameter is
+/// declared `ref` or `mut ref` | read"). `borrows` is called with the callee
+/// expression and the argument index; answering `true` for a callee it cannot
+/// resolve is the safe direction for its one caller, a hard error.
+///
+/// METHOD calls stay mode-blind, deliberately: resolving a receiver's method
+/// needs the receiver's type, which this walk does not have, and the
+/// conservative answer there is "a use", which can only under-accept.
+pub(crate) fn binding_only_read_through_borrow_aware(
+    name: &str,
+    e: &Expr,
+    borrows: &BorrowOracle<'_>,
+) -> bool {
+    let mut t = Tally {
+        borrows: Some(borrows),
+        ..Default::default()
+    };
+    walk_expr(name, e, &mut t);
+    t.verdict()
+}
+
 /// `Block` sibling of [`binding_only_read_through`], for the `if let`
 /// `then_block` / `while let` body scopes where the binding lives directly in a
 /// block rather than in a single arm expression.
@@ -86,8 +111,26 @@ pub(crate) fn binding_only_nested_match_scrutinee_block(name: &str, b: &Block) -
     !t.captured && t.mentions > 0 && t.mentions == t.match_scrutinee
 }
 
+/// B-2026-08-31-3 — "does the callee at this argument position take a borrow?",
+/// answered by whoever has the signatures. Named rather than spelled inline so
+/// the three places that pass it around agree, and so `Tally` stays readable.
+type BorrowOracle<'a> = dyn Fn(&Expr, usize) -> bool + 'a;
+
 #[derive(Default)]
-struct Tally {
+struct Tally<'a> {
+    /// B-2026-08-31-3 — optional callee-mode oracle. `Some(f)` makes a bare
+    /// `name` in a free-call ARGUMENT position count as a read-through when
+    /// `f(callee, idx)` says the parameter at that index is a borrow.
+    ///
+    /// The default walk is mode-BLIND and tallies every call argument as a use
+    /// of the binding, which is right for its own callers (they ask "was the
+    /// value materialized?", and a callee that borrows still forces the arm to
+    /// have something to lend). It is wrong for a caller asking design.md's
+    /// use-predicate question — "`f(v)` where `f`'s parameter is declared `ref`
+    /// or `mut ref` | read" — and `println(s)` is the shape that proves it: the
+    /// single most common thing an arm does with a payload, and a consume under
+    /// the blind walk.
+    borrows: Option<&'a BorrowOracle<'a>>,
     /// Every `Identifier(name)` node seen, at any depth.
     mentions: usize,
     /// The subset of those that sit directly under a projection or as a
@@ -104,7 +147,7 @@ struct Tally {
     captured: bool,
 }
 
-impl Tally {
+impl Tally<'_> {
     fn verdict(&self) -> bool {
         !self.captured && self.mentions == self.read_through
     }
@@ -114,7 +157,7 @@ fn is_bare(name: &str, e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Identifier(n) if n == name)
 }
 
-fn walk_expr(name: &str, e: &Expr, t: &mut Tally) {
+fn walk_expr(name: &str, e: &Expr, t: &mut Tally<'_>) {
     if is_bare(name, e) {
         t.mentions += 1;
     }
@@ -188,8 +231,21 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally) {
             walk_expr(name, b, t);
         }
         // ── Calls ─────────────────────────────────────────────────────────
-        ExprKind::Call { callee: obj, args }
-        | ExprKind::MethodCall {
+        ExprKind::Call { callee: obj, args } => {
+            walk_expr(name, obj, t);
+            for (i, a) in args.iter().enumerate() {
+                // B-2026-08-31-3 — a borrow-position argument is a READ. Only
+                // with an oracle: without one this falls through to the mention
+                // tally exactly as before.
+                if is_bare(name, &a.value) && t.borrows.is_some_and(|f| f(obj, i)) {
+                    t.mentions += 1;
+                    t.read_through += 1;
+                    continue;
+                }
+                walk_expr(name, &a.value, t);
+            }
+        }
+        ExprKind::MethodCall {
             object: obj, args, ..
         } => {
             walk_expr(name, obj, t);
@@ -328,7 +384,7 @@ fn walk_expr(name: &str, e: &Expr, t: &mut Tally) {
     }
 }
 
-fn walk_block(name: &str, b: &Block, t: &mut Tally) {
+fn walk_block(name: &str, b: &Block, t: &mut Tally<'_>) {
     for s in &b.stmts {
         walk_stmt(name, s, t);
     }
@@ -337,7 +393,7 @@ fn walk_block(name: &str, b: &Block, t: &mut Tally) {
     }
 }
 
-fn walk_stmt(name: &str, s: &Stmt, t: &mut Tally) {
+fn walk_stmt(name: &str, s: &Stmt, t: &mut Tally<'_>) {
     match &s.kind {
         StmtKind::Let { value, .. } => walk_expr(name, value, t),
         StmtKind::LetUninit { .. } => {}

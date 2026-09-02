@@ -11599,7 +11599,7 @@ fn leg_vec_index() {
     println("index");
     let mut v = Vec.new();
     v.push(mk(3));
-    match v[0] { E.A(r) => { let m = r; println(f"got {m.id + m.v.len()}"); } E.B => { } }
+    match v[0] { E.A(r) => { println(f"got {r.id + r.v.len()}"); } E.B => { } }
     println("index end");
 }
 
@@ -11680,10 +11680,21 @@ end
     ///     other owner, so its `dE` MUST still fire; if the fix over-reached and
     ///     silenced this one, B-2026-07-11-26 regresses and this leg catches it.
     ///
-    /// The arms all use `let m = r` rather than a consuming call on purpose: a
-    /// consuming `eat(r)` makes the INTERPRETER skip the payload's own body on
-    /// the `index` leg (one `dR3` where the compiled backends run two), which is
-    /// a separate divergence this fixture must not be sensitive to.
+    /// The arms use `let m = r` rather than a consuming call on purpose: a
+    /// consuming `eat(r)` makes the INTERPRETER skip the payload's own body,
+    /// which is a separate divergence this fixture must not be sensitive to.
+    ///
+    /// The `index` leg is the ONE exception, and B-2026-08-31-3 is why: that
+    /// divergence turned out to be a program design.md does not sanction —
+    /// `v[i]` is a borrow of an element the container still owns, so no arm
+    /// binding may be consumed out of it — and `let m = r` is a consume just as
+    /// much as `eat(r)` is. So that leg reads THROUGH the binding instead. The
+    /// expectation is unchanged: the compiled output was `index got 4 dR3 dE
+    /// dR3` with the rebind and is `index got 4 dR3 dE dR3` without it, which is
+    /// what shows the leg still exercises the defensive copy rather than having
+    /// been quietly weakened. The other three legs are untouched — a `ref`-chain
+    /// field, a `for`-loop element and a fresh temp are all owned or borrowed
+    /// places the rule has nothing to say about.
     #[test]
     fn e2e_defensive_scrutinee_copy_does_not_rerun_the_enum_own_drop_body() {
         let Some(out) = run_program(SCRUTINEE_CLONE_DROP_BODY_SRC) else {

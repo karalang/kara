@@ -207,6 +207,15 @@ impl<'a> super::TypeChecker<'a> {
         let scrut_ty = self.infer_expr(scrutinee);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
+        // B-2026-08-31-3 — the CHECK-position twin of `infer_match`'s gate, and
+        // it is not optional: a `match` in TAIL position (the last statement of
+        // a function, an arm body, a `let` initializer) comes through here and
+        // never touches `infer_match` at all. The rule fired on
+        // `match v[0] { .. } println("end");` and stayed silent on the same
+        // program with the trailing `println` removed, which is exactly this
+        // split and nothing about the shape being checked.
+        let scrut_borrows_an_element =
+            self.index_read_names_a_borrowed_element(scrutinee, &dispatch_ty);
         let mut arm_types: Vec<Type> = Vec::new();
         let mut scrutinee_mismatch = false;
         for arm in arms {
@@ -230,6 +239,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             let arm_ty = self.check_expr(&arm.body, expected);
+            if scrut_borrows_an_element {
+                self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
+            }
             arm_types.push(arm_ty);
             self.local_scope.pop();
         }
@@ -252,10 +264,145 @@ impl<'a> super::TypeChecker<'a> {
         result_ty
     }
 
+    /// B-2026-08-31-3 — reject an arm binding that is CONSUMED out of a `v[i]`
+    /// scrutinee.
+    ///
+    /// design.md § The index operator: "`v[i]` evaluates to `ref T` ... an index
+    /// expression *produces a borrow*, not a value", and § Match Arm Binding
+    /// Modes: "If the scrutinee is a `ref T` borrow ... **no arm binding may
+    /// consume a field**." Put together, `match v[0] { E.A(r) => eat(r) }` moves
+    /// the element's payload out of a container that still owns it -- the same
+    /// program `let t = v[0]` is already rejected for, one level up.
+    ///
+    /// WHY REJECT RATHER THAN PICK A BACKEND. Both backends accepted it and
+    /// improvised: the compiled ones treat the arm binding as a move and run the
+    /// payload's `Drop` body TWICE (once in the callee, once in the container's
+    /// element walk at the vector's death), the interpreter hands the callee a
+    /// view and runs it once. That is not a defect to arbitrate -- it is
+    /// design.md's own argument for the sibling rule, verbatim: "That
+    /// disagreement was not a backend defect to arbitrate -- it was a program
+    /// the language never sanctioned, and each backend had filled the gap in
+    /// good faith."
+    ///
+    /// The gate is [`TypeChecker::index_read_names_a_borrowed_element`], shared
+    /// with `reject_index_move_non_copy`, so every exemption that rule carries
+    /// -- a range slice, an SoA layout, a `shared` handle, a function value, a
+    /// `Copy` element -- is an exemption here. A shape that is not a move one
+    /// level up is not a move here either.
+    ///
+    /// CONSUMPTION is `binding_use::binding_only_read_through`'s complement: a
+    /// binding is fine while every occurrence is a projection, a method
+    /// receiver, or a write through one of those, and is consumed the moment it
+    /// appears as a bare value -- a call argument, a `let` right-hand side, an
+    /// aggregate element, a returned or tail value. A binding used only as a
+    /// NESTED match scrutinee is admitted too: that is a read, and its own arms
+    /// answer this question for themselves.
+    ///
+    /// The fix-its are the ones that exist. Reading in place needs no change;
+    /// taking the element OUT of the container first (`v.remove(i)`, `v.pop()`)
+    /// makes the move legal by making the container smaller; and `.clone()` is
+    /// offered only when the element type has one, following the sibling's rule
+    /// that a fix-it which does not exist is not a fix-it.
+    /// B-2026-08-31-3 — the arm bindings that are CONSUMED, per design.md's
+    /// use-predicate table.
+    ///
+    /// Free rather than a method so its callee-mode oracle borrows the
+    /// signature map alone; the caller needs `&mut self` for the diagnostics it
+    /// emits afterwards.
+    fn consuming_arm_bindings(
+        functions: &rustc_hash::FxHashMap<String, super::env::FunctionSig>,
+        arm: &MatchArm,
+    ) -> Vec<String> {
+        let borrows = |callee: &Expr, idx: usize| -> bool {
+            let ExprKind::Identifier(fname) = &callee.kind else {
+                return true;
+            };
+            match functions.get(fname.as_str()) {
+                Some(sig) => sig
+                    .params
+                    .get(idx)
+                    .is_none_or(|p| matches!(p, Type::Ref(_) | Type::MutRef(_))),
+                None => true,
+            }
+        };
+        crate::cfg::pattern_bindings(&arm.pattern)
+            .into_iter()
+            .filter(|name| name != "_")
+            .filter(|name| {
+                !crate::binding_use::binding_only_read_through_borrow_aware(
+                    name, &arm.body, &borrows,
+                ) && !crate::binding_use::binding_only_nested_match_scrutinee(name, &arm.body)
+            })
+            .collect()
+    }
+
+    fn reject_consuming_arm_binding_out_of_index(&mut self, scrut_ty: &Type, arm: &MatchArm) {
+        // The scrutinee's clone-ability, because `v[i].clone()` is the fix-it
+        // being offered -- the binding's own type is not what the programmer
+        // would write `.clone()` on.
+        let clone_hint = if self.type_supports_clone(scrut_ty) {
+            ", or match on an independent copy (`v[i].clone()`)"
+        } else {
+            " (no `.clone()` is offered: this element type does not have one)"
+        };
+        // design.md's use-predicate table, not the mode-BLIND walk: "`f(v)`
+        // where `f`'s parameter is declared `ref` or `mut ref` | read". Without
+        // it `println(s)` -- the single most common thing an arm does with a
+        // payload -- reads as a consume and the rule rejects correct code.
+        //
+        // A callee this cannot resolve answers "borrows", so the rule stays
+        // silent on any shape it cannot see through. That is the safe direction
+        // for a hard error: an under-fire leaves today's divergence in place,
+        // an over-fire rejects a working program.
+        //
+        // Computed by a FREE function taking only the signature map, so the
+        // oracle closure never captures `self` — a `&dyn Fn` that did would tie
+        // its lifetime to the `&mut self` the diagnostics below need.
+        let offenders = Self::consuming_arm_bindings(&self.env.functions, arm);
+        for name in offenders {
+            // The BINDING's type, not the scrutinee's. Consuming a `Copy`
+            // payload out of a borrowed enum copies it and leaves the container
+            // whole -- `match program[pc] { Push(n) => stack.push(n) }` over
+            // `Push(i64)` moves nothing. Gating on the scrutinee alone rejected
+            // that, and `examples/vm.kara` caught it on the first run.
+            let Some(binding_ty) = self.local_scope.lookup(&name).cloned() else {
+                continue;
+            };
+            if !self.type_cannot_leave_a_borrowed_place(&binding_ty) {
+                continue;
+            }
+            self.type_error(
+                format!(
+                    "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index \
+                     expression: this arm consumes `{name}`, which names a value inside \
+                     `v[i]` -- and `v[i]` evaluates to `ref T`, so consuming it moves the \
+                     element out of a container that cannot represent the hole. Read \
+                     `{name}` in place, or take the element out of the container first \
+                     (`v.remove(i)`, `v.pop()`){clone_hint}"
+                ),
+                arm.pattern.span,
+                TypeErrorKind::IndexMoveNonCopy,
+            );
+        }
+    }
+
     pub(super) fn infer_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: &Span) -> Type {
         let scrut_ty = self.infer_expr(scrutinee);
         let (mode, dispatch_ty) = ScrutineeMode::classify(&scrut_ty);
         let dispatch_ty = dispatch_ty.clone();
+        // B-2026-08-31-3 — a `v[i]` scrutinee is a BORROW of an element the
+        // container still owns, so no arm binding may be consumed out of it.
+        // Computed once, before the arm loop, because it is a property of the
+        // scrutinee alone.
+        //
+        // `dispatch_ty`, NOT `scrut_ty`, for the reason B-2026-08-15-11 gives
+        // one gate over: `v[i]` infers as `ref E`, a REFERENCE is `Copy`, and
+        // the gate's own `Copy` exemption then answered "nothing moves here"
+        // for every index scrutinee there is. Peeling is not a relaxation —
+        // borrowing a value does not change what its arms can do with it, and
+        // the peeled type is what every arm was checked against.
+        let scrut_borrows_an_element =
+            self.index_read_names_a_borrowed_element(scrutinee, &dispatch_ty);
         let mut arm_types: Vec<Type> = Vec::new();
         let mut scrutinee_mismatch = false;
 
@@ -280,6 +427,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             let arm_ty = self.infer_expr(&arm.body);
+            if scrut_borrows_an_element {
+                self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
+            }
             arm_types.push(arm_ty);
             self.local_scope.pop();
         }

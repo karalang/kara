@@ -48339,6 +48339,121 @@ fn borrow_projection_copy_covers_the_copying_shapes_and_exempts_the_rest() {
     );
 }
 
+/// B-2026-08-31-3 — a `match v[i]` arm may not CONSUME its binding.
+///
+/// design.md § The index operator says `v[i]` "evaluates to `ref T` ... an
+/// index expression *produces a borrow*, not a value", and § Match Arm Binding
+/// Modes says that under a `ref T` scrutinee "no arm binding may consume a
+/// field". Put together, `match v[0] { E.A(r) => eat(r) }` moves a payload out
+/// of a container that still owns it — the same program `let t = v[0]` has
+/// been rejected for since B-2026-08-26-21, one level up.
+///
+/// It was accepted, and the two backends improvised different answers: the
+/// compiled ones treated the binding as a move and ran the payload's `Drop`
+/// body TWICE (`got 3 dR3 dE dR3`), the interpreter handed the callee a view
+/// and ran it once (`got 3 dE dR3`). Rejecting the form removes the question
+/// rather than answering it, which is design.md's own stated reason for the
+/// sibling rule.
+///
+/// THE THREE BOUNDARIES are what keep this from being a blunt instrument, and
+/// the third one is not hypothetical: gating on the SCRUTINEE's type alone
+/// rejected `examples/vm.kara`, whose `match program[pc] { Push(n) => ... }`
+/// consumes an `i64`.
+#[test]
+fn match_over_an_index_rejects_a_consuming_arm_binding() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         fn eat(r: R) -> i64 { return r.id; }\n\
+         fn mkv() -> Vec[E] { let mut v: Vec[E] = Vec.new(); v.push(E.A(R { id: 3 })); return v }\n";
+    // Counts this rule's hits without asserting anything else about the
+    // program, so the boundary rows -- which must produce zero errors of any
+    // kind -- go through the same path as the firing ones.
+    fn hits(src: &str) -> usize {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "parse errors in the fixture");
+        let resolved = resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve errors in the fixture");
+        typecheck(&parsed.program, &resolved)
+            .errors
+            .iter()
+            .filter(|e| e.message.contains("E_INDEX_MOVE_NON_COPY"))
+            .count()
+    }
+    let fires = |body: &str| -> usize {
+        hits(&format!(
+            "{H}fn main() {{ let v: Vec[E] = mkv(); {body} }}\n"
+        ))
+    };
+
+    // The row's repro: the binding is handed to a by-value callee.
+    assert_eq!(
+        fires("match v[0] { E.A(r) => { println(f\"got {eat(r)}\"); } E.B => { } }"),
+        1,
+        "`eat` owns its parameter, so this moves the payload out of `v`"
+    );
+    // The `let` spelling of the same move. The row measured it as AGREEING
+    // across backends (two bodies everywhere) -- agreement on a program the
+    // language does not sanction is not a reason to keep it.
+    assert_eq!(
+        fires("match v[0] { E.A(r) => { let m: R = r; println(f\"got {m.id}\"); } E.B => { } }"),
+        1,
+        "a rebind is a consume just as much as a call argument is"
+    );
+
+    // BOUNDARY 1 -- reading THROUGH the binding is exactly what the borrow
+    // permits, and it must stay legal.
+    assert_eq!(
+        fires("match v[0] { E.A(r) => { println(f\"got {r.id}\"); } E.B => { } }"),
+        0,
+        "a projection off the binding reads through the borrow and moves nothing"
+    );
+    // BOUNDARY 1b -- a BORROW-position call argument is a read, per design.md's
+    // use-predicate table ("`f(v)` where `f`'s parameter is declared `ref` or
+    // `mut ref` | read"). This is the row that forced the predicate to consult
+    // the callee's mode at all: the mode-blind walk counts every call argument
+    // as a use, and `println(s)` is the single most common thing an arm does
+    // with a payload.
+    assert_eq!(
+        hits(
+            "enum Tok { Word(String), End }\n\
+             fn main() {\n\
+                 let mut es: Vec[Tok] = Vec.new();\n\
+                 es.push(Tok.Word(f\"w\"));\n\
+                 match es[0] { Tok.Word(s) => println(s), Tok.End => println(\"end\") }\n\
+             }\n"
+        ),
+        0,
+        "`println` borrows its argument, so this reads the payload rather than moving it"
+    );
+    // BOUNDARY 2 -- the scrutinee is an OWNED local, not an index, so the arm
+    // may move freely. This is the fix-it the rule offers.
+    assert_eq!(
+        hits(&format!(
+            "{H}fn main() {{ let mut v: Vec[E] = mkv(); let e: E = v.pop().unwrap(); \
+             match e {{ E.A(r) => {{ println(f\"got {{eat(r)}}\"); }} E.B => {{ }} }} }}\n"
+        )),
+        0,
+        "taking the element OUT of the container first is the sanctioned spelling"
+    );
+    // BOUNDARY 3 -- a `Copy` payload copies out of the borrow and leaves the
+    // container whole. This is `examples/vm.kara`'s shape, and gating on the
+    // SCRUTINEE's type rather than the BINDING's rejected it.
+    assert_eq!(
+        hits(
+            "enum Instr { Push(i64), Nop }\n\
+             fn take(n: i64) -> i64 { return n; }\n\
+             fn main() {\n\
+                 let mut p: Vec[Instr] = Vec.new();\n\
+                 p.push(Instr.Push(7));\n\
+                 match p[0] { Instr.Push(n) => { println(take(n)); } Instr.Nop => { } }\n\
+             }\n"
+        ),
+        0,
+        "an `i64` payload copies out of the borrowed element; nothing leaves the container"
+    );
+}
+
 /// B-2026-09-01-4 — the `.clone()` fix-it, and its absence.
 ///
 /// The edit is behaviour-PRESERVING (the read already copies; `.clone()` only

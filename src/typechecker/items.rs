@@ -4697,6 +4697,65 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// B-2026-08-31-3 — the GATE of [`Self::reject_index_move_non_copy`],
+    /// extracted so the match-arm rule below asks the identical question.
+    ///
+    /// True when `value` is an index expression that NAMES an element the
+    /// container still owns and whose type cannot be read out by value —
+    /// exactly the set that function rejects. Every exemption it carries is an
+    /// exemption here, which is the point of sharing one body: a shape that is
+    /// not a move at `let t = v[i]` is not a move one level down either.
+    pub(super) fn index_read_names_a_borrowed_element(&self, value: &Expr, ty: &Type) -> bool {
+        if !matches!(value.kind, ExprKind::Index { .. }) {
+            return false;
+        }
+        if self
+            .index_read_is_fresh_value
+            .contains(&SpanKey::from_span(&value.span))
+        {
+            return false;
+        }
+        if let ExprKind::Index { object, .. } = &value.kind {
+            if self.index_object_has_soa_layout(object) {
+                return false;
+            }
+        }
+        if let Type::Named { name, args } = ty {
+            if args.is_empty() && self.struct_has_soa_layout(name) {
+                return false;
+            }
+        }
+        self.type_cannot_leave_a_borrowed_place(ty)
+    }
+
+    /// B-2026-08-31-3 — the TYPE-only half of the gate above, so the match-arm
+    /// rule can ask it of a BINDING rather than of the scrutinee.
+    ///
+    /// A `Copy` element, a `shared` handle and a function value all copy out of
+    /// a borrowed place without leaving a hole, which is why the sibling rule
+    /// exempts each of them; `Error` / `Never` are recovery types and carry no
+    /// ownership story. Everything else has to stay where it is.
+    ///
+    /// Asking this per BINDING is what keeps the match-arm rule honest:
+    /// `match program[pc] { Push(n) => stack.push(n) }` over
+    /// `enum Instr { Push(i64) }` consumes `n`, and `n` is an `i64` — nothing
+    /// moves out of `program`. Gating on the SCRUTINEE's type alone rejected
+    /// that, which is a false positive `examples/vm.kara` caught immediately.
+    pub(super) fn type_cannot_leave_a_borrowed_place(&self, ty: &Type) -> bool {
+        if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
+            return false;
+        }
+        if matches!(ty, Type::Shared(_))
+            || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
+        {
+            return false;
+        }
+        if matches!(ty, Type::Function { .. }) {
+            return false;
+        }
+        true
+    }
+
     pub(super) fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
         if !matches!(value.kind, ExprKind::Index { .. }) {
             return;
