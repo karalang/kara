@@ -51771,13 +51771,13 @@ fn test_wildcard_let_discard_owns_what_its_arm_hands_out() {
         let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
         assert_eq!(run(&src).trim(), want, "[{label}]");
     }
-    // PINNED AT A KNOWN DIVERGENCE, not asserted as correct, and pinned on the
-    // side that FIRES. A bare arm handing out a HEAP-carrying `Option` payload
-    // runs the body here and on neither compiled backend — the
-    // boxed-`Option`-payload channel. PRE-EXISTING: the bare-STATEMENT
-    // spelling of the same program diverged the same way before this row, and
-    // the same bare arm over a USER enum, or over an `Option` whose payload
-    // carries no heap, is correct on all three. Filed separately.
+    // B-2026-08-31-28 — this was PINNED DIVERGENT here, on the side that
+    // fires: a bare arm handing out a HEAP-carrying `Option` payload ran the
+    // body under `--interp` and on neither compiled backend. The compiled
+    // half is fixed, so it is asserted as agreement now rather than pinned as
+    // a divergence. The interpreter's answer never changed — it was the
+    // correct column throughout, which is why this assertion reads the same
+    // as it did while it was a pin.
     let boxed = format!(
         "{hdr}fn main() {{\n\
          let o: Option[R] = Some(mk(1));\n\
@@ -51787,7 +51787,20 @@ fn test_wildcard_let_discard_owns_what_its_arm_hands_out() {
     assert_eq!(
         run(&boxed).trim(),
         "dR1\nend",
-        "[pinned DIVERGENT: bare arm handing out a heap-carrying Option payload]"
+        "[bare arm handing out a heap-carrying Option payload, B-2026-08-31-28]"
+    );
+    // The bare-STATEMENT spelling, which diverged the same way and is closed
+    // by the same guard.
+    let boxed_stmt = format!(
+        "{hdr}fn main() {{\n\
+         let o: Option[R] = Some(mk(1));\n\
+         match o {{ Some(r) => r, None => mk(9) }};\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(
+        run(&boxed_stmt).trim(),
+        "dR1\nend",
+        "[bare STATEMENT spelling, B-2026-08-31-28]"
     );
 }
 

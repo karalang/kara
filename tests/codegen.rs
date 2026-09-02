@@ -24671,6 +24671,7 @@ fn main() {
     fn e2e_wildcard_let_discard_owns_what_its_arm_hands_out() {
         let hdr = "struct R { id: i64, name: String }\n\
                    impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+                   enum OptR { Has(R), Non }\n\
                    fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n";
         for (label, body, want) in [
             // ── the tail names an ENCLOSING LOCAL ─────────────────────────
@@ -24767,30 +24768,49 @@ fn main() {
                 "let o: Option[R] = Some(mk(1));\nmatch o { Some(r) => { r } None => { mk(9) } };",
                 "dR1\nend\n",
             ),
+            // B-2026-08-31-28 — the BARE-arm spellings of the two rows above,
+            // which were pinned DIVERGENT at the bottom of this fixture until
+            // that row closed. The bodies retraction two lines below the
+            // memory one in `compile_match` never took the
+            // `branch_value_is_owned` guard the memory half took in
+            // B-2026-08-28-66, so a discarded match handed the payload's body
+            // to a destination that does not exist and it ran nowhere.
+            (
+                "match bare arm — payload binding handed out [B-2026-08-31-28]",
+                "let o: Option[R] = Some(mk(1));\nlet _ = match o { Some(r) => r, None => mk(9) };",
+                "dR1\nend\n",
+            ),
+            (
+                "match bare arm — bare statement, payload binding handed out [B-2026-08-31-28]",
+                "let o: Option[R] = Some(mk(1));\nmatch o { Some(r) => r, None => mk(9) };",
+                "dR1\nend\n",
+            ),
+            // The three controls that localized it to the intersection rather
+            // than to any one axis: braces, a USER enum, and a payload that
+            // carries no heap were each correct throughout.
+            (
+                "control: bare arm over a USER enum [B-2026-08-31-28]",
+                "let e: OptR = OptR.Has(mk(1));\nlet _ = match e { OptR.Has(r) => r, OptR.Non => mk(9) };",
+                "dR1\nend\n",
+            ),
+            (
+                "control: bare arm, value CONSUMED rather than discarded",
+                "let o: Option[R] = Some(mk(1));\nlet x = match o { Some(r) => r, None => mk(9) };\nprintln(f\"{x.id}\");",
+                "1\ndR1\nend\n",
+            ),
+            (
+                "control: bare arm binds the payload but yields something else",
+                "let o: Option[R] = Some(mk(1));\nlet _ = match o { Some(r) => mk(5), None => mk(9) };",
+                "dR1\ndR5\nend\n",
+            ),
         ] {
             let src = format!("{hdr}fn main() {{\nlet n = 0;\n{body}\nprintln(\"end\");\n}}\n");
             assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
         }
-        // PINNED AT A KNOWN DIVERGENCE, not asserted as correct. A BARE arm
-        // (no braces) handing out a HEAP-carrying `Option` payload is silent
-        // on both compiled backends and fires on the interpreter. It is the
-        // boxed-`Option`-payload channel and it is PRE-EXISTING: the
-        // BARE-STATEMENT spelling of the same program diverged the same way
-        // before this row. Narrowed by measurement — the same bare arm over a
-        // USER enum, or over an `Option` whose payload carries no heap, fires
-        // on all three. Filed separately; this row's widening neither caused
-        // it nor could reach it.
-        let boxed = format!(
-            "{hdr}fn main() {{\n\
-             let o: Option[R] = Some(mk(1));\n\
-             let _ = match o {{ Some(r) => r, None => mk(9) }};\n\
-             println(\"end\");\n}}\n"
-        );
-        assert_eq!(
-            run_program(&boxed).as_deref(),
-            Some("end\n"),
-            "[pinned DIVERGENT: bare arm handing out a heap-carrying Option payload]"
-        );
+        // The BARE-arm divergence this fixture used to pin here is CLOSED
+        // (B-2026-08-31-28) and its shapes are asserted in the table above,
+        // alongside the three controls that localized it. Nothing is pinned
+        // divergent in this fixture any more.
     }
 
     #[test]

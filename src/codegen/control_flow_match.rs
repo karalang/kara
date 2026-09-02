@@ -1243,9 +1243,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 // this the destination binding's body and the source's
                 // re-homed walk both fired — two bodies for one value, the
                 // second over the moved-from slot.
-                if let ExprKind::Identifier(nm) = &arm.body.kind {
-                    let nm = nm.clone();
-                    self.suppress_container_elem_bodies_for_var(&nm);
+                //
+                // B-2026-08-31-28 — gated on `owns_result`, in lockstep with
+                // the memory half directly above (the B-2026-08-28-67 rule).
+                // That call took the guard in B-2026-08-28-66 and this one,
+                // two lines below it, did not — so a DISCARDED match still
+                // retracted the source's bodies walk while handing the value
+                // to nobody, and the payload's `Drop` body ran on neither
+                // compiled backend:
+                //
+                //     let _ = match o { Some(r) => r, None => mk(9) };
+                //     --interp dR1      karac run / build (nothing)
+                //
+                // The retraction is a HANDOVER, exactly as the memory half's
+                // comment argues: it takes the body away from the source so
+                // the destination's own drop can run it. With no destination
+                // there is nothing to hand to, and the body is simply lost.
+                //
+                // Three controls say it is the intersection and not one axis:
+                // the BRACED spelling of the same arm is correct (a Block is
+                // not an `Identifier`, so this never fired for it and the
+                // box's walk still ran the body), a USER enum is correct, and
+                // an `Option` whose payload carries no heap is correct. Only a
+                // boxed payload handed out of a bare arm reaches here.
+                if owns_result {
+                    if let ExprKind::Identifier(nm) = &arm.body.kind {
+                        let nm = nm.clone();
+                        self.suppress_container_elem_bodies_for_var(&nm);
+                    }
                 }
                 // Move-aware, Map/Set variant: `match opt { Some(m) => m }`
                 // returns the bound Map/Set by identity into the match result
