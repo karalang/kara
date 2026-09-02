@@ -26,14 +26,24 @@ extern "C" {
 }
 
 extern "C" {
-    /// C11 / POSIX aligned allocation. Returns 0 on success and writes the
+    /// POSIX aligned allocation. Returns 0 on success and writes the
     /// pointer through `memptr`; returns an errno value (EINVAL / ENOMEM)
     /// on failure WITHOUT setting `errno`. Memory it returns is freed with
     /// plain `free`, which is why the aligned path below needs no free-side
     /// counterpart (POSIX.1-2008 posix_memalign, and C11 7.22.3.1 for
     /// `aligned_alloc`, both make `free` the correct deallocator).
+    ///
+    /// **Not declared on Windows** (B-2026-09-01-45). The MSVC CRT has no
+    /// `free`-compatible aligned allocator at all, so this is not a spelling
+    /// difference that a rename would paper over: `posix_memalign` does not
+    /// exist there, `_aligned_malloc` demands `_aligned_free` (plain `free` on
+    /// its memory is undefined), and C11 `aligned_alloc` is deliberately
+    /// unimplemented for exactly that incompatibility. Declaring the symbol
+    /// unconditionally is what left `karac-runtime` unlinkable on Windows
+    /// (`LNK2019: unresolved external symbol posix_memalign`); see
+    /// [`karac_alloc_aligned_or_panic`]'s Windows arm for the consequence.
+    #[cfg(not(windows))]
     fn posix_memalign(memptr: *mut *mut u8, alignment: usize, size: usize) -> i32;
-    fn free(ptr: *mut core::ffi::c_void);
 }
 
 /// Hard ceiling on any single runtime allocation: `2^61 - 1` bytes (~2.3 EB).
@@ -141,6 +151,17 @@ pub extern "C" fn karac_alloc_aligned_or_panic(size: usize, align: usize) -> *mu
     } else {
         size.next_multiple_of(align)
     };
+    over_aligned_from_system_allocator(n, align)
+}
+
+/// The platform half of [`karac_alloc_aligned_or_panic`]: hand back `n` bytes
+/// at `align`, where `align` is already known to exceed
+/// [`KARAC_MALLOC_GUARANTEED_ALIGN`] and `n` is already rounded up to a
+/// multiple of it.
+///
+/// Split out per-platform because the two arms are not the same operation.
+#[cfg(not(windows))]
+fn over_aligned_from_system_allocator(n: usize, align: usize) -> *mut u8 {
     let mut out: *mut u8 = std::ptr::null_mut();
     let rc = unsafe { posix_memalign(&mut out as *mut *mut u8, align, n) };
     if rc != 0 || out.is_null() {
@@ -148,6 +169,39 @@ pub extern "C" fn karac_alloc_aligned_or_panic(size: usize, align: usize) -> *mu
         std::process::abort();
     }
     out
+}
+
+/// Windows arm — a **diagnosed abort, not a fallback** (B-2026-09-01-45).
+///
+/// The whole aligned path rests on one property of `posix_memalign`: its
+/// memory is released with plain `free`. That is what lets every existing
+/// release path — `karac_free_buf`, the buffer-parking cache, the internal
+/// `free` in [`karac_realloc_aligned_or_panic`], and codegen's own emitted
+/// `free` calls — stay untouched. No Windows allocator has that property (see
+/// the extern block above), so an over-aligned buffer there would have to be
+/// paired with an aligned-aware free at every one of those sites.
+///
+/// Until that pairing exists, the two available behaviours are:
+///
+/// * return a merely 16-aligned buffer and let codegen's `vmovaps` fault on
+///   it — which is precisely the heap-history-dependent crash B-2026-08-31-24
+///   was opened to remove, reintroduced silently; or
+/// * refuse, with a message naming the limitation.
+///
+/// The second is the honest one, so that is what this does. Nothing reaches it
+/// today: `Test (windows-latest)` runs the non-LLVM workspace suite and Windows
+/// codegen E2E is still deferred (ci.yml "STAGE 4"), so no Kāra program is
+/// compiled on Windows at all and no caller can request an over-aligned buffer.
+/// It exists to keep the crate linkable and to make the gap loud the moment
+/// Windows codegen does land. The real fix is tracked separately.
+#[cfg(windows)]
+fn over_aligned_from_system_allocator(n: usize, align: usize) -> *mut u8 {
+    let _ = (n, align);
+    crate::fatal::write_stderr(
+        b"panic: over-aligned allocation is not supported on Windows \
+          (no free-compatible aligned allocator in the MSVC CRT)\n",
+    );
+    std::process::abort();
 }
 
 /// Panicking **over-aligned** reallocation — the grow-path twin of
@@ -177,6 +231,21 @@ pub extern "C" fn karac_realloc_aligned_or_panic(
     if align <= KARAC_MALLOC_GUARANTEED_ALIGN {
         return karac_realloc_or_panic(ptr, new_size);
     }
+    realloc_over_aligned(ptr, new_size, align)
+}
+
+/// The platform half of [`karac_realloc_aligned_or_panic`], with `align`
+/// already known to exceed [`KARAC_MALLOC_GUARANTEED_ALIGN`].
+#[cfg(not(windows))]
+fn realloc_over_aligned(ptr: *mut u8, new_size: usize, align: usize) -> *mut u8 {
+    // Declared locally rather than at file scope: this is the ONLY user of
+    // libc `free` outside the macos/linux-gated helpers (which each declare
+    // their own, the same way), so a file-scope declaration would be dead code
+    // on the Windows leg — where `windows-lint` runs clippy with `-D warnings`
+    // and would reject it (B-2026-09-01-45).
+    extern "C" {
+        fn free(ptr: *mut core::ffi::c_void);
+    }
     let grown = karac_realloc_or_panic(ptr, new_size);
     if (grown as usize).is_multiple_of(align) {
         return grown;
@@ -187,6 +256,19 @@ pub extern "C" fn karac_realloc_aligned_or_panic(
         free(grown as *mut core::ffi::c_void);
     }
     fresh
+}
+
+/// Windows arm — refuse BEFORE the `realloc`, not after (B-2026-09-01-45).
+///
+/// Letting the POSIX body run and only failing at its
+/// [`karac_alloc_aligned_or_panic`] call would be worse than it reads: `grown`
+/// comes back correctly aligned by luck a good fraction of the time, so the
+/// unsupported case would abort on some runs and silently return an
+/// under-aligned buffer on others. One deterministic refusal instead.
+#[cfg(windows)]
+fn realloc_over_aligned(ptr: *mut u8, new_size: usize, align: usize) -> *mut u8 {
+    let _ = ptr;
+    over_aligned_from_system_allocator(new_size, align)
 }
 
 /// Panicking reallocation — the grow-path counterpart of
@@ -905,6 +987,67 @@ mod tests {
         let r = karac_realloc_or_panic(q, 32);
         assert!(check(r, 32), "large -> small lost the surviving prefix");
         karac_free_buf(r, 32);
+    }
+
+    // The OVER-ALIGNED pair (B-2026-08-31-24) had no unit coverage at all
+    // until B-2026-09-01-45 split it into per-platform arms. These are
+    // POSIX-only on purpose: the Windows arm is a diagnosed abort (no
+    // `free`-compatible aligned allocator exists in the MSVC CRT), so running
+    // them there would kill the test process rather than fail an assertion.
+    #[cfg(not(windows))]
+    #[test]
+    fn aligned_or_panic_honors_an_over_alignment() {
+        // 32 and 64 both exceed `malloc`'s 16-byte guarantee, so both take the
+        // aligned path proper rather than the pass-through below.
+        for align in [32usize, 64, 128] {
+            let p = karac_alloc_aligned_or_panic(200, align);
+            assert!(!p.is_null(), "aligned alloc returned null at {align}");
+            assert!(
+                (p as usize).is_multiple_of(align),
+                "alignment {align} not honored: {p:?}"
+            );
+            karac_free_buf(p, 0);
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn aligned_or_panic_passes_through_at_or_under_the_malloc_guarantee() {
+        // At or under the guarantee the request must reach the ORDINARY
+        // allocator — that is what keeps the recycling buffer cache on the hot
+        // path for every non-SIMD element type.
+        let p = karac_alloc_aligned_or_panic(64, KARAC_MALLOC_GUARANTEED_ALIGN);
+        assert!(!p.is_null());
+        assert!((p as usize).is_multiple_of(KARAC_MALLOC_GUARANTEED_ALIGN));
+        karac_free_buf(p, 64);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn aligned_realloc_preserves_bytes_and_keeps_the_alignment() {
+        // The grow twin reallocs first and only re-aligns when the result came
+        // back short of the requested alignment. Either way the caller must see
+        // its bytes AND its alignment — the second is the half a plain
+        // `realloc` silently drops.
+        // Several sizes, not one: a plain `realloc` returns a pointer that
+        // HAPPENS to be 64-aligned for a 4 KiB request on glibc, so a
+        // single-size version of this test passes even with the aligned path
+        // short-circuited to `malloc` — i.e. it cannot fail, which makes it no
+        // guard at all. Sizes just off a power of two keep the result in the
+        // ordinary 16-aligned bins where the difference is observable.
+        let align = 128usize;
+        for new_size in [200usize, 300, 700, 1500, 3000] {
+            let p = karac_alloc_aligned_or_panic(100, align);
+            fill(p, 100);
+            let q = karac_realloc_aligned_or_panic(p, new_size, align);
+            assert!(!q.is_null());
+            assert!(
+                (q as usize).is_multiple_of(align),
+                "grown buffer lost its alignment at {new_size}: {q:?}"
+            );
+            assert!(check(q, 100), "grown buffer lost its bytes at {new_size}");
+            karac_free_buf(q, 0);
+        }
     }
 
     #[cfg(target_pointer_width = "64")]
