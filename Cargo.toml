@@ -433,6 +433,35 @@ kara-registry-proxy = { path = "registry-proxy" }
 # `cc <obj> libkarac_runtime.a` invocation, not LTO). See `bench/bench.sh`
 # binary-size pass in `kata-katas/leetcode/1601-1700/1665-...` for the
 # measurement harness.
+# `karac`'s own frames are the reason this override exists (B-2026-09-01-47).
+#
+# At `opt-level = 0` LLVM does not run stack-slot coloring, so a large `match`
+# gets EVERY arm's locals allocated simultaneously in one frame. Measured on
+# x86-64: `compile_stmt_inner` 108 KiB per frame, `compile_method_call`
+# 104-126 KiB, `compile_expr_inner` 46 KiB — three functions accounting for 83%
+# of a 1,042 KiB high-water mark reached in only ~40 frames and THREE levels of
+# monomorphization recursion. That aborted the whole `--test codegen` binary on
+# `Codegen E2E (Linux arm64)`, whose effective test-thread stack sits below the
+# requirement, while the 8 MiB-stack hosts passed.
+#
+# So this is not deep recursion to be made iterative — the walk is shallow, the
+# frames are just enormous, and only the optimizer can share those slots.
+# `opt-level = 1` cuts the requirement from >1 MiB to under 256 KiB (measured by
+# bisecting `RUST_MIN_STACK`: O0 fails at 1 MiB and passes at 2 MiB; O1 passes
+# at 256 KiB and fails at 128 KiB), a 4-8x reduction.
+#
+# It is not a tax, it is a win on both axes. The codegen E2E suite runs `karac`
+# 3544 times, so an optimized compiler makes the suite FASTER: 281s vs 323s,
+# -13%. The cost is one second on an incremental rebuild (12.1s vs 11.2s), which
+# is what a developer actually pays. `debug-assertions` and `overflow-checks`
+# are independent of `opt-level` and stay ON, so the karac lib keeps every check
+# a dev build is supposed to have.
+#
+# Do not remove this without re-measuring. `tests/codegen.rs`'s
+# `compiling_a_generic_monomorph_nest_fits_a_modest_thread_stack` guards it.
+[profile.dev.package.karac]
+opt-level = 1
+
 [profile.release]
 panic = "abort"
 lto = "fat"

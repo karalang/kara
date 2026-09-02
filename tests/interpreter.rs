@@ -25392,14 +25392,29 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
     // `2.0` / `0.2857…` are the historical receivers (they separate the
     // routes under glibc); `1.22` / `1.175` / `0.057` were found by sweeping
     // i/1000 for i in 1..4000 and separate them under Apple's libm.
-    let a: f32 = 2.0;
+    // `black_box` is LOAD-BEARING, not decoration (B-2026-09-01-47). These
+    // receivers are compile-time constants, so with optimization on LLVM folds
+    // `a.cosh()` at build time using DOUBLE-precision host math and rounds the
+    // result once — which is precisely the f64 route this test exists to tell
+    // APART from the f32 route. The oracle would then equal the value it is
+    // supposed to differ from, and the two `samples` columns would collapse
+    // into one. Opaque receivers force real `coshf`/`cosh` calls, so the two
+    // routes stay distinct and the expected text matches what the interpreter
+    // and both compiled backends actually produce (all three call libm).
+    //
+    // Measured: `2.0f32.cosh()` is 3.7621958255767822 as a `coshf` call —
+    // glibc's `coshf` is not correctly rounded — and 3.762195587158203 when
+    // constant-folded through double. The interpreter, the JIT and the AOT
+    // binary all print the first. Before this, an optimized build of this test
+    // asserted the second.
+    let a: f32 = std::hint::black_box(2.0);
     // The Kāra source spells this `0.2857142984867096f32` — the f64 digits of
     // the same f32. Kept short here because `clippy::excessive_precision`
     // rejects the long form on an `f32` binding; bit-identical either way.
-    let s: f32 = 0.2857143;
-    let c1: f32 = 1.22;
-    let c2: f32 = 1.175;
-    let c3: f32 = 0.057;
+    let s: f32 = std::hint::black_box(0.2857143);
+    let c1: f32 = std::hint::black_box(1.22);
+    let c2: f32 = std::hint::black_box(1.175);
+    let c3: f32 = std::hint::black_box(0.057);
     let samples: [(f32, f32, f32); 7] = [
         (a, a.cosh(), (a as f64).cosh() as f32),
         (s, s.sinh(), (s as f64).sinh() as f32),
@@ -25437,7 +25452,7 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
         cosh_c1 = f32_line(samples[4].1),
         sinh_c2 = f32_line(samples[5].1),
         atan_c3 = f32_line(samples[6].1),
-        cosh_d = (2.0f64).cosh(),
+        cosh_d = std::hint::black_box(2.0f64).cosh(),
     );
 
     assert_eq!(

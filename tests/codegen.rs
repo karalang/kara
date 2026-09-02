@@ -14025,6 +14025,80 @@ fn main() {
         }
     }
 
+    /// Stack-frame guard for B-2026-09-01-47 — compiling a shallow generic
+    /// monomorph nest must fit in a modest thread stack.
+    ///
+    /// The defect this pins was NOT deep recursion. The stack that aborted
+    /// `Codegen E2E (Linux arm64)` was only ~40 compiler frames over three
+    /// levels of monomorphization; it overflowed because three functions each
+    /// burn 46-126 KiB per call in an unoptimized build, where LLVM does not
+    /// color stack slots and every arm of a large `match` gets its locals
+    /// allocated at once. `[profile.dev.package.karac] opt-level = 1` in
+    /// Cargo.toml is the fix; this notices if the requirement climbs back.
+    ///
+    /// RE-EXECS ITSELF rather than spawning a bounded thread in-process,
+    /// because a stack overflow ABORTS — it cannot be caught, so an in-process
+    /// version would kill the whole test binary (exactly the CI symptom) and
+    /// take every later test's result with it. In a child process the abort
+    /// becomes a non-zero exit this test reports as an ordinary failure.
+    ///
+    /// 1 MiB, not the ~256 KiB actually measured on x86-64: aarch64 frames can
+    /// be materially larger and no arm64 host was available to measure, so the
+    /// budget is set for margin over sensitivity. It still catches a return to
+    /// the unoptimized frame sizes, which needed more than 1 MiB on x86-64 and
+    /// more again on arm64. A partial regression will slip through — that is
+    /// the deliberate trade, since a guard that false-fires on one arch is
+    /// worse than one that catches only the large regression.
+    #[test]
+    fn compiling_a_generic_monomorph_nest_fits_a_modest_thread_stack() {
+        const CHILD: &str = "KARAC_STACK_GUARD_CHILD";
+        // Same program as `e2e_generic_non_let_binding_instantiation_across_sites`
+        // above — the nest that actually overflowed.
+        let src = "struct Bag[=T] { xs: Vec[T] }\n\
+                   impl[T: Ord] Bag[T] {\n    \
+                       fn swap2(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }\n    \
+                       fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }\n    \
+                       fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }\n    \
+                       fn mk(v: Vec[T]) -> Vec[T] { let bags = [Bag { xs: v }]; \
+                         let mut out: Vec[T] = Vec.new(); for b in bags { out = b.inner(); } out }\n\
+                   }\n\
+                   fn main() {\n    \
+                       let a = Bag.mk([\"x\", \"y\", \"z\"]); println(a[0]);\n    \
+                       let b = Bag.mk([1, 2, 3]); println(b[0]);\n\
+                   }\n";
+
+        if std::env::var(CHILD).is_ok() {
+            // The result is deliberately ignored: this asserts only that
+            // COMPILING did not blow the stack. A checkout without the runtime
+            // archives yields `None` here, which must stay a pass — the output
+            // oracle is the sibling test's job, not this one's.
+            let _ = run_program(src);
+            return;
+        }
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let out = std::process::Command::new(exe)
+            .args([
+                "codegen_tests::compiling_a_generic_monomorph_nest_fits_a_modest_thread_stack",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env("RUST_MIN_STACK", "1048576")
+            .output()
+            .expect("re-exec the test binary");
+
+        assert!(
+            out.status.success(),
+            "compiling a three-level generic monomorph nest no longer fits a 1 MiB \
+             thread stack — karac's per-frame stack usage has regressed (B-2026-09-01-47). \
+             Check that `[profile.dev.package.karac] opt-level = 1` is still in Cargo.toml, \
+             then re-measure with `RUST_MIN_STACK`.\nchild stdout:\n{}\nchild stderr:\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+    }
+
     /// The third non-`let` site, the tuple destructure, through the SAME
     /// consuming oracle as its for-loop and match siblings above.
     ///
