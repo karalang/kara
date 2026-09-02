@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 5 |
-| run-vs-build | 302 | 17 |
+| run-vs-build | 302 | 16 |
 | leak | 252 | 8 |
 | missing-feature | 193 | 1 |
 | double-free | 162 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1360 | 29 |
+| codegen | 1360 | 28 |
 | interp | 320 | 16 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced · 35 open · 1912 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced · 34 open · 1913 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (35)
+### Open (34)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -157,7 +157,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 | B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
-| B-2026-09-02-3 | 2026-09-02 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it -- the byte-identical CONCRETE function is correct on all four | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
 | B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
 | B-2026-09-02-6 | 2026-09-02 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an assignment that runs on SOME iterations leaves it `false` for all later ones and a later iteration's freshly-declared target loses its own `Drop` body. Identical output before and after B-2026-08-30-53 (that fix neither causes nor cures it), and the limitation has been in the mechanism since B-2026-08-28-51 | — |
@@ -199,9 +198,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 
 </details>
 
-### Fixed (1912)
+### Fixed (1913)
 
-<details><summary>1912 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1913 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2117,6 +2116,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 | B-2026-09-01-47 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that… | 9dab75a |
 | B-2026-09-01-48 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one retur… | 094c206a |
 | B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
+| B-2026-09-02-3 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it --… | 56cb337 |
 
 </details>
 
