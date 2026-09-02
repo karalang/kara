@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 345 |
-| run-vs-build | 306 |
+| run-vs-build | 307 |
 | leak | 252 |
 | missing-feature | 193 |
 | double-free | 164 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1365 |
-| interp | 323 |
+| codegen | 1366 |
+| interp | 324 |
 | typecheck | 286 |
 | ownership | 72 |
 | other | 70 |
@@ -130,8 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-31-4 | 2026-08-31 | interp+codegen | medium | A LOCAL WHOSE LAST USE IS A `ref` ARGUMENT TO A CALLEE RETURNING A HEAP VALUE IS DROPPED AT SCOPE EXIT INSTEAD OF ITS LIVE-RANGE END ON BOTH COMPILED BACKENDS, AGAINST design.md line 866 -- `str end dE` vs interp `dE str end`; an `i64` return is clean | — |
-| B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
@@ -160,6 +158,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-13 | 2026-09-02 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelling `let x = mk(1);` of the identical value prints `dB dW7`, so the two differ only in whether the value is named | — |
 | B-2026-09-02-14 | 2026-09-02 | interp+codegen | medium | A BOUND `Option`/`Result` LOCAL WHOSE `if let` MISSES LOSES ITS PAYLOAD'S `Drop` BODY ON ALL FOUR SURFACES -- the pattern's payload-walk retraction is applied statically, before the match test, so on the miss edge it has handed the body to a binding that never happened; the same local with no `if let` at all runs the body correctly, which is what makes this a retraction bug rather than a missing registration | — |
 | B-2026-09-02-15 | 2026-09-02 | codegen | high | THE `if let` / `while let` / `let ... else` SPELLINGS OF AN INDEXED-ELEMENT SCRUTINEE DOUBLE FREE THE ELEMENT'S BUFFER -- `if let E.A(r) = v[0] { .. }` aborts with `free(): double free detected in tcache 2` on all three compiled surfaces where `--interp` prints `A got 4 dE dR3 B`; the three `control_flow.rs` sites never call `clone_owned_vec_index_element`, so `materialize_freshtemp_enum_scrutinee`'s `heap_index` leg drop-tracks a SHALLOW copy that still aliases the container's slot. Crashes with the payload UNBOUND and with no `impl Drop` anywhere, so it is pure memory | — |
+| B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
 
 ### Relocated
 
@@ -2044,8 +2043,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-30-56 | codegen | high | BOTH COMPILED BACKENDS BITCAST AN INTEGER INTO AN `Option` / `Result` PAYLOAD AND AN ENUM STRUCT-VARIANT FLOAT FIELD, so `let o: Option[f64] = Some(m… | b9500f80 |
 | B-2026-08-31-1 | interp+codegen | medium | A MATCH ARM THAT MOVES AN OWNED STRUCT PARAM'S ENUM PAYLOAD INTO A FRESH LOCAL RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON BOTH… | e59a31b |
 | B-2026-08-31-3 | interp+codegen | medium | A `match v[i]` ARM THAT MOVES ITS PAYLOAD INTO A BY-VALUE CALL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS AND ONCE IN THE INTERPRE… | d1394db7 |
+| B-2026-08-31-4 | interp+codegen | medium | A LOCAL WHOSE LAST USE IS A `ref` ARGUMENT TO A CALLEE RETURNING A HEAP VALUE IS DROPPED AT SCOPE EXIT INSTEAD OF ITS LIVE-RANGE END ON BOTH COMPILED… | aa21ffb4 |
 | B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
 | B-2026-08-31-5 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding… | 9eeb04a2 |
+| B-2026-08-31-6 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert b… | aa21ffb4 |
 | B-2026-08-31-8 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfac… | 95fbe26 |
 | B-2026-08-31-9 | codegen | medium | A STRUCT FIELD OF `Vector[T, N]` TYPE HAS NO DERIVED-Display ARM UNDER `karac build`, AND THE REFUSAL DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr --… | 86c9957 |
 | B-2026-08-31-10 | codegen | medium | AN `Option` WHOSE PAYLOAD LOWERS TO A MULTI-WORD STRUCT CANNOT BE INTERPOLATED IN AN F-STRING UNDER `karac build`, AND THE ERROR MISDESCRIBES ITS OWN… | da529e8 |
