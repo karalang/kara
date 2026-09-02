@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 164 |
 | codegen-gap | 159 |
 | diagnostics | 116 |
-| false-positive | 102 |
+| false-positive | 104 |
 | soundness | 94 |
 | perf | 87 |
 | other | 71 |
@@ -112,8 +112,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 1366 |
 | interp | 325 |
-| typecheck | 286 |
-| ownership | 72 |
+| typecheck | 287 |
+| ownership | 73 |
 | other | 70 |
 | cli | 70 |
 | autopar | 55 |
@@ -158,6 +158,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-13 | 2026-09-02 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelling `let x = mk(1);` of the identical value prints `dB dW7`, so the two differ only in whether the value is named | — |
 | B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
 | B-2026-09-02-17 | 2026-09-02 | interp | medium | `let ... else` OVER AN INDEXED ELEMENT RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON ALL THREE COMPILED SURFACES -- `A dE dR3 got 4 dR3 B` vs `A dE dR3 got 4 B`. Specific to this construct: the fresh-temp and named-local scrutinees agree, and so does `if let` over the SAME `v[0]`. WHICH COUNT IS RIGHT IS OPEN -- `let ... else` binds into the ENCLOSING scope, so `r` outlives the container's NLL death (visible in the trace: `dE dR3` prints before `got 4` reads `r`), which is also the escape B-2026-08-31-3 exists to reject | — |
+| B-2026-09-02-18 | 2026-09-02 | typecheck | medium | A GENERIC PREFIX SUM DOES NOT COMPILE: adding an element of an owned local `Vec[T]` to anything that is not also an element of an owned local `Vec[T]` is rejected as `arithmetic on a 'Add'-bounded type parameter requires both operands to have the same type, found 'T' and 'T'` -- a message that states the operands differ and then prints them identically. Blocks `karac run` AND `karac build` (E0200, error). Two owned-local elements added together are FINE, which refutes the obvious `Vec.new()`-poisons-the-element-type explanation. | — |
+| B-2026-09-02-19 | 2026-09-02 | ownership | medium | A DECLARED `T: Copy` BOUND IS NOT HONOURED FOR A BARE TYPE-PARAMETER BINDING: `fn f[T: Copy](x: T) { let a = x; let b = x; }` warns `value 'x' moved here, used again here` (E0500), and `let a = v[0]` on a `ref Vec[T]` with the same bound is a HARD error claiming `this element type is not Copy` (E0285) -- contradicting the bound in the signature and design.md's own rule that `v[i]` requires exactly `T: Copy`. A generic STRUCT FIELD and an `impl[T: Copy]` method body are both unaffected. | — |
 
 ### Relocated
 
