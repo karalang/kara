@@ -234,29 +234,40 @@ def ledger_view(rows) -> str:
             surf[seg] += 1
             if r["status"] == "open":
                 surfo[seg] += 1
+    # B-2026-09-02 concurrency: TOTALS ONLY, no status-dependent column.
+    #
+    # These tables carried an `open` count, which moved on every CLOSE — so two
+    # sessions closing two UNRELATED bugs both rewrote the `codegen` row and
+    # conflicted. The rule that keeps this file mergeable is that everything in
+    # the generated block depends on the SET of rows, never on their STATUS:
+    # then a close touches only the two lines that are its own row (out of the
+    # Open table, into the Fixed index) and two concurrent closes are disjoint
+    # by construction. The open distribution is still right below, as the Open
+    # table itself.
     out.append("\n### By class\n")
-    out.append("| class | total | open |")
-    out.append("|---|---|---|")
+    out.append("| class | total |")
+    out.append("|---|---|")
     for k, n in cls.most_common():
-        out.append(f"| {k or '—'} | {n} | {clso.get(k, 0)} |")
+        out.append(f"| {k or '—'} | {n} |")
     out.append("\n### By surface\n")
-    out.append("| surface | total | open |")
-    out.append("|---|---|---|")
+    out.append("| surface | total |")
+    out.append("|---|---|")
     for k, n in surf.most_common():
-        out.append(f"| {k} | {n} | {surfo.get(k, 0)} |")
+        out.append(f"| {k} | {n} |")
     out.append("## Current state")
     out.append("")
-    wf_note = f" · {len(wontf)} wontfix" if wontf else ""
-    rl_note = f" · {len(reloc)} relocated" if reloc else ""
+    # No counts here either, and for the same reason as the tables above: a
+    # `34 open · 1913 fixed` line is rewritten by EVERY close, so two concurrent
+    # closes always collide on it. The tallies are one command away
+    # (`grep -c '"status": "open"' docs/bug-ledger.jsonl`) and the section
+    # tables below are the authoritative list regardless.
     out.append(
-        f"_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — "
-        f"**{total} surfaced · {len(opens)} open · {len(fixed)} fixed"
-        f"{wf_note}{rl_note}** "
+        f"_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` "
         f"({rows[0]['date']} → {rows[-1]['date']}). Do not edit this block by "
         f"hand; edit the ledger and regenerate._"
     )
     out.append("")
-    out.append(f"### Open ({len(opens)})")
+    out.append("### Open")
     out.append("")
     if opens:
         out.append("| id | date | surface | sev | title | tracker |")
@@ -270,11 +281,11 @@ def ledger_view(rows) -> str:
         out.append("_None — the ledger is fully drained._")
     out.append("")
     if reloc:
-        out.append(f"### Relocated ({len(reloc)})")
+        out.append("### Relocated")
         out.append("")
         out.append(
             "<details><summary>"
-            f"{len(reloc)} relocated — real and still scheduled, but with no "
+            "Relocated — real and still scheduled, but with no "
             "action item today and a concrete external trigger, so the work "
             "now lives on a canonical tracker. Not wontfix (that is "
             "'measured to a standstill'); follow the tracker column.</summary>\n"
@@ -289,11 +300,11 @@ def ledger_view(rows) -> str:
         out.append("\n</details>")
         out.append("")
     if wontf:
-        out.append(f"### Wontfix ({len(wontf)})")
+        out.append("### Wontfix")
         out.append("")
         out.append(
             "<details><summary>"
-            f"{len(wontf)} wontfix — real and reproduced, measured to a "
+            "Wontfix — real and reproduced, measured to a "
             "standstill, no action left. Titles are kept in full: they carry "
             "the measurements that closed the question, so read one before "
             "reopening its subject.</summary>\n"
@@ -307,11 +318,11 @@ def ledger_view(rows) -> str:
             )
         out.append("\n</details>")
         out.append("")
-    out.append(f"### Fixed ({len(fixed)})")
+    out.append("### Fixed")
     out.append("")
     out.append(
         "<details><summary>"
-        f"{len(fixed)} fixed — compact index (one-line titles; full write-up + "
+        "Fixed — compact index (one-line titles; full write-up + "
         "cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test "
         "is the durable artifact.</summary>\n"
     )

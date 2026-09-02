@@ -90,43 +90,43 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 ### By class
 
-| class | total | open |
-|---|---|---|
-| miscompile | 345 | 4 |
-| run-vs-build | 302 | 16 |
-| leak | 252 | 8 |
-| missing-feature | 193 | 1 |
-| double-free | 162 | 0 |
-| codegen-gap | 159 | 1 |
-| diagnostics | 116 | 1 |
-| false-positive | 102 | 0 |
-| soundness | 95 | 1 |
-| perf | 87 | 0 |
-| other | 71 | 1 |
-| crash | 69 | 0 |
-| use-after-free | 27 | 0 |
+| class | total |
+|---|---|
+| miscompile | 345 |
+| run-vs-build | 302 |
+| leak | 252 |
+| missing-feature | 193 |
+| double-free | 162 |
+| codegen-gap | 159 |
+| diagnostics | 116 |
+| false-positive | 102 |
+| soundness | 95 |
+| perf | 87 |
+| other | 71 |
+| crash | 69 |
+| use-after-free | 27 |
 
 ### By surface
 
-| surface | total | open |
-|---|---|---|
-| codegen | 1360 | 27 |
-| interp | 320 | 15 |
-| typecheck | 286 | 1 |
-| ownership | 72 | 0 |
-| other | 70 | 0 |
-| cli | 70 | 2 |
-| autopar | 55 | 0 |
-| parser | 42 | 0 |
-| runtime | 35 | 1 |
-| effect | 29 | 0 |
-| resolver | 28 | 0 |
-| lexer | 8 | 0 |
+| surface | total |
+|---|---|
+| codegen | 1360 |
+| interp | 320 |
+| typecheck | 286 |
+| ownership | 72 |
+| other | 70 |
+| cli | 70 |
+| autopar | 55 |
+| parser | 42 |
+| runtime | 35 |
+| effect | 29 |
+| resolver | 28 |
+| lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced · 33 open · 1914 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (33)
+### Open
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -164,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 | B-2026-09-02-10 | 2026-09-02 | codegen | medium | B-2026-08-01-19's OVER-SUPPRESSION TRADE IS NOW A VISIBLE DIVERGENCE: a param view assigned into ONE field silences EVERY Drop-bearing field's body on the base, on all three compiled surfaces, while the interpreter is per-field since B-2026-08-30-54 -- a sibling that was never moved, never viewed and is read on the line before loses its body (`dR30 s dE dR8 v39` against `--interp`'s `dR30 s dR31 dE dR8 v39`). The flag is keyed by BINDING and the reason is per FIELD; only a struct with two or more Drop-bearing fields can show it | — |
 
-### Relocated (4)
+### Relocated
 
-<details><summary>4 relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
+<details><summary>Relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -177,9 +177,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 
 </details>
 
-### Wontfix (11)
+### Wontfix
 
-<details><summary>11 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>Wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -197,9 +197,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 
 </details>
 
-### Fixed (1914)
+### Fixed
 
-<details><summary>1914 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>Fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
