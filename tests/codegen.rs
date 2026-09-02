@@ -12298,9 +12298,14 @@ done
     /// - `consumed` — the arm moves the element into a by-value callee. Already at
     ///   one body, and marking `r` a view must not disturb the transfer.
     /// - `local` — a LOCAL tuple, not a param. Nobody else owns it, so caller-
-    ///   retains does not apply and this shape is deliberately NOT fixed here; it
-    ///   still runs two bodies on every surface (filed separately). Pinned so the
-    ///   marking is not quietly widened to locals without a measurement.
+    ///   retains does not apply and this shape was deliberately NOT fixed here. It
+    ///   was pinned at TWO bodies so the marking could not be quietly widened to
+    ///   locals without a measurement. B-2026-09-02-26 supplied that measurement
+    ///   and the cell now runs ONE — but the marking was still not widened: that
+    ///   row RETRACTS the tuple's element walk for the moved element and lets the
+    ///   rebind own the body, the OPPOSITE direction of this row's repair. The
+    ///   cell stays pinned here as the guard that the two do not overlap into a
+    ///   body that runs nowhere.
     ///
     /// The ENUM twins of the two fixed shapes were already correct on all four
     /// surfaces before this row, which is what shows the tuple family was simply
@@ -12362,7 +12367,6 @@ dR5
 consumed end
 local
   b6
-dR6
 dR6
 local end
 done
@@ -137395,6 +137399,151 @@ fn main() {
             Some("drop 301 esc\n1\n2\ndrop 6 die\n3\nlen 1\ndrop 151 store\n".to_string()),
             "each of the three paths runs the body exactly once: escaped at the \
              caller's binding, died in the callee, stored at the container's drain"
+        );
+    }
+
+    /// B-2026-09-02-26 — A LOCAL TUPLE SCRUTINEE'S ELEMENT REBIND DOUBLES THE
+    /// `Drop` BODY, AND THE REPAIR IS THE OPPOSITE OF B-2026-08-31-7's.
+    ///
+    /// `let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; … } }` ran
+    /// `dR6` twice on all four surfaces — agreed, and by one-value-one-body
+    /// agreed-wrong. One `R` is constructed, so one body is due.
+    ///
+    /// -31-7 fixed the owned-PARAM spelling by making the element a VIEW: the
+    /// caller retains the value, so its walk stays the single owner and the rebind
+    /// inherits view-ness. A LOCAL has no caller to hand the body to, so widening
+    /// that marking here would have produced a body that runs NOWHERE. The repair
+    /// is the other direction — RETRACT the tuple's element walk for the moved
+    /// element and let the rebind own it, which is what the enum family already
+    /// does for a local scrutinee (`e6` below, correct before and after).
+    ///
+    /// THE CONTROLS ARE THE POINT, because the fix WITHHOLDS a walk and the failure
+    /// mode of over-reaching is a body that never runs:
+    /// - `r6` — the same arm without the rebind. Read-only, so nothing is moved
+    ///   out and the walk must stay the single owner. One body before and after.
+    /// - `s6` — the arm moves the element into a BY-VALUE CALLEE. One body before
+    ///   and after, and the cell that picked the predicate: a bare-tuple element
+    ///   has no owner of its own to transfer FROM, so treating the argument as
+    ///   consuming (`binding_use::binding_only_read_through`, the enum family's
+    ///   test) masked the walk and ran NO body at all — measured on both backends
+    ///   independently. `consume_class::binding_only_borrowed` reads an
+    ///   entry-copied argument as non-consuming and is what both sides now use.
+    /// - `t6` — a two-element tuple with only the FIRST rebound. `dR56 dR56 dR57`
+    ///   before, `dR56 dR57` after: the mask is per element, not per tuple.
+    /// - `g6` — a GUARDED match whose consuming arm is NOT the one taken. The
+    ///   codegen mask is static, so masking on ANY arm ran no body here at all;
+    ///   requiring every binding arm to agree leaves this cell exactly as it was.
+    ///   Its `k > 0` sibling still runs two — this row's bug surviving in the
+    ///   mixed-guard cell, which an agreed-and-wrong answer is the documented
+    ///   trade for against a body that vanishes.
+    /// - `ol` — the tuple OUTLIVES the match, with a statement after it. The
+    ///   codegen retraction RE-REGISTERS the walk rather than swapping it in place,
+    ///   and it runs inside the arm's region, so the untouched element's body could
+    ///   have been pulled into the arm's cleanup frame. It fires at the tuple's own
+    ///   NLL end (before `after match`), identically on all five surfaces.
+    /// - `e6` — the ENUM spelling of `p6`, correct before and after. It is what
+    ///   shows the tuple family was behind the enum family rather than that a new
+    ///   rule was invented.
+    ///
+    /// `h6` and `l4` are the two shapes the fix reaches beyond the row's own:
+    /// a HEAP-carrying element (`dHx dHx` before — a genuine double free, which is
+    /// the severity question the row left open and `tests/memory_sanitizer.rs`'s
+    /// `asan_local_tuple_elem_rebind_frees_once` now pins), and an arm that hands
+    /// the element OUT of the function (`dR74` twice before). The owned-PARAM
+    /// escape and the `let (r, k) = t` destructure are NOT fixed here — they are
+    /// B-2026-09-02-24 and -25, whose machinery is elsewhere.
+    ///
+    /// Twin of `tests/interpreter.rs`'s `test_local_tuple_elem_rebind_runs_one_body`, pinned to the same string.
+    #[test]
+    fn e2e_local_tuple_elem_rebind_runs_one_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H { s: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.s}") } }
+enum E { A(R), B }
+
+fn sink(r: R) -> i64 { r.id }
+
+fn p6()  { let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; println(f"  b{m.id}"); } } }
+fn e6()  { let t = E.A(R { id: 16 }); match t { E.A(r) => { let m = r; println(f"  b{m.id}"); } E.B => {} } }
+fn r6()  { let t = (R { id: 26 }, 0); match t { (r, k) => { println(f"  b{r.id}"); } } }
+fn s6()  { let t = (R { id: 36 }, 0); match t { (r, k) => { println(f"  b{sink(r)}"); } } }
+fn t6()  { let t = (R { id: 56 }, R { id: 57 }); match t { (r, q) => { let m = r; println(f"  b{m.id}"); } } }
+fn h6()  { let t = (H { s: "x" }, 0); match t { (h, k) => { let m = h; println(f"  b{m.s}"); } } }
+fn l4() -> R { let t = (R { id: 74 }, 0); match t { (r, k) => { r } } }
+fn ol()  {
+    let t = (R { id: 91 }, R { id: 92 });
+    match t { (r, q) => { let m = r; println(f"  mv{m.id}") } }
+    println("  after match");
+}
+fn g6(n: i64) {
+    let t = (R { id: 86 }, n);
+    match t {
+        (r, k) if k > 0 => { let m = r; println(f"  mv{m.id}"); }
+        (r, k) => { println(f"  rd{r.id}"); }
+    }
+}
+
+fn main() {
+    println("p6"); p6(); println("p6 end");
+    println("e6"); e6(); println("e6 end");
+    println("r6"); r6(); println("r6 end");
+    println("s6"); s6(); println("s6 end");
+    println("t6"); t6(); println("t6 end");
+    println("h6"); h6(); println("h6 end");
+    println("l4"); let q = l4(); println(f"  got{q.id}"); println("l4 end");
+    println("ol"); ol(); println("ol end");
+    println("g6"); g6(0); println("g6 end");
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"p6
+  b6
+dR6
+p6 end
+e6
+  b16
+dR16
+e6 end
+r6
+  b26
+dR26
+r6 end
+s6
+  b36
+dR36
+s6 end
+t6
+  b56
+dR56
+dR57
+t6 end
+h6
+  bx
+dHx
+h6 end
+l4
+  got74
+dR74
+l4 end
+ol
+  mv91
+dR91
+dR92
+  after match
+ol end
+g6
+  rd86
+dR86
+g6 end
+done
+"#
         );
     }
 }

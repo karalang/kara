@@ -68151,4 +68151,69 @@ fn main() {
             "b35-optres-temp-nonescaping",
         );
     }
+
+    /// B-2026-09-02-26 — a LOCAL tuple scrutinee whose arm moves a HEAP-owning
+    /// element out, under ASAN + LSan.
+    ///
+    /// The row measured a heap-free payload, so it reported only a doubled
+    /// `Drop` BODY and left the severity question open. With a `Vec` + `String`
+    /// element the same shapes are a genuine DOUBLE FREE: the pre-fix compiled
+    /// binary aborts with `free(): double free detected in tcache 2` on
+    /// `rebind`, and the interpreter prints each body twice. The tuple's element
+    /// walk and the value the arm handed away both owned the same buffers.
+    ///
+    /// `readOnly` and `toCallee` are the controls that keep the retraction from
+    /// over-reaching — neither moves the element out, so the walk must stay the
+    /// single owner and both must still free exactly once. `twoElem` pins the
+    /// per-element mask against a tuple whose SECOND element is untouched, and
+    /// `mid` pins the element offset at a non-zero index.
+    ///
+    /// The ESCAPE shape (`match t { (r, k) => { r } }` returning the element) is
+    /// deliberately absent: its MEMORY half is a separate, pre-existing defect
+    /// that aborts identically before and after this row — filed as its own row
+    /// — and it was only masked here because the pre-fix binary aborted on an
+    /// earlier shape and never reached it. This row fixes that shape's BODY
+    /// count (pinned on a heap-free payload in `e2e_local_tuple_elem_rebind_runs_one_body`)
+    /// and leaves its buffers to that row.
+    #[test]
+    fn asan_local_tuple_elem_rebind_frees_once() {
+        assert_clean_asan_run(
+            "struct D { id: i64, xs: Vec[i64], name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"  dD{self.id}:{self.xs.len()}:{self.name}\") } }\n\
+             fn mkD(id: i64) -> D {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return D { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             fn sinkD(d: D) -> i64 { d.xs.len() }\n\
+             fn rebind()   { let t = (mkD(1), 0); match t { (r, k) => { let m = r; println(f\"  rb{m.xs.len()}:{m.name}\") } } }\n\
+             fn twoElem()  { let t = (mkD(2), mkD(3)); match t { (r, q) => { let m = r; println(f\"  te{m.xs.len()}:{m.name}\") } } }\n\
+             fn readOnly() { let t = (mkD(5), 0); match t { (r, k) => { println(f\"  ro{r.xs.len()}:{r.name}\") } } }\n\
+             fn toCallee() { let t = (mkD(6), 0); match t { (r, k) => { println(f\"  tc{sinkD(r)}\") } } }\n\
+             fn mid()      { let t = (0, mkD(7), 0); match t { (a, r, k) => { let m = r; println(f\"  md{m.xs.len()}:{m.name}\") } } }\n\
+             fn main() {\n\
+             \x20   rebind();\n\
+             \x20   twoElem();\n\
+             \x20   readOnly();\n\
+             \x20   toCallee();\n\
+             \x20   mid();\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "rb1:n1",
+                "  dD1:1:n1",
+                "  te1:n2",
+                "  dD2:1:n2",
+                "  dD3:1:n3",
+                "  ro1:n5",
+                "  dD5:1:n5",
+                "  tc1",
+                "  dD6:1:n6",
+                "  md1:n7",
+                "  dD7:1:n7",
+                "end",
+            ],
+            "b26-local-tuple-elem-rebind",
+        );
+    }
 }

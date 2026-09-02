@@ -70,7 +70,18 @@ mod closures;
 mod collections;
 mod column;
 mod conc_state;
-pub(crate) mod consume_class;
+// B-2026-09-02-26 — `consume_class` now lives at CRATE level (`src/consume_class.rs`)
+// and is re-exported here so every `super::consume_class::` path keeps resolving.
+//
+// It imports no `inkwell` and never did, but sitting under the `llvm`-gated
+// `codegen` module made it unreachable from the interpreter — so the two
+// backends could not share the one consumption predicate they both need, and
+// the interpreter half of this row would have had to re-derive the rule. That
+// is the split this family has paid for four times (B-2026-08-28-63,
+// B-2026-08-29-17, B-2026-08-31-32, B-2026-09-01-28); a shared module is what
+// stops a fifth. Codegen-containment is untouched: the move takes a
+// plain-`ast` analysis OUT of the backend rather than putting anything LLVM in.
+pub(crate) use crate::consume_class;
 mod contract_state;
 mod control_flow;
 mod control_flow_bce;

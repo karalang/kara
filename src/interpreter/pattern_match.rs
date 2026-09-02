@@ -529,6 +529,43 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::SelfValue => "self".to_string(),
             _ => return,
         };
+        // B-2026-09-02-26 — the BARE-TUPLE sibling of the enum retraction
+        // below, and the last cell of the family still running two bodies.
+        //
+        // `let t = (R { id: 6 }, 0); match t { (r, k) => { let m = r; … } }`
+        // ran `dR6` twice on all five surfaces: once for `m`'s own slot, once
+        // for `t`'s element walk at the frame's end. The owned-PARAM spelling
+        // is correct because B-2026-08-31-7 makes the element a VIEW of a value
+        // the CALLER retains — the walk stays the single owner and the rebind
+        // inherits view-ness. A LOCAL has no caller to hand the body to, so the
+        // repair is the OPPOSITE one: RETRACT the tuple's walk for the moved
+        // element and let the rebind own it, exactly as the enum family already
+        // does for a local scrutinee.
+        //
+        // `moved_out_tuple_elem_bodies` is the same per-`(binding, index)` mask
+        // B-2026-08-03-3 built for an element moved OUT of a tuple, so a
+        // multi-element tuple keeps every untouched element's body: measured
+        // `dR56 dR56 dR57` before, `dR56 dR57` after, for
+        // `let t = (R{56}, R{57}); match t { (r, q) => { let m = r; … } }`.
+        //
+        // Gated on the element being MATERIALIZED by the arm — a read-only arm
+        // moves nothing out and must keep the walk (measured one body before
+        // and after) — and on the scrutinee not being an owned-param view,
+        // whose walk the caller already owns; retracting there as well would
+        // hand the body to nobody. See `bare_tuple_elems_all_arms_move` for
+        // which predicate decides "materialized" and why it is NOT the enum
+        // leg's.
+        if let Value::Tuple(elems) = scrutinee {
+            if self
+                .tuple_scrutinee_walk_is_retractable(Some(place))
+                .is_some()
+            {
+                for i in self.bare_tuple_elems_all_arms_move(arms, elems) {
+                    self.moved_out_tuple_elem_bodies.insert((name.clone(), i));
+                }
+            }
+            return;
+        }
         let Value::EnumVariant { enum_name, .. } = scrutinee else {
             return;
         };
@@ -834,6 +871,94 @@ impl<'a> super::Interpreter<'a> {
     /// took the second arm and printed `v5 dE` — `dR5` gone — against the
     /// compiled `v5 dR5 dE`. Routing both through this function makes the
     /// lockstep structural instead of a thing to remember.
+    /// B-2026-09-02-26 — which bare-tuple element indices does EVERY arm that
+    /// binds them move out?
+    ///
+    /// ACROSS ALL ARMS, and unanimously, because the mask it feeds is STATIC on
+    /// the codegen side — a compile-time retraction of the tuple's element
+    /// walk, not a per-path flag. An `any` rule therefore loses a body outright
+    /// when a guarded match mixes spellings: for
+    /// `match t { (r, k) if k > 0 => { let m = r; … } (r, k) => { println(r.id) } }`
+    /// the consuming FIRST arm masks the element while the read-only SECOND arm
+    /// is the one taken, and the measured result was NO body at all against a
+    /// correct one before. Requiring agreement leaves such a match exactly as
+    /// it was — the consuming arm keeps running two, which is this row's bug
+    /// surviving in the mixed-guard cell, but an agreed-and-wrong answer is the
+    /// documented trade against a body that vanishes.
+    ///
+    /// Taken-arm-only would fix both cells here and CANNOT be matched by
+    /// codegen's static mask, which is the divergence the note at the head of
+    /// `execute_match` records paying for once already.
+    ///
+    /// The disarm in [`Self::disarm_moved_out_enum_payload`] masks these indices
+    /// out of the tuple's element walk; whoever the arm handed the element to
+    /// runs the body instead. Codegen's twin is
+    /// `disarm_moved_bare_tuple_elem_bodies`, built on this same predicate —
+    /// writing the rule twice is how this family has split before
+    /// (B-2026-08-28-63, B-2026-08-29-17, B-2026-08-31-32, B-2026-09-01-28:
+    /// four spelling-dependent divergences, every one a rule written out more
+    /// than once).
+    ///
+    /// `consume_class::binding_only_borrowed` rather than
+    /// `binding_use::binding_only_read_through`, and the two part company on
+    /// exactly the shape that decides it: a free-function ARGUMENT. `sink(r)`
+    /// over a bare-tuple element transfers nothing the walk could hand over —
+    /// the element has no owner of its own to move FROM — so masking there ran
+    /// no body at all (measured `b36` with `dR36` gone, on both backends
+    /// independently). `binding_only_borrowed` reads an entry-copied argument
+    /// as non-consuming and leaves the walk alone, which is the answer both
+    /// backends already gave. Its conservative bias points the right way here
+    /// too: a wrong "only borrowed" keeps today's two bodies, where a wrong
+    /// "consumed" loses one.
+    fn bare_tuple_elems_all_arms_move(&self, arms: &[MatchArm], elems: &[Value]) -> Vec<usize> {
+        let mut binds_somewhere: Vec<bool> = vec![false; elems.len()];
+        let mut all_move: Vec<bool> = vec![true; elems.len()];
+        for arm in arms {
+            let PatternKind::Tuple(subs) = &arm.pattern.kind else {
+                continue;
+            };
+            for (i, sub) in subs.iter().enumerate() {
+                let PatternKind::Binding(bname) = &sub.kind else {
+                    continue;
+                };
+                let Some(ev) = elems.get(i) else { continue };
+                if !self.value_runs_user_drop(ev) {
+                    continue;
+                }
+                binds_somewhere[i] = true;
+                let only_borrowed = crate::consume_class::binding_only_borrowed(bname, &arm.body)
+                    && arm
+                        .guard
+                        .as_ref()
+                        .is_none_or(|g| crate::consume_class::binding_only_borrowed(bname, g));
+                if only_borrowed {
+                    all_move[i] = false;
+                }
+            }
+        }
+        (0..elems.len())
+            .filter(|&i| binds_somewhere[i] && all_move[i])
+            .collect()
+    }
+
+    /// B-2026-09-02-26 — is this scrutinee place a LOCAL tuple binding whose
+    /// element walk the disarm above is entitled to retract?
+    ///
+    /// An owned-param scrutinee is excluded: its walk belongs to the CALLER
+    /// (B-2026-08-31-7), so retracting here as well leaves nothing to fire.
+    fn tuple_scrutinee_walk_is_retractable(&self, place: Option<&Expr>) -> Option<String> {
+        let name = match &place?.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return None,
+        };
+        let is_param_view = self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(name.as_str()));
+        (!is_param_view).then_some(name)
+    }
+
     fn match_disarms_payload_walk(&self, enum_name: &str, arms: &[MatchArm]) -> bool {
         arms.iter().any(|arm| {
             self.pattern_consumes_user_drop_payload(enum_name, &arm.pattern)

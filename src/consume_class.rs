@@ -51,6 +51,11 @@ pub(crate) fn binding_only_borrowed(name: &str, e: &Expr) -> bool {
 /// than a single arm expression. A block's value is its `final_expr`, so a
 /// `final_expr` that forwards `name` (the block result escapes) is a transfer,
 /// as is any consuming sink among its statements.
+// Codegen-only: this module was hoisted to crate level (B-2026-09-02-26) so the
+// INTERPRETER could share `binding_only_borrowed`; its remaining helpers still
+// have callers only under `#[cfg(feature = "llvm")]`, so they are dead in the
+// default build that CI lints.
+#[cfg(feature = "llvm")]
 pub(crate) fn binding_only_borrowed_block(name: &str, b: &crate::ast::Block) -> bool {
     let consumed = b
         .final_expr
@@ -466,6 +471,11 @@ fn walk_block(b: &crate::ast::Block, f: &mut impl FnMut(&Expr)) {
 /// that would otherwise double-free that same buffer (B-2026-07-23-4). Only the
 /// bare `binding.field` arg shape is reported; aggregate / return / let-move /
 /// method-arg sinks are already caught as consuming by `has_consuming_sink`.
+// Codegen-only: this module was hoisted to crate level (B-2026-09-02-26) so the
+// INTERPRETER could share `binding_only_borrowed`; its remaining helpers still
+// have callers only under `#[cfg(feature = "llvm")]`, so they are dead in the
+// default build that CI lints.
+#[cfg(feature = "llvm")]
 pub(crate) fn binding_fields_passed_to_free_fn_arg(
     names: &[String],
     e: &Expr,
@@ -529,6 +539,11 @@ pub(crate) fn binding_fields_passed_to_free_fn_arg(
 ///
 /// Only a BARE identifier counts. `take(s.a)` is the field case the sibling
 /// handles, and `take(s.a.len())` / `take(f(s))` read rather than move.
+// Codegen-only: this module was hoisted to crate level (B-2026-09-02-26) so the
+// INTERPRETER could share `binding_only_borrowed`; its remaining helpers still
+// have callers only under `#[cfg(feature = "llvm")]`, so they are dead in the
+// default build that CI lints.
+#[cfg(feature = "llvm")]
 pub(crate) fn bindings_passed_whole_to_free_fn_arg(names: &[String], e: &Expr) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     walk_exprs(e, &mut |x| {

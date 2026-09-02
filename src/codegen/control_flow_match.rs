@@ -765,6 +765,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the source is the tuple's own storage, and a later
                     // per-field move-out has to neutralize BOTH.
                     self.record_bare_tuple_elem_sources(&arm.pattern, scrutinee);
+                    // B-2026-09-02-26 — and the BODIES retraction for a LOCAL
+                    // tuple scrutinee whose arm MATERIALIZES an element.
+                    // `let t = (R { id: 6 }, 0); match t { (r, k) =>
+                    // { let m = r; … } }` ran the body twice on all four
+                    // surfaces: once for `m`'s own registration, once for `t`'s
+                    // element walk. The owned-PARAM spelling is correct for the
+                    // opposite reason (B-2026-08-31-7 makes the element a VIEW
+                    // of a value the CALLER retains), so this is gated OFF that
+                    // case — retracting there too would hand the body to
+                    // nobody.
+                    self.disarm_moved_bare_tuple_elem_bodies(&arm.pattern, scrutinee, arms);
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)
                     // MOVES `x` gets a deep clone + owned tracking — the
@@ -9568,6 +9579,78 @@ impl<'ctx> super::Codegen<'ctx> {
     /// coarse here — `let t = (r0, r1); let x = t.0;` must still run `r1`'s
     /// body. Masks accumulate across move-outs; when nothing survives, the
     /// action simply stays retracted (B-2026-08-03-3).
+    /// B-2026-09-02-26 — mask out of a LOCAL tuple scrutinee's element walk
+    /// every element this arm MATERIALIZES, so the arm's own owner runs the
+    /// body instead of both.
+    ///
+    /// The codegen twin of the interpreter's
+    /// `bare_tuple_arm_moved_drop_bindings`, and deliberately built on the same
+    /// `binding_use::binding_only_read_through`: a read-only arm moves nothing
+    /// out and must leave the walk as the single owner, while a rebind, a
+    /// return, or a by-value call materializes the element and takes it over.
+    /// One predicate for both backends is what keeps them agreeing by
+    /// construction rather than by coincidence — this family has split on a
+    /// second copy of a rule four times (B-2026-08-28-63, B-2026-08-29-17,
+    /// B-2026-08-31-32, B-2026-09-01-28).
+    ///
+    /// Restricted to a scrutinee that is NOT an owned param: there the element
+    /// is a view of a value the caller retains (B-2026-08-31-7) and the caller's
+    /// fire is already the single owner, so a retraction here would leave none.
+    ///
+    /// Unanimous across ARMS, matching the interpreter's
+    /// `bare_tuple_elems_all_arms_move` and for the reason that side records:
+    /// this mask is static, so a guarded match whose consuming arm masks an
+    /// element the TAKEN read-only arm still needs ran no body at all.
+    /// Per element, so `let t = (R { id: 56 }, R { id: 57 })` with only the
+    /// first rebound keeps `dR57` — measured `dR56 dR56 dR57` before,
+    /// `dR56 dR57` after.
+    fn disarm_moved_bare_tuple_elem_bodies(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) {
+        if self.pattern_state.pattern_binding_scrutinee_is_owned_param {
+            return;
+        }
+        let PatternKind::Tuple(subs) = &pattern.kind else {
+            return;
+        };
+        let ExprKind::Identifier(src) = &scrutinee.kind else {
+            return;
+        };
+        let src = src.clone();
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(scrutinee) else {
+            return;
+        };
+        let arity = subs.len();
+        let mut binds_somewhere = vec![false; arity];
+        let mut all_move = vec![true; arity];
+        for a in arms {
+            let PatternKind::Tuple(asubs) = &a.pattern.kind else {
+                continue;
+            };
+            for (i, sub) in asubs.iter().enumerate().take(arity) {
+                let PatternKind::Binding(bname) = &sub.kind else {
+                    continue;
+                };
+                binds_somewhere[i] = true;
+                let only_borrowed = super::consume_class::binding_only_borrowed(bname, &a.body)
+                    && a.guard
+                        .as_ref()
+                        .is_none_or(|g| super::consume_class::binding_only_borrowed(bname, g));
+                if only_borrowed {
+                    all_move[i] = false;
+                }
+            }
+        }
+        for i in 0..arity {
+            if binds_somewhere[i] && all_move[i] {
+                self.disarm_tuple_elem_bodies_at(&src, i as u32, tuple_ty);
+            }
+        }
+    }
+
     pub(super) fn disarm_tuple_elem_bodies_at(
         &mut self,
         var_name: &str,
