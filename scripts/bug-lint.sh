@@ -10,7 +10,8 @@
 #   5. cross-repo (if kara-katas is found): every `kata:N` ledger row is cited by
 #      that kata's README, and every B-ID in a kata README exists in the ledger
 #   6. every SHA cited in a `fix` field resolves to a commit in this repo
-#   7. canonical JSON encoding — see scripts/bug-ledger-normalize.py
+#   7. no PUBLISHED row has disappeared — every B-ID on origin/main is still here
+#   8. canonical JSON encoding — see scripts/bug-ledger-normalize.py
 set -euo pipefail
 cd "$(dirname "$0")/.."
 LEDGER="docs/bug-ledger.jsonl"
@@ -285,6 +286,56 @@ else:
         for bid in sorted(DANGLING_GRANDFATHERED - {b for b in cites if cites[b] & gone}):
             warns.append(f"{bid}: grandfathered as dangling but now resolves — "
                          "remove it from DANGLING_GRANDFATHERED")
+
+# 7. NO PUBLISHED ROW HAS DISAPPEARED.
+#
+# The ledger is append-only, so a row that is on `origin/main` and not here was
+# DELETED — and the way that happens is a bad rebase conflict resolution. Two
+# sessions filing at the same time both append at EOF, which conflicts; keeping
+# only one side ("ours" / "theirs") silently drops the other session's row.
+#
+# That outcome is invisible to every other check here: no duplicate, no bad
+# format, valid JSON, clean encoding, clean push. It is strictly worse than the
+# duplicate ID it replaces, which at least fails loudly on rule 2.
+#
+# Scoped to the case where the answer is unambiguous: run ONLY when HEAD already
+# contains `origin/main`. Before a rebase, `origin/main` legitimately carries
+# rows this working copy has not merged yet, and reporting those as deletions
+# would fire on the normal `git fetch` → not-yet-rebased state and train people
+# to ignore it. Which is also the practical rule this enforces: LINT AFTER THE
+# FINAL REBASE, not before — the same reason a fix SHA has to be read back after
+# one.
+if _git("rev-parse", "--git-dir").returncode != 0:
+    pass  # already reported above
+elif _git("rev-parse", "--verify", "--quiet", "origin/main").returncode != 0:
+    warns.append("no origin/main ref — skipped the deleted-row check (run `git fetch origin main`)")
+elif _git("merge-base", "--is-ancestor", "origin/main", "HEAD").returncode != 0:
+    warns.append(
+        "HEAD does not contain origin/main — skipped the deleted-row check; "
+        "rebase onto origin/main and re-run, which is when it is meaningful"
+    )
+else:
+    pub = _git("show", f"origin/main:{ledger}")
+    if pub.returncode != 0:
+        warns.append("could not read the ledger from origin/main — skipped the deleted-row check")
+    else:
+        published = set()
+        for line in pub.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                published.add(json.loads(line)["id"])
+            except Exception:
+                continue
+        here = {r["id"] for r in rows}
+        for bid in sorted(published - here):
+            errs.append(
+                f"{bid}: published on origin/main but MISSING here — the ledger is "
+                "append-only, so this row was deleted, almost certainly by resolving a "
+                "rebase conflict with one side instead of keeping both. Restore it: "
+                f"`git show origin/main:{ledger} | grep '\"{bid}\"' >> {ledger}`, then "
+                "renumber whichever row actually collided."
+            )
 
 for w in warns: print(f"WARN  {w}")
 for e in errs: print(f"ERROR {e}")
