@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 193 |
 | double-free | 167 |
 | codegen-gap | 159 |
-| diagnostics | 118 |
+| diagnostics | 119 |
 | false-positive | 104 |
 | soundness | 94 |
 | perf | 87 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 70 |
 | cli | 70 |
 | autopar | 55 |
-| parser | 44 |
+| parser | 45 |
 | runtime | 35 |
 | effect | 29 |
 | resolver | 28 |
@@ -157,10 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-25 | 2026-09-02 | interp+codegen | medium | THE `let (r, k) = t` SPELLING OF B-2026-08-31-7 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b5 dR5 dR5` where one is due, while the `match` spelling of the identical signature is now correct. A spelling gap in that row's rule, NOT folded in because the two halves live in different machinery and landing only the easy one would trade an agreed answer for a divergence | — |
 | B-2026-09-02-26 | 2026-09-02 | interp+codegen | medium | A LOCAL TUPLE SCRUTINEE'S ELEMENT REBIND STILL DOUBLES THE `Drop` BODY on all four surfaces -- `b6 dR6 dR6` where one is due, while the owned-PARAM spelling is now correct and the LOCAL ENUM spelling always was. Needs the OPPOSITE repair from B-2026-08-31-7's: caller-retains does not apply to a local, so the tuple's element walk must be RETRACTED rather than the rebind suppressed | — |
 | B-2026-09-02-28 | 2026-09-02 | interp+codegen | medium | A TUPLE-DESTRUCTURE DISCARD OF A CALL-PRODUCED ENUM RUNS NEITHER BODY ON THE COMPILED BACKENDS -- `let (_, _) = (mk(1), 5);` is interp `dB dW7` against compiled SILENCE, so the compiled side loses the enum's OWN body as well as its payload's | — |
-| B-2026-09-02-29 | 2026-09-02 | parser | medium | 12 OF THE 18 FUTURE-RESERVED KEYWORDS STILL RENDER THE INTERNAL `Error("...")` DEBUG WRAPPER INTO THE USER-VISIBLE DIAGNOSTIC, plus a cascading second error -- `Expected pattern, found Error("'async' is reserved for future use and cannot be used as an identifier")`. The other six give a clean `E0003`. This is the exact shape B-2026-07-08-13 was filed to remove; that row fixed the `E0003` path and this is the unfixed remainder. | — |
-| B-2026-09-02-30 | 2026-09-02 | parser | low | NO RESERVED-KEYWORD DIAGNOSTIC MENTIONS THE `r#` ESCAPE, though design.md names it as THE remedy for exactly this collision and says tooling can apply it mechanically. 0 of 18 keywords tested name it, in any syntactic position. The sibling name-class diagnostic does better -- it names its own remedy in prose (`consider renaming to `Ds``). | — |
 | B-2026-09-02-31 | 2026-09-02 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, .. }` in a nested expression position loses 15 B per evaluation at both opt levels where the BRACED `=> { s }` spelling is now clean. Excluded by that fix's block-bodied-arm condition, which is load-bearing: dropping it fails BOTH `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free` and `selfhost_codegen_matches_seed_run`, because a bare-armed match is also how the generic-enum debox hands a value out of its frame | — |
 | B-2026-09-02-32 | 2026-09-02 | codegen | high | A WHOLE-ELEMENT REBIND OUT OF A BARE-TUPLE PATTERN DOUBLE-FREES THE ELEMENT'S HEAP -- `match t { (r, k) => { let m = r; ... } }` over a heap-owning element aborts with `free(): double free detected in tcache 2` at BOTH optimization levels while `--interp` is correct. The MEMORY analogue of B-2026-08-31-7, which fixed this exact shape for `Drop` BODIES only: `m` takes a struct drop of its own while the tuple's `__karac_drop_tuple_*` still frees the same buffers. Needs the element's OWNER transferred, not a per-field cap zeroed the way B-2026-09-02-27 does for `let n = r.name` | — |
+| B-2026-09-02-33 | 2026-09-02 | parser | low | THREE KEYWORD/POSITION CELLS STILL REPORT ON THE PUNCTUATION INSTEAD OF THE KEYWORD, because the word starts a construct the parser commits to before it can fail -- `fn f(comptime: i64)` gives `Expected parameter pattern, found Colon` and `let x = try;` gives `Expected LeftBrace, found Semicolon`. Same family as B-2026-07-08-13 / B-2026-09-02-29 (a Rust `Debug` token name in user-facing text) but a much milder instance: the leaked name is a punctuation token, not a wrapped message. | — |
 
 ### Relocated
 
@@ -2138,6 +2137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-21 | codegen | high | THE `for`-RANGE SPELLING OF THE SAME SHAPE NEVER TERMINATES ON THE JIT: the induction variable stops advancing at the iteration that performs the con… | f1d28a4 |
 | B-2026-09-02-23 | codegen | high | A BARE-TUPLE ELEMENT BINDING IS REGISTERED AS A SECOND OWNER OF THE TUPLE'S ELEMENT, SO `match t { (r, k) => .. | a08960b1 |
 | B-2026-09-02-27 | codegen | high | MOVING A HEAP FIELD OUT OF A BARE-TUPLE ELEMENT BINDING DOUBLE-FREES IT -- `match t { (r, k) => { let n = r.name; .. | e49aa9e8 |
+| B-2026-09-02-29 | parser | medium | 12 OF THE 18 FUTURE-RESERVED KEYWORDS STILL RENDER THE INTERNAL `Error("...")` DEBUG WRAPPER INTO THE USER-VISIBLE DIAGNOSTIC, plus a cascading secon… | 1f2fae6 |
+| B-2026-09-02-30 | parser | low | NO RESERVED-KEYWORD DIAGNOSTIC MENTIONS THE `r#` ESCAPE, though design.md names it as THE remedy for exactly this collision and says tooling can appl… | 1f2fae6 |
 
 </details>
 
