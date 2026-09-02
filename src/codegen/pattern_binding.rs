@@ -1119,7 +1119,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                     let tn_owned = tn.to_string();
                                     let name_owned = name.clone();
                                     self.track_user_drop_var(&tn_owned, &name_owned, alloca);
-                                } else {
+                                } else if !self
+                                    .pattern_state
+                                    .current_bare_tuple_bindings
+                                    .contains(name.as_str())
+                                {
+                                    // B-2026-09-02-23 — a bare-tuple element
+                                    // binding owns nothing: it is a bit-copy of
+                                    // the scrutinee tuple's element, whose heap
+                                    // the tuple's own drop frees. See
+                                    // `current_bare_tuple_bindings`.
                                     self.track_struct_var(tn, alloca);
                                 }
                             }

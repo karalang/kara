@@ -253,6 +253,75 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-02-23 — A BARE-TUPLE ELEMENT BINDING MUST NOT REGISTER A
+    /// SECOND OWNER FOR THE TUPLE'S ELEMENT.
+    ///
+    /// `match t { (r, k) => … }` over a tuple whose element is a heap-owning
+    /// struct bound `r` as a bit-copy of `t.0` AND registered it on the
+    /// struct-drop channel, while the tuple's own `__karac_drop_tuple_*` was
+    /// already freeing that element — both ran on the same buffers.
+    ///
+    /// IT NEEDS NO FIELD READ, NO `impl Drop`, AND NO PARTICULAR FIELD MIX.
+    /// The row was first characterised as needing a `Vec` + `String` pair read
+    /// in a specific order, which was wrong in an instructive way: at the
+    /// DEFAULT `-O2` the optimizer folded away one of the two frees for almost
+    /// every shape, so the handful that still aborted looked like the trigger
+    /// condition. Under `KARAC_OPT_LEVEL=0` every one of them aborted,
+    /// including `match t { (r, k) => { println("hi") } }`. That is why this
+    /// case lives in the ASAN suite rather than as an output pin: ASAN catches
+    /// the double free at any optimization level, and an `-O2` transcript pin
+    /// would have passed vacuously on all but one shape.
+    ///
+    /// THE CONTROLS ARE THE POINT, because the fix REMOVES an owner and the
+    /// failure mode of over-reaching is a leak (which LSan catches here):
+    /// - `bare` — the same struct as a plain by-value param, never in a tuple.
+    ///   Correct before and after; it must keep its own drop.
+    /// - `letd` — the `let (r, k) = t` destructure, which was always correct
+    ///   and goes through different machinery (`finish_place_source_tuple_
+    ///   destructure`), so it must stay untouched.
+    /// - `enu` — the enum-payload twin, correct before and after via the arm
+    ///   channel; it is what showed the tuple family was simply behind.
+    ///
+    /// A LOCAL tuple scrutinee is included because it was the ONE shape that
+    /// aborted even at `-O2` — the case a user would actually have hit.
+    #[test]
+    fn asan_bare_tuple_element_binding_is_not_a_second_owner() {
+        assert_clean_asan_run(
+            "struct H { id: i64, xs: Vec[i64], name: String }\n\
+             fn mk(id: i64) -> H {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return H { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             enum E { A(H), B }\n\
+             fn noread(t: (H, i64)) { match t { (r, k) => { println(\"noread\") } } }\n\
+             fn readboth(t: (H, i64)) { match t { (r, k) => { println(f\"  rb{r.xs.len()}:{r.name}\") } } }\n\
+             fn loc() { let t = (mk(3), 0); match t { (r, k) => { println(f\"  loc{r.id}\") } } }\n\
+             fn bare(h: H) { println(f\"  bare{h.id}\") }\n\
+             fn letd(t: (H, i64)) { let (r, k) = t; println(f\"  letd{r.id}\") }\n\
+             fn enu(e: E) { match e { E.A(r) => { println(f\"  enu{r.id}\") } E.B => { } } }\n\
+             fn main() {\n\
+             \x20   noread((mk(1), 0));\n\
+             \x20   readboth((mk(2), 0));\n\
+             \x20   loc();\n\
+             \x20   bare(mk(4));\n\
+             \x20   letd((mk(5), 0));\n\
+             \x20   enu(E.A(mk(6)));\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "noread",
+                "  rb1:n2",
+                "  loc3",
+                "  bare4",
+                "  letd5",
+                "  enu6",
+                "end",
+            ],
+            "b23-bare-tuple-element-single-owner",
+        );
+    }
+
     /// B-2026-09-01-33 — the heap-carrying producer-call argument under
     /// ASAN + LSan.
     ///

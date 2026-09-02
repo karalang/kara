@@ -6543,6 +6543,7 @@ impl<'ctx> Codegen<'ctx> {
                 pattern_binding_inner_types: HashMap::new(),
                 pattern_binding_borrow_modes: HashMap::new(),
                 current_variant_payload_bindings: HashSet::new(),
+                current_bare_tuple_bindings: HashSet::new(),
             },
             accel: Accel {
                 soa_layouts: HashMap::new(),

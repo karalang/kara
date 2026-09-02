@@ -250,4 +250,19 @@ pub(crate) struct PatternState<'ctx> {
     /// StructDrop; set/cleared around each bind call by the match / if-let
     /// compilers. Empty everywhere else, so `let` destructures are untouched.
     pub(crate) current_variant_payload_bindings: HashSet<String>,
+    /// B-2026-09-02-23 — the BARE-TUPLE element binding names of the pattern
+    /// currently being bound (`collect_bare_tuple_binding_names`), the exact
+    /// complement of [`Self::current_variant_payload_bindings`] within a tuple
+    /// pattern.
+    ///
+    /// Such a binding is a bit-copy VIEW of the scrutinee tuple's element, and
+    /// the tuple's own drop (`__karac_drop_tuple_*`, emitted at the match's
+    /// merge block) already frees that element's heap. Registering the binding
+    /// on the struct-drop channel as well made both run on the SAME buffers —
+    /// a systematic double free that `-O2` usually hid and `KARAC_OPT_LEVEL=0`
+    /// exposes on every instance. `bind_pattern_values` consults this to skip
+    /// that second registration; set/cleared around each bind call by the
+    /// match compiler, so `let` destructures (which are correct already) are
+    /// untouched.
+    pub(crate) current_bare_tuple_bindings: HashSet<String>,
 }

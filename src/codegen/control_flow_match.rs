@@ -683,6 +683,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     Self::collect_bare_tuple_binding_names(&arm.pattern, false, &mut bt_names);
                     self.payload_vars.param_view_locals.extend(bt_names);
                 }
+                // B-2026-09-02-23 — and the MEMORY half, which is a different
+                // question from view-ness and is NOT restricted to an
+                // owned-param scrutinee. A bare-tuple element binding is a
+                // bit-copy of the tuple's element, and the tuple's own
+                // `__karac_drop_tuple_*` (emitted at the merge block) already
+                // frees that element's heap; registering the binding on the
+                // struct-drop channel too freed the same buffers twice.
+                // `-O2` hid almost every instance -- which is why this sat
+                // behind a `Vec`+`String` "trigger" that was really just the
+                // one shape the optimizer failed to fold -- and
+                // `KARAC_OPT_LEVEL=0` shows it on ALL of them, including a
+                // `match t { (r, k) => { println("hi") } }` that reads no
+                // field at all.
+                self.pattern_state.current_bare_tuple_bindings.clear();
+                {
+                    let mut bt_all: Vec<String> = Vec::new();
+                    Self::collect_bare_tuple_binding_names(&arm.pattern, false, &mut bt_all);
+                    self.pattern_state
+                        .current_bare_tuple_bindings
+                        .extend(bt_all);
+                }
                 // B-2026-08-12-2 — per-ARM, and saved/restored because a nested
                 // `match` inside this body binds through the same field.
                 let saved_arm_borrows = self.pattern_state.pattern_binding_arm_only_borrows;
@@ -736,6 +757,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.pattern_state.pattern_binding_arm_borrowed_only_names =
                         saved_arm_borrowed_names.clone();
                     self.pattern_state.current_variant_payload_bindings.clear();
+                    self.pattern_state.current_bare_tuple_bindings.clear();
                     // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
                     // over a `Map.get` scrutinee whose arm (guard or body)
                     // MOVES `x` gets a deep clone + owned tracking — the
