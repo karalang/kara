@@ -67712,6 +67712,90 @@ fn main() {
     }
 
     #[test]
+    fn asan_tuple_arg_vec_element_heap_is_freed() {
+        // B-2026-09-02-35 — a by-value TUPLE ARGUMENT whose element carries a
+        // `Vec` of heap-owning things leaked every one of that Vec's elements.
+        //
+        // The caller's tuple temporary was registered through the shallow
+        // `track_tuple_var` fallback, whose LLVM-type-driven walker
+        // (`emit_aggregate_heap_field_frees`) frees a `{ptr,len,cap}` field's
+        // outer buffer and cannot recurse — the element type is erased at the
+        // LLVM level. It took that fallback because `infer_arg_elem_te` could
+        // not name a CALL element, so `(mkv(), 0)`'s element types came back as
+        // EMPTY paths, read as no-drop, and the deep `synthesize_tuple_drop_fn_te`
+        // branch right above it never fired.
+        //
+        // NO `match`, DESTRUCTURE OR MOVE-OUT IS INVOLVED, which is what
+        // separates this from the whole B-2026-09-02-23/-27/-34 family it was
+        // found next to: the argument is merely passed and read.
+        //
+        // Every cell allocates 45-byte strings, past any small-string
+        // threshold, so the elements are real heap rather than inline bytes.
+        //
+        // THE CONTROLS ARE THE POINT, because the fix makes MORE type
+        // information reach a registrar that decides whether to free: widening
+        // it in the wrong direction turns a leak into a double free. `plain`
+        // passes the same Vec as its own parameter, `local` never passes it at
+        // all, and `handback` returns the element out of the callee so the
+        // caller's binding owns it — the shape that would abort first if the
+        // caller's temp started freeing a buffer the callee gave away. Looped,
+        // so anything unbalanced compounds instead of cancelling.
+        assert_clean_asan_run(
+            r#"
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-byte");
+    s.push_str(f"{t}");
+    return s;
+}
+fn mkv(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(pad(n));
+    v.push(pad(n));
+    return v;
+}
+fn mkvv() -> Vec[Vec[i64]] {
+    let mut o: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    o.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3);
+    o.push(b);
+    return o;
+}
+struct H { id: i64, xs: Vec[String] }
+fn mkh(id: i64) -> H { return H { id: id, xs: mkv(id) }; }
+fn takev(t: (Vec[String], i64)) { println(f"v{t.0.len()}:{t.1}"); }
+fn takevv(t: (Vec[Vec[i64]], i64)) { println(f"n{t.0.len()}:{t.1}"); }
+fn takeh(t: (H, i64)) { println(f"h{t.0.xs.len()}:{t.1}"); }
+fn plain(v: Vec[String]) { println(f"p{v.len()}"); }
+fn handback(t: (Vec[String], i64)) -> Vec[String] { return t.0; }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        takev((mkv(1), 0));
+        takevv((mkvv(), 5));
+        takeh((mkh(2), 9));
+        plain(mkv(3));
+        let t = (mkv(4), 7);
+        println(f"l{t.0.len()}:{t.1}");
+        let r = handback((mkv(5), 8));
+        println(f"b{r.len()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "v2:0", "n2:5", "h2:9", "p2", "l2:7", "b2", "v2:0", "n2:5", "h2:9", "p2", "l2:7",
+                "b2", "v2:0", "n2:5", "h2:9", "p2", "l2:7", "b2", "done",
+            ],
+            "b0902-35-tuple-arg-vec-element-heap",
+        );
+    }
+
+    #[test]
     fn asan_field_param_view_sibling_bodies_free_exactly_once() {
         // B-2026-09-02-10 — the heap half of the per-FIELD param-view fix.
         //

@@ -5598,6 +5598,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
             }
         }
+        // B-2026-09-02-35 — a CALL element (`take((mkv(), 0))`). None of the
+        // namers below resolves a call's RESULT, so such an element came back an
+        // empty path, which reads as no-drop everywhere downstream. The tuple
+        // ARGUMENT registrar then failed its `type_expr_has_drop_heap` test and
+        // took the shallow `track_tuple_var` fallback, whose LLVM-type-driven
+        // walker frees a Vec field's outer buffer but never the heap its
+        // ELEMENTS own -- so every `String` in a `(Vec[String], i64)` argument
+        // leaked, with no `match`, destructure or move-out anywhere in sight.
+        // (`Vec[Vec[i64]]` leaked its inner Vecs identically; the axis is a
+        // heap-owning element type, not `String`.)
+        //
+        // Hand back the callee's DECLARED return type VERBATIM rather than
+        // rebuilding it from a name, for B-2026-08-28-11's reason one arm up: a
+        // bare `Path(["Vec"])` with no generic args is exactly as unusable as
+        // the empty one, because `vec_inner_type_expr` needs the `[String]` to
+        // see that the element owns heap. Same two-map lookup
+        // `tuple_arg_elem_type_exprs`' own Call arm already uses, so a generic
+        // callee resolves here too.
+        //
+        // Fail-CLOSED, like every other arm: an unresolvable callee falls
+        // through to the namers and then to the empty path, which degrades to
+        // the pre-existing leak rather than to a caller drop of a buffer the
+        // callee owns.
+        if let ExprKind::Call { callee, .. } = &e.kind {
+            if let ExprKind::Identifier(fn_name) = &callee.kind {
+                if let Some(ret) = self.fn_sig.fn_return_type_exprs.get(fn_name).or_else(|| {
+                    self.mono_state
+                        .generic_fns
+                        .get(fn_name)
+                        .and_then(|f| f.return_type.as_ref())
+                }) {
+                    return ret.clone();
+                }
+            }
+        }
         let name = self
             .enum_name_of_expr(e)
             // B-2026-08-28-43 — a BARE unit-variant element (`(B, 1)`).
