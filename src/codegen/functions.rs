@@ -1503,6 +1503,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
+        self.drop_rc.field_view_flag_fields.clear();
         // B-2026-08-30-2 — same reasoning one map over: `branch_tail_owner_slots`
         // holds ALLOCAS, so an entry surviving into the next function names a
         // slot in a frame that no longer exists. It was a latent hazard while

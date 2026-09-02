@@ -9467,6 +9467,61 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// A binding with no flag — everything but the branch-tail shape — takes
     /// the unguarded call, byte-identical to before.
+    /// B-2026-08-30-54 — open a `cond_move_drop_flags` guard around a RUN of
+    /// emitted calls, for the sites that emit more than one and so cannot use
+    /// [`Self::emit_user_drop_call_guarded`] (which guards exactly one).
+    ///
+    /// Returns the `(live, cont)` pair and leaves the builder positioned in
+    /// `live`; pass it back to [`Self::close_cond_move_guard`] when the run is
+    /// finished. A binding with no flag returns `None` and the caller emits
+    /// straight into the current block, byte-identical to before.
+    pub(super) fn open_cond_move_guard(
+        &mut self,
+        binding_name: &str,
+    ) -> Option<(
+        inkwell::basic_block::BasicBlock<'ctx>,
+        inkwell::basic_block::BasicBlock<'ctx>,
+    )> {
+        let flag = self
+            .drop_rc
+            .cond_move_drop_flags
+            .get(binding_name)
+            .copied()?;
+        let fn_val = self.current_fn?;
+        let live = self.context.append_basic_block(fn_val, "cmrun.live");
+        let cont = self.context.append_basic_block(fn_val, "cmrun.cont");
+        let armed = self
+            .builder
+            .build_load(self.context.bool_type(), flag, "cmrun.armed")
+            .ok()?
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(armed, live, cont)
+            .ok()?;
+        self.builder.position_at_end(live);
+        Some((live, cont))
+    }
+
+    /// Close a guard opened by [`Self::open_cond_move_guard`]. A `None` handle
+    /// is a no-op, so an unguarded caller needs no branch of its own.
+    pub(super) fn close_cond_move_guard(
+        &mut self,
+        blocks: Option<(
+            inkwell::basic_block::BasicBlock<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )>,
+    ) {
+        let Some((_, cont)) = blocks else { return };
+        if self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none())
+        {
+            let _ = self.builder.build_unconditional_branch(cont);
+        }
+        self.builder.position_at_end(cont);
+    }
+
     pub(super) fn emit_user_drop_call_guarded(
         &self,
         binding_name: &str,

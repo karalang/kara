@@ -115738,6 +115738,101 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_target_param_view_assign_matches_the_identifier_spelling() {
+        // B-2026-08-30-54 — `h.f = r` inside a match arm, where `r` is a
+        // payload view of an OWNED enum param. The FIELD spelling of
+        // B-2026-08-30-53, and it was wrong on BOTH backends in different
+        // directions, which is why that row stopped at a bare identifier: the
+        // interpreter ran the payload's body twice, and codegen retracted the
+        // BASE's whole bodies action all-paths and permanently.
+        //
+        // The oracle is now the identifier spelling itself, which agrees on all
+        // four surfaces since ed0a330b/b2122ccd — `dies`/`refreshed` below are
+        // that test's `a`/`b`/`f` rows with `out` replaced by `h.f`, and they
+        // must print the same thing.
+        //
+        // Codegen took the same shape as the identifier fix: a per-path
+        // `cond_move_drop_flags` bool on the base, cleared where the store
+        // happened, re-armed when the SAME field later receives a fresh value,
+        // and consulted by the displaced-field emission. The interpreter took
+        // its half through `moved_out_struct_field_bodies`, the per-FIELD mask
+        // `drop_user_drop_fields_of_binding` already reads.
+        //
+        // Five shapes, measured against a stashed `src/`:
+        //
+        //   a  arm NOT taken       pre-fix `m dE a0`            (`dR0` lost)
+        //   b  arm taken           pre-fix interp doubled `dR8`
+        //   c  view then FRESH     pre-fix `dR5` lost, interp doubled `dR9`
+        //   d  no view at all      unchanged boundary
+        //   e  TWO fields, not     pre-fix `s dE e61` (both bodies lost)
+        //      taken
+        //
+        // `e` is the row worth keeping an eye on: the flag guards the base's
+        // WHOLE walk, so B-2026-08-01-19's over-suppression trade is unchanged
+        // by this fix — a sibling field's body is still silenced while another
+        // field holds a view. `e` uses the NOT-taken arm precisely so it pins
+        // agreement rather than that residue.
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { f: R }
+struct H2 { f: R, g: R }
+
+fn dies(b: E) -> i64 {
+    let mut h: H = H { f: R { id: 0, tag: f"t0" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    println("m");
+    return h.f.id
+}
+
+fn refreshed(b: E) -> i64 {
+    let mut h: H = H { f: R { id: 0, tag: f"t0" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    println("m1");
+    h.f = R { id: 5, tag: f"t5" };
+    println("m2");
+    return h.f.id
+}
+
+fn plain() -> i64 {
+    let mut h: H = H { f: R { id: 20, tag: f"t20" } };
+    h.f = R { id: 21, tag: f"t21" };
+    println("p");
+    return h.f.id
+}
+
+fn sibs(b: E) -> i64 {
+    let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    println("s");
+    return h.f.id + h.g.id
+}
+
+fn main() {
+    println(f"a{dies(E.B)}");
+    println("-");
+    println(f"b{dies(E.A(R { id: 8, tag: f"t8" }))}");
+    println("-");
+    println(f"c{refreshed(E.A(R { id: 9, tag: f"t9" }))}");
+    println("-");
+    println(f"d{plain()}");
+    println("-");
+    println(f"e{sibs(E.B)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "m\ndR0\ndE\na0\n-\ndR0\nm\ndE\ndR8\nb8\n-\ndR0\nm1\nm2\ndR5\ndE\ndR9\nc5\n-\ndR20\np\ndR21\nd21\n-\ns\ndR31\ndR30\ndE\ne61"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_conditional_param_view_assign_keeps_target_body_per_path() {
         // B-2026-08-30-53 — `out = r` inside a match arm, where `r` is a
         // payload view of an OWNED param. The assignment hands the caller's

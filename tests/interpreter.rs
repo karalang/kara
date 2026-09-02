@@ -38690,6 +38690,100 @@ fn if_let_miss_drops_the_scrutinee_temp_before_the_else_arm() {
     }
 }
 
+/// B-2026-08-30-54 — the FIELD spelling of the conditional param-view
+/// assignment, `h.f = r`.
+///
+/// Unlike its sibling below, this half was NOT an oracle before the fix: the
+/// interpreter ran the payload's body TWICE on the taken path
+/// (`dR0 m dR8 dE dR8 b8`) because `record_assign_of_param_view` reached only
+/// a bare-identifier target, and codegen was wrong in the other direction. The
+/// fix gives the interpreter a per-FIELD record over
+/// `moved_out_struct_field_bodies` — the mask
+/// `drop_user_drop_fields_of_binding` already consults — rather than the
+/// whole-binding set the identifier leg uses, so silencing one field leaves
+/// every other field's body armed.
+///
+/// The parity twin of
+/// `codegen::test_e2e_field_target_param_view_assign_matches_the_identifier_spelling`,
+/// and the expectations are the identifier test's own rows with `out`
+/// replaced by `h.f` — that the two spellings print the same thing is the
+/// property the row was filed to restore.
+#[test]
+fn field_target_param_view_assign_fires_each_body_once() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct H { f: R }\n\
+         struct H2 { f: R, g: R }\n\
+         fn dies(b: E) -> i64 {\n\
+             let mut h: H = H { f: R { id: 0, tag: f\"t0\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             println(\"m\");\n\
+             return h.f.id\n\
+         }\n\
+         fn refreshed(b: E) -> i64 {\n\
+             let mut h: H = H { f: R { id: 0, tag: f\"t0\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             println(\"m1\");\n\
+             h.f = R { id: 5, tag: f\"t5\" };\n\
+             println(\"m2\");\n\
+             return h.f.id\n\
+         }\n\
+         fn plain() -> i64 {\n\
+             let mut h: H = H { f: R { id: 20, tag: f\"t20\" } };\n\
+             h.f = R { id: 21, tag: f\"t21\" };\n\
+             println(\"p\");\n\
+             return h.f.id\n\
+         }\n\
+         fn sibs(b: E) -> i64 {\n\
+             let mut h: H2 = H2 { f: R { id: 30, tag: f\"t30\" }, g: R { id: 31, tag: f\"t31\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             println(\"s\");\n\
+             return h.f.id + h.g.id\n\
+         }\n";
+    for (label, body, want) in [
+        // Arm NOT taken: `h.f` still holds what `h` was built with.
+        (
+            "arm-not-taken",
+            "println(f\"a{dies(E.B)}\")\n",
+            "m\ndR0\ndE\na0\n",
+        ),
+        // Arm taken: the displacement fires the field's own initializer at the
+        // assignment, and the moved-in payload's body is the caller's. The
+        // interpreter used to run that payload here as well.
+        (
+            "arm-taken",
+            "println(f\"b{dies(E.A(R { id: 8, tag: f\"t8\" }))}\")\n",
+            "dR0\nm\ndE\ndR8\nb8\n",
+        ),
+        // A view, then a FRESH value in the same field. The second
+        // displacement must NOT fire (it displaces the caller's view) and the
+        // fresh value must run its own body — the pair codegen needed a re-arm
+        // for and the interpreter needed the per-field gate for.
+        (
+            "view-then-fresh-value",
+            "println(f\"c{refreshed(E.A(R { id: 9, tag: f\"t9\" }))}\")\n",
+            "dR0\nm1\nm2\ndR5\ndE\ndR9\nc5\n",
+        ),
+        // No view anywhere: the boundary an over-eager fix would move.
+        (
+            "no-view-at-all",
+            "println(f\"d{plain()}\")\n",
+            "dR20\np\ndR21\nd21\n",
+        ),
+        // TWO Drop-bearing fields with the arm not taken: both bodies are due.
+        (
+            "two-fields-not-taken",
+            "println(f\"e{sibs(E.B)}\")\n",
+            "s\ndR31\ndR30\ndE\ne61\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-30-53 — the ORACLE half of the conditional param-view
 /// assignment. `out = r` inside a match arm, where `r` is a payload view of
 /// an owned param, must run `out`'s OWN body exactly once on the path where

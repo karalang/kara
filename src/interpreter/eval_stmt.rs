@@ -2263,6 +2263,56 @@ impl<'a> super::Interpreter<'a> {
         self.moved_out_user_drop_bindings.insert(target.to_string());
     }
 
+    /// B-2026-08-30-54 — the FIELD-target sibling of
+    /// [`Self::record_assign_of_param_view`].
+    ///
+    /// `match b { E.A(r) => { h.f = r; } .. }` over an OWNED enum param stores
+    /// a payload VIEW of the caller's value into a FIELD of an outer local. The
+    /// caller still owns that payload and runs its body, so leaving the field
+    /// in the base's field-bodies walk ran it a SECOND time -- measured
+    /// `dR0 m dR8 dE dR8 v8` against every compiled backend's
+    /// `dR0 m dE dR8 v8`.
+    ///
+    /// Routed through `moved_out_struct_field_bodies`, the PER-FIELD mask
+    /// `drop_user_drop_fields_of_binding` already consults, rather than through
+    /// the whole-binding `moved_out_user_drop_bindings` its identifier sibling
+    /// uses. That is the difference the row named: a field is one leaf of the
+    /// base's walk, so silencing the base wholesale would take every OTHER
+    /// Drop-bearing field's body with it. The same set also gates the
+    /// displaced-field fire above, which is what makes a REPEATED assignment
+    /// (`h.f = r; .. h.f = R { .. };`) agree with codegen -- the displacement
+    /// runs a body only for a value the field genuinely owned.
+    ///
+    /// View-ness does NOT propagate from here, and deliberately so: the
+    /// identifier sibling propagates onto a NAME, and `h.f` is not one. A later
+    /// `let z = h.f;` records its own move-out through the `let x = h.f`
+    /// leg (B-2026-08-03-8), which is the same mask by a different route.
+    ///
+    /// The method-frame guard is [`Self::record_assign_of_param_view`]'s,
+    /// verbatim and for its reason (B-2026-08-27-48 / B-2026-08-30-55): a frame
+    /// that claimed its arguments is the only owner and must keep firing.
+    fn record_field_assign_of_param_view(&mut self, base: &str, field: &str, value: &Expr) {
+        let ExprKind::Identifier(src) = &value.kind else {
+            return;
+        };
+        if self
+            .method_frame_caller_retains_args
+            .last()
+            .is_some_and(|caller_owns| !caller_owns)
+        {
+            return;
+        }
+        let src_is_view = self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|params| params.contains(src.as_str()));
+        if !src_is_view {
+            return;
+        }
+        self.moved_out_struct_field_bodies
+            .insert((base.to_string(), field.to_string()));
+    }
+
     /// B-2026-08-28-12 — run the user `Drop` bodies of every element/field a
     /// `let` destructure DISCARDS through a wildcard leaf.
     ///
@@ -5752,7 +5802,25 @@ impl<'a> super::Interpreter<'a> {
                     };
                     if let Some(base) = chain_base {
                         chain_middles.reverse();
-                        if !self.moved_out_user_drop_bindings.contains(base.as_str())
+                        // B-2026-08-30-54 — the PER-FIELD gate beside the
+                        // three base-coarse ones. `h.f = r` over a param view
+                        // records `(h, f)` below, and a LATER `h.f = <fresh>`
+                        // displaces that view -- a value the caller still owns
+                        // and fires. Without this the interpreter ran it here
+                        // as well: `dR0 m1 dR8 m2 dR5 dE dR8 v5`, one `dR8` too
+                        // many, against the compiled backends' (and the
+                        // bare-identifier spelling's) `dR0 m1 m2 dR5 dE dR8 v5`.
+                        //
+                        // Depth 1 only, because that is the key shape the set
+                        // has: a deep chain (`o.h.r = ..`) is keyed by the ROOT
+                        // and its own field name, which is not what a middle
+                        // segment's view would record.
+                        let field_is_view = chain_middles.is_empty()
+                            && self
+                                .moved_out_struct_field_bodies
+                                .contains(&(base.clone(), field.clone()));
+                        if !field_is_view
+                            && !self.moved_out_user_drop_bindings.contains(base.as_str())
                             && !self.moved_out_drop_field_bindings.contains(base.as_str())
                             && !crate::deque_head::expr_mentions_name_deep(value, &base)
                         {
@@ -5926,6 +5994,27 @@ impl<'a> super::Interpreter<'a> {
                     // the view record has to be taken afterwards or it is wiped
                     // by the statement that establishes it.
                     self.record_assign_of_param_view(&t, value);
+                } else if let ExprKind::FieldAccess { object, field } = &target.kind {
+                    // B-2026-08-30-54 — the FIELD sibling of the two calls
+                    // above, expressed over `moved_out_struct_field_bodies`
+                    // rather than the whole-binding set, which is what the row
+                    // asked for and what keeps the mask per field.
+                    //
+                    // Same order and same reason: clear first (the field just
+                    // received a value, so a stale record from its previous one
+                    // must not silence it), then record if what it received is
+                    // a param view.
+                    if let ExprKind::Identifier(base) = &object.kind {
+                        let (base, field) = (base.clone(), field.clone());
+                        self.moved_out_struct_field_bodies
+                            .remove(&(base.clone(), field.clone()));
+                        // Keyed by a field PATH, so a prefix match rather
+                        // than a point removal: every payload record rooted at
+                        // this field is stale once the field is overwritten.
+                        self.moved_out_struct_field_payload_bodies
+                            .retain(|(n, path)| !(n == &base && path.first() == Some(&field)));
+                        self.record_field_assign_of_param_view(&base, &field, value);
+                    }
                 }
             }
             StmtKind::CompoundAssign { target, op, value } => {

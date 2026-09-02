@@ -6186,6 +6186,7 @@ impl<'ctx> Codegen<'ctx> {
                 cond_move_escaping_sites: std::collections::HashSet::new(),
                 cond_move_drop_flags: HashMap::new(),
                 cond_store_flag_params: std::collections::HashSet::new(),
+                field_view_flag_fields: HashMap::new(),
                 deep_copy_rc_inc_bare_shared: false,
                 enum_drop_fns: HashMap::new(),
                 struct_drop_fns: HashMap::new(),

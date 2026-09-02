@@ -11419,9 +11419,79 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if (self.fn_ctx.current_fn_param_names.contains(src.as_str())
                                     && !self.borrow_vars.ref_params.contains_key(src.as_str()))
                                     || self.payload_vars.param_view_locals.contains(src.as_str()));
+                        let base = base.clone();
                         if rhs_is_param_view {
-                            let base = base.clone();
-                            self.suppress_user_drop_for_var(&base);
+                            // B-2026-08-30-54 — a PER-PATH flag, the field
+                            // sibling of what B-2026-08-30-53 did for a bare
+                            // identifier target, and for the same two reasons.
+                            //
+                            // The retraction this replaces was ALL PATHS and
+                            // PERMANENT, and both halves of that were wrong. On
+                            // a path where the arm never ran, `h.f` still holds
+                            // the value `h` was built with and nobody else owns
+                            // it: `match b { E.A(r) => { h.f = r; } E.B => {} }`
+                            // over `E.B` printed `m dE v0` against the
+                            // interpreter's `m dR0 dE v0`. And once retracted
+                            // the base's walk never came back, so a LATER fresh
+                            // value in the same field ran no body at all --
+                            // `h.f = R { id: 5, .. }` printed
+                            // `dR0 m1 m2 dE dR8 v5`, losing `dR5`, which is the
+                            // half B-2026-08-30-54 was filed for.
+                            //
+                            // The flag guards the base's whole
+                            // `UserDrop{StructFieldBodies}` action, so
+                            // B-2026-08-01-19's documented over-suppression
+                            // trade (the base's OTHER Drop-bearing fields go
+                            // silent while a view is held) is unchanged --
+                            // narrowing that is a separate question about the
+                            // walker's granularity, not about this path.
+                            match self.cond_move_drop_flag_for(&base) {
+                                Some(flag) => {
+                                    let bool_t = self.context.bool_type();
+                                    let _ =
+                                        self.builder.build_store(flag, bool_t.const_int(0, false));
+                                    self.drop_rc
+                                        .field_view_flag_fields
+                                        .entry(base.clone())
+                                        .or_default()
+                                        .insert(field.clone());
+                                }
+                                None => self.suppress_user_drop_for_var(&base),
+                            }
+                        } else if self
+                            .drop_rc
+                            .field_view_flag_fields
+                            .get(base.as_str())
+                            .is_some_and(|fs| fs.len() == 1 && fs.contains(field))
+                        {
+                            // RE-ARM: this field is the ONLY reason the base's
+                            // walk is disarmed, and it has just been given a
+                            // value of its own, so the base owns a body again.
+                            //
+                            // The single-field condition is what keeps this
+                            // honest: the flag is per BINDING while the reason
+                            // is per FIELD, so re-arming while a SIBLING field
+                            // still holds a view would resurrect that view's
+                            // body alongside the fresh one. Where more than one
+                            // field is recorded this declines and leaves the
+                            // coarse suppression exactly as it was.
+                            //
+                            // Ordered after `emit_displaced_field_bodies`
+                            // above, which is what makes the pair right: the
+                            // displacement reads the `false` the view
+                            // assignment left and correctly skips the caller's
+                            // value, and only then does the base become an
+                            // owner again.
+                            if let Some(flag) = self
+                                .drop_rc
+                                .cond_move_drop_flags
+                                .get(base.as_str())
+                                .copied()
+                            {
+                                let bool_t = self.context.bool_type();
+                                let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
+                                self.drop_rc.field_view_flag_fields.remove(base.as_str());
+                            }
                         }
                     }
                     self.compile_field_store(object, field, val, rhs_is_fresh, Some(value))?;
@@ -17279,6 +17349,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .program_snapshot
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(ftn.as_str()));
+        // B-2026-08-30-54 — GUARDED by the base's per-path flag, but ONLY for
+        // the field that flag was set for. The `full_armed` gate above reads
+        // the ACTION, and since that row the action stays armed while the flag
+        // carries the per-path answer — so without a guard the displacement
+        // fired for a value the base does not own. It is the field sibling of
+        // the guard B-2026-08-30-53 put on the binding-target displacement, and
+        // the ordering argument is the same: the flag is cleared AFTER this
+        // emission, so the first assignment (displacing the field's own
+        // initializer) fires and a later one (displacing a caller's view) does
+        // not.
+        //
+        // THE PER-FIELD CONDITION IS LOAD-BEARING, and a coarser version of
+        // this line was measured wrong before it went in. The flag is per
+        // BINDING; a SIBLING field of the same base still holds a value the
+        // base genuinely owns, so guarding its displacement on the same flag
+        // deleted a body that was due — `h.f = r; h.g = R { id: 9, .. };`
+        // dropped `g`'s initializer body (`dR1`) outright. Consulting
+        // `field_view_flag_fields` keeps the guard on exactly the field the
+        // view landed in. A base with no flag, or a field the flag was not set
+        // for, emits into the current block exactly as before.
+        let guard = if self
+            .drop_rc
+            .field_view_flag_fields
+            .get(base.as_str())
+            .is_some_and(|fs| fs.contains(field))
+        {
+            self.open_cond_move_guard(&base)
+        } else {
+            None
+        };
         if owns_body {
             if let Some(f) = self.module.get_function(&format!("{ftn}.drop")) {
                 self.builder.build_call(f, &[fptr.into()], "").unwrap();
@@ -17293,6 +17393,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } else if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&ftn) {
             self.builder.build_call(w, &[fptr.into()], "").unwrap();
         }
+        self.close_cond_move_guard(guard);
     }
 
     /// Peel value-position block wrappers to the expression that actually

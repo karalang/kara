@@ -111,6 +111,19 @@ pub(crate) struct DropRc<'ctx> {
     /// ones this row's registration created, so no pre-existing retraction
     /// changes behaviour.
     pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
+    /// B-2026-08-30-54 — for each base binding whose bodies walk is currently
+    /// disarmed by a per-path flag because a FIELD of it received a param
+    /// view, the field names that did it.
+    ///
+    /// The flag is per BINDING (it guards the base's whole
+    /// `UserDrop{StructFieldBodies}` action), while the thing that disarmed it
+    /// is per FIELD. Re-arming needs both: a later assignment of a FRESH value
+    /// to the same field makes the base an owner again, but a fresh value in a
+    /// SIBLING field does not — re-arming there would resurrect the view's body
+    /// alongside it. So the re-arm fires only when the field being overwritten
+    /// is the ONLY one recorded here, and otherwise leaves the coarse
+    /// suppression exactly as B-2026-08-01-19 left it.
+    pub(crate) field_view_flag_fields: HashMap<String, std::collections::HashSet<String>>,
     /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
     /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
     /// more than once would otherwise collect one identical `{null, 0, 0}`
