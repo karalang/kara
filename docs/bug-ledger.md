@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 193 |
 | double-free | 166 |
 | codegen-gap | 159 |
-| diagnostics | 116 |
+| diagnostics | 118 |
 | false-positive | 104 |
 | soundness | 94 |
 | perf | 87 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 70 |
 | cli | 70 |
 | autopar | 55 |
-| parser | 42 |
+| parser | 44 |
 | runtime | 35 |
 | effect | 29 |
 | resolver | 28 |
@@ -161,6 +161,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-26 | 2026-09-02 | interp+codegen | medium | A LOCAL TUPLE SCRUTINEE'S ELEMENT REBIND STILL DOUBLES THE `Drop` BODY on all four surfaces -- `b6 dR6 dR6` where one is due, while the owned-PARAM spelling is now correct and the LOCAL ENUM spelling always was. Needs the OPPOSITE repair from B-2026-08-31-7's: caller-retains does not apply to a local, so the tuple's element walk must be RETRACTED rather than the rebind suppressed | — |
 | B-2026-09-02-27 | 2026-09-02 | codegen | high | MOVING A HEAP FIELD OUT OF A BARE-TUPLE ELEMENT BINDING DOUBLE-FREES IT -- `match t { (r, k) => { let n = r.name; ... } }` aborts with `free(): double free detected in tcache 2` at BOTH optimization levels while `--interp` is correct. The tuple's element walk still frees the field the `let` moved into `n`: nothing disarms the FIELD in that walk. The same move off a BARE by-value param is correct, which puts the axis on the tuple-element binding rather than on field move-out generally | — |
 | B-2026-09-02-28 | 2026-09-02 | interp+codegen | medium | A TUPLE-DESTRUCTURE DISCARD OF A CALL-PRODUCED ENUM RUNS NEITHER BODY ON THE COMPILED BACKENDS -- `let (_, _) = (mk(1), 5);` is interp `dB dW7` against compiled SILENCE, so the compiled side loses the enum's OWN body as well as its payload's | — |
+| B-2026-09-02-29 | 2026-09-02 | parser | medium | 12 OF THE 18 FUTURE-RESERVED KEYWORDS STILL RENDER THE INTERNAL `Error("...")` DEBUG WRAPPER INTO THE USER-VISIBLE DIAGNOSTIC, plus a cascading second error -- `Expected pattern, found Error("'async' is reserved for future use and cannot be used as an identifier")`. The other six give a clean `E0003`. This is the exact shape B-2026-07-08-13 was filed to remove; that row fixed the `E0003` path and this is the unfixed remainder. | — |
+| B-2026-09-02-30 | 2026-09-02 | parser | low | NO RESERVED-KEYWORD DIAGNOSTIC MENTIONS THE `r#` ESCAPE, though design.md names it as THE remedy for exactly this collision and says tooling can apply it mechanically. 0 of 18 keywords tested name it, in any syntactic position. The sibling name-class diagnostic does better -- it names its own remedy in prose (`consider renaming to `Ds``). | — |
 
 ### Relocated
 
