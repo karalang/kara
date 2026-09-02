@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 349 |
-| run-vs-build | 308 |
+| run-vs-build | 309 |
 | leak | 253 |
 | missing-feature | 193 |
 | double-free | 166 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1374 |
-| interp | 328 |
+| codegen | 1375 |
+| interp | 329 |
 | typecheck | 287 |
 | ownership | 73 |
 | other | 70 |
@@ -151,7 +151,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
 | B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
-| B-2026-09-02-13 | 2026-09-02 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelling `let x = mk(1);` of the identical value prints `dB dW7`, so the two differ only in whether the value is named | — |
 | B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
 | B-2026-09-02-17 | 2026-09-02 | interp | medium | `let ... else` OVER AN INDEXED ELEMENT RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON ALL THREE COMPILED SURFACES -- `A dE dR3 got 4 dR3 B` vs `A dE dR3 got 4 B`. Specific to this construct: the fresh-temp and named-local scrutinees agree, and so does `if let` over the SAME `v[0]`. WHICH COUNT IS RIGHT IS OPEN -- `let ... else` binds into the ENCLOSING scope, so `r` outlives the container's NLL death (visible in the trace: `dE dR3` prints before `got 4` reads `r`), which is also the escape B-2026-08-31-3 exists to reject | — |
 | B-2026-09-02-20 | 2026-09-02 | codegen | high | A LOOP-DECLARED LOCAL WHOSE `Drop`-BEARING STRUCT OWNS TWO HEAP FIELDS SEGFAULTS THE JIT WHEN A CONDITIONAL PARAM-VIEW ASSIGNMENT TARGETS IT -- `karac run` exits 139 having printed NOTHING, while `--interp` and both `karac build` legs are correct. Bisected to three necessary ingredients: two heap-owning fields, the `let` inside the loop, and the conditional assignment; removing any one runs correctly. Pre-dates B-2026-09-02-6's fix (a build of the parent commit crashes identically) | — |
@@ -161,6 +160,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-25 | 2026-09-02 | interp+codegen | medium | THE `let (r, k) = t` SPELLING OF B-2026-08-31-7 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b5 dR5 dR5` where one is due, while the `match` spelling of the identical signature is now correct. A spelling gap in that row's rule, NOT folded in because the two halves live in different machinery and landing only the easy one would trade an agreed answer for a divergence | — |
 | B-2026-09-02-26 | 2026-09-02 | interp+codegen | medium | A LOCAL TUPLE SCRUTINEE'S ELEMENT REBIND STILL DOUBLES THE `Drop` BODY on all four surfaces -- `b6 dR6 dR6` where one is due, while the owned-PARAM spelling is now correct and the LOCAL ENUM spelling always was. Needs the OPPOSITE repair from B-2026-08-31-7's: caller-retains does not apply to a local, so the tuple's element walk must be RETRACTED rather than the rebind suppressed | — |
 | B-2026-09-02-27 | 2026-09-02 | codegen | high | MOVING A HEAP FIELD OUT OF A BARE-TUPLE ELEMENT BINDING DOUBLE-FREES IT -- `match t { (r, k) => { let n = r.name; ... } }` aborts with `free(): double free detected in tcache 2` at BOTH optimization levels while `--interp` is correct. The tuple's element walk still frees the field the `let` moved into `n`: nothing disarms the FIELD in that walk. The same move off a BARE by-value param is correct, which puts the axis on the tuple-element binding rather than on field move-out generally | — |
+| B-2026-09-02-28 | 2026-09-02 | interp+codegen | medium | A TUPLE-DESTRUCTURE DISCARD OF A CALL-PRODUCED ENUM RUNS NEITHER BODY ON THE COMPILED BACKENDS -- `let (_, _) = (mk(1), 5);` is interp `dB dW7` against compiled SILENCE, so the compiled side loses the enum's OWN body as well as its payload's | — |
 
 ### Relocated
 
@@ -2128,6 +2128,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-10 | codegen | medium | B-2026-08-01-19's OVER-SUPPRESSION TRADE IS NOW A VISIBLE DIVERGENCE: a param view assigned into ONE field silences EVERY Drop-bearing field's body o… | d3f7d4b |
 | B-2026-09-02-11 | codegen | medium | A READ-ONLY `match v[i]` ARM STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON ALL THREE COMPILED SURFACES -- `index got 4 dR3 dE dR3` against `--interp`… | 788361f |
 | B-2026-09-02-12 | interp+codegen | medium | AN `Option`/`Result` SCRUTINEE WHOSE NON-MATCHING ARM CARRIES A `Drop` TYPE LOSES THAT PAYLOAD'S BODY ON ALL FOUR SURFACES -- and through `if let` as… | eac05d2 |
+| B-2026-09-02-13 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelli… | 64e9b1b |
 | B-2026-09-02-14 | interp+codegen | medium | A BOUND `Option`/`Result` LOCAL WHOSE `if let` MISSES LOSES ITS PAYLOAD'S `Drop` BODY ON ALL FOUR SURFACES -- the pattern's payload-walk retraction i… | aa73e67 |
 | B-2026-09-02-15 | codegen | high | THE `if let` / `while let` / `let .. | a2e3f4f |
 | B-2026-09-02-18 | typecheck | medium | A GENERIC PREFIX SUM DOES NOT COMPILE: adding an element of an owned local `Vec[T]` to anything that is not also an element of an owned local `Vec[T]… | fe82c7b |
