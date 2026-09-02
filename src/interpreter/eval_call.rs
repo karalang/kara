@@ -3503,6 +3503,13 @@ impl<'a> super::Interpreter<'a> {
                 // (`eat(Tv.A(R { .. }))`) is an `ExprKind::Call` and was always
                 // correct — the spelling was the whole variable.
                 .or_else(|| self.qualified_struct_variant_enum_name(path))
+                // B-2026-09-01-32 — the UNQUALIFIED spelling of the same
+                // construction (`eat(Hold { inner: R { .. } })`). B-2026-08-31-8
+                // deliberately claimed only the qualified form, because moving
+                // the interpreter alone would have turned an answer all four
+                // surfaces agreed on into a fresh run-vs-build divergence. The
+                // codegen half lands with this, so both move together.
+                .or_else(|| self.unqualified_struct_variant_enum_name(path))
             }
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(v) => self.find_enum_for_variant(v).or_else(|| {

@@ -2544,6 +2544,51 @@ impl<'a> Interpreter<'a> {
             .map(|_| enum_name.clone())
     }
 
+    /// B-2026-09-01-32 — the enum an UNQUALIFIED struct-variant literal
+    /// constructs: `Hold { inner: … }` → `Some("Sv")`.
+    ///
+    /// The sibling of [`Self::qualified_struct_variant_enum_name`] for the
+    /// one-segment spelling. That form is legal and really is constructed —
+    /// `eval_expr`'s struct-literal arm builds a `Value::EnumVariant` for it on
+    /// exactly the `path.len() == 1 && find_struct_def(name).is_none()`
+    /// condition mirrored here, matching the typechecker's
+    /// `unqualified_enum_struct_variant` routing (B-2026-06-13-12).
+    ///
+    /// PRECEDENCE MATTERS AND IS COPIED FROM THAT SITE: a real struct of the
+    /// same name wins, and only then is the name read as a variant. Answering
+    /// the enum first would reclassify ordinary `R { .. }` literals in any
+    /// program that also has an enum variant called `R`.
+    ///
+    /// Restricted to STRUCT-shaped variants rather than reusing
+    /// `find_enum_for_variant`, which matches a variant of any kind: a
+    /// brace-literal spelling can only construct a struct-shaped variant, and
+    /// answering `Some` for a tuple or unit variant of the same name would hand
+    /// callers an owner for a value this spelling never builds.
+    pub(crate) fn unqualified_struct_variant_enum_name(&self, path: &[String]) -> Option<String> {
+        if path.len() != 1 {
+            return None;
+        }
+        let variant = &path[0];
+        if self.find_struct_def(variant).is_some() {
+            return None;
+        }
+        fn scan(items: &[Item], variant: &str) -> Option<String> {
+            items.iter().find_map(|item| match item {
+                Item::EnumDef(e) => e
+                    .variants
+                    .iter()
+                    .find(|v| v.name == variant && matches!(v.kind, VariantKind::Struct(_)))
+                    .map(|_| e.name.clone()),
+                _ => None,
+            })
+        }
+        scan(&self.program.items, variant).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| scan(&p.items, variant))
+        })
+    }
+
     fn qualified_enum_struct_variant_field_order(
         &self,
         enum_name: &str,

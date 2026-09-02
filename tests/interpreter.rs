@@ -53837,6 +53837,105 @@ fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
     );
 }
 
+/// B-2026-09-01-32 — the UNQUALIFIED enum struct-variant literal
+/// `Hold { .. }` runs its `Drop` bodies.
+///
+/// The sibling of B-2026-08-31-8, and the spelling that row's fix deliberately
+/// declined. It was wrong on ALL FOUR surfaces at once, so no A/B parity gate
+/// could see it: every backend agreed, and every backend ran neither the enum's
+/// own body nor its payload's. Fixing the interpreter alone would have turned
+/// that agreed-but-wrong answer into a fresh run-vs-build divergence — the
+/// worse of the two — which is why both halves landed together.
+///
+/// The two CONTROLS are what localize it to the brace spelling. The qualified
+/// form `Sv.Hold { .. }` was correct (B-2026-08-31-8 for the interpreter;
+/// codegen always), and the unqualified TUPLE form `A(r)` was correct on every
+/// surface throughout — it parses as an `ExprKind::Call` and reaches
+/// `enum_name_for_variant_ctor`, the very helper the brace arm now shares.
+///
+/// `struct wins over a same-named variant` pins the PRECEDENCE, which is the
+/// one way this fix could have broken working programs: both the interpreter
+/// and codegen check for a real struct of that name before reading the segment
+/// as a variant, so an ordinary literal keeps its own drop in a program that
+/// also declares a variant of the same name. Without this row a fix that
+/// dropped the struct check would still pass every other row here.
+///
+/// The two order rows pin the SEQUENCE, not just the count: argument temps are
+/// introduced left to right and pop right to left (B-2026-08-29-46), so a fix
+/// that fired them forward would agree on every count and differ only here.
+/// The mixed row additionally proves the two spellings share one owner
+/// mechanism rather than two that happen to agree.
+#[test]
+fn fresh_temp_unqualified_struct_variant_arg_runs_its_drop_bodies() {
+    const H: &str = "struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum Sv { Hold { inner: R }, Nil }\n\
+         impl Drop for Sv { fn drop(mut ref self) { println(\"dSv\") } }\n\
+         enum Tv { A(R), Nil }\n\
+         impl Drop for Tv { fn drop(mut ref self) { println(\"dTv\") } }\n\
+         struct Dup { id: i64 }\n\
+         impl Drop for Dup { fn drop(mut ref self) { println(f\"dDup{self.id}\") } }\n\
+         enum Ev { Dup { inner: R }, Nil }\n\
+         impl Drop for Ev { fn drop(mut ref self) { println(\"dEv\") } }\n\
+         fn eat(v: Sv) { println(\"e\") }\n\
+         fn eatt(v: Tv) { println(\"e\") }\n\
+         fn eatd(v: Dup) { println(\"e\") }\n\
+         fn eat2(v: Sv, w: Sv) { println(\"e2\") }\n\
+         struct Rh { id: i64, tag: String, buf: Vec[i64] }\n\
+         impl Drop for Rh { fn drop(mut ref self) { println(f\"dRh{self.id}:{self.buf.len()}\") } }\n\
+         enum Svh { HoldH { inner: Rh }, Nil }\n\
+         impl Drop for Svh { fn drop(mut ref self) { println(\"dSvh\") } }\n\
+         fn eath(v: Svh) { println(\"e\") }\n";
+    for (label, body, want) in [
+        (
+            "unqualified struct-variant fresh temp",
+            "eat(Hold { inner: R { id: 1 } })",
+            "e\ndSv\ndR1\n",
+        ),
+        (
+            "qualified struct-variant (control, B-2026-08-31-8)",
+            "eat(Sv.Hold { inner: R { id: 2 } })",
+            "e\ndSv\ndR2\n",
+        ),
+        (
+            "unqualified tuple-variant (control)",
+            "eatt(A(R { id: 3 }))",
+            "e\ndTv\ndR3\n",
+        ),
+        (
+            "named-local unqualified (control)",
+            "let a = Hold { inner: R { id: 4 } }; eat(a)",
+            "e\ndSv\ndR4\n",
+        ),
+        (
+            "struct wins over a same-named variant",
+            "eatd(Dup { id: 7 })",
+            "e\ndDup7\n",
+        ),
+        (
+            "unqualified, HEAP-carrying payload",
+            "eath(HoldH { inner: Rh { id: 8, tag: \"ab\", buf: [1, 2, 3] } })",
+            "e\ndSvh\ndRh8:3\n",
+        ),
+        (
+            "two-fresh unqualified, reverse order",
+            "eat2(Hold { inner: R { id: 5 } }, Hold { inner: R { id: 6 } })",
+            "e2\ndSv\ndR6\ndSv\ndR5\n",
+        ),
+        (
+            "mixed qualified + unqualified, reverse order",
+            "eat2(Sv.Hold { inner: R { id: 8 } }, Hold { inner: R { id: 9 } })",
+            "e2\ndSv\ndR9\ndSv\ndR8\n",
+        ),
+    ] {
+        assert_eq!(
+            run(&format!("{H}fn main() {{\n{body}\n}}\n")),
+            want,
+            "{label}"
+        );
+    }
+}
+
 /// B-2026-08-31-8 — an enum STRUCT-VARIANT literal passed as a fresh-temp
 /// argument runs its `Drop` bodies.
 ///

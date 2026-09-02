@@ -8201,6 +8201,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     .contains_key(en)
                     .then(|| en.clone())
             }
+            // B-2026-09-01-32 — the UNQUALIFIED struct-variant spelling
+            // (`eat(Hold { inner: R { .. } })`), whose one-segment path carries
+            // the VARIANT name with no enum to read off `path[len-2]`. The arm
+            // above answered `None` for it, so every caller that keys a fresh
+            // owned temp's drop off this — the aggregate-argument tracker among
+            // them — registered no owner, and neither the enum's own `Drop`
+            // body nor its payload's ran on either compiled backend.
+            //
+            // The construction side has always understood the spelling:
+            // `compile_expr`'s struct-literal arm routes it to
+            // `compile_enum_struct_variant_init` on exactly the same
+            // "not a struct, find the enum declaring the variant" condition
+            // (mirroring the typechecker's `unqualified_enum_struct_variant`).
+            // So a correctly-typed enum value was being built and then dropped
+            // as if it were nothing — the two halves disagreed about what the
+            // expression is.
+            //
+            // The unqualified TUPLE-variant twin `eat(A(r))` is an
+            // `ExprKind::Call` and reaches `enum_name_for_variant_ctor` in the
+            // arm above, which is why that spelling was always correct and why
+            // only the brace form was affected. Reusing the same helper here
+            // keeps the two spellings answering through one lookup, and gets
+            // its user-enum-over-seeded-builtin preference for free — a plain
+            // scan of `enum_layouts` would pick an arbitrary match on a name
+            // collision, since that map has no meaningful iteration order.
+            //
+            // The struct check comes first for the same reason it does at the
+            // construction site: a real struct of this name wins, so an
+            // ordinary `R { .. }` literal is never reinterpreted as a variant
+            // in a program that happens to have a variant called `R`.
+            ExprKind::StructLiteral { path, .. } if path.len() == 1 => {
+                let name = &path[0];
+                if self.type_decls.struct_types.contains_key(name.as_str()) {
+                    None
+                } else {
+                    self.enum_name_for_variant_ctor(name)
+                }
+            }
             _ => None,
         }
     }

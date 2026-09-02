@@ -327,6 +327,57 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-32 — the UNQUALIFIED enum struct-variant payload is neither
+    /// leaked nor double-freed.
+    ///
+    /// The ASAN twin of B-2026-08-31-8's case one spelling over. Unlike that
+    /// one, this backend was NOT already correct: `enum_name_of_expr`'s
+    /// struct-literal arm was guarded `path.len() >= 2`, so the one-segment
+    /// spelling got no caller-side owner and ran neither body.
+    ///
+    /// The heap payload is the point. The row was measured on a SCALAR payload,
+    /// where the whole defect is a missing line of output and the memory side
+    /// says nothing — so a fix could look complete against it while leaving a
+    /// heap-carrying value unbalanced. A `String` and a 32-element `Vec` make
+    /// the frees observable: this case is what says the newly-registered
+    /// owner frees exactly once rather than once too many.
+    ///
+    /// `qualified` and `named` are the controls that already had an owner. A
+    /// widening of the new arm that reached either would surface here as a
+    /// double free rather than as a wrong line of output — which is the failure
+    /// mode the output fixtures cannot see.
+    #[test]
+    fn asan_fresh_temp_unqualified_struct_variant_arg_payload_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String, buf: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.buf.len()}") } }
+enum Sv { Hold { inner: R }, Nil }
+impl Drop for Sv { fn drop(mut ref self) { println("dSv") } }
+
+fn mkr(n: i64) -> R {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 32 { v.push(i + n); i = i + 1; }
+    return R { id: n, tag: "t", buf: v };
+}
+
+fn eat(v: Sv) { println("e"); }
+
+fn main() {
+    eat(Hold { inner: mkr(1) });
+    eat(Sv.Hold { inner: mkr(2) });
+    let a = Hold { inner: mkr(3) };
+    eat(a);
+}
+"#,
+            &[
+                "e", "dSv", "dR1:32", "e", "dSv", "dR2:32", "e", "dSv", "dR3:32",
+            ],
+            "fresh_temp_unqualified_struct_variant_arg_payload_is_balanced",
+        );
+    }
+
     /// A container-element heap read handed out of a BRANCH VALUE gets an owner
     /// at the merge (B-2026-08-28-44).
     ///
