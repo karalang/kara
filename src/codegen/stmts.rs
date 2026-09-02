@@ -11438,43 +11438,60 @@ impl<'ctx> super::Codegen<'ctx> {
                             // `dR0 m1 m2 dE dR8 v5`, losing `dR5`, which is the
                             // half B-2026-08-30-54 was filed for.
                             //
-                            // The flag guards the base's whole
-                            // `UserDrop{StructFieldBodies}` action, so
+                            // B-2026-09-02-10 — the flag is PER FIELD, not per
+                            // binding, and that is what closes
                             // B-2026-08-01-19's documented over-suppression
-                            // trade (the base's OTHER Drop-bearing fields go
-                            // silent while a view is held) is unchanged --
-                            // narrowing that is a separate question about the
-                            // walker's granularity, not about this path.
-                            match self.cond_move_drop_flag_for(&base) {
+                            // trade rather than inheriting it.
+                            //
+                            // B-2026-08-30-54 disarmed the base's
+                            // `cond_move_drop_flags` bit, which guards the
+                            // base's WHOLE `UserDrop{StructFieldBodies}`
+                            // action -- so a view in `f` silenced `g`'s body
+                            // too, for a sibling that was never moved, never
+                            // viewed, and still read on the line before
+                            // (`dR30 s dE dR8 v39` against the interpreter's
+                            // `dR30 s dR31 dE dR8 v39`). The reason is per
+                            // field; making the flag per field lets the death
+                            // site branch to a walker masked to exactly the
+                            // fields a view landed in ON THAT PATH.
+                            //
+                            // The base's own binding flag is deliberately NOT
+                            // touched now. A field view does not hand the BASE
+                            // over, and three readers -- the two fire sites'
+                            // guard, `arg_producer_mints_fresh_owned_temp`, and
+                            // `disarm_flags_for_handed_over_bindings` -- take a
+                            // key's mere presence in that map as "conditionally
+                            // moved". Leaving it out keeps this shape off all
+                            // three.
+                            match self.field_view_flag_for(&base, field) {
                                 Some(flag) => {
                                     let bool_t = self.context.bool_type();
                                     let _ =
                                         self.builder.build_store(flag, bool_t.const_int(0, false));
-                                    self.drop_rc
-                                        .field_view_flag_fields
-                                        .entry(base.clone())
-                                        .or_default()
-                                        .insert(field.clone());
                                 }
                                 None => self.suppress_user_drop_for_var(&base),
                             }
-                        } else if self
+                        } else if let Some(flag) = self
                             .drop_rc
-                            .field_view_flag_fields
+                            .field_view_flags
                             .get(base.as_str())
-                            .is_some_and(|fs| fs.len() == 1 && fs.contains(field))
+                            .and_then(|m| m.get(field.as_str()))
+                            .copied()
                         {
-                            // RE-ARM: this field is the ONLY reason the base's
-                            // walk is disarmed, and it has just been given a
-                            // value of its own, so the base owns a body again.
+                            // RE-ARM: this field held a view and has just been
+                            // given a value of its own, so the base owns its
+                            // body again.
                             //
-                            // The single-field condition is what keeps this
-                            // honest: the flag is per BINDING while the reason
-                            // is per FIELD, so re-arming while a SIBLING field
-                            // still holds a view would resurrect that view's
-                            // body alongside the fresh one. Where more than one
-                            // field is recorded this declines and leaves the
-                            // coarse suppression exactly as it was.
+                            // B-2026-09-02-10 dropped the single-field
+                            // condition this used to carry. It was needed only
+                            // because the flag was per BINDING while the reason
+                            // was per FIELD, so re-arming with a SIBLING still
+                            // viewed would have resurrected that sibling's
+                            // body. The flags are independent now, so the
+                            // sibling's stays `false` on its own and this field
+                            // can re-arm unconditionally -- which is also what
+                            // makes the base's OTHER fields keep their bodies
+                            // in the first place.
                             //
                             // Ordered after `emit_displaced_field_bodies`
                             // above, which is what makes the pair right: the
@@ -11482,16 +11499,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             // assignment left and correctly skips the caller's
                             // value, and only then does the base become an
                             // owner again.
-                            if let Some(flag) = self
-                                .drop_rc
-                                .cond_move_drop_flags
-                                .get(base.as_str())
-                                .copied()
-                            {
-                                let bool_t = self.context.bool_type();
-                                let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
-                                self.drop_rc.field_view_flag_fields.remove(base.as_str());
-                            }
+                            let bool_t = self.context.bool_type();
+                            let _ = self.builder.build_store(flag, bool_t.const_int(1, false));
                         }
                     }
                     self.compile_field_store(object, field, val, rhs_is_fresh, Some(value))?;
@@ -17369,15 +17378,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // `field_view_flag_fields` keeps the guard on exactly the field the
         // view landed in. A base with no flag, or a field the flag was not set
         // for, emits into the current block exactly as before.
-        let guard = if self
+        // B-2026-09-02-10 — the guard now reads that FIELD's own flag rather
+        // than the base's binding flag, which a field view no longer clears.
+        // Same condition as before (`field_view_flags` is keyed by field, as
+        // `field_view_flag_fields` was) and the same emitted shape; only the
+        // slot it loads changed.
+        let guard = match self
             .drop_rc
-            .field_view_flag_fields
+            .field_view_flags
             .get(base.as_str())
-            .is_some_and(|fs| fs.contains(field))
+            .and_then(|m| m.get(field))
+            .copied()
         {
-            self.open_cond_move_guard(&base)
-        } else {
-            None
+            Some(flag) => self.open_guard_on_flag(flag),
+            None => None,
         };
         if owns_body {
             if let Some(f) = self.module.get_function(&format!("{ftn}.drop")) {

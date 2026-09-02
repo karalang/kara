@@ -2100,7 +2100,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// after the bodies walk (which reads the payload this frees), and must
     /// skip a self-alias or any RHS mentioning the target — see the call
     /// site's guards.
-    pub(super) fn emit_inline_optres_payload_overwrite_free(&self, name: &str) {
+    pub(super) fn emit_inline_optres_payload_overwrite_free(&mut self, name: &str) {
         let Some(slot) = self.variables.get(name).copied() else {
             return;
         };
@@ -2113,8 +2113,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // All live frames, not just the top — same rationale as the boxed
         // sibling: at a mid-function store a transient RHS-evaluation frame can
         // sit above the frame that owns the binding's action.
-        for action in self.drop_rc.scope_cleanup_actions.iter().flatten() {
-            let matches_slot = match action {
+        // B-2026-09-02-10 — cloned out of the frame before emitting: the
+        // emitter takes `&mut self` now (it may add a masked walker function to
+        // the module), so it cannot run while this iteration borrows the frames.
+        let matched: Vec<CleanupAction<'ctx>> = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .filter(|action| match action {
                 CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
                     *option_slot == slot.ptr
                 }
@@ -2122,14 +2129,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     *result_slot == slot.ptr
                 }
                 _ => false,
-            };
-            if matches_slot {
-                self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
-            }
+            })
+            .cloned()
+            .collect();
+        for action in &matched {
+            self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
         }
     }
 
-    pub(super) fn emit_boxed_enum_overwrite_free(&self, name: &str) {
+    pub(super) fn emit_boxed_enum_overwrite_free(&mut self, name: &str) {
         let Some(slot) = self.variables.get(name).copied() else {
             return;
         };
@@ -2142,15 +2150,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // All live frames, not just the top: at a mid-function store a
         // transient RHS-evaluation frame can sit above the frame that owns the
         // binding's action — the same rationale the Map sibling gives.
-        for action in self.drop_rc.scope_cleanup_actions.iter().flatten() {
-            let matches_slot = match action {
+        // B-2026-09-02-10 — cloned out first, for the reason the Option/Result
+        // sibling above gives.
+        let matched: Vec<CleanupAction<'ctx>> = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .filter(|action| match action {
                 CleanupAction::BoxedEnumDrop { enum_slot, .. }
                 | CleanupAction::NestedBoxedEnumDrop { enum_slot, .. } => *enum_slot == slot.ptr,
                 _ => false,
-            };
-            if matches_slot {
-                self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
-            }
+            })
+            .cloned()
+            .collect();
+        for action in &matched {
+            self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
         }
     }
 
@@ -9009,6 +9024,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 name: String,
                 ptr: PointerValue<'c>,
                 drop_fn: FunctionValue<'c>,
+                // B-2026-09-02-10 — carried so the fire can select a
+                // field-view-masked walker; the filter above already reads
+                // both, so neither is a new lookup.
+                type_name: String,
+                kind: UserDropKind,
             },
             Rc {
                 name: String,
@@ -9077,6 +9097,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             name: binding_name.clone(),
                             ptr: *binding_ptr,
                             drop_fn: *drop_fn,
+                            type_name: type_name.clone(),
+                            kind: *kind,
                         })
                     }
                     _ => None,
@@ -9100,7 +9122,13 @@ impl<'ctx> super::Codegen<'ctx> {
         });
         for d in &due {
             match d {
-                DueDrop::User { name, ptr, drop_fn } => {
+                DueDrop::User {
+                    name,
+                    ptr,
+                    drop_fn,
+                    type_name,
+                    kind,
+                } => {
                     // Record before emitting, for the reason the `Rc` arm below
                     // spells out — and this arm is the one that motivated it.
                     // The action is RETIRED from the frame once fired, so the
@@ -9133,7 +9161,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // local's last use, so a conditionally-moved binding lands
                     // on this channel rather than at scope exit.
                     let call_name = format!("nll.drop.{name}");
-                    self.emit_user_drop_call_guarded(name, *drop_fn, *ptr, &call_name);
+                    // B-2026-09-02-10 — and selected per FIELD when a param
+                    // view landed in one, which the per-binding guard alone
+                    // cannot express.
+                    self.emit_user_drop_bodies_call_field_view_selected(
+                        name, type_name, *kind, *drop_fn, *ptr, &call_name,
+                    );
                 }
                 // Rebuild the action and hand it to the shared per-action
                 // emitter rather than open-coding the dec here — the
@@ -9440,6 +9473,53 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(slot)
     }
 
+    /// B-2026-09-02-10 — get (or lazily create) the per-FIELD view flag for
+    /// `binding.field`.
+    ///
+    /// The field sibling of [`Self::cond_move_drop_flag_for`], and allocated
+    /// the same way and for the same reason: the entry block dominates every
+    /// path, so a `true` initializer there plus a `false` store in the block
+    /// the field assignment compiles into is exactly "this field holds a
+    /// caller's view on the path that ran, and its own value everywhere else".
+    ///
+    /// Separate from `cond_move_drop_flags` rather than a reuse of it. That map
+    /// answers a question about the BINDING — was it handed over — and three
+    /// unrelated readers treat a key's mere presence as that answer. A field
+    /// view is not a hand-over of the base, so it gets its own map and leaves
+    /// theirs alone.
+    pub(super) fn field_view_flag_for(
+        &mut self,
+        binding: &str,
+        field: &str,
+    ) -> Option<PointerValue<'ctx>> {
+        if let Some(p) = self
+            .drop_rc
+            .field_view_flags
+            .get(binding)
+            .and_then(|m| m.get(field))
+        {
+            return Some(*p);
+        }
+        let fn_val = self.current_fn?;
+        let entry = fn_val.get_first_basic_block()?;
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let bool_t = self.context.bool_type();
+        let slot = b
+            .build_alloca(bool_t, &format!("fvflag.{binding}.{field}"))
+            .ok()?;
+        b.build_store(slot, bool_t.const_int(1, false)).ok()?;
+        self.drop_rc
+            .field_view_flags
+            .entry(binding.to_string())
+            .or_default()
+            .insert(field.to_string(), slot);
+        Some(slot)
+    }
+
     /// B-2026-08-28-51 — clear the conditional-move drop flag for a bare
     /// identifier at the tail of a branch ARM in escaping position.
     ///
@@ -9487,6 +9567,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .cond_move_drop_flags
             .get(binding_name)
             .copied()?;
+        self.open_guard_on_flag(flag)
+    }
+
+    /// B-2026-09-02-10 — [`Self::open_cond_move_guard`] against an explicit
+    /// flag slot rather than a binding's entry in `cond_move_drop_flags`.
+    ///
+    /// Same emission exactly; the split exists because the per-FIELD view flags
+    /// live in their own map and need the identical guard shape.
+    pub(super) fn open_guard_on_flag(
+        &mut self,
+        flag: PointerValue<'ctx>,
+    ) -> Option<(
+        inkwell::basic_block::BasicBlock<'ctx>,
+        inkwell::basic_block::BasicBlock<'ctx>,
+    )> {
         let fn_val = self.current_fn?;
         let live = self.context.append_basic_block(fn_val, "cmrun.live");
         let cont = self.context.append_basic_block(fn_val, "cmrun.cont");
@@ -9520,6 +9615,240 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = self.builder.build_unconditional_branch(cont);
         }
         self.builder.position_at_end(cont);
+    }
+
+    /// B-2026-09-02-10 — fire a base binding's `StructFieldBodies` walk with
+    /// the fields a param view landed in masked out AT RUNTIME.
+    ///
+    /// THE GRANULARITY MISMATCH THIS EXISTS TO CLOSE. `h.f = r` gives one field
+    /// of `h` a caller's view, so `f`'s body is the caller's to run and must not
+    /// fire again at `h`'s death. B-2026-08-01-19 expressed that by retracting
+    /// the base's whole bodies action, and B-2026-08-30-54 replaced the
+    /// retraction with a per-path bit but kept it keyed by BINDING — so a
+    /// SIBLING field, never moved and never viewed, lost its body too. The
+    /// reason is per field; the answer now is as well.
+    ///
+    /// The shape is a branch tree over the viewed fields' flags, with the
+    /// registered walker at the all-armed leaf and a walker masked to exactly
+    /// the disarmed subset at every other. That keeps the common path
+    /// byte-identical to before — no view landed means the original `drop_fn`
+    /// is called, unchanged — and it is faithful to whatever EMISSION-time mask
+    /// the registered walker already carries, because each variant is the same
+    /// emitter with the runtime subset ADDED to that mask rather than a
+    /// decomposition rebuilt from scratch.
+    ///
+    /// Delegates to [`Self::emit_user_drop_call_guarded`] whenever the shape
+    /// does not apply: a different action kind, a binding with no viewed field,
+    /// a base type whose walker cannot be re-emitted. So every program without
+    /// a param-view field assignment emits exactly what it did before.
+    ///
+    /// CAPPED at [`Self::FIELD_VIEW_SELECT_MAX`] viewed fields. The tree has
+    /// `2^n` leaves, and past the cap this declines and takes the coarse
+    /// per-binding guard — the pre-fix behaviour, which is over-suppression
+    /// rather than a double fire, so the fallback stays on the safe side.
+    pub(super) fn emit_user_drop_bodies_call_field_view_selected(
+        &mut self,
+        binding_name: &str,
+        type_name: &str,
+        kind: UserDropKind,
+        drop_fn: FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        call_name: &str,
+    ) {
+        // Only the per-binding FIELD-BODIES walk is decomposable this way. A
+        // type's own `karac_drop_<T>` wrapper runs its field bodies from inside
+        // itself and is registered as a different action, so there is no walker
+        // here to re-emit with a mask.
+        if kind != UserDropKind::StructFieldBodies {
+            self.emit_user_drop_call_guarded(binding_name, drop_fn, ptr, call_name);
+            return;
+        }
+        let Some(field_names) = self.type_decls.struct_field_names.get(type_name).cloned() else {
+            self.emit_user_drop_call_guarded(binding_name, drop_fn, ptr, call_name);
+            return;
+        };
+        // Resolve each viewed field NAME to its index, dropping any the type no
+        // longer declares. Sorted for a deterministic tree: the map is a
+        // `HashMap`, whose iteration order is not meaningful, and the emitted
+        // block layout must not depend on it.
+        let mut viewed: Vec<(String, usize, PointerValue<'ctx>)> = self
+            .drop_rc
+            .field_view_flags
+            .get(binding_name)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(f, flag)| {
+                        field_names
+                            .iter()
+                            .position(|n| n == f)
+                            .map(|i| (f.clone(), i, *flag))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        viewed.sort_by_key(|(_, i, _)| *i);
+        if viewed.is_empty() || viewed.len() > Self::FIELD_VIEW_SELECT_MAX {
+            self.emit_user_drop_call_guarded(binding_name, drop_fn, ptr, call_name);
+            return;
+        }
+        // The base's own per-binding guard still wraps the whole tree. A field
+        // view no longer clears that bit, so it is `false` here only for the
+        // reasons it always was — the binding itself handed over on this path —
+        // and those reasons silence every field, which is what it already did.
+        let outer = self.open_cond_move_guard(binding_name);
+        let mut disarmed: Vec<usize> = Vec::new();
+        self.emit_field_view_leaf_tree(
+            binding_name,
+            type_name,
+            drop_fn,
+            ptr,
+            call_name,
+            &viewed,
+            0,
+            &mut disarmed,
+        );
+        self.close_cond_move_guard(outer);
+    }
+
+    /// At most this many viewed fields get a runtime-selected walker; see
+    /// [`Self::emit_user_drop_bodies_call_field_view_selected`].
+    pub(super) const FIELD_VIEW_SELECT_MAX: usize = 3;
+
+    /// Recursive half of
+    /// [`Self::emit_user_drop_bodies_call_field_view_selected`]: branch on
+    /// `viewed[pos]`'s flag, then recurse into both successors, accumulating
+    /// the indices whose flag read `false` on the current path.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_field_view_leaf_tree(
+        &mut self,
+        binding_name: &str,
+        type_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        call_name: &str,
+        viewed: &[(String, usize, PointerValue<'ctx>)],
+        pos: usize,
+        disarmed: &mut Vec<usize>,
+    ) {
+        if pos == viewed.len() {
+            self.emit_field_view_leaf_call(
+                binding_name,
+                type_name,
+                drop_fn,
+                ptr,
+                call_name,
+                disarmed,
+            );
+            return;
+        }
+        let Some(fn_val) = self.current_fn else {
+            self.emit_field_view_leaf_call(
+                binding_name,
+                type_name,
+                drop_fn,
+                ptr,
+                call_name,
+                disarmed,
+            );
+            return;
+        };
+        let flag = viewed[pos].2;
+        let armed_bb = self.context.append_basic_block(fn_val, "fvsel.armed");
+        let viewed_bb = self.context.append_basic_block(fn_val, "fvsel.viewed");
+        let cont_bb = self.context.append_basic_block(fn_val, "fvsel.cont");
+        let armed = self
+            .builder
+            .build_load(self.context.bool_type(), flag, "fvsel.f")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(armed, armed_bb, viewed_bb)
+            .unwrap();
+        self.builder.position_at_end(armed_bb);
+        self.emit_field_view_leaf_tree(
+            binding_name,
+            type_name,
+            drop_fn,
+            ptr,
+            call_name,
+            viewed,
+            pos + 1,
+            disarmed,
+        );
+        if self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none())
+        {
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+        }
+        self.builder.position_at_end(viewed_bb);
+        disarmed.push(viewed[pos].1);
+        self.emit_field_view_leaf_tree(
+            binding_name,
+            type_name,
+            drop_fn,
+            ptr,
+            call_name,
+            viewed,
+            pos + 1,
+            disarmed,
+        );
+        disarmed.pop();
+        if self
+            .builder
+            .get_insert_block()
+            .is_some_and(|b| b.get_terminator().is_none())
+        {
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+        }
+        self.builder.position_at_end(cont_bb);
+    }
+
+    /// Emit one leaf of the tree: the walk with `disarmed` masked out on top of
+    /// whatever the registered walker already skips.
+    ///
+    /// An EMPTY `disarmed` is the no-view-landed path and calls the registered
+    /// `drop_fn` verbatim — never a re-emitted equivalent — so that path cannot
+    /// drift from what the registration decided. A mask that leaves nothing to
+    /// walk yields `None` from the emitter and emits no call, which is the
+    /// correct reading of "every Drop-bearing field is the caller's".
+    fn emit_field_view_leaf_call(
+        &mut self,
+        binding_name: &str,
+        type_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        call_name: &str,
+        disarmed: &[usize],
+    ) {
+        if disarmed.is_empty() {
+            self.builder
+                .build_call(drop_fn, &[ptr.into()], call_name)
+                .unwrap();
+            return;
+        }
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(binding_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(type_name, &i))
+            .unwrap_or_default();
+        let mut here: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_bodies
+            .get(binding_name)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        here.extend(disarmed.iter().copied());
+        let skip = self.field_skip_tree_for_var(binding_name, here);
+        if let Some(masked) = self.emit_user_drop_field_bodies_fn_skipping(type_name, &subst, &skip)
+        {
+            self.builder
+                .build_call(masked, &[ptr.into()], call_name)
+                .unwrap();
+        }
     }
 
     pub(super) fn emit_user_drop_call_guarded(
@@ -10926,9 +11255,10 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
-        let action_ref = &self.drop_rc.scope_cleanup_actions[frame_idx][action_idx];
-        self.record_drop_obs(action_ref, fn_val);
-        self.emit_cleanup_action(action_ref, fn_val, vec_ty, ptr_ty, i64_t);
+        // B-2026-09-02-10 — cloned for the same reason as the two sweeps above.
+        let action_owned = self.drop_rc.scope_cleanup_actions[frame_idx][action_idx].clone();
+        self.record_drop_obs(&action_owned, fn_val);
+        self.emit_cleanup_action(&action_owned, fn_val, vec_ty, ptr_ty, i64_t);
     }
 
     /// B-2026-08-30-7: the SLOT a cleanup action would free, or `None` for an
@@ -11184,7 +11514,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn emit_cleanup_action(
-        &self,
+        &mut self,
         action: &CleanupAction<'ctx>,
         fn_val: FunctionValue<'ctx>,
         vec_ty: StructType<'ctx>,
@@ -12802,11 +13132,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 binding_name,
                 binding_ptr,
                 drop_fn,
-                ..
+                type_name,
+                kind,
             } => {
                 // B-2026-08-28-51 — guarded when the binding is conditionally
                 // moved; an ordinary unguarded call otherwise.
-                self.emit_user_drop_call_guarded(binding_name, *drop_fn, *binding_ptr, "");
+                // B-2026-09-02-10 — and, for a field-bodies walk over a base
+                // one of whose fields received a param view, selected against
+                // that FIELD's own flag so a sibling's body still fires.
+                self.emit_user_drop_bodies_call_field_view_selected(
+                    binding_name,
+                    type_name,
+                    *kind,
+                    *drop_fn,
+                    *binding_ptr,
+                    "",
+                );
                 // B-2026-08-18-4 — THE SEAM BETWEEN THE TWO READERS.
                 //
                 // When a field was moved out of a boxed payload whose user

@@ -111,19 +111,30 @@ pub(crate) struct DropRc<'ctx> {
     /// ones this row's registration created, so no pre-existing retraction
     /// changes behaviour.
     pub(crate) cond_store_flag_params: std::collections::HashSet<String>,
-    /// B-2026-08-30-54 — for each base binding whose bodies walk is currently
-    /// disarmed by a per-path flag because a FIELD of it received a param
-    /// view, the field names that did it.
+    /// B-2026-08-30-54 / B-2026-09-02-10 — for each base binding a FIELD of
+    /// which received a param view, that field's OWN per-path flag: `true`
+    /// while the base still owns the field's value, `false` on a path where a
+    /// caller's view landed in it.
     ///
-    /// The flag is per BINDING (it guards the base's whole
-    /// `UserDrop{StructFieldBodies}` action), while the thing that disarmed it
-    /// is per FIELD. Re-arming needs both: a later assignment of a FRESH value
-    /// to the same field makes the base an owner again, but a fresh value in a
-    /// SIBLING field does not — re-arming there would resurrect the view's body
-    /// alongside it. So the re-arm fires only when the field being overwritten
-    /// is the ONLY one recorded here, and otherwise leaves the coarse
-    /// suppression exactly as B-2026-08-01-19 left it.
-    pub(crate) field_view_flag_fields: HashMap<String, std::collections::HashSet<String>>,
+    /// ONE FLAG PER FIELD, not one per binding, and that is the whole point.
+    /// B-2026-08-30-54 recorded only the field NAMES here and disarmed the
+    /// base's `cond_move_drop_flags` bit, which guards the base's WHOLE
+    /// `UserDrop{StructFieldBodies}` action — so a view in one field silenced
+    /// every OTHER Drop-bearing field's body on the base as well
+    /// (B-2026-08-01-19's documented over-suppression trade). The granularity
+    /// of the flag has to match the granularity of the reason, so the reason —
+    /// per field — now sets the granularity.
+    ///
+    /// Read at the base's death by
+    /// [`Codegen::emit_user_drop_bodies_call_field_view_selected`], which
+    /// branches on these flags and calls a walker masked to exactly the fields
+    /// a view actually landed in ON THAT PATH. The base's own
+    /// `cond_move_drop_flags` bit is left alone here — a field view does not
+    /// hand the BASE over, and treating it as if it did also mis-answered
+    /// `arg_producer_mints_fresh_owned_temp` and the hand-over sweep in
+    /// `disarm_flags_for_handed_over_bindings`, both of which read the mere
+    /// PRESENCE of a binding flag as "this binding is conditionally moved".
+    pub(crate) field_view_flags: HashMap<String, HashMap<String, PointerValue<'ctx>>>,
     /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
     /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
     /// more than once would otherwise collect one identical `{null, 0, 0}`

@@ -1225,7 +1225,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // and restored around the body exactly as the heap-span set above is.
         let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
         let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
-        let saved_field_view_fields = std::mem::take(&mut self.drop_rc.field_view_flag_fields);
+        let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
         // A closure body's tail is RETURNED, so it is an escaping site — the
         // same seed `compile_function` plants for a named function. Without it
         // the interpreter (whose `next_block_is_fn_body` covers closures) fixed
@@ -1348,7 +1348,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_ctx.current_fn_heap_closure_spans = saved_heap_spans;
         self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
-        self.drop_rc.field_view_flag_fields = saved_field_view_fields;
+        self.drop_rc.field_view_flags = saved_field_view_flags;
 
         // 8. Restore outer state.
         self.mono_state.type_subst = saved_subst;

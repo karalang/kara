@@ -526,6 +526,12 @@ pub(crate) enum UserDropKind {
     StructFieldBodies,
 }
 
+// B-2026-09-02-10 — `Clone` so the three callers that hold a borrow of
+// `scope_cleanup_actions` can hand an OWNED action to `emit_cleanup_action`,
+// which now needs `&mut self`: a `UserDrop` field-bodies walk over a base with
+// a param-viewed field emits a runtime-selected masked walker, and emitting a
+// function is a mutation of the module.
+#[derive(Clone)]
 pub(crate) enum CleanupAction<'ctx> {
     /// Unconditionally free an RC-elided `shared struct` binding
     /// (ownership phase-A elision — `src/ownership/elision.rs`; design

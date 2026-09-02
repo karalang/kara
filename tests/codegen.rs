@@ -116209,6 +116209,129 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_param_view_leaves_sibling_field_bodies_armed() {
+        // B-2026-09-02-10 — a param view landing in ONE field must not silence
+        // the base's OTHER Drop-bearing fields.
+        //
+        // B-2026-08-01-19 retracted the base's whole bodies action when a field
+        // received a view, and documented the over-suppression in its own code
+        // comment; B-2026-08-30-54 replaced the retraction with a per-path bool
+        // but kept it keyed by BINDING, so the residue survived and became
+        // VISIBLE as a divergence for the first time (that row's `e` shape uses
+        // the NOT-taken arm precisely to pin agreement rather than this).
+        // `sibs` below is that shape with the arm TAKEN: `g` is never moved,
+        // never viewed, and read on the line before, and it printed
+        // `dR30 s dE dR8 v39` against `--interp`'s `dR30 s dR31 dE dR8 v39`.
+        //
+        // The fix moves the flag to the granularity of the REASON: one flag per
+        // viewed FIELD, and a death-site branch tree selecting a walker masked
+        // to exactly the fields a view landed in ON THAT PATH.
+        //
+        // Six shapes. `a`/`b` are the row's two, `b` being the same loss one
+        // step later (a FRESH value in the sibling after the view, whose body
+        // was silenced too).
+        //
+        // `c` IS THE ROW THE PER-BINDING SHORTCUT CANNOT PASS, and it is why
+        // the flags are per field rather than one bool selecting between two
+        // walkers. Two fields each take a view on INDEPENDENT paths; on the
+        // path where only the first landed, a single bool cannot say that the
+        // second still holds its own value. Measured pre-fix as
+        // `dR30 s dE dE dR18 w81` against `--interp`'s
+        // `dR30 s dR32 dR31 dE dE dR18 w81` — TWO bodies lost, not one.
+        //
+        // `d` is the all-armed path (no view lands anywhere), which must stay
+        // byte-identical to before: the tree calls the REGISTERED walker
+        // verbatim at that leaf, never a re-emitted equivalent.
+        //
+        // `e` pins the RE-ARM, which this fix simplified. B-2026-08-30-54 could
+        // only re-arm when the viewed field was the ONLY one recorded, because
+        // re-arming a per-binding bool with a sibling still viewed would
+        // resurrect that sibling's body. With independent flags that condition
+        // is gone, so here `f` is refreshed while `g` still holds a view and
+        // both answers must be right at once.
+        //
+        // `f` is the boundary an over-eager fix would move: a struct with a
+        // same-shaped field assignment whose RHS is a FRESH value, never a
+        // view, which must be untouched.
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H2 { f: R, g: R }
+struct H3 { f: R, g: R, k: R }
+
+fn sibs(b: E) -> i64 {
+    let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    println("s");
+    return h.f.id + h.g.id
+}
+
+fn sib_refreshed(b: E) -> i64 {
+    let mut h: H2 = H2 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    h.g = R { id: 9, tag: f"t9" };
+    println("s");
+    return h.f.id + h.g.id
+}
+
+fn two_views(b: E, c: E) -> i64 {
+    let mut h: H3 = H3 { f: R { id: 30, tag: f"t30" }, g: R { id: 31, tag: f"t31" }, k: R { id: 32, tag: f"t32" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match c { E.A(r2) => { h.g = r2; } E.B => { } }
+    println("s");
+    return h.f.id + h.g.id + h.k.id
+}
+
+fn rearm_with_sibling_viewed(b: E, c: E) -> i64 {
+    let mut h: H3 = H3 { f: R { id: 40, tag: f"t40" }, g: R { id: 41, tag: f"t41" }, k: R { id: 42, tag: f"t42" } };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match c { E.A(r2) => { h.g = r2; } E.B => { } }
+    h.f = R { id: 7, tag: f"t7" };
+    println("s");
+    return h.f.id + h.g.id + h.k.id
+}
+
+fn fresh_only() -> i64 {
+    let mut h: H2 = H2 { f: R { id: 50, tag: f"t50" }, g: R { id: 51, tag: f"t51" } };
+    h.f = R { id: 52, tag: f"t52" };
+    println("p");
+    return h.f.id + h.g.id
+}
+
+fn main() {
+    println(f"a{sibs(E.A(R { id: 8, tag: f"t8" }))}");
+    println("-");
+    println(f"b{sib_refreshed(E.A(R { id: 8, tag: f"t8" }))}");
+    println("-");
+    println(f"c{two_views(E.A(R { id: 18, tag: f"t18" }), E.B)}");
+    println("-");
+    println(f"d{two_views(E.B, E.B)}");
+    println("-");
+    println(f"e{rearm_with_sibling_viewed(E.B, E.A(R { id: 6, tag: f"t6" }))}");
+    println("-");
+    println(f"f{fresh_only()}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                concat!(
+                    "dR30\ns\ndR31\ndE\ndR8\na39\n-",
+                    "\ndR30\ndR31\ns\ndR9\ndE\ndR8\nb17\n-",
+                    "\ndR30\ns\ndR32\ndR31\ndE\ndE\ndR18\nc81\n-",
+                    "\ns\ndR32\ndR31\ndR30\ndE\ndE\nd93\n-",
+                    "\ndR41\ndR40\ns\ndR42\ndR7\ndE\ndR6\ndE\ne55\n-",
+                    "\ndR50\np\ndR51\ndR52\nf103",
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_conditional_param_view_assign_keeps_target_body_per_path() {
         // B-2026-08-30-53 — `out = r` inside a match arm, where `r` is a
         // payload view of an OWNED param. The assignment hands the caller's

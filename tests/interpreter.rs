@@ -38843,6 +38843,112 @@ fn field_target_param_view_assign_fires_each_body_once() {
     }
 }
 
+/// B-2026-09-02-10 — the ORACLE half of the per-FIELD param-view question: a
+/// view landing in ONE field leaves every SIBLING field's body armed.
+///
+/// The interpreter has been right about this throughout, and that is the point
+/// of pinning it here. It records the view through
+/// `moved_out_struct_field_bodies`, a `(binding, field)` mask, so the
+/// granularity of its answer has always matched the granularity of the reason.
+/// Codegen's per-path bit was keyed by BINDING and guarded the base's whole
+/// `UserDrop{StructFieldBodies}` action, so a view in `f` silenced `g` as well
+/// — B-2026-08-01-19's documented over-suppression trade, which B-2026-08-30-54
+/// narrowed and thereby made visible as a divergence for the first time.
+///
+/// Sibling of `field_target_param_view_assign_runs_each_body_once` above, whose
+/// `two-fields-not-taken` row deliberately uses the arm that does NOT run:
+/// these are the taken-arm rows it could not assert while codegen was coarse.
+///
+/// `two-views-one-taken` is the row a per-BINDING flag cannot satisfy however
+/// it is repaired, and it is here to keep any future cut honest. Two fields
+/// take views on INDEPENDENT paths; where only the first landed, one bool
+/// cannot also say the second still owns its value. It needs one flag per
+/// field, which is what the fix emits.
+///
+/// The parity twin of
+/// `codegen::test_e2e_field_param_view_leaves_sibling_field_bodies_armed`.
+#[test]
+fn field_param_view_leaves_sibling_field_bodies_armed() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         struct H2 { f: R, g: R }\n\
+         struct H3 { f: R, g: R, k: R }\n\
+         fn sibs(b: E) -> i64 {\n\
+             let mut h: H2 = H2 { f: R { id: 30, tag: f\"t30\" }, g: R { id: 31, tag: f\"t31\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             println(\"s\");\n\
+             return h.f.id + h.g.id\n\
+         }\n\
+         fn sib_refreshed(b: E) -> i64 {\n\
+             let mut h: H2 = H2 { f: R { id: 30, tag: f\"t30\" }, g: R { id: 31, tag: f\"t31\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             h.g = R { id: 9, tag: f\"t9\" };\n\
+             println(\"s\");\n\
+             return h.f.id + h.g.id\n\
+         }\n\
+         fn two_views(b: E, c: E) -> i64 {\n\
+             let mut h: H3 = H3 { f: R { id: 30, tag: f\"t30\" }, g: R { id: 31, tag: f\"t31\" }, k: R { id: 32, tag: f\"t32\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             match c { E.A(r2) => { h.g = r2; } E.B => { } }\n\
+             println(\"s\");\n\
+             return h.f.id + h.g.id + h.k.id\n\
+         }\n\
+         fn rearm_with_sibling_viewed(b: E, c: E) -> i64 {\n\
+             let mut h: H3 = H3 { f: R { id: 40, tag: f\"t40\" }, g: R { id: 41, tag: f\"t41\" }, k: R { id: 42, tag: f\"t42\" } };\n\
+             match b { E.A(r) => { h.f = r; } E.B => { } }\n\
+             match c { E.A(r2) => { h.g = r2; } E.B => { } }\n\
+             h.f = R { id: 7, tag: f\"t7\" };\n\
+             println(\"s\");\n\
+             return h.f.id + h.g.id + h.k.id\n\
+         }\n";
+    for (label, body, want) in [
+        // The row's own repro. `g` is never moved, never viewed, and read on
+        // the line before; codegen printed this without `dR31`.
+        (
+            "sibling-armed-on-taken-arm",
+            "println(f\"a{sibs(E.A(R { id: 8, tag: f\"t8\" }))}\")\n",
+            "dR30\ns\ndR31\ndE\ndR8\na39\n",
+        ),
+        // The same loss one step later: a FRESH value in the sibling AFTER the
+        // view. Note `dR31` here fires at the assignment (the displacement),
+        // which codegen already had right — what it lost was `dR9`, the fresh
+        // value's own body at the base's death.
+        (
+            "sibling-refreshed-after-view",
+            "println(f\"b{sib_refreshed(E.A(R { id: 8, tag: f\"t8\" }))}\")\n",
+            "dR30\ndR31\ns\ndR9\ndE\ndR8\nb17\n",
+        ),
+        // TWO fields viewed on independent paths, only the FIRST landing.
+        // Codegen lost BOTH `dR32` and `dR31` here — the row that rules out
+        // any single-bool repair.
+        (
+            "two-views-one-taken",
+            "println(f\"c{two_views(E.A(R { id: 18, tag: f\"t18\" }), E.B)}\")\n",
+            "dR30\ns\ndR32\ndR31\ndE\ndE\ndR18\nc81\n",
+        ),
+        // Neither view lands: the all-armed path, which must be untouched.
+        (
+            "no-view-lands",
+            "println(f\"d{two_views(E.B, E.B)}\")\n",
+            "s\ndR32\ndR31\ndR30\ndE\ndE\nd93\n",
+        ),
+        // A field re-armed by a fresh value while a SIBLING still holds a
+        // view. Codegen could not express this at all before: its re-arm was
+        // restricted to the case where the refreshed field was the only one
+        // recorded, precisely because one bool could not hold both answers.
+        (
+            "rearm-while-sibling-viewed",
+            "println(f\"e{rearm_with_sibling_viewed(E.B, E.A(R { id: 6, tag: f\"t6\" }))}\")\n",
+            "dR41\ndR40\ns\ndR42\ndR7\ndE\ndR6\ndE\ne55\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-30-53 — the ORACLE half of the conditional param-view
 /// assignment. `out = r` inside a match arm, where `r` is a payload view of
 /// an owned param, must run `out`'s OWN body exactly once on the path where

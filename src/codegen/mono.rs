@@ -2512,7 +2512,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // survive into) the enclosing body. Mirrors `saved_cleanup`.
             let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
             let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
-            let saved_field_view_fields = std::mem::take(&mut self.drop_rc.field_view_flag_fields);
+            let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -2535,7 +2535,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Restore state.
             self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
             self.drop_rc.cond_store_flag_params = saved_cond_store_params;
-            self.drop_rc.field_view_flag_fields = saved_field_view_fields;
+            self.drop_rc.field_view_flags = saved_field_view_flags;
             self.accel.soa_return_locals = saved_soa_return_locals;
             self.var_types.binding_layouts = saved_binding_layouts;
             self.borrow_vars.ref_params = saved_ref_params;
@@ -3194,7 +3194,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-08-28-71 — see the twin in `compile_generic_call`.
         let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
         let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
-        let saved_field_view_fields = std::mem::take(&mut self.drop_rc.field_view_flag_fields);
+        let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
 
         let result = self
             .declare_mono_function(func, mangled)
@@ -3202,7 +3202,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
-        self.drop_rc.field_view_flag_fields = saved_field_view_fields;
+        self.drop_rc.field_view_flags = saved_field_view_flags;
         self.accel.soa_return_locals = saved_soa_return_locals;
         self.var_types.binding_layouts = saved_binding_layouts;
         self.borrow_vars.ref_params = saved_ref_params;
@@ -3414,7 +3414,7 @@ impl<'ctx> super::Codegen<'ctx> {
         //    monomorphizations, so re-seeding per mono is idempotent.
         self.drop_rc.cond_move_drop_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
-        self.drop_rc.field_view_flag_fields.clear();
+        self.drop_rc.field_view_flags.clear();
         if let Some(tail) = func.body.final_expr.as_deref() {
             self.note_escaping_site(tail);
         }

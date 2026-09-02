@@ -66797,6 +66797,77 @@ fn main() {
     }
 
     #[test]
+    fn asan_field_param_view_sibling_bodies_free_exactly_once() {
+        // B-2026-09-02-10 — the heap half of the per-FIELD param-view fix.
+        //
+        // THE ROW'S OWN REPRO COULD NOT HAVE MEASURED THIS. It carries a
+        // scalar-plus-short-tag payload, where the whole defect is a missing
+        // line of output and the memory side says nothing at all — so a fix can
+        // look complete against it while leaving a heap-owning sibling
+        // unbalanced in either direction. Restoring a body that had been
+        // silenced is exactly the change most able to introduce a DOUBLE free,
+        // and re-arming the wrong field would be a use-after-free on a husk.
+        //
+        // Each `R` here owns a `String` tag and an eight-element `Vec[String]`
+        // of long strings, so every body that runs or fails to run is visible
+        // to the sanitizer rather than only to the diff. `dR<id>-<len>` reads
+        // the Vec's length from inside the body, so a body running on a moved-
+        // from or freed object shows up as a wrong count rather than passing
+        // quietly.
+        //
+        // Three cells per iteration, looped so a per-path flag that fails to
+        // reset between iterations is caught: only the first view lands, both
+        // land, and neither lands. Measured 0 definitely/indirectly lost under
+        // valgrind as well, and byte-identical on all four surfaces.
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}-{self.xs.len()}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H3 { f: R, g: R, k: R }
+
+fn mk(n: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 8 { v.push(f"payloadpayload-{n}-{i}"); i = i + 1; }
+    return R { id: n, tag: f"tag-payloadpayload-{n}", xs: v }
+}
+
+fn two_views(b: E, c: E) -> i64 {
+    let mut h: H3 = H3 { f: mk(30), g: mk(31), k: mk(32) };
+    match b { E.A(r) => { h.f = r; } E.B => { } }
+    match c { E.A(r2) => { h.g = r2; } E.B => { } }
+    println("s");
+    return h.f.id + h.g.id + h.k.id
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"a{two_views(E.A(mk(18)), E.B)}");
+        println(f"b{two_views(E.A(mk(18)), E.A(mk(19)))}");
+        println(f"c{two_views(E.B, E.B)}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dR30-8", "s", "dR32-8", "dR31-8", "dE", "dE", "dR18-8", "a81", "dR30-8", "dR31-8",
+                "s", "dR32-8", "dE", "dR19-8", "dE", "dR18-8", "b69", "s", "dR32-8", "dR31-8",
+                "dR30-8", "dE", "dE", "c93", "dR30-8", "s", "dR32-8", "dR31-8", "dE", "dE",
+                "dR18-8", "a81", "dR30-8", "dR31-8", "s", "dR32-8", "dE", "dR19-8", "dE", "dR18-8",
+                "b69", "s", "dR32-8", "dR31-8", "dR30-8", "dE", "dE", "c93", "dR30-8", "s",
+                "dR32-8", "dR31-8", "dE", "dE", "dR18-8", "a81", "dR30-8", "dR31-8", "s", "dR32-8",
+                "dE", "dR19-8", "dE", "dR18-8", "b69", "s", "dR32-8", "dR31-8", "dR30-8", "dE",
+                "dE", "c93", "done",
+            ],
+            "b10-field-param-view-sibling-bodies",
+        );
+    }
+
+    #[test]
     fn asan_optres_temp_arg_ownership_follows_callee_escape() {
         // Escape routes — each of these aborted or leaked before.
         assert_clean_asan_run(
