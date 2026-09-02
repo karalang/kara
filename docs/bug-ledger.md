@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 193 |
 | double-free | 168 |
 | codegen-gap | 159 |
-| diagnostics | 119 |
+| diagnostics | 120 |
 | false-positive | 104 |
 | soundness | 94 |
 | perf | 87 |
@@ -117,7 +117,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 70 |
 | cli | 70 |
 | autopar | 55 |
-| parser | 45 |
+| parser | 46 |
 | runtime | 35 |
 | effect | 29 |
 | resolver | 28 |
@@ -160,6 +160,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-31 | 2026-09-02 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, .. }` in a nested expression position loses 15 B per evaluation at both opt levels where the BRACED `=> { s }` spelling is now clean. Excluded by that fix's block-bodied-arm condition, which is load-bearing: dropping it fails BOTH `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free` and `selfhost_codegen_matches_seed_run`, because a bare-armed match is also how the generic-enum debox hands a value out of its frame | — |
 | B-2026-09-02-32 | 2026-09-02 | codegen | high | A WHOLE-ELEMENT REBIND OUT OF A BARE-TUPLE PATTERN DOUBLE-FREES THE ELEMENT'S HEAP -- `match t { (r, k) => { let m = r; ... } }` over a heap-owning element aborts with `free(): double free detected in tcache 2` at BOTH optimization levels while `--interp` is correct. The MEMORY analogue of B-2026-08-31-7, which fixed this exact shape for `Drop` BODIES only: `m` takes a struct drop of its own while the tuple's `__karac_drop_tuple_*` still frees the same buffers. Needs the element's OWNER transferred, not a per-field cap zeroed the way B-2026-09-02-27 does for `let n = r.name` | — |
 | B-2026-09-02-35 | 2026-09-02 | codegen | medium | A BY-VALUE TUPLE PARAM LEAKS ITS ELEMENT VEC'S HEAP-OWNING ELEMENTS -- `fn take(t: (Vec[String], i64))` frees the Vec's `{ptr,len,cap}` BUFFER but never the heap each element owns, so every `String` in it leaks (176 bytes / 2 objects on a two-element Vec, under ASAN+LSan). Not String-specific: `Vec[Vec[i64]]` leaks its inner Vecs identically. The same `Vec[String]` as a PLAIN param, as a tuple LOCAL, or inside a struct param is CLEAN, which puts the axis on the tuple param's entry copy rather than on Vec drop. No `match`, destructure or move-out required | — |
+| B-2026-09-02-36 | 2026-09-02 | parser | low | THE RESIDUAL OF B-2026-09-02-29 ON THE SIBLING PATH: all 12 STRUCTURAL MARKERS still render the internal `Error("...")` Debug wrapper when raw-escaped -- `Expected pattern, found Error("'r#self' is not legal; 'self' is a structural marker, not a reservable keyword")` -- and emit the generic E0002 rather than syntax.md's specified `E_RAW_IDENT_NOT_ALLOWED`. 1f2fae6 moved reserved KEYWORDS off `Token::Error`; the raw-identifier REJECTION path still produces one. | — |
 
 ### Relocated
 
