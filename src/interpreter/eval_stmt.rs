@@ -2102,6 +2102,47 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// B-2026-09-02-40 — the parameter name a tuple-destructure SOURCE is
+    /// rooted at: the identifier itself (`let (r, k) = t;`), or the root of a
+    /// pure `FieldAccess` chain (`let (r, k) = h.pe;` → `h`, `g.h.pe` → `g`).
+    /// `None` for any other source shape.
+    ///
+    /// Walks `FieldAccess` ONLY, deliberately. Codegen's twin gate computes
+    /// `owner_runs_bodies` from `place_root_ident`, which also reaches through
+    /// `Index`/`TupleIndex` — but its marking site is additionally guarded by
+    /// `place_field_chain_root`, written against this walk, because a container
+    /// ELEMENT (`v[i].pe`) is not the callee's entry copy and no measurement
+    /// backs treating its leaves as views.
+    ///
+    /// No caller-retains exclusion, and that is measured rather than assumed.
+    /// `finish_place_source_tuple_destructure` opens with an
+    /// `owned_struct_params` bail, so a param whose struct carries a direct
+    /// `Vec`/`VecDeque`/`String` field looked like it would never reach
+    /// codegen's marking site — which would have made marking it here a
+    /// run-vs-build split. An exclusion mirroring that bail was written, and
+    /// the probe refuted it: with `struct Hs { pe: (R, i64), name: String }`
+    /// the COMPILED backends went to one body while the excluded interpreter
+    /// stayed at two, i.e. the bail does not fire for this shape and the
+    /// exclusion caused the very divergence it was meant to prevent. The
+    /// `ownstr` cell of `e2e_projection_source_tuple_destructure_is_a_view` and
+    /// its interpreter twin keep that measurement standing.
+    fn destructure_source_param_root<'e>(&self, value: &'e Expr) -> Option<&'e str> {
+        match &value.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            ExprKind::FieldAccess { .. } => {
+                let mut cur = value;
+                loop {
+                    match &cur.kind {
+                        ExprKind::FieldAccess { object, .. } => cur = object,
+                        ExprKind::Identifier(n) => return Some(n.as_str()),
+                        _ => return None,
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn let_destructures_owned_param(&mut self, stmt: &Stmt) -> bool {
         let (pattern, value) = match &stmt.kind {
             StmtKind::Let { pattern, value, .. } => (pattern, value),
@@ -2211,9 +2252,17 @@ impl<'a> super::Interpreter<'a> {
             }
             return false;
         }
-        let ExprKind::Identifier(n) = &value.kind else {
+        // B-2026-09-02-40 — the source may be a bare parameter name OR a FIELD
+        // CHAIN rooted at one (`let (r, k) = h.pe;`). Both name a tuple the
+        // callee's entry copy owns; the projection spelling was simply never
+        // admitted here, so it fell through to `push_drops_for_stmt` and minted
+        // a second owner — `b12 dR12 dR12` against a due `b12 dR12`, agreed on
+        // all four surfaces because codegen's own marking was gated to
+        // identifiers purely to match this bail.
+        let Some(n) = self.destructure_source_param_root(value) else {
             return false;
         };
+        let n = n.to_string();
         if !self
             .owned_param_names_stack
             .last()

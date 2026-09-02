@@ -528,6 +528,76 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-02-40 — the heap-carrying PROJECTION-source destructure under
+    /// ASAN + LSan.
+    ///
+    /// The fix records a `let (r, k) = h.pe;` leaf in `param_view_locals`, the
+    /// same registration `asan_let_tuple_destructure_leaf_has_one_owner` covers
+    /// for a bare-param source, reached one hop further in through a field. Body
+    /// counting is pinned by the E2E twins; what only ASAN can answer is whether
+    /// the buffers still have exactly one owner once the leaf stops registering
+    /// a body — a withheld body is also a withheld drop action, and the leaf's
+    /// memory arrives by `zero_tuple_elem_cap_at` handing the element away from
+    /// the OWNING STRUCT's tuple walk rather than from a bare tuple param's.
+    /// That is the part this case exists for: the source of the cap-zero is a
+    /// different owner here, so an index computed against the wrong base would
+    /// free a neighbour twice.
+    ///
+    /// `ownstr` is the cell that earns its place. Its struct carries a `String`
+    /// of its OWN beside the tuple, so the param is a caller-retains
+    /// `owned_struct_params` deep copy — exactly the shape an earlier draft of
+    /// this fix excluded on the theory that codegen bailed there. It does not
+    /// bail, and the exclusion split the backends. Pinning the shape under ASAN
+    /// says the two buffers (the struct's `name` and the element's) are freed
+    /// once each, which is the thing a body-count assertion cannot see.
+    ///
+    /// `twohop` runs the cap-zero two fields deep, and `norebind` is the
+    /// over-reach control: the element is only READ, so the tuple must still
+    /// free it exactly once.
+    ///
+    /// The transcript is asserted alongside so the case fails if the bodies stop
+    /// running rather than merely staying memory-clean — each `Drop` body reads
+    /// both heap fields, so a premature free is a use-after-free here rather
+    /// than a silent leak.
+    #[test]
+    fn asan_projection_source_destructure_leaf_has_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.name}:{self.xs.len()}\") } }\n\
+             struct H { pe: (R, i64) }\n\
+             struct Hs { pe: (R, i64), name: String }\n\
+             struct G { h: H }\n\
+             fn mk(id: i64) -> R {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return R { id: id, name: f\"n{id}\", xs: v }\n\
+             }\n\
+             fn plain(h: H) { let (r, k) = h.pe; let m = r; println(f\"  p{m.xs.len()}:{m.name}\") }\n\
+             fn ownstr(hs: Hs) { let (r, k) = hs.pe; let m = r; println(f\"  o:{m.name}:{hs.name}\") }\n\
+             fn twohop(g: G) { let (r, k) = g.h.pe; let m = r; println(f\"  t:{m.name}\") }\n\
+             fn norebind(h: H) { let (r, k) = h.pe; println(f\"  nr{r.xs.len()}:{r.name}\") }\n\
+             fn main() {\n\
+             \x20   plain(H { pe: (mk(1), 0) });\n\
+             \x20   ownstr(Hs { pe: (mk(2), 0), name: \"s\" });\n\
+             \x20   twohop(G { h: H { pe: (mk(3), 0) } });\n\
+             \x20   norebind(H { pe: (mk(4), 0) });\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "p1:n1",
+                "dR1:n1:1",
+                "  o:n2:s",
+                "dR2:n2:1",
+                "  t:n3",
+                "dR3:n3:1",
+                "  nr1:n4",
+                "dR4:n4:1",
+                "end",
+            ],
+            "b40-projection-source-destructure-single-owner",
+        );
+    }
+
     /// B-2026-09-01-33 — the heap-carrying producer-call argument under
     /// ASAN + LSan.
     ///

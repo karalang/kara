@@ -34353,9 +34353,15 @@ done
 ///   tuple whole-rebind at all (`t2.0.id` still fails to lower), which is why the
 ///   propagation here reads `owned_param_seed_names_stack` — the frame's params
 ///   AS SEEDED — rather than the union that has grown to include inherited views.
-/// - `proj` — `let (r, k) = h.pe;`. A projection source satisfies codegen's
-///   `owner_runs_bodies` (its root is a param) but not this backend's gate, which
-///   wants a bare identifier.
+/// - `proj` — `let (r, k) = h.pe;`. FIXED SINCE, by B-2026-09-02-40. A
+///   projection source already satisfied codegen's `owner_runs_bodies` (its root
+///   is a param); only this backend's gate wanted a bare identifier, and
+///   codegen's marking was narrowed to identifiers purely to match it. -40
+///   taught this side the field-chain shape and lifted both together — one body
+///   here now. Kept in this list because it is the cell that shows a pin can be a
+///   MATCHING restriction rather than an ownership judgement, and
+///   `test_projection_source_tuple_destructure_is_a_view` is where the widened
+///   shape is pinned in full.
 ///
 /// `norebind` and `local` are the over-reach controls: withholding a body fails
 /// by running none, and both must stay at exactly one.
@@ -34445,8 +34451,105 @@ viewsrc end
 proj
   b12
 dR12
-dR12
 proj end
+done
+"#
+    );
+}
+
+/// B-2026-09-02-40 — a `let`-destructure whose source is a FIELD CHAIN rooted at
+/// an owned param (`let (r, k) = h.pe;`) binds views, exactly as the bare-param
+/// spelling does since B-2026-09-02-25.
+///
+/// `plain` ran `b12 dR12 dR12` where one body is due, AGREED on all four
+/// surfaces — and the agreement is what made it worth its own row rather than a
+/// one-sided patch. Codegen's `owner_runs_bodies` already answered yes for
+/// `h.pe` (`place_root_ident` walks to the param `h`); its marking site was
+/// narrowed to `ExprKind::Identifier` for the sole purpose of matching the
+/// interpreter's gate, which bailed outright on a non-identifier RHS. So the fix
+/// is one rule taught to both sides: the source may be a bare parameter name OR
+/// a pure `FieldAccess` chain rooted at one.
+///
+/// LIFTED BOTH SIDES TOGETHER, because either alone is a divergence — the row's
+/// own opener measured that dropping codegen's gate by itself takes `plain` to
+/// one body compiled and leaves the interpreter at two.
+///
+/// `ownstr` IS THE CELL THAT REFUTED AN ASSUMPTION, and it is here for that
+/// reason. `finish_place_source_tuple_destructure` opens with an
+/// `owned_struct_params` bail, so a param whose struct carries a direct
+/// `Vec`/`VecDeque`/`String` field looked like it could never reach codegen's
+/// marking site — which would have made marking it interpreter-side a
+/// run-vs-build split. An exclusion mirroring that bail was written and
+/// measured: the COMPILED backends went to one body while the excluded
+/// interpreter stayed at two, i.e. the bail does not fire for this shape and the
+/// guard caused the exact divergence it was added to prevent. It was removed.
+/// This cell keeps that refutation standing.
+///
+/// `rebind` is the pinned-at-two cell, held back by a measurement rather than by
+/// taste: `let h2 = h; let (r, k) = h2.pe;` roots at `h2`, which is not a
+/// parameter, so codegen's `owner_runs_bodies` says no and its leaf takes the
+/// body. Marking it here alone would split the backends. At two on all four
+/// surfaces, filed separately.
+///
+/// `norebind` and `refparam` are the over-reach controls, and they fail in
+/// opposite directions: withholding a body too eagerly shows up as `norebind`
+/// running NONE, and `refparam` (a borrowed receiver the caller still owns) must
+/// never gain one.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_projection_source_tuple_destructure_is_a_view`, pinned to the same
+/// string.
+#[test]
+fn test_projection_source_tuple_destructure_is_a_view() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H  { pe: (R, i64) }
+struct Hs { pe: (R, i64), name: String }
+struct G  { h: H }
+
+fn f1(h: H)   { let (r, k) = h.pe;   let m = r; println(f"  b{m.id}") }
+fn f2(hs: Hs) { let (r, k) = hs.pe;  let m = r; println(f"  b{m.id} {hs.name}") }
+fn f3(g: G)   { let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}") }
+fn f4(h: H)   { let (r, k) = h.pe;   println(f"  b{r.id}") }
+fn f5(h: H)   { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") }
+fn f6(h: ref H) { println(f"  b{h.pe.0.id}") }
+
+fn main() {
+    println("plain");    f1(H  { pe: (R { id: 1 }, 0) });                println("plain end")
+    println("ownstr");   f2(Hs { pe: (R { id: 2 }, 0), name: "n" });     println("ownstr end")
+    println("twohop");   f3(G  { h: H { pe: (R { id: 3 }, 0) } });       println("twohop end")
+    println("norebind"); f4(H  { pe: (R { id: 4 }, 0) });                println("norebind end")
+    println("rebind");   f5(H  { pe: (R { id: 5 }, 0) });                println("rebind end")
+    println("refparam"); let h6 = H { pe: (R { id: 6 }, 0) }; f6(h6);    println("refparam end")
+    println("done")
+}
+"#),
+        r#"plain
+  b1
+dR1
+plain end
+ownstr
+  b2 n
+dR2
+ownstr end
+twohop
+  b3
+dR3
+twohop end
+norebind
+  b4
+dR4
+norebind end
+rebind
+  b5
+dR5
+dR5
+rebind end
+refparam
+  b6
+dR6
+refparam end
 done
 "#
     );

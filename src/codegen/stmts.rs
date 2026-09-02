@@ -13732,6 +13732,29 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// B-2026-09-02-40 — the root of a pure `FieldAccess` chain
+    /// (`h.pe` → `h`, `g.h.pe` → `g`), or `None` for anything else.
+    ///
+    /// Deliberately NARROWER than [`Self::place_root_ident`], which also walks
+    /// `Index` and `TupleIndex`: this answers "is the destructured tuple a
+    /// FIELD of the named root", the question the param-view marking needs, and
+    /// it is written to match the chain the interpreter's
+    /// `destructure_source_param_root` walks so the two gates admit the same
+    /// set of sources rather than agreeing by convention.
+    fn place_field_chain_root(value: &Expr) -> Option<&str> {
+        if !matches!(&value.kind, ExprKind::FieldAccess { .. }) {
+            return None;
+        }
+        let mut cur = value;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } => cur = object,
+                ExprKind::Identifier(n) => return Some(n.as_str()),
+                _ => return None,
+            }
+        }
+    }
+
     /// #21 — the place-source half of [`Self::finish_owned_tuple_destructure`]
     /// (`let (t, n) = h.pe` where `h` is an owned local/callee-owned struct).
     /// For each leaf whose element type is a non-shared user ENUM or nested
@@ -13755,17 +13778,27 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(root) => self.fn_ctx.current_fn_param_names.contains(root),
             None => return,
         };
-        // B-2026-09-02-25 — may the TOP-LEVEL leaves of this destructure be
-        // recorded as param views (see the marking site)? Only for a source
-        // written as a bare parameter name, which is exactly the shape the
-        // interpreter's `let_destructures_owned_param` admits. A projection
-        // source (`let (r, k) = h.pe`) satisfies `owner_runs_bodies` — its root
-        // is a param — but the interpreter's gate wants an IDENTIFIER and
-        // declines, so marking here would leave that shape at one body compiled
-        // and two interpreted. It is at two on every surface today; keeping the
-        // two gates the same keeps it agreed, which is the trade this row's own
-        // opener made.
-        let mark_views = owner_runs_bodies && matches!(&value.kind, ExprKind::Identifier(_));
+        // B-2026-09-02-25, widened by B-2026-09-02-40 — may the leaves of this
+        // destructure be recorded as param views (see the marking site)?
+        //
+        // -25 admitted only a bare parameter name, because that was the one
+        // shape the interpreter's `let_destructures_owned_param` accepted; a
+        // PROJECTION source (`let (r, k) = h.pe`) already satisfies
+        // `owner_runs_bodies` — its root is a param — so marking it here alone
+        // would have gone to one body compiled against two interpreted. -40
+        // teaches the interpreter the same shape, so the restriction comes off
+        // and both sides move together.
+        //
+        // The chain test is NOT redundant with `owner_runs_bodies`.
+        // `place_root_ident` above also reaches through `Index` and
+        // `TupleIndex`, so `let (r, k) = v[i].pe;` over a param `v` answers yes
+        // there — a container ELEMENT is a different ownership story (the
+        // element is not the param's own entry copy) and no measurement backs
+        // marking it. `Self::place_field_chain_root` walks `FieldAccess` only,
+        // which is exactly what the interpreter's gate walks.
+        let mark_views = owner_runs_bodies
+            && (matches!(&value.kind, ExprKind::Identifier(_))
+                || Self::place_field_chain_root(value).is_some());
         let Some(elems) = self.place_chain_tuple_tes(value) else {
             return;
         };
