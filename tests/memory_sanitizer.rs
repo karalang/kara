@@ -373,6 +373,95 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-02-32 — MOVING THE WHOLE ELEMENT OUT OF A BARE-TUPLE PATTERN
+    /// MUST DISARM THE TUPLE, NOT THE COPY.
+    ///
+    /// The whole-element sibling of `asan_tuple_element_field_move_out_disarms_
+    /// the_tuple` above, and the memory analogue of what B-2026-08-31-7 fixed
+    /// for `Drop` BODIES. Same root shape: every move-out disarm writes into the
+    /// SOURCE BINDING's alloca, which for a tuple element is a bit-copy rather
+    /// than the slot `__karac_drop_tuple_*` reads, so after `let m = r;` the
+    /// tuple went on freeing buffers `m` owns — `free(): double free detected in
+    /// tcache 2` at BOTH optimization levels and with auto-par either way,
+    /// against a correct `--interp`.
+    ///
+    /// -27 zeroes ONE field's `cap` because a field move-out gives away exactly
+    /// one buffer. A whole-element move gives away all of them and names no
+    /// single field, so the repair walks the element's entire heap-field set in
+    /// the tuple's slot instead.
+    ///
+    /// THE CONTROLS CARRY THE WEIGHT, because the fix SUPPRESSES A FREE and
+    /// every way of over-reaching is a leak or a silenced body (LSan and the
+    /// output assertion catch them respectively):
+    /// - `withBody` — the element type has a user `Drop`. Restoring memory
+    ///   ownership must not also silence the body: `dD2` has to appear exactly
+    ///   once, and its `xs.len()`/`name` read from inside the body prove it ran
+    ///   on a live value rather than on a husk.
+    /// - `mid` — the moved element sits in the MIDDLE of a three-element tuple,
+    ///   so a repair that GEP'd the wrong index would corrupt a neighbour
+    ///   rather than silently work.
+    /// - `bare` — the identical whole rebind off a plain by-value param, never
+    ///   in a tuple. It must keep disarming its own slot and must not leak.
+    /// - `noMove` — the element only READ. The tuple must still free it once.
+    ///
+    /// `viaProj` is a PROJECTION scrutinee (`match s.t`). B-2026-09-02-27 could
+    /// not reach that shape and said so; B-2026-09-02-34 widened the slot
+    /// recording to projection and nested scrutinees, and this fix inherits the
+    /// widening for free. It is pinned here rather than left as accidental
+    /// coverage, so a future narrowing of -34 fails loudly instead of silently
+    /// giving the double free back.
+    ///
+    /// NOT WIDENED TO THE SIBLING ROWS, which were measured byte-identical
+    /// before and after this change and stay open: B-2026-09-02-25 (the
+    /// `let (r, k) = t` spelling) and B-2026-09-02-26 (a LOCAL tuple scrutinee)
+    /// are about the `Drop` BODY count, not the heap, and go through different
+    /// machinery.
+    #[test]
+    fn asan_tuple_element_whole_move_out_disarms_the_tuple() {
+        assert_clean_asan_run(
+            "struct H { id: i64, xs: Vec[i64], name: String }\n\
+             struct D { id: i64, xs: Vec[i64], name: String }\n\
+             struct S { t: (H, i64) }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"  dD{self.id}:{self.xs.len()}:{self.name}\") } }\n\
+             fn mk(id: i64) -> H {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return H { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             fn mkD(id: i64) -> D {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return D { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             fn whole(t: (H, i64)) { match t { (r, k) => { let m = r; println(f\"  w{m.xs.len()}:{m.name}\") } } }\n\
+             fn withBody(t: (D, i64)) { match t { (r, k) => { let m = r; println(f\"  b{m.xs.len()}:{m.name}\") } } }\n\
+             fn mid(t: (i64, H, i64)) { match t { (a, r, k) => { let m = r; println(f\"  m{m.xs.len()}:{m.name}\") } } }\n\
+             fn bare(h: H) { let m = h; println(f\"  bare{m.xs.len()}:{m.name}\") }\n\
+             fn noMove(t: (H, i64)) { match t { (r, k) => { println(f\"  nm{r.xs.len()}:{r.name}\") } } }\n\
+             fn viaProj(s: S) { match s.t { (r, k) => { let m = r; println(f\"  p{m.xs.len()}:{m.name}\") } } }\n\
+             fn main() {\n\
+             \x20   whole((mk(1), 0));\n\
+             \x20   withBody((mkD(2), 0));\n\
+             \x20   mid((0, mk(3), 0));\n\
+             \x20   bare(mk(4));\n\
+             \x20   noMove((mk(5), 0));\n\
+             \x20   viaProj(S { t: (mk(6), 0) });\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "w1:n1",
+                "  b1:n2",
+                "  dD2:1:n2",
+                "  m1:n3",
+                "  bare1:n4",
+                "  nm1:n5",
+                "  p1:n6",
+                "end",
+            ],
+            "b32-tuple-elem-whole-move-out",
+        );
+    }
+
     /// B-2026-09-01-33 — the heap-carrying producer-call argument under
     /// ASAN + LSan.
     ///

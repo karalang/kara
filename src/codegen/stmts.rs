@@ -9294,6 +9294,63 @@ impl<'ctx> super::Codegen<'ctx> {
                                     shared_info.is_none(),
                                 );
                             }
+                            // B-2026-09-02-32 — the WHOLE-ELEMENT sibling of
+                            // B-2026-09-02-27, and the memory analogue of what
+                            // B-2026-08-31-7 fixed for `Drop` BODIES.
+                            //
+                            // Every branch above disarms the SOURCE BINDING's
+                            // own alloca, and for a bare-tuple element that
+                            // alloca is a bit-copy — not the slot the tuple's
+                            // `__karac_drop_tuple_*` reads. B-2026-09-02-23 made
+                            // the tuple the single owner, so after `let m = r;`
+                            // the tuple still frees buffers `m` now owns:
+                            // `b1:1:n1` then `free(): double free detected in
+                            // tcache 2` at BOTH optimization levels, against a
+                            // correct `--interp` (valgrind: two invalid frees,
+                            // the `Vec` buffer and the `String` buffer).
+                            //
+                            // -27 zeroes ONE field's `cap` there because a field
+                            // move-out gives away exactly one buffer. A whole-
+                            // element move gives away all of them and has no
+                            // single field to name, so this zeroes the element's
+                            // entire heap-field set in the tuple's slot —
+                            // `zero_struct_move_caps`, the same walk every other
+                            // whole-struct move already uses, just aimed at the
+                            // authoritative slot rather than the copy.
+                            //
+                            // Zeroing the TUPLE's slot cannot cost a read: `r`
+                            // and `m` read the binding's copy, and only the
+                            // tuple's drop reads what is zeroed here. That is
+                            // what makes the store safe in the `has_user_drop`
+                            // branch too, where the sibling disarm deliberately
+                            // RETRACTS rather than zeroes to keep a
+                            // read-after-move readable.
+                            //
+                            // Self-gating: the map is empty unless this binding
+                            // came from a tuple pattern whose element address is
+                            // knowable, which is the set B-2026-09-02-34 widened
+                            // to projection and nested scrutinees.
+                            //
+                            // Keyed by (name, slot) as that row requires: a
+                            // re-home can hand one binding's slot to another
+                            // name, and the name alone would then name the wrong
+                            // element.
+                            if let Some(src_slot) = self.variables.get(source_name).copied() {
+                                if let Some(elem_ptr) = self
+                                    .payload_vars
+                                    .bare_tuple_elem_slots
+                                    .get(&(source_name.to_string(), src_slot.ptr))
+                                    .copied()
+                                {
+                                    if let Some(elem_type) =
+                                        self.var_types.var_type_names.get(source_name).cloned()
+                                    {
+                                        if self.type_decls.struct_types.contains_key(&elem_type) {
+                                            self.zero_struct_move_caps(elem_ptr, &elem_type);
+                                        }
+                                    }
+                                }
+                            }
                             // B-2026-07-31-27 — Map/Set whole-handle rebind
                             // (`let m5 = m4;`). The suppressor's Map/Set arm
                             // just nulled the SOURCE slot (branch-safe move
