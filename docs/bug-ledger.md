@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 6 |
-| run-vs-build | 299 | 16 |
+| run-vs-build | 301 | 17 |
 | leak | 252 | 8 |
 | missing-feature | 192 | 0 |
 | double-free | 162 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1358 | 32 |
-| interp | 318 | 16 |
+| codegen | 1359 | 32 |
+| interp | 320 | 18 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced · 37 open · 1906 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1978 surfaced · 38 open · 1907 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (38)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
-| B-2026-08-31-38 | 2026-08-31 | codegen | medium | `if let Some(H { r, .. }) = o` OVER AN `Option`-WRAPPED STRUCT PAYLOAD RUNS NO `Drop` BODY AT ALL ON EITHER COMPILED BACKEND -- the `match` spelling of the same pattern is correct, so it is the `if let` leg alone | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
@@ -167,6 +166,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
 | B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
 | B-2026-09-02-6 | 2026-09-02 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an assignment that runs on SOME iterations leaves it `false` for all later ones and a later iteration's freshly-declared target loses its own `Drop` body. Identical output before and after B-2026-08-30-53 (that fix neither causes nor cures it), and the limitation has been in the mechanism since B-2026-08-28-51 | — |
+| B-2026-09-02-7 | 2026-09-02 | interp | medium | A `while let` ARM THAT BINDS ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE PER PASS UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the compiled column is the correct one (one value, one body), the surplus scales with the iteration count, and the same loop binding NOTHING is correct on all three, which isolates the trigger to the binding rather than to the loop | — |
+| B-2026-09-02-8 | 2026-09-02 | interp+codegen | medium | AN `Option`-ENVELOPED STRUCT PATTERN THAT BINDS ONLY THE NON-`Drop` FIELD LOSES THE PAYLOAD'S `Drop` BODY IN THE INTERPRETER on both the `if let` and `match` spellings -- and the `let ... else` spelling of the same pattern loses it on ALL FOUR SURFACES, which is agreed-and-wrong rather than a divergence; the same pattern WITHOUT the `Option` envelope, and the same envelope binding NOTHING, are correct everywhere | — |
 
 ### Relocated (4)
 
@@ -201,9 +202,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 
 </details>
 
-### Fixed (1906)
+### Fixed (1907)
 
-<details><summary>1906 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1907 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2078,6 +2079,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 | B-2026-08-31-35 | interp+codegen | medium | A DISCARDED BRANCH WHOSE ARM LITERAL CONSUMES A LOCAL RUNS THAT LOCAL'S `Drop` BODY TWICE ON ALL THREE BACKENDS -- `let t = mkd(7); let _ = if n == 0… | e49a85f |
 | B-2026-08-31-36 | interp | medium | THE INTERPRETER BINDS THE WHOLE CONTAINER, NOT THE ELEMENT, FOR `let g = ref c[i]` WHEN `c` IS A `Slice` OR A `Map` -- codegen and the typechecker bo… | 8ba5e95f |
 | B-2026-08-31-37 | codegen | low | A `Map` BASE FOR `let g = ref m[k]` DECLINES WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` -- no span, and the state is plainly… | 15f91338 |
+| B-2026-08-31-38 | codegen | medium | `if let Some(H { r, . | 1849e2e |
 | B-2026-08-31-41 | ownership | high | A `Slice[T]` THAT BORROWS A LOCAL `Vec` ESCAPES INTO A RETURN VALUE WITH NO DIAGNOSTIC -- `karac check` says "All checks passed" on `fn f() -> Slice[… | c5b5f6a |
 | B-2026-08-31-42 | codegen | medium | AN AGGREGATE CONTAINING A `bf16` FIELD ABORTS THE WASM BUILD WITH `Cannot select: fp_to_bf16` WHEN IT CROSSES A NON-INLINED BOUNDARY BY VALUE -- a pa… | b1be5b9 |
 | B-2026-08-31-44 | codegen | low | B-2026-08-29-32'S FRESHNESS GUARD IS NOW OVER-CONSERVATIVE AND LEAKS 38 B PER EVALUATION IN TWO SHAPES THE UPSTREAM ALIASING FIX HAS SINCE MADE SAFE… | 1b5c026 |
