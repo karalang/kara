@@ -17522,6 +17522,14 @@ fn test_freshtemp_enum_scrutinee_runs_user_drop() {
     // match. The interpreter runs the body at the statement/arm boundary
     // (codegen defers to enclosing-scope exit — the deferred slice-3 timing
     // difference); both run it exactly once.
+    //
+    // B-2026-09-01-42 — the FOURTH `DROP` is the temporary that ends the
+    // `while let`. `next` is called four times (i = 0, 1, 2 yield; i = 3
+    // stops), so four temporaries exist and four bodies are due; this
+    // assertion carried three, pinning the loop-exit residual as expected
+    // output on the interpreter exactly as its codegen twin did on the
+    // compiled side. Both were updated in the same commit, since the two
+    // backends have to agree here.
     let out = run(r#"enum Step { Yield(i64), Stop }
         impl Drop for Step { fn drop(mut ref self) { println("DROP"); } }
         fn next(i: i64) -> Step { if i < 3 { Step.Yield(i) } else { Step.Stop } }
@@ -17534,7 +17542,7 @@ fn test_freshtemp_enum_scrutinee_runs_user_drop() {
         }"#);
     assert_eq!(
         out.trim(),
-        "Y 0\nDROP\nAFTER\nI 0\nDROP\nI 1\nDROP\nI 2\nDROP\nDONE"
+        "Y 0\nDROP\nAFTER\nI 0\nDROP\nI 1\nDROP\nI 2\nDROP\nDROP\nDONE"
     );
 }
 

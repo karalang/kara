@@ -50251,6 +50251,15 @@ fn main() {
     #[test]
     fn e2e_freshtemp_enum_scrutinee_while_let_runs_user_drop_per_iter() {
         // The while-let leg: the user Drop fires once per matched iteration.
+        //
+        // B-2026-09-01-42 — AND ONCE FOR THE TEMPORARY THAT ENDS THE LOOP,
+        // which is the fourth `DROP` below. `next` is called FOUR times
+        // (i = 0, 1, 2 yield; i = 3 stops), so four temporaries exist and four
+        // bodies are due. This fixture asserted three: it was pinning the
+        // loop-exit residual as expected output, which is what made that
+        // residual look intentional. design.md § `if let` and `let...else` >
+        // "Scrutinee temporary scope", fourth bullet, requires the last one to
+        // be dropped too.
         if let Some(out) = run_program(
             "enum Step { Yield(i64), Stop }\n\
              impl Drop for Step { fn drop(mut ref self) { println(\"DROP\"); } }\n\
@@ -50261,7 +50270,7 @@ fn main() {
                  println(\"DONE\");\n\
              }",
         ) {
-            assert_eq!(out, "I 0\nDROP\nI 1\nDROP\nI 2\nDROP\nDONE\n");
+            assert_eq!(out, "I 0\nDROP\nI 1\nDROP\nI 2\nDROP\nDROP\nDONE\n");
         }
     }
 
