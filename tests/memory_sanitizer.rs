@@ -124,6 +124,59 @@ mod memory_sanitizer_tests {
     ) -> Option<(String, String, std::process::ExitStatus)> {
         run_under_asan_opts(src, label, false, false, true)
     }
+    /// B-2026-09-02-1 — the element `Drop` walk must not read a buffer the same
+    /// drain already freed.
+    ///
+    /// The `let` path registered the `StructFieldBodies` walk BEFORE the
+    /// struct's memory drop, and the scope-exit drain runs a frame LIFO, so the
+    /// free drained one step ahead of the walk that reads through it. The body
+    /// then printed a different garbage id on every run.
+    ///
+    /// WHAT ACTUALLY CATCHES IT HERE IS THE TRANSCRIPT, NOT THE SANITIZER, and
+    /// that is worth stating because the opposite is the natural assumption for
+    /// a use-after-free. Measured on the pre-fix compiler: VALGRIND reports it
+    /// (`Invalid read of size 8`, 1 error from 1 context, the `free` being the
+    /// preceding instruction in the same drain), but this ASAN harness does NOT
+    /// flag it -- the pre-fix run fails on `stdout mismatch` with a garbage
+    /// `dR64`, having exited ASAN-clean. So for THIS defect the expected-id
+    /// assertion is the oracle and the sanitizer is not.
+    ///
+    /// It still earns its place: it is the only case exercising this shape in
+    /// the auto-par column under a sanitizer, so if the free and the read ever
+    /// land in a form ASAN does see, it fails here too. Do not read a green run
+    /// of this case alone as evidence that the ordering is sound -- the
+    /// transcript is what makes it evidence.
+    ///
+    /// `_auto_par` is load-bearing: the sequential harness cannot reach the
+    /// shape at all. Without outlining the bodies action fires at its NLL point
+    /// and never enters the drain, so the two halves never meet
+    /// (B-2026-08-31-6).
+    #[test]
+    fn asan_par_field_bodies_walk_does_not_read_freed_buffer() {
+        assert_clean_asan_run_min_allocs_auto_par(
+            "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct Box3 { xs: Vec[R] }\n\
+             fn build(k: i64) -> Box3 {\n\
+             \x20   let mut v: Vec[R] = Vec.new();\n\
+             \x20   v.push(R { id: k, tag: f\"t\" });\n\
+             \x20   let bx: Box3 = Box3 { xs: v };\n\
+             \x20   return bx\n\
+             }\n\
+             fn mk_v() -> Vec[String] { let mut n: Vec[String] = Vec.new(); n.push(f\"aa\"); return n }\n\
+             fn main() {\n\
+             \x20   let a: Box3 = build(10);\n\
+             \x20   println(f\"a{a.xs[0].id}\");\n\
+             \x20   let b: Vec[String] = mk_v();\n\
+             \x20   println(f\"b{b.len()}\");\n\
+             \x20   println(f\"done\");\n\
+             }\n",
+            &["a10", "b1", "done", "dR10"],
+            "b1-par-field-bodies-after-free",
+            1,
+        );
+    }
+
     /// B-2026-09-01-34 — a discarded struct-variant literal in a two-tail `if`
     /// or a `match` arm, under ASAN + LSan.
     ///

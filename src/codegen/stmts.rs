@@ -9301,6 +9301,45 @@ impl<'ctx> super::Codegen<'ctx> {
                                 } else {
                                     self.emit_user_drop_field_bodies_fn(&struct_name, &subst)
                                 };
+                                // B-2026-09-02-1 — MEMORY BEFORE BODIES, the
+                                // B-2026-08-01-2 frame rule, which this site had
+                                // backwards.
+                                //
+                                // The scope-exit drain runs a frame LIFO
+                                // (`emit_scope_cleanup_from`'s `(0..n).rev()`),
+                                // so whichever action is pushed LAST runs FIRST.
+                                // Registering the field-bodies walk before the
+                                // memory drop therefore drained the FREE first
+                                // and the walk second, and the walk reads the
+                                // buffer the free just released.
+                                //
+                                // It stayed invisible because the bodies action
+                                // normally fires at its NLL point and never
+                                // reaches the drain at all. Auto-par is what puts
+                                // both halves in the same drain: an outlined
+                                // region terminates the builder's insert block,
+                                // so `fire_due_user_drops` early-returns for the
+                                // statements it spans and the walk falls through
+                                // to scope exit (B-2026-08-31-6). Measured on
+                                // `let a = build(10); … let b = mkV();` --
+                                // `a10 b1 done dR93841100766318`, a different
+                                // garbage id every run, against
+                                // `KARAC_AUTO_PAR=0`'s correct `a10 dR10 b1 done`.
+                                //
+                                // Confirmed at the source rather than inferred:
+                                // instrumenting the drain prints, for `main`,
+                                // `idx=2 FreeVecBuffer`, `idx=1 StructDrop`,
+                                // `idx=0 UserDrop[StructFieldBodies] a` -- the
+                                // struct's own memory drop draining one step
+                                // ahead of the walk that reads it.
+                                //
+                                // Outlining is only what made the two halves
+                                // meet. Any future path that defers a bodies
+                                // action to the drain hits the same edge, which
+                                // is why the order is fixed here at the
+                                // registration site rather than special-cased in
+                                // the auto-par lowering.
+                                self.track_struct_var_inst(&struct_name, alloca, inst);
                                 if let Some(bodies_fn) = bodies_fn {
                                     self.track_user_drop_var_with_fn(
                                         &struct_name,
@@ -9310,7 +9349,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                         UserDropKind::StructFieldBodies,
                                     );
                                 }
-                                self.track_struct_var_inst(&struct_name, alloca, inst);
                             } else if self.type_decls.struct_types.contains_key(&struct_name) {
                                 // B-2026-07-11-35 (push leg) — thread the binding's
                                 // recorded generic instantiation (`S[String]`) so

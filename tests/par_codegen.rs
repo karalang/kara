@@ -216,6 +216,105 @@ fn main() {{
     /// asserts EVERY element against the sequential definition rather than one
     /// spot value, because a parallel write landing in the wrong place is
     /// exactly the failure mode and a single index can miss it.
+    /// B-2026-09-02-1 — the scope-exit drain must run a struct's field-BODIES
+    /// walk before its MEMORY drop, not after.
+    ///
+    /// `emit_scope_cleanup_from` drains a frame LIFO, so the action pushed LAST
+    /// runs FIRST. The `let` path registered the `StructFieldBodies` walk before
+    /// `track_struct_var_inst`, which drained the struct's memory drop one step
+    /// AHEAD of the walk that reads through it: the element `Drop` body ran on
+    /// freed memory and printed a different garbage id on every run
+    /// (`a10 b1 done dR93841100766318`), with a valgrind `Invalid read of size
+    /// 8` whose `free` is the preceding instruction in the same drain.
+    ///
+    /// THIS TEST BELONGS HERE AND NOWHERE ELSE. `tests/codegen.rs` compiles
+    /// sequentially and never sees the outlined column, so it cannot reach the
+    /// shape: without outlining the bodies action fires at its NLL point and
+    /// never reaches the drain, which is why the ordering hazard sat invisible.
+    /// Auto-par is only what puts BOTH halves in the same drain
+    /// (B-2026-08-31-6: an outlined region terminates the insert block, so
+    /// `fire_due_user_drops` early-returns for the statements it spans).
+    ///
+    /// THE TRIGGER IS NARROW and each row is one of the row's measured
+    /// discriminators: a `Vec`-of-`Drop` binding, then a LATER binding
+    /// initialized FROM A CALL whose return type carries a container. A call
+    /// returning `String` or `i64`, a `Vec` built in place, or no later binding
+    /// never met the hazard. The later binding does not have to be READ.
+    ///
+    /// WHAT THIS DOES NOT ASSERT: the body's POSITION. Under auto-par it still
+    /// runs at scope exit (`done` then `dR10`) where the interpreter and
+    /// `KARAC_AUTO_PAR=0` run it at the NLL point. That residual divergence is
+    /// B-2026-08-31-6 and is deliberately left alone -- this row is the
+    /// memory-safety half, separately fixable and separately fixed.
+    ///
+    /// The exact transcript is the RIGHT check and, for this defect, the only
+    /// one that works: pre-fix the id is whatever the freed block now holds --
+    /// `dR94353033004857` here, `dR64` under ASAN -- so any fixed expectation
+    /// fails, while the sanitizer harness exits CLEAN on it (see
+    /// `asan_par_field_bodies_walk_does_not_read_freed_buffer`). Valgrind does
+    /// report the invalid read; ASAN does not.
+    #[test]
+    fn test_par_field_bodies_walk_runs_before_the_struct_memory_drop() {
+        const H: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct Box3 { xs: Vec[R] }\n\
+             struct WrapV { ys: Vec[String] }\n\
+             fn build(k: i64) -> Box3 { let mut v: Vec[R] = Vec.new(); v.push(R { id: k, tag: f\"t\" }); let bx: Box3 = Box3 { xs: v }; return bx }\n\
+             fn build2(k: i64) -> Box3 { let mut v: Vec[R] = Vec.new(); v.push(R { id: k, tag: f\"t\" }); v.push(R { id: k + 1, tag: f\"t\" }); let bx: Box3 = Box3 { xs: v }; return bx }\n\
+             fn mk_v() -> Vec[String] { let mut n: Vec[String] = Vec.new(); n.push(f\"aa\"); return n }\n\
+             fn mk_w() -> WrapV { let mut n: Vec[String] = Vec.new(); n.push(f\"aa\"); return WrapV { ys: n } }\n\
+             fn mk_s() -> String { return f\"zz\" }\n\
+             fn mk_i() -> i64 { return 5 }\n";
+        for (label, body, want) in [
+            (
+                "later binding from a Vec-returning call",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\")",
+                "a10\nb1\ndone\ndR10\n",
+            ),
+            (
+                "later binding from a call returning a struct wrapping a Vec",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: WrapV = mk_w(); println(f\"b{b.ys.len()}\"); println(f\"done\")",
+                "a10\nb1\ndone\ndR10\n",
+            ),
+            (
+                "later binding never read",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"done\")",
+                "a10\ndone\ndR10\n",
+            ),
+            (
+                "two elements: both bodies, both correct",
+                "let a: Box3 = build2(10); println(f\"a{a.xs[0].id}\"); let b: Vec[String] = mk_v(); println(f\"b{b.len()}\"); println(f\"done\")",
+                "a10\nb1\ndone\ndR10\ndR11\n",
+            ),
+            (
+                "call returning String (control)",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: String = mk_s(); println(f\"b{b.len()}\"); println(f\"done\")",
+                "a10\ndR10\nb2\ndone\n",
+            ),
+            (
+                "call returning i64 (control)",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let b: i64 = mk_i(); println(f\"b{b}\"); println(f\"done\")",
+                "a10\ndR10\nb5\ndone\n",
+            ),
+            (
+                "Vec built in place (control)",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); let mut b: Vec[String] = Vec.new(); b.push(f\"q\"); println(f\"b{b.len()}\"); println(f\"done\")",
+                "a10\ndR10\nb1\ndone\n",
+            ),
+            (
+                "no later binding (control)",
+                "let a: Box3 = build(10); println(f\"a{a.xs[0].id}\"); println(f\"done\")",
+                "a10\ndR10\ndone\n",
+            ),
+        ] {
+            assert_eq!(
+                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                Some(want.to_string()),
+                "{label}"
+            );
+        }
+    }
+
     #[test]
     fn mut_ref_vec_param_is_a_valid_fanout_target() {
         let out = run_program(
