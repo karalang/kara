@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 6 |
-| run-vs-build | 298 | 16 |
-| leak | 251 | 7 |
+| run-vs-build | 299 | 16 |
+| leak | 252 | 8 |
 | missing-feature | 192 | 0 |
 | double-free | 162 | 0 |
 | codegen-gap | 159 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1356 | 32 |
+| codegen | 1358 | 33 |
 | interp | 318 | 16 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1974 surfaced · 37 open · 1904 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced · 38 open · 1905 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (38)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
 | B-2026-08-31-3 | 2026-08-31 | interp+codegen | medium | A `match v[i]` ARM THAT MOVES ITS PAYLOAD INTO A BY-VALUE CALL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS AND ONCE IN THE INTERPRETER -- `got 3 dR3 dE dR3` vs `got 3 dE dR3`; the consuming call is the variable, not the index | — |
 | B-2026-08-31-4 | 2026-08-31 | interp+codegen | medium | A LOCAL WHOSE LAST USE IS A `ref` ARGUMENT TO A CALLEE RETURNING A HEAP VALUE IS DROPPED AT SCOPE EXIT INSTEAD OF ITS LIVE-RANGE END ON BOTH COMPILED BACKENDS, AGAINST design.md line 866 -- `str end dE` vs interp `dE str end`; an `i64` return is clean | — |
@@ -167,6 +166,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1974 surfaced
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 | B-2026-09-02-3 | 2026-09-02 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it -- the byte-identical CONCRETE function is correct on all four | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
+| B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
+| B-2026-09-02-6 | 2026-09-02 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an assignment that runs on SOME iterations leaves it `false` for all later ones and a later iteration's freshly-declared target loses its own `Drop` body. Identical output before and after B-2026-08-30-53 (that fix neither causes nor cures it), and the limitation has been in the mechanism since B-2026-08-28-51 | — |
 
 ### Relocated (4)
 
@@ -201,9 +202,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1974 surfaced
 
 </details>
 
-### Fixed (1904)
+### Fixed (1905)
 
-<details><summary>1904 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1905 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2045,6 +2046,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1974 surfaced
 | B-2026-08-30-50 | interp+codegen | medium | A MIXED CONTROL-FLOW ARGUMENT LOSES THE FRESH BRANCH'S `Drop` BODY when that branch is the one taken -- `one(if false { k } else { mk(31) })` runs `k… | 76677be1 |
 | B-2026-08-30-51 | interp | high | INTERPRETER: A SHADOWED BINDING'S `Drop` BODY NEVER RUNS AND THE SHADOWING VALUE'S RUNS TWICE -- `let t = mk(1); let t = mk(2);` prints `dR2 dR2` und… | 07dc9e76 |
 | B-2026-08-30-52 | codegen | high | A READ-ONLY ARM THAT DESTRUCTURES OR NESTS OVER AN `Option`/`Result` PAYLOAD TOOK ITS HEAP -- FULLY FIXED | 022f07c |
+| B-2026-08-30-53 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends… | ed0a330b |
 | B-2026-08-30-55 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter… | 3a09311 |
 | B-2026-08-30-56 | codegen | high | BOTH COMPILED BACKENDS BITCAST AN INTEGER INTO AN `Option` / `Result` PAYLOAD AND AN ENUM STRUCT-VARIANT FLOAT FIELD, so `let o: Option[f64] = Some(m… | b9500f80 |
 | B-2026-08-31-1 | interp+codegen | medium | A MATCH ARM THAT MOVES AN OWNED STRUCT PARAM'S ENUM PAYLOAD INTO A FRESH LOCAL RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON BOTH… | e59a31b |
