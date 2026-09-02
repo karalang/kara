@@ -3764,7 +3764,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 && crate::ast::fn_conditionally_returns_param_bare(func, i)
                 && !crate::ast::fn_moves_param_into_outliving_place(func, i)
             {
-                if let TypeKind::Path(path) = &param.ty.kind {
+                // B-2026-09-02-3 — the SUBSTITUTED parameter type, not the raw
+                // one. `param.ty` here is the GENERIC AST, so a param declared
+                // `a: T` reads as the literal path `T`, and the user-`Drop`
+                // lookup below asks `drop_method_keys` for a type named "T" and
+                // is told no. The registration then silently did not happen,
+                // and the value that died inside the call ran no body on any
+                // compiled lane while `--interp` ran it.
+                //
+                // That is why B-2026-08-28-71 looked complete: its measurement
+                // was `genf(R { .. }, false, 7)`, whose conditionally-returned
+                // param is declared with the CONCRETE type `R`, so the raw path
+                // already named a real struct. The gap is only for a param
+                // whose declared type IS the type parameter.
+                //
+                // `subst_monomorph_type_params` is the existing resolver and it
+                // already answers `R` at this exact point (instrumented:
+                // `raw=Path(["T"]) substituted=Path(["R"])` with
+                // `type_subst_names = {"T": "R"}`), so this needs no new
+                // channel — only the resolved type instead of the declared one.
+                let param_ty_resolved = self.subst_monomorph_type_params(&param.ty);
+                if let TypeKind::Path(path) = &param_ty_resolved.kind {
                     if let Some(struct_name) = path.segments.first() {
                         let has_user_drop = self
                             .program_snapshot

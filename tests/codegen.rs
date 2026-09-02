@@ -15732,6 +15732,46 @@ fn main() {
                  println(f\"{x.id}\"); }\n",
                 "drop n41\n99\ndrop n99\n",
             ),
+            // B-2026-09-02-3 — the conditionally-returned param's declared type
+            // IS THE TYPE PARAMETER, which is the shape every generic case
+            // above misses. Each of those declares it concretely (`r: R`,
+            // `h: H`) and uses `T` only for an extra scalar argument, so the
+            // mono registration's `drop_method_keys` lookup was handed a real
+            // struct name and succeeded. With `a: T` it is handed the literal
+            // string "T", finds no such type, and silently registers nothing —
+            // so the value that died inside ran no body on any compiled lane
+            // while `--interp` ran it.
+            //
+            // Both branch directions, because which param dies swaps with `k`
+            // and the two must each run exactly once.
+            (
+                "generic-param-is-T-dying-first-arg",
+                "fn pick[T](a: T, k: bool, alt: T) -> T { if k { return alt; } return a; }\n\
+                 fn main() { let x = pick(H { id: 41, name: f\"n41\" }, true, \
+                 H { id: 42, name: f\"n42\" }); println(f\"{x.id}\"); }\n",
+                "drop n41\n42\ndrop n42\n",
+            ),
+            (
+                "generic-param-is-T-dying-second-arg",
+                "fn pick[T](a: T, k: bool, alt: T) -> T { if k { return alt; } return a; }\n\
+                 fn main() { let x = pick(H { id: 43, name: f\"n43\" }, false, \
+                 H { id: 44, name: f\"n44\" }); println(f\"{x.id}\"); }\n",
+                "drop n44\n43\ndrop n43\n",
+            ),
+            // A BOUNDED type parameter resolves through the same channel, so it
+            // must answer the same. Pinned because a bound is the one thing
+            // that could plausibly route the type differently.
+            (
+                "generic-param-is-bounded-T",
+                "#[derive(Display)]\n\
+                 struct D { id: i64, name: String }\n\
+                 impl Drop for D { fn drop(mut ref self) { println(f\"drop {self.name}\"); } }\n\
+                 fn pickd[T: Display](a: T, k: bool, alt: T) -> T \
+                 { if k { return alt; } return a; }\n\
+                 fn main() { let x = pickd(D { id: 45, name: f\"n45\" }, true, \
+                 D { id: 46, name: f\"n46\" }); println(f\"{x.id}\"); }\n",
+                "drop n45\n46\ndrop n46\n",
+            ),
         ] {
             let heap = "struct H { id: i64, name: String }\n\
                  impl Drop for H { fn drop(mut ref self) { println(f\"drop {self.name}\"); } }\n";

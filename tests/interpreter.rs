@@ -35127,6 +35127,42 @@ fn test_conditionally_returned_param_user_drop_body_runs_once() {
              println(f\"{x.id}\") }\n",
             "drop n41\n99\ndrop n99\n",
         ),
+        // B-2026-09-02-3 — the conditionally-returned param's declared type IS
+        // the type parameter. Every generic case above declares it concretely
+        // (`r: R`, `h: H`) and uses `T` only for a scalar argument, so all of
+        // them reached a `drop_method_keys` lookup that was handed a real
+        // struct name. With `a: T` the mono registration was handed the literal
+        // "T", registered nothing, and the compiled lanes ran no body for the
+        // value that died inside — while this backend, which resolves a generic
+        // by its declared name, was already correct. So these three are the
+        // TARGET the compiled backends now meet, exactly as the pair above.
+        //
+        // Keep them verbatim in step with the codegen twin.
+        (
+            "generic-param-is-T-dying-first-arg",
+            "fn pick[T](a: T, k: bool, alt: T) -> T { if k { return alt; } return a; }\n\
+             fn main() { let x = pick(H { id: 41, name: f\"n41\" }, true, \
+             H { id: 42, name: f\"n42\" }); println(f\"{x.id}\") }\n",
+            "drop n41\n42\ndrop n42\n",
+        ),
+        (
+            "generic-param-is-T-dying-second-arg",
+            "fn pick[T](a: T, k: bool, alt: T) -> T { if k { return alt; } return a; }\n\
+             fn main() { let x = pick(H { id: 43, name: f\"n43\" }, false, \
+             H { id: 44, name: f\"n44\" }); println(f\"{x.id}\") }\n",
+            "drop n44\n43\ndrop n43\n",
+        ),
+        (
+            "generic-param-is-bounded-T",
+            "#[derive(Display)]\n\
+             struct D { id: i64, name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"drop {self.name}\") } }\n\
+             fn pickd[T: Display](a: T, k: bool, alt: T) -> T \
+             { if k { return alt; } return a; }\n\
+             fn main() { let x = pickd(D { id: 45, name: f\"n45\" }, true, \
+             D { id: 46, name: f\"n46\" }); println(f\"{x.id}\") }\n",
+            "drop n45\n46\ndrop n46\n",
+        ),
         (
             "generic-heap-payload-escaping-path",
             "fn take[T](h: H, k: bool, t: T) -> H { if k { h } \
