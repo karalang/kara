@@ -77,6 +77,40 @@ impl super::Parser {
         self.parse_expr_bp_with_ctx(0, true)
     }
 
+    /// Parse the `{ … }` body of a block-introducing keyword expression
+    /// (`try` / `seq` / `par` / `unsafe` / `loop` / `comptime`), naming BOTH
+    /// readings when the `{` is missing.
+    ///
+    /// These keywords are the one place where a reserved word does not reach
+    /// the `E0003` path: the parser commits to the construct on seeing the
+    /// keyword, so by the time it fails the keyword is consumed and the
+    /// surprising token really is the `;` or `)` that followed. Reporting
+    /// that literally gives `Expected LeftBrace, found Semicolon` — a bare
+    /// Rust `Debug` token name, and no help to either reader
+    /// (B-2026-09-02-33).
+    ///
+    /// Both readings are plausible from `let x = try;` alone — a malformed
+    /// `try { … }`, or an identifier the writer did not know was reserved —
+    /// and the parser cannot tell which, so the message states both instead
+    /// of guessing. The kind stays `Syntax` rather than `ReservedKeyword`
+    /// because the structural reading is primary: a keyword construct is
+    /// missing its block.
+    fn expect_keyword_block(&mut self, kw: &str) -> Option<Block> {
+        if !self.check(&Token::LeftBrace) {
+            let mut msg = format!(
+                "expected `{{` after `{kw}` — the `{kw}` expression form is `{kw} {{ ... }}`"
+            );
+            if crate::token::is_raw_escapable(kw) {
+                msg.push_str(&format!(
+                    "; if you meant an identifier named `{kw}`, write `r#{kw}`"
+                ));
+            }
+            self.error(&msg);
+            return None;
+        }
+        self.parse_block()
+    }
+
     fn parse_expr_bp(&mut self, min_bp: u8) -> Option<Expr> {
         self.parse_expr_bp_with_ctx(min_bp, false)
     }
@@ -1282,14 +1316,7 @@ impl super::Parser {
             Token::Comptime => {
                 let start = self.current_span();
                 self.advance(); // consume `comptime`
-                if !self.check(&Token::LeftBrace) {
-                    self.error(
-                        "expected `{` after `comptime` — the comptime expression form is \
-                         `comptime { ... }`.",
-                    );
-                    return None;
-                }
-                let block = self.parse_block()?;
+                let block = self.expect_keyword_block("comptime")?;
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Comptime(block),
@@ -1404,7 +1431,7 @@ impl super::Parser {
             // Loop expression
             Token::Loop => {
                 self.advance();
-                let body = self.parse_block()?;
+                let body = self.expect_keyword_block("loop")?;
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Loop {
@@ -1457,7 +1484,7 @@ impl super::Parser {
             // Unsafe block
             Token::Unsafe => {
                 self.advance();
-                let block = self.parse_block()?;
+                let block = self.expect_keyword_block("unsafe")?;
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Unsafe(block),
@@ -1470,7 +1497,7 @@ impl super::Parser {
             // unification, From-chain coercion) lands in P1.
             Token::Try => {
                 self.advance();
-                let block = self.parse_block()?;
+                let block = self.expect_keyword_block("try")?;
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Try(block),
@@ -1480,7 +1507,7 @@ impl super::Parser {
             // Seq block
             Token::Seq => {
                 self.advance();
-                let block = self.parse_block()?;
+                let block = self.expect_keyword_block("seq")?;
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Seq(block),
@@ -1490,7 +1517,7 @@ impl super::Parser {
             // Par block
             Token::Par => {
                 self.advance();
-                let block = self.parse_block()?;
+                let block = self.expect_keyword_block("par")?;
                 Some(Expr {
                     span: self.span_from(&start),
                     kind: ExprKind::Par(block),

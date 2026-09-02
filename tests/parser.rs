@@ -15590,17 +15590,35 @@ fn no_reserved_keyword_leaks_the_internal_error_token() {
         }
     }
 
-    // Naming the keyword is asserted over the twelve this bug was about. The
-    // already-clean six are excluded from THIS half for a real reason, not a
-    // convenient one: three of their cells legitimately do not reach the
-    // reserved-keyword path at all, because the word starts a construct the
-    // parser commits to before it can fail --- `fn f(comptime: i64)` consumes
-    // `comptime` as a parameter modifier, and `let x = comptime;` / `let x =
-    // try;` begin a `comptime { … }` / `try { … }` block. Those report on the
-    // punctuation that actually surprised them. They are a separate (and much
-    // milder) diagnostics gap, filed as B-2026-09-02-33; they are NOT the
-    // `Error("…")` leak this test exists for, which is why the loop above
-    // still covers all eighteen.
+    // Naming the keyword is asserted over all eighteen. The three cells that
+    // used to be excluded here --- `comptime` in parameter and expression
+    // position, `try` in expression position, where the parser commits to the
+    // construct before it can fail and so blamed the `:` / `;` it then found
+    // --- were filed as B-2026-09-02-33 and have since been fixed, so the
+    // exclusion is gone and this covers the full matrix.
+    //
+    // The assertion is "mentions the keyword", not "starts with it", because
+    // the two families answer differently by design: a word with no v1 meaning
+    // gets `'async' is reserved for future use …`, while one that starts a
+    // real construct gets `expected `{` after `try` …` naming both readings.
+    // Both name the keyword; only the second could not lead with it.
+    for kw in already_clean
+        .iter()
+        .chain(karac::token::RESERVED_FUTURE_KEYWORDS.iter())
+    {
+        for shape in positions {
+            let src = shape.replace("KW", kw);
+            let (_prog, errors) = parse_with_errors(&src);
+            assert!(
+                errors.iter().any(|e| e.message.contains(*kw)),
+                "no diagnostic names `{kw}`; got {:?} for: {src}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    // The twelve with no v1 meaning additionally LEAD with the keyword, which
+    // is the shape B-2026-09-02-29 was about.
     for kw in karac::token::RESERVED_FUTURE_KEYWORDS {
         for shape in positions {
             let src = shape.replace("KW", kw);
@@ -15609,7 +15627,7 @@ fn no_reserved_keyword_leaks_the_internal_error_token() {
                 errors
                     .iter()
                     .any(|e| e.message.starts_with(&format!("'{kw}' is"))),
-                "no diagnostic names `{kw}`; got {:?} for: {src}",
+                "no diagnostic leads with `{kw}`; got {:?} for: {src}",
                 errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
             );
         }
@@ -15691,4 +15709,118 @@ fn a_reserved_keyword_yields_one_diagnostic_per_occurrence() {
     // Same shape for an active keyword — no future-reserved-specific cascade.
     let active = parse_with_errors(r#"fn main() { let group = 1; println(f"{group}"); }"#).1;
     assert_eq!(active.len(), 2, "got {:?}", active);
+}
+
+// ── Block-keyword diagnostics (B-2026-09-02-33) ─────────────────────
+
+/// A keyword whose construct the parser COMMITS to before it can fail must
+/// still say something useful. `let x = try;` used to report `Expected
+/// LeftBrace, found Semicolon` --- a bare Rust `Debug` token name naming the
+/// `;` rather than the `try`, useless to either reader.
+///
+/// The scope here is wider than the row that filed it: that row named only
+/// `try`, because the sweep behind it covered the 18 RESERVED words and
+/// `seq` / `par` / `unsafe` / `loop` are not among them. All five share one
+/// code path and one defect, so all five are pinned.
+#[test]
+fn a_block_keyword_without_its_block_names_the_construct_not_the_punctuation() {
+    for kw in ["try", "seq", "par", "unsafe", "loop", "comptime"] {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let x = {kw}; }}"));
+        assert!(!errors.is_empty(), "expected a parse error for `{kw}`");
+        let msg = &errors[0].message;
+        assert!(
+            !msg.contains("found Semicolon") && !msg.contains("LeftBrace"),
+            "`{kw}` still blames the punctuation with an internal token name: {msg}",
+        );
+        assert!(
+            msg.contains(&format!("expected `{{` after `{kw}`")),
+            "`{kw}` should name the construct; got {msg}",
+        );
+    }
+}
+
+/// Both readings, because the parser genuinely cannot tell them apart: a
+/// malformed `try { … }`, or an identifier the writer did not know was
+/// reserved. Naming only the first would leave the second reader stuck.
+#[test]
+fn a_block_keyword_diagnostic_also_offers_the_raw_identifier_reading() {
+    for kw in ["try", "seq", "par", "unsafe", "loop", "comptime"] {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let x = {kw}; }}"));
+        assert!(
+            errors[0].message.contains(&format!(
+                "if you meant an identifier named `{kw}`, write `r#{kw}`"
+            )),
+            "`{kw}` should offer the r# reading; got {:?}",
+            errors[0].message,
+        );
+    }
+}
+
+/// `comptime` in parameter position is the one cell where the fix is a
+/// lookahead rather than a message: the keyword is a real parameter PREFIX,
+/// so it was consumed unconditionally and the pattern parser then blamed the
+/// `:` that followed. A prefix must be followed by a binding, so `:` / `,` /
+/// `)` after it mean a parameter NAMED `comptime`.
+#[test]
+fn comptime_in_parameter_position_reports_the_keyword_not_the_punctuation() {
+    for src in [
+        "fn f(comptime: i64) -> i64 { 0 }",    // named, with a type
+        "fn f(comptime) -> i64 { 0 }",         // named, alone
+        "fn f(comptime, y: i64) -> i64 { y }", // named, first of several
+    ] {
+        let (_p, errors) = parse_with_errors(src);
+        assert!(!errors.is_empty(), "expected a parse error for: {src}");
+        for e in &errors {
+            assert!(
+                !e.message.contains("found Colon")
+                    && !e.message.contains("found Comma")
+                    && !e.message.contains("found RightParen"),
+                "still blames the punctuation: {:?} (src: {src})",
+                e.message,
+            );
+        }
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.starts_with("'comptime' is a reserved keyword")),
+            "should name `comptime`; got {:?} for: {src}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// The other half of that lookahead: the genuine `comptime` PREFIX must still
+/// parse. Without this the fix could "pass" by disabling the feature.
+#[test]
+fn the_genuine_comptime_parameter_prefix_still_parses() {
+    let (prog, errors) = parse_with_errors("comptime fn twice(comptime n: i64) -> i64 { n * 2 }");
+    assert!(errors.is_empty(), "got {:?}", errors);
+    let f = prog
+        .items
+        .iter()
+        .find_map(|i| match i {
+            karac::ast::Item::Function(f) if f.name == "twice" => Some(f),
+            _ => None,
+        })
+        .expect("fn twice should parse");
+    assert!(
+        f.params[0].is_comptime,
+        "the `comptime` prefix on `n` must still be recorded",
+    );
+}
+
+/// ...and every block keyword's valid form still parses.
+#[test]
+fn block_keyword_valid_forms_still_parse() {
+    for src in [
+        "fn main() { let a = unsafe { 1 }; }",
+        "fn main() { let b = seq { 2 }; }",
+        "fn main() { let c = par { 3 }; }",
+        "fn main() { let d = try { 4 }; }",
+        "fn main() { let e = comptime { 5 }; }",
+        "fn main() { loop { break; } }",
+    ] {
+        let (_p, errors) = parse_with_errors(src);
+        assert!(errors.is_empty(), "should parse: {src}; got {:?}", errors);
+    }
 }

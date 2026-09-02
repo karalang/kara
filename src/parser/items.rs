@@ -1550,7 +1550,26 @@ impl super::Parser {
         // typechecker rule that enforces "comptime arg required" lands with
         // the evaluator. Slice 1 records the marker here. Spec: deferred.md §
         // Comptime (form 3, the parameter prefix).
-        let is_comptime = self.eat(&Token::Comptime);
+        // A `comptime` here is the parameter PREFIX — but only when something
+        // that can begin a parameter pattern follows it. `comptime :` is never
+        // a valid prefix (the prefix must be followed by a binding), so that
+        // shape is a parameter NAMED `comptime`, and consuming the keyword
+        // would leave the pattern parser to blame the `:` it then found:
+        // `Expected parameter pattern, found Colon` (B-2026-09-02-33). Leaving
+        // the token unconsumed lets it reach the reserved-keyword path and
+        // report `'comptime' is a reserved keyword …; write `r#comptime` …`,
+        // which is both true and actionable. One token of lookahead decides it
+        // completely: `,` and `)` close the parameter for the same reason `:`
+        // opens its type, so none of the three can follow the prefix.
+        let is_comptime = if self.check(&Token::Comptime)
+            && !matches!(
+                self.peek_token_at(1),
+                Token::Colon | Token::Comma | Token::RightParen
+            ) {
+            self.eat(&Token::Comptime)
+        } else {
+            false
+        };
 
         // Focused diagnostic for the anonymous-parameter shape — `fn f(Type)`
         // / `trait T { fn m(self, Type); }`. Try to recognize a TYPE in
