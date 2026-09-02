@@ -102,31 +102,31 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 102 | 0 |
 | soundness | 95 | 1 |
 | perf | 87 | 0 |
-| other | 69 | 1 |
-| crash | 67 | 0 |
+| other | 71 | 3 |
+| crash | 69 | 2 |
 | use-after-free | 26 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1351 | 29 |
-| interp | 315 | 15 |
+| codegen | 1353 | 31 |
+| interp | 316 | 16 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
 | other | 70 | 0 |
 | cli | 70 | 2 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
-| runtime | 33 | 0 |
+| runtime | 34 | 1 |
 | effect | 29 | 0 |
 | resolver | 28 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1966 surfaced · 33 open · 1900 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1970 surfaced · 37 open · 1900 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (33)
+### Open (37)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -163,6 +163,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1966 surfaced
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 | B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
 | B-2026-09-01-44 | 2026-09-01 | interp | medium | THE ASSOCIATED-FUNCTION SPELLING of a conditional return is wrong under `--interp` in BOTH directions -- the dying argument runs NO `Drop` body and the returned one runs TWO -- while the free-fn and method spellings and all three COMPILED lanes are correct | — |
+| B-2026-09-01-45 | 2026-09-01 | runtime | high | `karac-runtime` NO LONGER LINKS ON WINDOWS -- `LNK2019: unresolved external symbol posix_memalign referenced in function karac_alloc_aligned_or_panic`, so `Test (windows-latest)` fails at BUILD time, not on a test. Red on every concluded CI run since 33f43c4. | — |
+| B-2026-09-01-46 | 2026-09-01 | codegen | high | `e2e_vec_of_vector_operations_round_trip` PRODUCES NO OUTPUT AT ALL on x86-64 -- the over-aligned `Vec[Vector[T, N]]` program that B-2026-08-31-24 was supposed to fix still dies, deterministically, on every concluded CI run since that fix landed. | — |
+| B-2026-09-01-47 | 2026-09-01 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that a 1 MiB thread stack is not enough, which is why `Codegen E2E (Linux arm64)` has been red on every concluded run while the 8 MiB-stack hosts pass. | — |
+| B-2026-09-01-48 | 2026-09-01 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one returning the CORRECTLY-ROUNDED f32. A test defect, not a backend divergence: all four Kara surfaces agree with each other on macOS. | — |
 
 ### Relocated (4)
 
