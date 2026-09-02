@@ -3,7 +3,7 @@
 //! Tokenizer for Kāra source code. Converts a character stream into tokens
 //! with source location tracking (Span).
 
-use crate::token::{FloatSuffix, IntSuffix, Span, SpannedToken, Token};
+use crate::token::{is_raw_escapable, FloatSuffix, IntSuffix, Span, SpannedToken, Token};
 
 /// The Lexer holds state required to tokenize input source code.
 pub struct Lexer<'a> {
@@ -1442,21 +1442,10 @@ impl<'a> Lexer<'a> {
             self.advance();
         }
         let name = self.slice_text(name_start, self.current);
-        if matches!(
-            name,
-            "self"
-                | "Self"
-                | "_"
-                | "super"
-                | "crate"
-                | "mod"
-                | "pub"
-                | "priv"
-                | "private"
-                | "mut"
-                | "ref"
-                | "own"
-        ) {
+        // `UNESCAPABLE_MARKERS` is shared with the parser, which consults it
+        // before suggesting `r#NAME` — a suggestion the lexer would reject is
+        // worse than no suggestion (B-2026-09-02-30).
+        if !is_raw_escapable(name) {
             return self.make_spanned(Token::Error(format!(
                 "'r#{name}' is not legal; '{name}' is a structural marker, not a reservable keyword"
             )));
@@ -1589,11 +1578,35 @@ impl<'a> Lexer<'a> {
             // `f64`), resolved to `Type::Float(FloatSize::{F16,BF16})` by the
             // typechecker's builtin-type lowering. They fall through to the
             // identifier arm below.
-            // Reserved-for-future-use keywords — see design.md § Reserved-for-Future-Use Keywords.
-            "gen" | "become" | "do" | "final" | "override" | "priv" | "typeof" | "virtual"
-            | "async" | "await" | "pure" | "box" => Token::Error(format!(
-                "'{text}' is reserved for future use and cannot be used as an identifier"
-            )),
+            // Reserved-for-future-use keywords — see design.md § Reserved-for-Future-Use
+            // Keywords, and `token::RESERVED_FUTURE_KEYWORDS` for the list itself.
+            //
+            // These carry their spelling as a keyword token rather than a lexer
+            // `Error`, so the parser reports them through the same `E0003` path
+            // as an active keyword instead of printing the internal token
+            // (B-2026-09-02-29). The wording still distinguishes the two — a
+            // future-reserved word is not a v1 feature at all — but it now
+            // arrives as a diagnostic rather than as a `Debug` rendering.
+            // Spelled out rather than routed through a lookup over
+            // `RESERVED_FUTURE_KEYWORDS`: this `match` runs for every
+            // identifier in the source, and rustc compiles the literal arms to
+            // a length/prefix switch, where a slice scan would add up to twelve
+            // string comparisons per identifier on the lexer's hot path.
+            // `tests/lexer.rs::test_v60_reserved_for_future_use_keywords`
+            // iterates the constant and asserts each entry lands here, so the
+            // two cannot drift apart silently.
+            "async" => Token::ReservedFuture("async"),
+            "await" => Token::ReservedFuture("await"),
+            "become" => Token::ReservedFuture("become"),
+            "box" => Token::ReservedFuture("box"),
+            "do" => Token::ReservedFuture("do"),
+            "final" => Token::ReservedFuture("final"),
+            "gen" => Token::ReservedFuture("gen"),
+            "override" => Token::ReservedFuture("override"),
+            "priv" => Token::ReservedFuture("priv"),
+            "pure" => Token::ReservedFuture("pure"),
+            "typeof" => Token::ReservedFuture("typeof"),
+            "virtual" => Token::ReservedFuture("virtual"),
             // Regular identifier
             _ => {
                 if is_reserved_fragment_specifier_namespace(text) {

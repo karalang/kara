@@ -1687,7 +1687,8 @@ fn test_keyword_as_identifier_names_the_keyword() {
         assert!(!errors.is_empty(), "expected a parse error for: {src}");
         assert!(
             errors.iter().any(|e| e.message
-                == "'group' is a reserved keyword and cannot be used as an identifier"),
+                == "'group' is a reserved keyword and cannot be used as an identifier; \
+                    write `r#group` to use it as an ordinary identifier"),
             "message should name the reserved keyword; got {:?} for: {src}",
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
@@ -1696,9 +1697,9 @@ fn test_keyword_as_identifier_names_the_keyword() {
     // spelling is recovered per-token, not hardcoded.
     let (_p, errs) = parse_with_errors("fn f(match: i64) -> i64 { 0 }");
     assert!(
-        errs.iter()
-            .any(|e| e.message
-                == "'match' is a reserved keyword and cannot be used as an identifier"),
+        errs.iter().any(|e| e.message
+            == "'match' is a reserved keyword and cannot be used as an identifier; \
+                    write `r#match` to use it as an ordinary identifier"),
         "got {:?}",
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
@@ -15546,4 +15547,148 @@ fn test_subscript_followed_by_brace_is_not_a_generic_struct_literal() {
             result.errors
         );
     }
+}
+
+// ── Reserved-keyword diagnostics (B-2026-09-02-29, B-2026-09-02-30) ──
+
+/// Every reserved-for-future-use keyword reports a clean `E0003`, in every
+/// syntactic position — no `Error("…")` debug wrapper.
+///
+/// Before the fix the split was by KEYWORD, not by position: six words
+/// (`asm`, `comptime`, `dyn`, `global_asm`, `try`, `yield`) already had real
+/// token variants and reported cleanly, while the twelve in
+/// `RESERVED_FUTURE_KEYWORDS` lexed to `Token::Error` and surfaced as
+/// `Expected pattern, found Error("'async' is reserved for future use …")` —
+/// the compiler's internal token representation, shown to the user.
+#[test]
+fn no_reserved_keyword_leaks_the_internal_error_token() {
+    let positions = [
+        "fn main() { let KW = 1; }",  // let pattern
+        "fn f(KW: i64) -> i64 { 0 }", // parameter
+        "fn main() { let x = KW; }",  // expression
+        "struct S { KW: i64 }",       // struct field
+        "fn KW() {}",                 // function name
+    ];
+    // The full v1 reserved set: the six that were already clean plus the
+    // twelve that were not. The no-leak property holds for all eighteen.
+    let already_clean = ["asm", "comptime", "dyn", "global_asm", "try", "yield"];
+    for kw in already_clean
+        .iter()
+        .chain(karac::token::RESERVED_FUTURE_KEYWORDS.iter())
+    {
+        for shape in positions {
+            let src = shape.replace("KW", kw);
+            let (_prog, errors) = parse_with_errors(&src);
+            assert!(!errors.is_empty(), "expected a parse error for: {src}");
+            for e in &errors {
+                assert!(
+                    !e.message.contains("Error("),
+                    "diagnostic leaks the internal token for `{kw}`: {:?} (src: {src})",
+                    e.message,
+                );
+            }
+        }
+    }
+
+    // Naming the keyword is asserted over the twelve this bug was about. The
+    // already-clean six are excluded from THIS half for a real reason, not a
+    // convenient one: three of their cells legitimately do not reach the
+    // reserved-keyword path at all, because the word starts a construct the
+    // parser commits to before it can fail --- `fn f(comptime: i64)` consumes
+    // `comptime` as a parameter modifier, and `let x = comptime;` / `let x =
+    // try;` begin a `comptime { … }` / `try { … }` block. Those report on the
+    // punctuation that actually surprised them. They are a separate (and much
+    // milder) diagnostics gap, filed as B-2026-09-02-33; they are NOT the
+    // `Error("…")` leak this test exists for, which is why the loop above
+    // still covers all eighteen.
+    for kw in karac::token::RESERVED_FUTURE_KEYWORDS {
+        for shape in positions {
+            let src = shape.replace("KW", kw);
+            let (_prog, errors) = parse_with_errors(&src);
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.message.starts_with(&format!("'{kw}' is"))),
+                "no diagnostic names `{kw}`; got {:?} for: {src}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            );
+        }
+    }
+}
+
+/// The wording keeps the two families apart. An ACTIVE keyword collides with a
+/// v1 feature; a RESERVED-FOR-FUTURE-USE word is not a feature at all. That
+/// distinction was the one correct part of the old message and is preserved.
+#[test]
+fn reserved_future_and_active_keywords_are_worded_differently() {
+    let (_p, future) = parse_with_errors("fn main() { let async = 1; }");
+    assert!(
+        future[0]
+            .message
+            .starts_with("'async' is reserved for future use"),
+        "got {:?}",
+        future[0].message,
+    );
+    let (_p, active) = parse_with_errors("fn main() { let union = 1; }");
+    assert!(
+        active[0]
+            .message
+            .starts_with("'union' is a reserved keyword"),
+        "got {:?}",
+        active[0].message,
+    );
+}
+
+/// Every reserved-keyword diagnostic names the `r#` escape — design.md
+/// § Keywords calls it "the forward-compatibility lever" and says tooling can
+/// apply it mechanically. Before the fix, 0 of 18 mentioned it.
+#[test]
+fn reserved_keyword_diagnostics_name_the_raw_identifier_escape() {
+    for kw in [
+        "union", "group", "blocks", "match", "async", "typeof", "gen",
+    ] {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let {kw} = 1; }}"));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains(&format!("write `r#{kw}`"))),
+            "diagnostic for `{kw}` should name the r# escape; got {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+    }
+}
+
+/// ...but NOT for the structural markers, which `r#` cannot rescue. `priv` is
+/// the case that makes this load-bearing: it is reserved-for-future-use AND
+/// unescapable, so a blanket suggestion would tell the reader to write
+/// `r#priv` — which the lexer then rejects.
+#[test]
+fn the_raw_escape_is_not_suggested_where_the_lexer_would_reject_it() {
+    for kw in ["priv", "self"] {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let {kw} = 1; }}"));
+        assert!(!errors.is_empty(), "expected a parse error for `{kw}`");
+        for e in &errors {
+            assert!(
+                !e.message.contains("r#"),
+                "`{kw}` is unescapable; diagnostic must not suggest r#: {:?}",
+                e.message,
+            );
+        }
+    }
+}
+
+/// One fault, one diagnostic. The B-2026-09-02-29 report described the second
+/// error in its repro as a cascade from the same token; it is not — the repro
+/// simply spelled `async` twice (a `let` and an f-string interpolation), and
+/// an ACTIVE keyword produces exactly the same 1-per-occurrence count. Pinned
+/// so a future change cannot introduce the cascade the row believed existed.
+#[test]
+fn a_reserved_keyword_yields_one_diagnostic_per_occurrence() {
+    let one = parse_with_errors("fn main() { let async = 1; }").1;
+    assert_eq!(one.len(), 1, "got {:?}", one);
+    let two = parse_with_errors(r#"fn main() { let async = 1; println(f"{async}"); }"#).1;
+    assert_eq!(two.len(), 2, "got {:?}", two);
+    // Same shape for an active keyword — no future-reserved-specific cascade.
+    let active = parse_with_errors(r#"fn main() { let group = 1; println(f"{group}"); }"#).1;
+    assert_eq!(active.len(), 2, "got {:?}", active);
 }

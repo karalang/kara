@@ -316,7 +316,47 @@ pub enum Token {
     /// can attach it to the enclosing module rather than the next item.
     ModuleDocComment(String),
     Error(String),
+    /// A word from design.md § Reserved-for-Future-Use Keywords, carrying its
+    /// source spelling.
+    ///
+    /// These are NOT v1 features, so they have no token of their own and
+    /// nothing in the parser ever accepts one — but they must still reach the
+    /// parser as a *keyword*, not as a lexer `Error`. Before B-2026-09-02-29
+    /// they lexed to `Error(msg)`, which `keyword_spelling` reports as a
+    /// non-keyword, so the parser fell through to its `found {tok:?}` fallback
+    /// and rendered the compiler's internal token — `Expected pattern, found
+    /// Error("'async' is reserved for future use …")` — instead of the clean
+    /// `E0003` the active keywords get. Keeping the spelling as a payload lets
+    /// them share that one diagnostic path.
+    ReservedFuture(&'static str),
     EOF,
+}
+
+/// The words design.md § Reserved-for-Future-Use Keywords holds back from v1.
+///
+/// The lexer maps each to [`Token::ReservedFuture`]; `r#NAME` bypasses the
+/// table entirely, so every one of these stays usable as an identifier today
+/// (except `priv`, which [`UNESCAPABLE_MARKERS`] also claims).
+pub const RESERVED_FUTURE_KEYWORDS: &[&str] = &[
+    "async", "await", "become", "box", "do", "final", "gen", "override", "priv", "pure", "typeof",
+    "virtual",
+];
+
+/// Words the `r#` escape does NOT rescue: structural markers whose meaning is
+/// positional rather than nominal, so there is no identifier for `r#NAME` to
+/// denote.
+///
+/// This is the authority for both the lexer's `r#` rejection and the parser's
+/// decision to *suggest* `r#` at all (B-2026-09-02-30). One list, because a
+/// diagnostic that recommends an escape the lexer then rejects is worse than a
+/// diagnostic that recommends nothing.
+pub const UNESCAPABLE_MARKERS: &[&str] = &[
+    "self", "Self", "_", "super", "crate", "mod", "pub", "priv", "private", "mut", "ref", "own",
+];
+
+/// Whether `kw` can be escaped to an ordinary identifier with `r#kw`.
+pub fn is_raw_escapable(kw: &str) -> bool {
+    !UNESCAPABLE_MARKERS.contains(&kw)
 }
 
 impl Token {
@@ -406,6 +446,10 @@ impl Token {
             Token::Independent => "independent",
             Token::SelfValue => "self",
             Token::SelfType => "Self",
+            // Not a v1 keyword, but a keyword-shaped rejection: reporting it
+            // here is what routes it to the `E0003` path rather than the
+            // internal-token fallback (B-2026-09-02-29).
+            Token::ReservedFuture(kw) => kw,
             _ => return None,
         };
         Some(s)

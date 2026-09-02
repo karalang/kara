@@ -1461,20 +1461,84 @@ fn test_c_string_literal_unterminated() {
 fn test_v60_reserved_for_future_use_keywords() {
     // Per design.md § Reserved-for-Future-Use Keywords (v60 item 9). Each must
     // be rejected at the lexer level so they cannot be used as identifiers.
-    for keyword in [
-        "gen", "become", "do", "final", "override", "priv", "typeof", "virtual", "async", "await",
-        "pure", "box",
-    ] {
+    // Each lexes to `Token::ReservedFuture`, NOT to a lexer `Token::Error`:
+    // the rejection is a keyword-shaped one, so the parser can report it
+    // through the same `E0003` path as an active keyword instead of printing
+    // the internal token (B-2026-09-02-29).
+    //
+    // This loop is also the drift guard between the constant and the lexer's
+    // (deliberately hand-written) match arms: an entry added to the constant
+    // but not the lexer lexes as an `Identifier` and fails here. The count is
+    // pinned for the other direction --- `comptime` and `try` have already
+    // graduated out of this set once, so it does move.
+    assert_eq!(
+        karac::token::RESERVED_FUTURE_KEYWORDS.len(),
+        12,
+        "the reserved-for-future-use set changed; update the lexer match arms too",
+    );
+    for keyword in karac::token::RESERVED_FUTURE_KEYWORDS {
         let tokens = tokens_only(keyword);
         assert_eq!(
             tokens,
+            vec![Token::ReservedFuture(keyword), Token::EOF],
+            "expected reserved-future keyword token for '{keyword}'",
+        );
+    }
+}
+
+#[test]
+fn reserved_future_keywords_carry_a_keyword_spelling() {
+    // The property the parser's diagnostic actually depends on: a
+    // reserved-for-future-use word must report a spelling, because
+    // `keyword_spelling() == None` is exactly what routed these to the
+    // `found {tok:?}` fallback that leaked `Error("…")` (B-2026-09-02-29).
+    for keyword in karac::token::RESERVED_FUTURE_KEYWORDS {
+        assert_eq!(
+            Token::ReservedFuture(keyword).keyword_spelling(),
+            Some(*keyword),
+        );
+    }
+    // A genuine lexer error still reports none, so the fallback survives for
+    // the ~40 `Token::Error` cases that really have no keyword to name.
+    assert_eq!(
+        Token::Error("Unterminated string".to_string()).keyword_spelling(),
+        None,
+    );
+}
+
+#[test]
+fn every_escapable_keyword_the_diagnostic_suggests_actually_lexes() {
+    // `UNESCAPABLE_MARKERS` is the parser's gate for whether to suggest
+    // `r#NAME` (B-2026-09-02-30). If the two ever drift, the compiler starts
+    // recommending an escape the lexer rejects — worse than saying nothing.
+    // Pin the direction that matters: everything NOT on the list must lex as a
+    // raw identifier.
+    for keyword in karac::token::RESERVED_FUTURE_KEYWORDS {
+        if !karac::token::is_raw_escapable(keyword) {
+            continue;
+        }
+        let tokens = tokens_only(&format!("r#{keyword}"));
+        assert_eq!(
+            tokens,
             vec![
-                Token::Error(format!(
-                    "'{keyword}' is reserved for future use and cannot be used as an identifier"
-                )),
+                Token::Identifier {
+                    name: (*keyword).to_string(),
+                    raw: true,
+                },
                 Token::EOF,
             ],
-            "expected reserved-keyword error for '{keyword}'",
+            "r#{keyword} should lex as a raw identifier",
+        );
+    }
+    // ... and everything ON it must not, with `priv` the overlap that makes
+    // the gate load-bearing: it is reserved-for-future-use AND unescapable.
+    assert!(!karac::token::is_raw_escapable("priv"));
+    for marker in karac::token::UNESCAPABLE_MARKERS {
+        let tokens = tokens_only(&format!("r#{marker}"));
+        assert!(
+            matches!(tokens[0], Token::Error(ref m) if m.contains("structural marker")),
+            "r#{marker} should be rejected, got {:?}",
+            tokens[0],
         );
     }
 }

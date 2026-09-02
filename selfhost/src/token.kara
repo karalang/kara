@@ -211,6 +211,13 @@ pub enum Token {
     ModuleDocComment(String),
     Eof,
     Error(String),
+    // A design.md § Reserved-for-Future-Use keyword, carrying its spelling.
+    // The Rust twin's `Token::ReservedFuture`. These are not v1 features, but
+    // they are rejected as KEYWORDS rather than as lexer errors so the parser
+    // can report them through the same `E0003` path as an active keyword
+    // (B-2026-09-02-29); the port models the variant so the differential
+    // oracle compares the spelling, not two coincidentally-equal `ERROR`s.
+    ReservedFuture(String),
 }
 pub struct SpannedToken {
     pub token: Token,

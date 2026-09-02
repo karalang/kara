@@ -1554,20 +1554,20 @@ fn keyword_or_ident(text: String) -> Token {
         // the identifier arm below); see B-2026-07-14-2 / design.md § Reserved
         // float keywords.
         // Reserved-for-future-use keywords (design.md § Reserved-for-Future-Use).
-        "gen" => Token.Error("reserved keyword".to_string()),
-        "become" => Token.Error("reserved keyword".to_string()),
-        "do" => Token.Error("reserved keyword".to_string()),
-        "final" => Token.Error("reserved keyword".to_string()),
-        "override" => Token.Error("reserved keyword".to_string()),
-        "priv" => Token.Error("reserved keyword".to_string()),
-        "typeof" => Token.Error("reserved keyword".to_string()),
-        "virtual" => Token.Error("reserved keyword".to_string()),
-        "async" => Token.Error("reserved keyword".to_string()),
-        "await" => Token.Error("reserved keyword".to_string()),
+        "gen" => Token.ReservedFuture("gen".to_string()),
+        "become" => Token.ReservedFuture("become".to_string()),
+        "do" => Token.ReservedFuture("do".to_string()),
+        "final" => Token.ReservedFuture("final".to_string()),
+        "override" => Token.ReservedFuture("override".to_string()),
+        "priv" => Token.ReservedFuture("priv".to_string()),
+        "typeof" => Token.ReservedFuture("typeof".to_string()),
+        "virtual" => Token.ReservedFuture("virtual".to_string()),
+        "async" => Token.ReservedFuture("async".to_string()),
+        "await" => Token.ReservedFuture("await".to_string()),
         // `comptime` graduated to an active keyword (deferred.md § Comptime).
         "comptime" => Token.Comptime,
-        "pure" => Token.Error("reserved keyword".to_string()),
-        "box" => Token.Error("reserved keyword".to_string()),
+        "pure" => Token.ReservedFuture("pure".to_string()),
+        "box" => Token.ReservedFuture("box".to_string()),
         _ => {
             // Reserved `expr_<year>` fragment-specifier namespace; everything
             // else is an ordinary identifier. (`r#expr_2026` bypasses this via

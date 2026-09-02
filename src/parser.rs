@@ -5,7 +5,7 @@
 
 use crate::ast::*;
 use crate::lexer::{classify_ident, IdentClass};
-use crate::token::{Span, SpannedToken, Token};
+use crate::token::{is_raw_escapable, Span, SpannedToken, Token};
 use rustc_hash::FxHashMap;
 
 mod attributes;
@@ -1101,7 +1101,29 @@ impl Parser {
         let tok = self.peek_token();
         match tok.keyword_spelling() {
             Some(kw) => {
-                format!("'{kw}' is a reserved keyword and cannot be used as an identifier")
+                // Two families, one diagnostic path. An ACTIVE keyword is a v1
+                // feature the name collides with; a RESERVED-FOR-FUTURE-USE one
+                // is not a feature at all, merely held back — worth saying,
+                // because it tells the reader nothing they can write today uses
+                // this word (B-2026-09-02-29).
+                let mut msg = if matches!(tok, Token::ReservedFuture(_)) {
+                    format!("'{kw}' is reserved for future use and cannot be used as an identifier")
+                } else {
+                    format!("'{kw}' is a reserved keyword and cannot be used as an identifier")
+                };
+                // Name the remedy. design.md § Keywords calls `r#` "the
+                // forward-compatibility lever" and says tooling can apply it
+                // mechanically; the compiler is that tooling and it already
+                // knows the name the writer wanted (B-2026-09-02-30). Gated on
+                // `is_raw_escapable` because the structural markers (`self`,
+                // `mut`, `priv`, …) are the one set `r#` does not rescue, and
+                // the lexer would reject the suggestion we had just made.
+                if is_raw_escapable(kw) {
+                    msg.push_str(&format!(
+                        "; write `r#{kw}` to use it as an ordinary identifier"
+                    ));
+                }
+                msg
             }
             None => format!("Expected {expected}, found {tok:?}"),
         }

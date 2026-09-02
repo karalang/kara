@@ -265,6 +265,10 @@ fn render(tok: SpannedToken) -> String {
         }
         Eof => line.push_str("EOF"),
         Error(msg) => line.push_str("ERROR"),
+        ReservedFuture(kw) => {
+            line.push_str("RESERVED ");
+            line.push_str(kw);
+        }
     }
     line
 }

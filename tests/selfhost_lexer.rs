@@ -567,6 +567,12 @@ fn render_rust(t: &SpannedToken) -> String {
         // sides spell it `ERROR`, not because the port learned the new token.
         // Teaching the port is a self-host change, tracked separately.
         Token::IntegerOutOfRange(..) => "ERROR",
+        // Rendered as `RESERVED <lexeme>`, its own kind — not `KW` (no v1
+        // construct accepts one) and not `ERROR` (it is no longer a lexer
+        // error). Carrying the lexeme means the oracle compares the SPELLING,
+        // so the port cannot agree by both sides merely saying `ERROR`; the
+        // corpus exercises all twelve (B-2026-09-02-29).
+        Token::ReservedFuture(kw) => return body_with(s, &format!("RESERVED {kw}")),
         Token::EOF => "EOF",
         // The match is now exhaustive over every Token the seed lexer emits — the
         // port models the full token set (slices A–E). A new seed variant fails
