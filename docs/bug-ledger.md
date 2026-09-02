@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 308 |
 | leak | 253 |
 | missing-feature | 193 |
-| double-free | 165 |
+| double-free | 166 |
 | codegen-gap | 159 |
 | diagnostics | 116 |
 | false-positive | 104 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1373 |
+| codegen | 1374 |
 | interp | 328 |
 | typecheck | 287 |
 | ownership | 73 |
@@ -157,10 +157,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-20 | 2026-09-02 | codegen | high | A LOOP-DECLARED LOCAL WHOSE `Drop`-BEARING STRUCT OWNS TWO HEAP FIELDS SEGFAULTS THE JIT WHEN A CONDITIONAL PARAM-VIEW ASSIGNMENT TARGETS IT -- `karac run` exits 139 having printed NOTHING, while `--interp` and both `karac build` legs are correct. Bisected to three necessary ingredients: two heap-owning fields, the `let` inside the loop, and the conditional assignment; removing any one runs correctly. Pre-dates B-2026-09-02-6's fix (a build of the parent commit crashes identically) | — |
 | B-2026-09-02-21 | 2026-09-02 | codegen | high | THE `for`-RANGE SPELLING OF THE SAME SHAPE NEVER TERMINATES ON THE JIT: the induction variable stops advancing at the iteration that performs the conditional param-view assignment and that iteration repeats forever, while `--interp` and both `karac build` legs are correct. The `while` spelling of the identical program is fine on all four surfaces, and so is a NESTED `for`, so it is not every range loop. Pre-dates B-2026-09-02-6's fix (a build of the parent commit hangs identically) | — |
 | B-2026-09-02-22 | 2026-09-02 | codegen | low | A DOUBLY-NESTED `Option[Option[String]]` ARGUMENT LEAKS ITS INNER PAYLOAD -- 45 B in 3 blocks over a three-iteration loop, unmoved by all THREE of B-2026-09-01-29's fixes. The payload is 3 words, so `Option[Option[String]]` exceeds the 3-word boxing limit `optres_param_entry_copied_te` gates on: the param is never ADMITTED to the by-value copy convention, so neither the callee's entry copy nor any caller-side ownership predicate applies and no frame is ever offered the temp | — |
-| B-2026-09-02-23 | 2026-09-02 | codegen | high | A TUPLE PARAM WHOSE ELEMENT STRUCT OWNS BOTH A `Vec` AND A `String` DOUBLE-FREES ON BOTH COMPILED BACKENDS WHEN A `match` ARM READS BOTH HEAP FIELDS OFF THE ELEMENT BINDING -- `free(): double free detected in tcache 2`, exit 134, on a program with NO `impl Drop` anywhere. `--interp` is correct. The bare-param spelling of the identical read is clean, and so are TWO `String`s or TWO `Vec`s: the trigger is the tuple PATTERN plus a MIXED heap-kind pair plus the arm reading both | — |
 | B-2026-09-02-24 | 2026-09-02 | interp+codegen | medium | A MATCH ARM THAT HANDS ITS ELEMENT/PAYLOAD OUT OF THE FUNCTION RUNS THE `Drop` BODY TWICE ON ALL FOUR SURFACES -- `dR4 got4 dR4` where one is due. The scrutinee's walk still fires at the callee's scope exit on a value the arm already gave away. The ENUM spelling is wrong identically, so this is about the ESCAPE, not about tuples; an arm that moves into a BY-VALUE CALLEE is correct everywhere | — |
 | B-2026-09-02-25 | 2026-09-02 | interp+codegen | medium | THE `let (r, k) = t` SPELLING OF B-2026-08-31-7 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b5 dR5 dR5` where one is due, while the `match` spelling of the identical signature is now correct. A spelling gap in that row's rule, NOT folded in because the two halves live in different machinery and landing only the easy one would trade an agreed answer for a divergence | — |
 | B-2026-09-02-26 | 2026-09-02 | interp+codegen | medium | A LOCAL TUPLE SCRUTINEE'S ELEMENT REBIND STILL DOUBLES THE `Drop` BODY on all four surfaces -- `b6 dR6 dR6` where one is due, while the owned-PARAM spelling is now correct and the LOCAL ENUM spelling always was. Needs the OPPOSITE repair from B-2026-08-31-7's: caller-retains does not apply to a local, so the tuple's element walk must be RETRACTED rather than the rebind suppressed | — |
+| B-2026-09-02-27 | 2026-09-02 | codegen | high | MOVING A HEAP FIELD OUT OF A BARE-TUPLE ELEMENT BINDING DOUBLE-FREES IT -- `match t { (r, k) => { let n = r.name; ... } }` aborts with `free(): double free detected in tcache 2` at BOTH optimization levels while `--interp` is correct. The tuple's element walk still frees the field the `let` moved into `n`: nothing disarms the FIELD in that walk. The same move off a BARE by-value param is correct, which puts the axis on the tuple-element binding rather than on field move-out generally | — |
 
 ### Relocated
 
@@ -2132,6 +2132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-15 | codegen | high | THE `if let` / `while let` / `let .. | a2e3f4f |
 | B-2026-09-02-18 | typecheck | medium | A GENERIC PREFIX SUM DOES NOT COMPILE: adding an element of an owned local `Vec[T]` to anything that is not also an element of an owned local `Vec[T]… | fe82c7b |
 | B-2026-09-02-19 | ownership | medium | A DECLARED `T: Copy` BOUND IS NOT HONOURED FOR A BARE TYPE-PARAMETER BINDING: `fn f[T: Copy](x: T) { let a = x; let b = x; }` warns `value 'x' moved… | fe82c7b |
+| B-2026-09-02-23 | codegen | high | A BARE-TUPLE ELEMENT BINDING IS REGISTERED AS A SECOND OWNER OF THE TUPLE'S ELEMENT, SO `match t { (r, k) => .. | a08960b1 |
 
 </details>
 
