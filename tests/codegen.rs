@@ -11982,6 +11982,152 @@ end
         );
     }
 
+    /// The B-2026-09-02-15 fixture, shared by the E2E and its interpreter twin.
+    const IFLET_INDEX_ELEM_CLONE_SRC: &str = r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+
+struct N { id: i64, v: Vec[i64] }
+enum F { A(N), B }
+
+fn mk(n: i64) -> E { let mut v: Vec[i64] = Vec.new(); v.push(n); return E.A(R { id: n, v: v }) }
+fn mkf(n: i64) -> F { let mut v: Vec[i64] = Vec.new(); v.push(n); return F.A(N { id: n, v: v }) }
+
+fn leg_iflet() {
+    println("iflet");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    if let E.A(r) = v[0] { println(f"got {r.id + r.v.len()}"); }
+    println("iflet end");
+}
+
+fn leg_field() {
+    println("field");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let h = H { xs: v };
+    if let E.A(r) = h.xs[0] { println(f"got {r.id + r.v.len()}"); }
+    println("field end");
+}
+
+fn leg_whilelet() {
+    println("whilelet");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(3));
+    while let E.A(r) = v[0] {
+        println(f"got {r.id + r.v.len()}");
+        break
+    }
+    println("whilelet end");
+}
+
+fn leg_unbound() {
+    println("unbound");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    if let E.A(_) = v[0] { println("got"); }
+    println("unbound end");
+}
+
+fn leg_nodrop() {
+    println("nodrop");
+    let mut v: Vec[F] = Vec.new();
+    v.push(mkf(5));
+    if let F.A(n) = v[0] { println(f"got {n.id + n.v.len()}"); }
+    println("nodrop end");
+}
+
+fn leg_fresh() {
+    println("fresh");
+    if let E.A(r) = mk(6) { println(f"got {r.id + r.v.len()}"); }
+    println("fresh end");
+}
+
+fn main() {
+    leg_iflet();
+    leg_field();
+    leg_whilelet();
+    leg_unbound();
+    leg_nodrop();
+    leg_fresh();
+    println("end");
+}
+"#;
+
+    /// The interpreter's answer, and the oracle.
+    const IFLET_INDEX_ELEM_CLONE_EXPECTED: &str = r#"iflet
+got 2
+dE
+dR1
+iflet end
+field
+got 3
+dE
+dR2
+field end
+whilelet
+got 4
+dE
+dR3
+whilelet end
+unbound
+got
+dE
+dR4
+unbound end
+nodrop
+got 6
+nodrop end
+fresh
+got 7
+dR6
+dE
+fresh end
+end
+"#;
+
+    /// B-2026-09-02-15 — THE `if let` FAMILY NEVER CLONED AN INDEXED ELEMENT, SO
+    /// IT DROP-TRACKED A BIT-COPY OF THE CONTAINER'S SLOT AND THE PROGRAM DIED.
+    ///
+    /// `compile_match` deep-clones a heap-`Vec` element scrutinee before
+    /// materializing it (B-2026-06-14-12's direct-match sibling), and
+    /// `materialize_freshtemp_enum_scrutinee`'s `heap_index` leg is written on
+    /// that assumption — it drop-tracks whatever it is handed. The three
+    /// `control_flow.rs` siblings (`compile_if_let`, `compile_while_let`,
+    /// `compile_let_else`) called the materializer directly and never called the
+    /// cloner, so `__karac_drop_E` freed the container's buffer at the
+    /// construct's exit and the container freed it again at its own. Measured on
+    /// `811781c`: `free(): double free detected in tcache 2` on the JIT, the
+    /// default `karac build` and `KARAC_AUTO_PAR=0` alike, where `--interp`
+    /// printed a clean `A got 4 dE dR3 B`; valgrind named it
+    /// `Invalid free() / delete / delete[] / realloc()`.
+    ///
+    /// SIX LEGS, and the last two are the controls that keep the fix honest:
+    ///   - `iflet` — `if let E.A(r) = v[0]`, the shape as reported.
+    ///   - `field` — `if let E.A(r) = h.xs[0]`, the field-rooted index.
+    ///   - `whilelet` — the `while let` spelling, whose scrutinee is
+    ///     re-evaluated (and so re-cloned) every iteration.
+    ///   - `unbound` — `E.A(_)`. It crashed too, which is what shows the defect
+    ///     was the SCRUTINEE's ownership and never the binding's.
+    ///   - `nodrop` — the same shape with NO `impl Drop` anywhere. It crashed
+    ///     too, so this is pure memory and no body count can stand in for it.
+    ///   - `fresh` — `if let E.A(r) = mk(6)`, a genuine owned temp. The cloner
+    ///     must stay a no-op there, and its `dR6 dE` is what proves it.
+    ///
+    /// The `let … else` spelling is fixed by the same call but is NOT in this
+    /// fixture: its interpreter answer carries one extra payload body, which is
+    /// a separate interpreter-side divergence (see the row filed at this fix's
+    /// close). Its memory half is covered by the ASAN twin instead.
+    #[test]
+    fn e2e_index_element_clone_reaches_the_if_let_family() {
+        let Some(out) = run_program(IFLET_INDEX_ELEM_CLONE_SRC) else {
+            return;
+        };
+        assert_eq!(out, IFLET_INDEX_ELEM_CLONE_EXPECTED);
+    }
+
     /// B-2026-08-31-1 — A PAYLOAD BOUND OUT OF A *PROJECTION* OF AN OWNED PARAM IS
     /// A VIEW, AND THE VIEW-NESS MUST PROPAGATE THROUGH A REBIND.
     ///

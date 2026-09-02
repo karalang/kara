@@ -1691,6 +1691,103 @@ fn main() {
         );
     }
 
+    /// B-2026-09-02-15 — the `if let` family over an indexed element, which is
+    /// a MEMORY defect end to end: before the fix these programs aborted with
+    /// `free(): double free detected in tcache 2`, so the guard is that they
+    /// run at all under ASAN and leave nothing behind under LSan.
+    ///
+    /// `leg_option_elem` is the ANTI-OVER-REACH CONTROL and the reason the new
+    /// `clone_owned_vec_index_element` call is gated rather than unconditional.
+    /// `compile_match` calls the cloner for every scrutinee, and over a
+    /// `Vec[Option[R]]` element that clone is owned by nobody — the type-erased
+    /// `Option` layout carries no droppable payload, so
+    /// `materialize_freshtemp_enum_scrutinee` declines it. The `match` spelling
+    /// leaks 40 B there today; an ungated call here reproduced that leak in the
+    /// `if let` spelling, which had been clean. LSan is what caught it, and this
+    /// leg is what keeps it caught.
+    #[test]
+    fn asan_if_let_family_over_an_indexed_element_is_memory_clean() {
+        let Some((out, status)) = run_under_asan(
+            r#"struct R { id: i64, v: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+
+fn mk(n: i64) -> E {
+    let mut v: Vec[String] = Vec.new();
+    v.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    v.push(f"tag{n}");
+    return E.A(R { id: n, v: v })
+}
+
+fn mko(n: i64) -> Option[R] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    v.push(f"opt{n}");
+    return Option.Some(R { id: n, v: v })
+}
+
+fn leg_iflet() {
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(1));
+    let mut i = 0;
+    while i < 3 {
+        if let E.A(r) = xs[0] { println(f"n{r.id} {r.v.len()}"); }
+        i = i + 1;
+    }
+}
+
+fn leg_whilelet() {
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(2));
+    while let E.A(r) = xs[0] {
+        println(f"n{r.id} {r.v.len()}");
+        break
+    }
+}
+
+fn leg_letelse() {
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(3));
+    let E.A(r) = xs[0] else { println("none"); return }
+    println(f"n{r.id} {r.v.len()}");
+}
+
+fn leg_option_elem() {
+    let mut xs: Vec[Option[R]] = Vec.new();
+    xs.push(mko(4));
+    if let Option.Some(r) = xs[0] { println(f"n{r.id} {r.v.len()}"); }
+}
+
+fn main() {
+    leg_iflet();
+    leg_whilelet();
+    leg_letelse();
+    leg_option_elem();
+    println("end");
+}
+"#,
+            "asan_if_let_family_over_an_indexed_element_is_memory_clean",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert!(
+            out.contains("end"),
+            "the program did not run to the end:\n{out}"
+        );
+        // Three passes over the same element, each reading a live clone.
+        assert_eq!(
+            out.matches("n1 2").count(),
+            3,
+            "the if-let clone did not carry a live payload on every pass:\n{out}"
+        );
+        assert_eq!(
+            out.matches("n4 2").count(),
+            1,
+            "the Option-element control did not read its payload:\n{out}"
+        );
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///

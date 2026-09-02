@@ -55,6 +55,47 @@ impl<'ctx> super::Codegen<'ctx> {
         // Keyed on the scrutinee's span, so compile ORDER is irrelevant.
         let own_value = self.branch_value_is_owned(value);
         let val = self.compile_expr(value)?;
+        // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
+        // `Vec`: deep-clone the shallow element read, exactly as `compile_match`
+        // does at its own scrutinee site. `materialize_freshtemp_enum_scrutinee`'s
+        // `heap_index` leg is written on the assumption that the CALLER has
+        // already cloned -- it drop-tracks what it is handed -- so without this
+        // the three `if let` / `while let` / `let … else` sites drop-tracked a
+        // bit-copy still aliasing the container's slot, and `__karac_drop_E`
+        // freed the container's buffer at the construct's exit while the
+        // container freed it again at its own. That aborted the program
+        // (`free(): double free detected in tcache 2`) on all three compiled
+        // surfaces, with the payload bound OR unbound and with no `impl Drop`
+        // anywhere -- the `match` spelling has been clone-protected since
+        // B-2026-06-14-12's direct-match sibling. No-op for every non-index /
+        // Copy-element scrutinee.
+        //
+        // GATED to a variant pattern over a NON-shared USER enum, which is
+        // exactly the population the materializer takes ownership of, because
+        // `compile_match`'s unconditional call is not a model to copy here: the
+        // same clone over a `Vec[Option[R]]` element is owned by nobody (the
+        // type-erased `Option` layout carries no droppable payload, so the
+        // materializer declines it) and LEAKS 40 B -- measured on the `match`
+        // spelling, where that leak is pre-existing, and reproduced here the
+        // moment this call was made unconditional. `Option`/`Result` elements
+        // reach this construct correctly today; a struct-pattern scrutinee
+        // likewise (measured valgrind-clean), so both stay on the path they
+        // already take.
+        let needs_elem_clone = self
+            .variant_pattern_enum_name(pattern)
+            .filter(|n| n.as_str() != "Option" && n.as_str() != "Result")
+            .and_then(|n| {
+                self.type_decls
+                    .enum_layouts
+                    .get(n.as_str())
+                    .map(|l| !l.is_shared)
+            })
+            .unwrap_or(false);
+        let val = if needs_elem_clone {
+            self.clone_owned_vec_index_element(value, val)?
+        } else {
+            val
+        };
         // B-2026-07-21-8: the if-let route of the ref-chain consuming-read
         // family — `if let Ident(name) = st.tok { <consume name> }` with
         // `st: ref` aliased the caller's payload exactly like the match route
@@ -809,6 +850,47 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_if_let`).
         self.builder.position_at_end(cond_bb);
         let val = self.compile_expr(value)?;
+        // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
+        // `Vec`: deep-clone the shallow element read, exactly as `compile_match`
+        // does at its own scrutinee site. `materialize_freshtemp_enum_scrutinee`'s
+        // `heap_index` leg is written on the assumption that the CALLER has
+        // already cloned -- it drop-tracks what it is handed -- so without this
+        // the three `if let` / `while let` / `let … else` sites drop-tracked a
+        // bit-copy still aliasing the container's slot, and `__karac_drop_E`
+        // freed the container's buffer at the construct's exit while the
+        // container freed it again at its own. That aborted the program
+        // (`free(): double free detected in tcache 2`) on all three compiled
+        // surfaces, with the payload bound OR unbound and with no `impl Drop`
+        // anywhere -- the `match` spelling has been clone-protected since
+        // B-2026-06-14-12's direct-match sibling. No-op for every non-index /
+        // Copy-element scrutinee.
+        //
+        // GATED to a variant pattern over a NON-shared USER enum, which is
+        // exactly the population the materializer takes ownership of, because
+        // `compile_match`'s unconditional call is not a model to copy here: the
+        // same clone over a `Vec[Option[R]]` element is owned by nobody (the
+        // type-erased `Option` layout carries no droppable payload, so the
+        // materializer declines it) and LEAKS 40 B -- measured on the `match`
+        // spelling, where that leak is pre-existing, and reproduced here the
+        // moment this call was made unconditional. `Option`/`Result` elements
+        // reach this construct correctly today; a struct-pattern scrutinee
+        // likewise (measured valgrind-clean), so both stay on the path they
+        // already take.
+        let needs_elem_clone = self
+            .variant_pattern_enum_name(pattern)
+            .filter(|n| n.as_str() != "Option" && n.as_str() != "Result")
+            .and_then(|n| {
+                self.type_decls
+                    .enum_layouts
+                    .get(n.as_str())
+                    .map(|l| !l.is_shared)
+            })
+            .unwrap_or(false);
+        let val = if needs_elem_clone {
+            self.clone_owned_vec_index_element(value, val)?
+        } else {
+            val
+        };
         // B-2026-07-21-8 (while-let leg): an ESCAPING `while let V(x) =
         // <refparam>.field` aliases the caller's payload exactly like the
         // match/if-let routes — clone per evaluation. The clone emits here in
@@ -1400,6 +1482,47 @@ impl<'ctx> super::Codegen<'ctx> {
         else_block: &Block,
     ) -> Result<(), String> {
         let val = self.compile_expr(value)?;
+        // B-2026-09-02-15 — `if let E.A(r) = v[i] { … }` over a heap-element
+        // `Vec`: deep-clone the shallow element read, exactly as `compile_match`
+        // does at its own scrutinee site. `materialize_freshtemp_enum_scrutinee`'s
+        // `heap_index` leg is written on the assumption that the CALLER has
+        // already cloned -- it drop-tracks what it is handed -- so without this
+        // the three `if let` / `while let` / `let … else` sites drop-tracked a
+        // bit-copy still aliasing the container's slot, and `__karac_drop_E`
+        // freed the container's buffer at the construct's exit while the
+        // container freed it again at its own. That aborted the program
+        // (`free(): double free detected in tcache 2`) on all three compiled
+        // surfaces, with the payload bound OR unbound and with no `impl Drop`
+        // anywhere -- the `match` spelling has been clone-protected since
+        // B-2026-06-14-12's direct-match sibling. No-op for every non-index /
+        // Copy-element scrutinee.
+        //
+        // GATED to a variant pattern over a NON-shared USER enum, which is
+        // exactly the population the materializer takes ownership of, because
+        // `compile_match`'s unconditional call is not a model to copy here: the
+        // same clone over a `Vec[Option[R]]` element is owned by nobody (the
+        // type-erased `Option` layout carries no droppable payload, so the
+        // materializer declines it) and LEAKS 40 B -- measured on the `match`
+        // spelling, where that leak is pre-existing, and reproduced here the
+        // moment this call was made unconditional. `Option`/`Result` elements
+        // reach this construct correctly today; a struct-pattern scrutinee
+        // likewise (measured valgrind-clean), so both stay on the path they
+        // already take.
+        let needs_elem_clone = self
+            .variant_pattern_enum_name(pattern)
+            .filter(|n| n.as_str() != "Option" && n.as_str() != "Result")
+            .and_then(|n| {
+                self.type_decls
+                    .enum_layouts
+                    .get(n.as_str())
+                    .map(|l| !l.is_shared)
+            })
+            .unwrap_or(false);
+        let val = if needs_elem_clone {
+            self.clone_owned_vec_index_element(value, val)?
+        } else {
+            val
+        };
         // B-2026-07-21-8 (let-else leg): same ref-chain clone contract as the
         // if-let site. A `let…else` binding escapes into the enclosing scope
         // by construction, so the escape flag is unconditional for a matching
