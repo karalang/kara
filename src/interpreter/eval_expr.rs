@@ -1024,12 +1024,24 @@ impl<'a> super::Interpreter<'a> {
                 // clone cannot double-free.
                 let mut scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
                 let mut drop_val = scrut_drop.as_ref().map(|_| val.clone());
-                // B-2026-07-30-11 (enum leg) — the `if let` twin of the `match`
-                // disarm: once this pattern moves a Drop-bearing payload out,
-                // the source binding's payload-body walk must skip it, matching
-                // codegen's retraction at `control_flow.rs`'s owned-variable arm.
-                self.disarm_moved_out_enum_payload_one(value, &val, pattern, Some(then_block));
                 let result = if self.try_match_pattern(pattern, &val) {
+                    // B-2026-07-30-11 (enum leg) — the `if let` twin of the
+                    // `match` disarm: once this pattern moves a Drop-bearing
+                    // payload out, the source binding's payload-body walk must
+                    // skip it, matching codegen's retraction at
+                    // `control_flow.rs`'s owned-variable arm.
+                    //
+                    // B-2026-09-02-14 — INSIDE the match test since this row.
+                    // It used to run ahead of the test, because codegen's
+                    // retraction was a compile-time removal that could not know
+                    // whether the pattern would match; so on the miss edge the
+                    // walk was handed to a binding that never happened and the
+                    // payload's `Drop` body ran nowhere, on all four surfaces.
+                    // Codegen now clears a per-path flag on the hit edge
+                    // instead (`optres_payload_bodies_flag_for`), which is the
+                    // same decision this line makes, and the two edges of the
+                    // construct answer separately on both backends.
+                    self.disarm_moved_out_enum_payload_one(value, &val, pattern, Some(then_block));
                     // B-2026-07-30-11 (if-let leg): a consuming scrutinee's
                     // moved-out Drop-bearing payload bindings get REAL Drop
                     // slots, exactly like the match-arm site (`eval_match`'s
@@ -1313,18 +1325,20 @@ impl<'a> super::Interpreter<'a> {
                     // spelling of the same destructure printed it once — the
                     // spelling-dependent split this family keeps closing.
                     //
-                    // Runs before the match test, exactly as the `if let` site
-                    // does, because codegen's compile-time retraction cannot
-                    // know whether the pattern will match; and it is a
-                    // set-insert keyed by the place's name, so re-running it
-                    // once per iteration is idempotent.
+                    // B-2026-09-02-14 — runs INSIDE the match test, exactly
+                    // as the `if let` site does. Both used to run ahead of it,
+                    // because codegen's compile-time retraction could not know
+                    // whether the pattern would match; codegen now clears a
+                    // per-path flag on the hit edge instead, so the miss edge
+                    // keeps the walk it never gave away. It is a set-insert
+                    // keyed by the place's name, so re-running it once per
+                    // matching iteration stays idempotent.
                     //
                     // A FRESH-TEMP scrutinee (`while let Some(r) = v.pop()`) is
                     // untouched: the helper returns early for a place that is
                     // neither an identifier nor `self`, which is what keeps
                     // B-2026-07-30-11's while-let case — a stash with no walk to
                     // stand down to — firing as before.
-                    self.disarm_moved_out_enum_payload_one(value, &val, pattern, Some(body));
                     if !self.try_match_pattern(pattern, &val) {
                         if let Some(tn) = scrut_drop {
                             self.run_user_drop_body_on_value(&tn, val.clone());
@@ -1356,6 +1370,7 @@ impl<'a> super::Interpreter<'a> {
                         }
                         break;
                     }
+                    self.disarm_moved_out_enum_payload_one(value, &val, pattern, Some(body));
                     let drop_snapshot = scrut_drop.map(|tn| (tn, val.clone()));
                     // B-2026-07-30-11 (while-let leg): the per-iteration
                     // consuming scrutinee's moved-out Drop-bearing payload

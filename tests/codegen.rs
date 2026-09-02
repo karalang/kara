@@ -129506,14 +129506,16 @@ fn main() {
     /// `let ... else` WAS ONE OF THE ROW'S UNMEASURED SHAPES. It is affected
     /// and closes with the other two.
     ///
-    /// FRESH TEMPORARIES ONLY, and the last row here is why. A NAMED local
-    /// reaching a miss edge still owns its value and has its own walk to run
-    /// the body at its own death — firing here as well would double it. That
-    /// local ALSO loses the body today, but for an unrelated reason (its walk
-    /// is statically retracted before the match test, and on the miss edge
-    /// nothing takes over), which is a different site needing an edge-sensitive
-    /// retraction. Filed as B-2026-09-02-14 and pinned below so the two cannot
-    /// drift apart unnoticed.
+    /// FRESH TEMPORARIES ONLY, and the last two rows here are why. A NAMED
+    /// local reaching a miss edge still owns its value and has its own walk to
+    /// run the body at its own death — firing here as well would double it. The
+    /// gate is unchanged; what changed is that the local's walk now survives to
+    /// the miss edge at all. It used to be retracted statically before the match
+    /// test, so the local lost its body too, for an unrelated reason — split out
+    /// as B-2026-09-02-14 and closed by making that retraction edge-sensitive
+    /// (a per-path flag cleared in the arm's own block). The two rows below pin
+    /// the local's body and the walk that produces it, so a regression in either
+    /// direction — a lost body, or this fixture's fire doubling it — fails here.
     #[test]
     fn e2e_a_declined_optres_temporary_runs_its_payload_drop_body() {
         const PRELUDE: &str = "struct W { id: i64 }\n\
@@ -129594,13 +129596,15 @@ fn main() {
                 "after\n",
             ),
             (
-                // STILL BROKEN, deliberately pinned: a NAMED local is not a
-                // temporary, and its lost body has a different cause (a static
-                // retraction the miss edge cannot undo). B-2026-09-02-14.
-                "known remaining: a BOUND local, not a temporary [B-2026-09-02-14]",
+                // B-2026-09-02-14 — a NAMED local is not a temporary, so the
+                // miss-edge fire above declines and the local's OWN walk runs
+                // the body, at the local's real death (the `if let`, its last
+                // use). It printed nothing until that row made the arm
+                // retraction edge-sensitive.
+                "a BOUND local, not a temporary [B-2026-09-02-14]",
                 "let r: Result[W, W] = mkerr();\n\
                  if let Ok(w) = r { println(f\"v{w.id}\"); }",
-                "after\n",
+                "dW7\nafter\n",
             ),
             (
                 // …and the shape that proves the bound local's walk exists at
@@ -129610,6 +129614,215 @@ fn main() {
                 "let r: Result[W, W] = mkerr();\n\
                  println(\"x\");",
                 "dW7\nx\nafter\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: interpreter transcript"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backends must agree with the interpreter"
+                );
+            }
+        }
+    }
+
+    /// B-2026-09-02-14 — A BOUND `Option`/`Result` LOCAL WHOSE ARM MISSED LOST
+    /// ITS PAYLOAD'S `Drop` BODY, ON ALL FOUR SURFACES.
+    ///
+    /// `let r = mkerr(); if let Ok(w) = r { … }` never runs `W`'s body. The
+    /// same local with no `if let` at all runs it correctly, which is the whole
+    /// diagnosis: the walk EXISTS, so this was a retraction that should not have
+    /// applied, not a missing registration.
+    ///
+    /// THE RETRACTION WAS RIGHT AND FLOW-INSENSITIVE. A pattern that takes the
+    /// payload hands the body to the arm's binding, so the source's walk must
+    /// stand down — true on the hit edge, and applied on every path out of the
+    /// construct, including the one where the pattern did not match and no
+    /// binding exists. Both backends now decide it PER PATH: codegen clears a
+    /// per-path flag in the arm's own block (`optres_payload_bodies_flag_for`,
+    /// read at the place's death), and the interpreter's disarm moved inside the
+    /// match test. The two are the same decision, so they stay in step.
+    ///
+    /// AGREED-AND-WRONG, so no A/B gate could see it, and the storage is
+    /// reclaimed either way (valgrind: 9 allocs / 9 frees, 0 errors on a
+    /// `String`-carrying payload before and after) — a lost side effect, not a
+    /// leak. Only an absolute expectation catches this class.
+    ///
+    /// THE LATER-USE ROW IS THE ONE THAT CONSTRAINS THE FIX. When `r` is used
+    /// again after the `if let`, the body is due at that LATER site and exactly
+    /// once — which is what rules out simply emitting the bodies on the miss
+    /// edge. The flag leaves the walk armed and lets the NLL machinery place it
+    /// at the place's real last use, so both rows come out right from one rule.
+    ///
+    /// ALL THREE OF THE ROW'S UNMEASURED SHAPES ARE HERE AND WERE AFFECTED: the
+    /// `match` spelling with a non-binding arm, a USER enum with payloads in
+    /// both variants, and a heap-carrying payload.
+    #[test]
+    fn e2e_a_bound_optres_local_whose_arm_missed_runs_its_payload_drop_body() {
+        const PRELUDE: &str = "struct W { id: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+             struct H { tag: String }\n\
+             impl Drop for H { fn drop(mut ref self) { println(f\"dH{self.tag}\"); } }\n\
+             enum E { A(W), B(W) }\n\
+             struct V { id: i64 }\n\
+             impl Drop for V { fn drop(mut ref self) { println(f\"dV{self.id}\"); } }\n\
+             enum E2 { A(V), B }\n\
+             impl Drop for E2 { fn drop(mut ref self) { println(\"dE2\"); } }\n\
+             fn mkerr() -> Result[W, W] { return Err(W { id: 7 }); }\n\
+             fn mkok() -> Result[W, W] { return Ok(W { id: 1 }); }\n\
+             fn mksome() -> Option[W] { return Some(W { id: 5 }); }\n\
+             fn mkerrh() -> Result[H, H] { return Err(H { tag: \"seven\" }); }\n\
+             fn mkb() -> E { return E.B(W { id: 3 }); }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "the row: an `if let` the bound local's value declines",
+                "let r: Result[W, W] = mkerr();\n\
+                 if let Ok(w) = r { println(f\"v{w.id}\"); }",
+                "dW7\nafter\n",
+            ),
+            (
+                // The row's first unmeasured shape. A `match` retracts through
+                // the same helper, so an arm set that binds only `Ok` and
+                // wildcards the rest lost the body identically.
+                "`match` with a non-binding arm [row: NOT MEASURED]",
+                "let r: Result[W, W] = mkerr();\n\
+                 match r { Ok(a) => { println(f\"ma{a.id}\"); } _ => { println(\"wild\"); } }",
+                "wild\ndW7\nafter\n",
+            ),
+            (
+                // The row's second unmeasured shape. This one was a
+                // RUN-VS-BUILD divergence rather than an agreed silence:
+                // `--interp` printed nothing where all three compiled surfaces
+                // printed the body.
+                "a USER enum with payloads in both variants [row: NOT MEASURED]",
+                "let e: E = mkb();\n\
+                 if let E.A(w) = e { println(f\"v{w.id}\"); }",
+                "dW3\nafter\n",
+            ),
+            (
+                // …and its `let ... else` spelling, divergent the same way. A
+                // user enum that declares its OWN `Drop` was already correct on
+                // all four surfaces before the fix and stays so, so the hole was
+                // specific to an enum whose only body is its payload's.
+                "the same USER enum through `let ... else`",
+                "let e: E = mkb();\n\
+                 let E.A(w) = e else { println(\"elsearm\"); println(\"after\"); return };\n\
+                 println(f\"v{w.id}\");",
+                "elsearm\nafter\ndW3\n",
+            ),
+            (
+                // The row's third unmeasured shape. Bodies-only either way —
+                // the buffer was always reclaimed.
+                "a heap-carrying payload [row: NOT MEASURED]",
+                "let r: Result[H, H] = mkerrh();\n\
+                 if let Ok(h) = r { println(f\"v{h.tag}\"); }",
+                "dHseven\nafter\n",
+            ),
+            (
+                "the `while let` spelling, whose first pass misses",
+                "let r: Result[W, W] = mkerr();\n\
+                 while let Ok(w) = r { println(f\"v{w.id}\"); break; }",
+                "dW7\nafter\n",
+            ),
+            (
+                // `let ... else` was a RUN-VS-BUILD divergence before this fix:
+                // `--interp` printed nothing where the compiled backends
+                // printed the body at the divergent exit.
+                "the `let ... else` spelling, previously an interp/compiled split",
+                "let r: Result[W, W] = mkerr();\n\
+                 let Ok(w) = r else { println(\"elsearm\"); println(\"after\"); return };\n\
+                 println(f\"v{w.id}\");",
+                "elsearm\nafter\ndW7\n",
+            ),
+            (
+                // THE CONSTRAINING ROW. `r`'s last use is the later `match`, so
+                // the body is due there and exactly once. A miss-edge emission
+                // would print `dW7` before `mid` AND again in the `Err` arm.
+                "the local used AGAIN after the `if let`: one body, at the later use",
+                "let r: Result[W, W] = mkerr();\n\
+                 if let Ok(w) = r { println(f\"v{w.id}\"); }\n\
+                 println(\"mid\");\n\
+                 match r { Ok(a) => { println(f\"ma{a.id}\"); } Err(e) => { println(f\"me{e.id}\"); } }",
+                "mid\nme7\ndW7\nafter\n",
+            ),
+            (
+                // THE HIT-EDGE GATE: the arm's binding owns the payload and
+                // runs the body itself, so the place's walk must stand down
+                // there or every matching `if let` doubles.
+                "control: the same local when the arm DOES match",
+                "let r: Result[W, W] = mkok();\n\
+                 if let Ok(w) = r { println(f\"v{w.id}\"); }",
+                "v1\ndW1\nafter\n",
+            ),
+            (
+                // The shape that proves the local's walk exists at all, which
+                // is what makes the row a retraction bug rather than a missing
+                // registration.
+                "control: the same local with no `if let` at all",
+                "let r: Result[W, W] = mkerr();\n\
+                 println(\"x\");",
+                "dW7\nx\nafter\n",
+            ),
+            (
+                // A pattern that binds NOTHING never claimed the payload, so
+                // the retraction never fired and this row was correct before
+                // the fix too. It pins that it stays correct.
+                "control: a pattern that binds nothing keeps the walk",
+                "let r: Result[W, W] = mkerr();\n\
+                 if let Ok(_) = r { println(\"hit\"); }",
+                "dW7\nafter\n",
+            ),
+            (
+                // Same reason, through the `Option`/`None` spelling: `None`
+                // claims no ownership.
+                "control: an `Option` local declined by a `None` pattern",
+                "let o: Option[W] = mksome();\n\
+                 if let None = o { println(\"none\"); } else { println(\"some\"); }",
+                "some\ndW5\nafter\n",
+            ),
+            (
+                "control: `match` binding both arms, correct throughout",
+                "let r: Result[W, W] = mkerr();\n\
+                 match r { Ok(a) => { println(f\"ma{a.id}\"); } Err(e) => { println(f\"me{e.id}\"); } }",
+                "me7\ndW7\nafter\n",
+            ),
+            (
+                // THE SPLIT THIS FIX HAD TO KEEP. Codegen's optres retraction
+                // is per-path now; its USER-ENUM one is still a compile-time
+                // removal, so the interpreter's arm scan stays whole-match
+                // there. Making both taken-arm-only diverged exactly here: the
+                // read-through SECOND arm is the one taken, its own answer is
+                // "nothing moved out", and `--interp` printed `v5 dE dR5`
+                // against every compiled backend's `v5 dR5 dE`. Interpreter-side
+                // this shape is `readthrough_arm_leaves_the_payload_with_its_enum`'s
+                // `mixed-arms-one-materializes` row; the cross-backend twin is
+                // here because the divergence was compiled-vs-interpreted.
+                "control: a USER enum's mixed arms keep the whole-match retraction",
+                "let g: E2 = E2.A(V { id: 5 });\n\
+                 match g { E2.A(r) if r.id == 1 => { let m = r; println(f\"m{m.id}\"); }\n\
+                           E2.A(r) => { println(f\"v{r.id}\"); } E2.B => {} }",
+                "v5\ndV5\ndE2\nafter\n",
+            ),
+            (
+                // The `Option` spelling of the row above: taken-arm-only, and
+                // the read-through arm leaves the payload with the source, so
+                // exactly one body either way.
+                "control: an `Option`'s mixed arms, taken-arm-only",
+                "let o: Option[W] = mksome();\n\
+                 match o { Some(a) if a.id == 1 => { let m = a; println(f\"m{m.id}\"); }\n\
+                           Some(a) => { println(f\"v{a.id}\"); } None => {} }",
+                "v5\ndW5\nafter\n",
             ),
         ];
         for (label, body, want) in cases {

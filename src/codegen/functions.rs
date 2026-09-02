@@ -1502,6 +1502,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // site's escaping-ness is a static property of the source location, so
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
+        self.drop_rc.optres_payload_bodies_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
         self.drop_rc.field_view_flags.clear();
         // B-2026-08-30-2 — same reasoning one map over: `branch_tail_owner_slots`

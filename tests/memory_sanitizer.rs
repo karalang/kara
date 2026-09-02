@@ -67008,6 +67008,67 @@ fn main() {
     }
 
     #[test]
+    fn asan_bound_optres_local_missed_arm_body_reads_live_memory() {
+        // B-2026-09-02-14 — a BOUND `Option`/`Result` local whose arm MISSED
+        // lost its payload's `Drop` body, and the fix restores it.
+        //
+        // THE ROW'S OWN REPRO COULD NOT HAVE MEASURED THIS. It carries a
+        // scalar payload, where the defect is a missing line of output and the
+        // memory side says nothing — so a fix can look complete against it
+        // while the restored body reads a husk. Restoring a silenced body is
+        // exactly the change most able to introduce a double free or a
+        // use-after-free: the retraction it un-does exists because a hit-edge
+        // binding owns the same buffer.
+        //
+        // Each `W` owns a long `String` and the body READS THROUGH it
+        // (`self.s.len()`), so a body running on a freed or moved-from object
+        // is a sanitizer error rather than a quiet pass. Looped, so a per-path
+        // flag that fails to reset between iterations shows up.
+        //
+        // Four cells: the miss edge (the row), the hit edge (whose binding owns
+        // the payload and must be the sole runner), the later-use shape (one
+        // body, at the later `match`), and the `match` arm set that binds only
+        // `Ok` — the row's first unmeasured shape.
+        assert_clean_asan_run(
+            r#"
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+struct W { s: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.s.len()}"); } }
+fn mkerr() -> Result[W, W] { return Err(W { s: pad(7) }); }
+fn mkok() -> Result[W, W] { return Ok(W { s: pad(1) }); }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let a: Result[W, W] = mkerr();
+        if let Ok(w) = a { println(f"h{w.s.len()}"); }
+        let b: Result[W, W] = mkok();
+        if let Ok(w) = b { println(f"h{w.s.len()}"); }
+        let c: Result[W, W] = mkerr();
+        if let Ok(w) = c { println(f"h{w.s.len()}"); }
+        println("mid");
+        match c { Ok(x) => { println(f"x{x.s.len()}"); } Err(e) => { println(f"e{e.s.len()}"); } }
+        let d: Result[W, W] = mkerr();
+        match d { Ok(x) => { println(f"x{x.s.len()}"); } _ => { println("wild"); } }
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dW47", "h47", "dW47", "mid", "e47", "dW47", "wild", "dW47", "dW47", "h47", "dW47",
+                "mid", "e47", "dW47", "wild", "dW47", "dW47", "h47", "dW47", "mid", "e47", "dW47",
+                "wild", "dW47", "done",
+            ],
+            "b0902-14-bound-optres-local-missed-arm",
+        );
+    }
+
+    #[test]
     fn asan_field_param_view_sibling_bodies_free_exactly_once() {
         // B-2026-09-02-10 — the heap half of the per-FIELD param-view fix.
         //

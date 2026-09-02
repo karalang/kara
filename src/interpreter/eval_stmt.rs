@@ -5647,8 +5647,14 @@ impl<'a> super::Interpreter<'a> {
                 // `None`: a `let … else` pattern binds into the ENCLOSING
                 // block, so B-2026-08-28-67's read-through gate has no scope to
                 // inspect and the payload is materialized by definition.
-                self.disarm_moved_out_enum_payload_one(value, &val, pattern, None);
+                //
+                // B-2026-09-02-14 — INSIDE the match test since this row, like
+                // its `if let` / `while let` siblings. It used to run ahead of
+                // the test because codegen's retraction was a compile-time
+                // removal; codegen now clears a per-path flag on the match edge
+                // instead, so the else edge keeps the walk it never gave away.
                 if self.try_match_pattern(pattern, &val) {
+                    self.disarm_moved_out_enum_payload_one(value, &val, pattern, None);
                     // B-2026-08-31-30 — the STRUCT sibling of the enum-payload
                     // disarm above, and the same failure it describes: a bare
                     // struct pattern (`let P { r, .. } = h else { … }`) moves

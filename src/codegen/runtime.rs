@@ -9505,6 +9505,54 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(slot)
     }
 
+    /// B-2026-09-02-14 — get (or lazily create) the per-path payload-BODIES
+    /// flag for an `Option`/`Result` place whose payload an arm may bind out.
+    ///
+    /// Allocated exactly like [`Self::cond_move_drop_flag_for`] and for the
+    /// same reason: the entry block dominates every path, so a `true`
+    /// initializer there plus a `false` store in the arm's own block is
+    /// precisely "an arm took the payload on the path that ran, and the place
+    /// still owes the body everywhere else".
+    ///
+    /// Returns `None` when there is no `ContainerElemBodies` action to guard —
+    /// nothing to schedule, and creating a flag would leave a reader branching
+    /// on a bit that guards nothing.
+    pub(super) fn optres_payload_bodies_flag_for(
+        &mut self,
+        name: &str,
+    ) -> Option<PointerValue<'ctx>> {
+        let place = self.variables.get(name)?.ptr;
+        let key = (name.to_string(), place);
+        if let Some(p) = self.drop_rc.optres_payload_bodies_flags.get(&key) {
+            return Some(*p);
+        }
+        let armed = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| {
+                matches!(a, CleanupAction::UserDrop { binding_name, binding_ptr, kind, .. }
+                    if binding_name == name
+                        && *binding_ptr == place
+                        && *kind == UserDropKind::ContainerElemBodies)
+            })
+        });
+        if !armed {
+            return None;
+        }
+        let fn_val = self.current_fn?;
+        let entry = fn_val.get_first_basic_block()?;
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let bool_t = self.context.bool_type();
+        let slot = b
+            .build_alloca(bool_t, &format!("optresbodies.{name}"))
+            .ok()?;
+        b.build_store(slot, bool_t.const_int(1, false)).ok()?;
+        self.drop_rc.optres_payload_bodies_flags.insert(key, slot);
+        Some(slot)
+    }
+
     /// B-2026-09-02-10 — get (or lazily create) the per-FIELD view flag for
     /// `binding.field`.
     ///
@@ -9687,6 +9735,19 @@ impl<'ctx> super::Codegen<'ctx> {
         ptr: PointerValue<'ctx>,
         call_name: &str,
     ) {
+        // B-2026-09-02-14 — the payload-BODIES walk of an `Option`/`Result`
+        // place an arm may have bound out runs under its own per-path flag. The
+        // arm retraction this replaces removed the action outright, so the miss
+        // edge — where no binding exists to run the body — lost it too.
+        if kind == UserDropKind::ContainerElemBodies {
+            let key = (binding_name.to_string(), ptr);
+            if let Some(flag) = self.drop_rc.optres_payload_bodies_flags.get(&key).copied() {
+                let g = self.open_guard_on_flag(flag);
+                self.emit_user_drop_call_guarded(binding_name, drop_fn, ptr, call_name);
+                self.close_cond_move_guard(g);
+                return;
+            }
+        }
         // Only the per-binding FIELD-BODIES walk is decomposable this way. A
         // type's own `karac_drop_<T>` wrapper runs its field bodies from inside
         // itself and is registered as a different action, so there is no walker
@@ -10385,7 +10446,32 @@ impl<'ctx> super::Codegen<'ctx> {
             })
     }
 
+    /// B-2026-09-02-14 — a place whose walk an arm handed to its binding answers
+    /// FALSE here even though the action is still in the frame.
+    ///
+    /// That retraction used to be a REMOVAL, and every static reader of this
+    /// predicate was written against the removal: the assign-overwrite legs in
+    /// `stmts.rs` ask it to decide whether the value being displaced still owns
+    /// its payload, and a consuming arm's answer is no. The retraction is now a
+    /// per-path FLAG so the miss edge can keep the walk, which leaves the action
+    /// armed — and a reader that saw the change would emit the walk again on the
+    /// overwrite path, UNGUARDED. Measured on
+    /// `while let Some(r) = w { let m = r; …; w = None; }`: the assign's bodies
+    /// call fired beside the binding's, printing the payload's body twice.
+    ///
+    /// So the flag's existence answers this predicate, and every static decision
+    /// stays byte-identical to the removal it replaces. Only the FIRE is
+    /// conditional now, in
+    /// [`Self::emit_user_drop_bodies_call_field_view_selected`], which reads the
+    /// same flag against the same slot.
     pub(super) fn has_armed_container_elem_bodies(&self, name: &str) -> bool {
+        if self.variables.get(name).is_some_and(|s| {
+            self.drop_rc
+                .optres_payload_bodies_flags
+                .contains_key(&(name.to_string(), s.ptr))
+        }) {
+            return false;
+        }
         self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| {
                 matches!(action, CleanupAction::UserDrop { binding_name, kind, .. }

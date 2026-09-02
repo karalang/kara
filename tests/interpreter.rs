@@ -17594,11 +17594,181 @@ fn test_a_declined_optres_temporary_runs_its_payload_drop_body() {
     );
 
     // FRESH TEMPORARIES ONLY. A bound local keeps its own walk, so firing here
-    // would double it; that local loses its body for an unrelated reason and is
-    // pinned as still-broken in the E2E matrix (B-2026-09-02-14).
+    // would double it — see `test_a_bound_optres_local_whose_arm_missed_...`
+    // for the local's own half (B-2026-09-02-14).
     assert_eq!(
         run(&wrap("let r: Result[W, W] = mkerr();\n    println(\"x\");")),
         "dW7\nx\nafter\n"
+    );
+}
+
+#[test]
+fn test_a_bound_optres_local_whose_arm_missed_runs_its_payload_drop_body() {
+    // B-2026-09-02-14 — a BOUND `Option`/`Result` local whose arm MISSED lost
+    // its payload's `Drop` body, on all four surfaces.
+    //
+    // `let r = mkerr(); if let Ok(w) = r { … }` ran nothing, while the same
+    // local with no `if let` at all ran the body correctly — so the walk
+    // EXISTS, and this was a retraction that should not have applied rather
+    // than a missing registration. The retraction is a hand-off ("the arm's
+    // binding owns the payload from here on"), true on the hit edge and
+    // applied on every path out of the construct, including the one where the
+    // pattern did not match and there is no binding to hand anything to.
+    //
+    // The interpreter's disarm moved INSIDE the match test — and, for `match`,
+    // onto the TAKEN ARM alone rather than a scan of every arm. Both used to
+    // be flow-insensitive to stay in step with codegen's compile-time
+    // retraction; codegen now clears a per-path flag in the arm's own block,
+    // so the two backends decide per path and still decide identically.
+    //
+    // On the DEFAULT leg because half the fix is the interpreter's, and the
+    // cross-backend matrix
+    // (`e2e_a_bound_optres_local_whose_arm_missed_runs_its_payload_drop_body`)
+    // is gated on `--features llvm`.
+    const PRELUDE: &str = "struct W { id: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+         struct H { tag: String }\n\
+         impl Drop for H { fn drop(mut ref self) { println(f\"dH{self.tag}\"); } }\n\
+         enum E { A(W), B(W) }\n\
+         fn mkerr() -> Result[W, W] { return Err(W { id: 7 }); }\n\
+         fn mkok() -> Result[W, W] { return Ok(W { id: 1 }); }\n\
+         fn mksome() -> Option[W] { return Some(W { id: 5 }); }\n\
+         fn mkerrh() -> Result[H, H] { return Err(H { tag: \"seven\" }); }\n\
+         fn mkb() -> E { return E.B(W { id: 3 }); }\n";
+    let wrap =
+        |body: &str| format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
+
+    // THE ROW.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             if let Ok(w) = r { println(f\"v{w.id}\"); }"
+        )),
+        "dW7\nafter\n"
+    );
+
+    // The row's first unmeasured shape: a `match` whose arm set binds only
+    // `Ok` and wildcards the rest retracts through the same helper.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             match r { Ok(a) => { println(f\"ma{a.id}\"); } _ => { println(\"wild\"); } }"
+        )),
+        "wild\ndW7\nafter\n"
+    );
+
+    // Second unmeasured shape: a USER enum with payloads in both variants.
+    // This one was an interp-vs-compiled DIVERGENCE, not an agreed silence —
+    // the compiled backends printed the body and `--interp` did not.
+    assert_eq!(
+        run(&wrap(
+            "let e: E = mkb();\n\
+             if let E.A(w) = e { println(f\"v{w.id}\"); }"
+        )),
+        "dW3\nafter\n"
+    );
+
+    // …and its `let ... else` spelling, divergent the same way. A user enum
+    // that declares its OWN `Drop` was already correct everywhere, so the hole
+    // was specific to an enum whose only body is its payload's.
+    assert_eq!(
+        run(&wrap(
+            "let e: E = mkb();\n\
+             let E.A(w) = e else { println(\"elsearm\"); println(\"after\"); return };\n\
+             println(f\"v{w.id}\");"
+        )),
+        "elsearm\nafter\ndW3\n"
+    );
+
+    // Third unmeasured shape: a heap-carrying payload. Bodies-only either way
+    // — valgrind stayed at 9 allocs / 9 frees, 0 errors across the fix.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[H, H] = mkerrh();\n\
+             if let Ok(h) = r { println(f\"v{h.tag}\"); }"
+        )),
+        "dHseven\nafter\n"
+    );
+
+    // The `while let` spelling, whose first pass misses.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             while let Ok(w) = r { println(f\"v{w.id}\"); break; }"
+        )),
+        "dW7\nafter\n"
+    );
+
+    // The `let ... else` spelling, a RUN-VS-BUILD divergence before this fix:
+    // `--interp` printed nothing where the compiled backends printed the body
+    // at the divergent exit.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             let Ok(w) = r else { println(\"elsearm\"); println(\"after\"); return };\n\
+             println(f\"v{w.id}\");"
+        )),
+        "elsearm\nafter\ndW7\n"
+    );
+
+    // THE CONSTRAINING SHAPE: `r`'s last use is the later `match`, so the body
+    // is due there and exactly once. Emitting on the miss edge instead of
+    // keeping the walk would print it twice.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             if let Ok(w) = r { println(f\"v{w.id}\"); }\n\
+             println(\"mid\");\n\
+             match r { Ok(a) => { println(f\"ma{a.id}\"); } Err(e) => { println(f\"me{e.id}\"); } }"
+        )),
+        "mid\nme7\ndW7\nafter\n"
+    );
+
+    // THE HIT-EDGE GATE: the arm's binding owns the payload and runs the body,
+    // so the place's walk must stand down there.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkok();\n\
+             if let Ok(w) = r { println(f\"v{w.id}\"); }"
+        )),
+        "v1\ndW1\nafter\n"
+    );
+
+    // CONTROL: the walk exists — this is what makes the row a retraction bug.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             println(\"x\");"
+        )),
+        "dW7\nx\nafter\n"
+    );
+
+    // CONTROL: a pattern that binds nothing never claimed the payload, so the
+    // retraction never fired and this was correct before the fix too.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             if let Ok(_) = r { println(\"hit\"); }"
+        )),
+        "dW7\nafter\n"
+    );
+
+    // CONTROL: same reason, through `Option`/`None`.
+    assert_eq!(
+        run(&wrap(
+            "let o: Option[W] = mksome();\n\
+             if let None = o { println(\"none\"); } else { println(\"some\"); }"
+        )),
+        "some\ndW5\nafter\n"
+    );
+
+    // CONTROL: `match` binding both arms, correct throughout.
+    assert_eq!(
+        run(&wrap(
+            "let r: Result[W, W] = mkerr();\n\
+             match r { Ok(a) => { println(f\"ma{a.id}\"); } Err(e) => { println(f\"me{e.id}\"); } }"
+        )),
+        "me7\ndW7\nafter\n"
     );
 }
 

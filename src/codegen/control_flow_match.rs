@@ -11226,6 +11226,26 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
+        // B-2026-09-02-14 — EDGE-SENSITIVE since this row, and the builder is
+        // positioned in the arm's own block at every one of the four call
+        // sites, so the `false` store lands on the hit edge alone. The static
+        // removal it replaces applied to every path out of the construct,
+        // including the one where the pattern did not match and no binding
+        // exists to run the body: `let r = mkerr(); if let Ok(w) = r { … }`
+        // ran `W`'s `Drop` body nowhere, on all four surfaces, while the same
+        // local with no `if let` at all ran it correctly. The place keeps the
+        // walk it never gave away, and the NLL machinery already fires it at
+        // the place's real last use — which is what makes a LATER use
+        // (`… ; match r { … }`) still run exactly one body, at the later site.
+        //
+        // Falls back to the removal when there is no flag to be had (no armed
+        // action, or no current function), which is byte-identical to before.
+        if let Some(flag) = self.optres_payload_bodies_flag_for(&name) {
+            let _ = self
+                .builder
+                .build_store(flag, self.context.bool_type().const_int(0, false));
+            return;
+        }
         self.suppress_container_elem_bodies_for_var(&name);
     }
 

@@ -6179,6 +6179,7 @@ impl<'ctx> Codegen<'ctx> {
                 param_view_struct_fields: HashMap::new(),
             },
             drop_rc: DropRc {
+                optres_payload_bodies_flags: HashMap::new(),
                 assign_ident_target: None,
                 zero_inited_vec_slots: rustc_hash::FxHashSet::default(),
                 inline_optres_retained_sources: std::collections::HashSet::new(),

@@ -135,6 +135,43 @@ pub(crate) struct DropRc<'ctx> {
     /// `disarm_flags_for_handed_over_bindings`, both of which read the mere
     /// PRESENCE of a binding flag as "this binding is conditionally moved".
     pub(crate) field_view_flags: HashMap<String, HashMap<String, PointerValue<'ctx>>>,
+    /// B-2026-09-02-14 — per-path flag for a named `Option`/`Result` place
+    /// whose payload-BODIES walk a `match` / `if let` / `while let` /
+    /// `let … else` arm hands to its binding: `true` while the place still owes
+    /// the body, `false` on the edge where an arm actually took the payload.
+    ///
+    /// The retraction it replaces was a compile-time REMOVAL of the action, so
+    /// it applied to every path out of the construct — including the one where
+    /// the pattern did not match and no binding exists to run the body. The
+    /// place kept its payload and its `Drop` body ran nowhere, on all four
+    /// surfaces. A store on the hit edge alone says exactly what the retraction
+    /// meant to say, and the miss edge keeps the walk it never gave away.
+    ///
+    /// Its own map, following [`Self::field_view_flags`]' precedent rather than
+    /// reusing `cond_move_drop_flags`: three readers there treat a key's mere
+    /// presence as "this binding is conditionally MOVED", which a place whose
+    /// payload one arm may bind is not. Read at the place's death by
+    /// [`Codegen::emit_user_drop_bodies_call_field_view_selected`], and only
+    /// for a `ContainerElemBodies` action — the one kind this arm retraction
+    /// ever removed.
+    /// KEYED BY THE ACTION'S FULL IDENTITY — `(binding_name, binding_ptr)` —
+    /// because neither half alone identifies it, and each wrong half was
+    /// measured:
+    ///
+    ///  * NAME alone collides across sibling scopes. Six
+    ///    `{ let o = …; match o { … } }` blocks are six allocas under one name,
+    ///    so the FIRST block's consuming arm cleared a bit the SIXTH block's
+    ///    walk then read, losing that block's body outright.
+    ///  * SLOT alone collides with the boxed-payload RE-HOME
+    ///    (`pattern_binding.rs`, B-2026-08-02-25): that hands the source's
+    ///    action to the arm's binding under a new NAME but the SAME SLOT, so a
+    ///    slot-keyed flag guarded the binding's fire with the source's bit and
+    ///    lost the body the re-home exists to deliver.
+    ///
+    /// Together they are exactly the action, so a flag guards the fire it was
+    /// created for and no other.
+    pub(crate) optres_payload_bodies_flags:
+        HashMap<(String, PointerValue<'ctx>), PointerValue<'ctx>>,
     /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
     /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
     /// more than once would otherwise collect one identical `{null, 0, 0}`

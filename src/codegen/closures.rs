@@ -1224,6 +1224,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // survive to guard an outer binding of the same name. Saved, cleared,
         // and restored around the body exactly as the heap-span set above is.
         let saved_cond_move_flags = std::mem::take(&mut self.drop_rc.cond_move_drop_flags);
+        let saved_optres_bodies_flags =
+            std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
         let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
         let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
         // A closure body's tail is RETURNED, so it is an escaping site — the
@@ -1347,6 +1349,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // to this closure's body compile only.
         self.fn_ctx.current_fn_heap_closure_spans = saved_heap_spans;
         self.drop_rc.cond_move_drop_flags = saved_cond_move_flags;
+        self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
         self.drop_rc.field_view_flags = saved_field_view_flags;
 

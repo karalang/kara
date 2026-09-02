@@ -25,12 +25,24 @@ impl<'a> super::Interpreter<'a> {
         arms: &[MatchArm],
         span: &Span,
     ) -> Value {
-        // B-2026-07-30-11 (enum leg) — before any arm runs, disarm the
-        // scrutinee binding's payload-body walk if ANY arm moves a Drop-bearing
-        // payload out. Scanning every arm rather than only the taken one is
-        // what keeps this in step with codegen, whose retraction is a
-        // compile-time removal and therefore cannot be path-sensitive.
-        self.disarm_moved_out_enum_payload(scrutinee_place, scrutinee, arms);
+        // B-2026-09-02-14 — the retraction is per-path for `Option`/`Result`
+        // and whole-match for a USER enum, because that is exactly the split
+        // codegen has. Codegen's optres retraction became a per-path flag
+        // cleared in the arm's own block; its user-enum retraction
+        // (`suppress_destructured_enum_payload_cleanup` and the field-bodies
+        // disarm beside it) is still a compile-time removal that cannot be
+        // path-sensitive. Making BOTH taken-arm-only here diverged the user-enum
+        // case: `match e { E.A(r) if … => { let m = r; … } E.A(r) => { … } }`
+        // takes the read-through second arm, whose own answer is "nothing moved
+        // out", so the walk stayed with `e` and printed `v5 dE dR5` against
+        // every compiled backend's `v5 dR5 dE`.
+        let optres_scrutinee = matches!(
+            scrutinee,
+            Value::EnumVariant { enum_name, .. } if enum_name == "Option" || enum_name == "Result"
+        );
+        if !optres_scrutinee {
+            self.disarm_moved_out_enum_payload(scrutinee_place, scrutinee, arms);
+        }
         for arm in arms {
             if self.try_match_pattern(&arm.pattern, scrutinee) {
                 // Check guard if present
@@ -42,6 +54,31 @@ impl<'a> super::Interpreter<'a> {
                     if !self.is_truthy(&guard_val) {
                         continue;
                     }
+                }
+                // B-2026-07-30-11 (enum leg) — disarm the scrutinee place's
+                // payload-body walk when this arm moves a Drop-bearing payload
+                // out: the binding owns the resource from here on and runs the
+                // body itself.
+                //
+                // B-2026-09-02-14 — for an `Option`/`Result` scrutinee, THE
+                // TAKEN ARM ONLY, and after its guard has passed. This used to
+                // run before the loop and scan EVERY arm, because codegen's
+                // retraction was a compile-time removal that could not be
+                // path-sensitive. It therefore fired on paths where no arm bound
+                // anything — `match r { Ok(a) => …, _ => … }` over an `Err`
+                // handed the walk to a binding that never happened, and the
+                // payload's `Drop` body ran nowhere on any surface. Codegen now
+                // clears a per-path flag in the arm's own block instead
+                // (`optres_payload_bodies_flag_for`), so both backends decide
+                // this per path and still decide it identically. The user-enum
+                // scan stays above the loop, matching the retraction codegen
+                // still makes statically there.
+                if optres_scrutinee {
+                    self.disarm_moved_out_enum_payload(
+                        scrutinee_place,
+                        scrutinee,
+                        std::slice::from_ref(arm),
+                    );
                 }
                 self.env.push_scope();
                 // B-2026-08-29-31 — record which arm ran, for the discard
@@ -158,7 +195,18 @@ impl<'a> super::Interpreter<'a> {
                 let arm_reads_through = match scrutinee {
                     Value::EnumVariant { enum_name, .. } => {
                         scrutinee_place.is_some_and(Self::place_walk_is_retractable)
-                            && !self.match_disarms_payload_walk(enum_name, arms)
+                            && !self.match_disarms_payload_walk(
+                                enum_name,
+                                // Asked over the SAME arm set the disarm used,
+                                // which is the lockstep this pair has always
+                                // needed: taken-arm-only for `Option`/`Result`,
+                                // whole-match for a user enum.
+                                if optres_scrutinee {
+                                    std::slice::from_ref(arm)
+                                } else {
+                                    arms
+                                },
+                            )
                     }
                     _ => false,
                 };
