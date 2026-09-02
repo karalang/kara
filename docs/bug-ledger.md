@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 345 | 6 |
 | run-vs-build | 301 | 17 |
 | leak | 252 | 8 |
-| missing-feature | 192 | 0 |
+| missing-feature | 193 | 1 |
 | double-free | 162 | 0 |
 | codegen-gap | 159 | 1 |
 | diagnostics | 116 | 1 |
 | false-positive | 102 | 0 |
 | soundness | 95 | 1 |
 | perf | 87 | 0 |
-| other | 71 | 2 |
+| other | 71 | 1 |
 | crash | 69 | 2 |
 | use-after-free | 27 | 0 |
 
@@ -118,13 +118,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 70 | 2 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
-| runtime | 34 | 1 |
+| runtime | 35 | 1 |
 | effect | 29 | 0 |
 | resolver | 28 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1978 surfaced · 38 open · 1907 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1979 surfaced · 38 open · 1908 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (38)
 
@@ -158,7 +158,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1978 surfaced
 | B-2026-09-01-41 | 2026-09-01 | codegen | medium | A STRUCT'S `Vec` FIELD IS NEVER FREED when the struct is declared OUTSIDE a loop, the field is pushed to INSIDE it, and the loop body also makes a heap TEMPORARY -- all three needed, the element type is irrelevant, and the whole Vec leaks | — |
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 | B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
-| B-2026-09-01-45 | 2026-09-01 | runtime | high | `karac-runtime` NO LONGER LINKS ON WINDOWS -- `LNK2019: unresolved external symbol posix_memalign referenced in function karac_alloc_aligned_or_panic`, so `Test (windows-latest)` fails at BUILD time, not on a test. Red on every concluded CI run since 33f43c4. | — |
 | B-2026-09-01-46 | 2026-09-01 | codegen | high | `e2e_vec_of_vector_operations_round_trip` PRODUCES NO OUTPUT AT ALL on x86-64 -- the over-aligned `Vec[Vector[T, N]]` program that B-2026-08-31-24 was supposed to fix still dies, deterministically, on every concluded CI run since that fix landed. | — |
 | B-2026-09-01-47 | 2026-09-01 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that a 1 MiB thread stack is not enough, which is why `Codegen E2E (Linux arm64)` has been red on every concluded run while the 8 MiB-stack hosts pass. | — |
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
@@ -168,6 +167,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1978 surfaced
 | B-2026-09-02-6 | 2026-09-02 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an assignment that runs on SOME iterations leaves it `false` for all later ones and a later iteration's freshly-declared target loses its own `Drop` body. Identical output before and after B-2026-08-30-53 (that fix neither causes nor cures it), and the limitation has been in the mechanism since B-2026-08-28-51 | — |
 | B-2026-09-02-7 | 2026-09-02 | interp | medium | A `while let` ARM THAT BINDS ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE PER PASS UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the compiled column is the correct one (one value, one body), the surplus scales with the iteration count, and the same loop binding NOTHING is correct on all three, which isolates the trigger to the binding rather than to the loop | — |
 | B-2026-09-02-8 | 2026-09-02 | interp+codegen | medium | AN `Option`-ENVELOPED STRUCT PATTERN THAT BINDS ONLY THE NON-`Drop` FIELD LOSES THE PAYLOAD'S `Drop` BODY IN THE INTERPRETER on both the `if let` and `match` spellings -- and the `let ... else` spelling of the same pattern loses it on ALL FOUR SURFACES, which is agreed-and-wrong rather than a divergence; the same pattern WITHOUT the `Option` envelope, and the same envelope binding NOTHING, are correct everywhere | — |
+| B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 
 ### Relocated (4)
 
@@ -202,9 +202,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1978 surfaced
 
 </details>
 
-### Fixed (1907)
+### Fixed (1908)
 
-<details><summary>1907 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1908 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2113,6 +2113,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1978 surfaced
 | B-2026-09-01-38 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's… | 960e840 |
 | B-2026-09-01-40 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFAC… | cf75c62 |
 | B-2026-09-01-44 | interp | medium | THE ASSOCIATED-FUNCTION SPELLING of a conditional return is wrong under `--interp` in BOTH directions -- the dying argument runs NO `Drop` body and t… | abdffc4 |
+| B-2026-09-01-45 | runtime | high | `karac-runtime` NO LONGER LINKS ON WINDOWS -- `LNK2019: unresolved external symbol posix_memalign referenced in function karac_alloc_aligned_or_panic… | 6c2a4fb |
 | B-2026-09-01-48 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one retur… | 094c206a |
 | B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
 
