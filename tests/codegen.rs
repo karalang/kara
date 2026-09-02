@@ -11412,10 +11412,15 @@ fn main() {
     /// `__karac_dropelems_enum_<E>` on the one-shot frame, with the enum
     /// drop switch pushed FIRST so the LIFO drain runs the body before the
     /// payload's heap is freed (the `String` in each payload pins that
-    /// ordering — the reverse printed garbage). Own-`impl Drop` enums run
-    /// their OWN body only (no payload walk, both backends), and an
-    /// erased-generic payload stays silent on both — the declared-type
-    /// rule. Twin of `tests/interpreter.rs`'s
+    /// ordering — the reverse printed garbage). An erased-generic payload
+    /// stays silent on both — the declared-type rule.
+    ///
+    /// B-2026-09-02-13 — the `Loud` rows read `loud drop` ALONE until that
+    /// row. "Own-`impl Drop` enums run their OWN body only" was this
+    /// fixture's stated rule and it was wrong against the bound-local
+    /// oracle: `let x = mk_loud(5);` prints `loud drop` then `drop 5 l5`,
+    /// and the wrapper and the payload walker are complementary
+    /// registrations for an enum rather than alternatives. Twin of `tests/interpreter.rs`'s
     /// `test_enum_return_discard_runs_payload_body`, same source and
     /// expected string.
     #[test]
@@ -11478,7 +11483,7 @@ fn main() {
         };
         assert_eq!(
             out,
-            "a\ndrop 1 h1\nb\ndrop 2 h2\nc\ndrop 3 m3\ndrop 4 m4\nd\nloud drop\nloud drop\ne\nf\nend\n"
+            "a\ndrop 1 h1\nb\ndrop 2 h2\nc\ndrop 3 m3\ndrop 4 m4\nd\nloud drop\ndrop 5 l5\nloud drop\ndrop 6 l6\ne\nf\nend\n"
         );
     }
 
@@ -20913,7 +20918,7 @@ fn main() {
                 "call-source-stmt-control",
                 "fn mk() -> E { E.A(R { id: 41 }) }\n\
                  fn main() { mk(); println(\"end\") }\n",
-                "drop E\nend\n",
+                "drop E\ndrop R41\nend\n",
             ),
             (
                 "bare-unit-variant-stmt",
@@ -100101,9 +100106,12 @@ fn main() {
                 "dSv\ndR5\nd\n",
             ),
             (
-                "producer-call (control: own body alone)",
+                // B-2026-09-02-13 — no longer "own body alone": a call
+                // producer runs the payload body too, matching the bound
+                // local. Kept as the producer-call control.
+                "producer-call (control: a call producer, own body + payload)",
                 "let _ = mk(6); println(\"d\")",
-                "dSv\nd\n",
+                "dSv\ndR6\nd\n",
             ),
             (
                 "two-tail-if",
@@ -128479,10 +128487,15 @@ fn main() {
                 // nowhere else: a fresh divergence, not a fix. Measured — this
                 // cell printed `dE dR8` against compiled's `dE` on the first,
                 // unnarrowed attempt.
+                // B-2026-09-02-13 — this WAS `dE` alone. The guard is
+                // still live (the taken-tail question must not reach a call
+                // arm), but what a call arm ANSWERS changed: a discarded
+                // call producing an own-`Drop` enum now runs the payload
+                // body on every surface, so the row reads `dE dR8`.
                 "guard: a CALL arm, which the question must NOT reach",
                 "let c = true;\n\
                  let _ = if c { E.A(mk(8)) } else { mke(9) };",
-                "dE\nmid\nv=7\n",
+                "dE\ndR8\nmid\nv=7\n",
             ),
         ];
         for (label, body, want) in cases {
@@ -128544,25 +128557,25 @@ fn main() {
                 "ctor FIRST, call second, wildcard `let` — the row's shape",
                 "let _ = if c { E.A(mk(8)) } else { mke(9) };",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             (
                 "the same with the OTHER arm taken",
                 "let _ = if c { E.A(mk(8)) } else { mke(9) };",
                 "false",
-                "dE\nv=7\n",
+                "dE\ndR9\nv=7\n",
             ),
             (
                 "ctor FIRST, bare-statement spelling",
                 "if c { E.A(mk(8)) } else { mke(9) };",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             (
                 "ctor FIRST, `match` spelling",
                 "let _ = match c { true => E.A(mk(8)), _ => mke(9) };",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             (
                 "a UNIT variant first, call second",
@@ -128574,7 +128587,7 @@ fn main() {
                 "nested `else if`, the call arm deepest",
                 "let _ = if c { E.A(mk(8)) } else { if c { E.B } else { mke(9) } };",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             // ── the MIRROR order, which named its type off the call in first
             //    position and was already correct. Pinned because it is what
@@ -128585,32 +128598,32 @@ fn main() {
                 "call FIRST, ctor second",
                 "let _ = if c { mke(8) } else { E.A(mk(9)) };",
                 "false",
-                "dE\nv=7\n",
+                "dE\ndR9\nv=7\n",
             ),
             (
                 "call FIRST, ctor second, `match` spelling",
                 "let _ = match c { true => mke(8), _ => E.A(mk(9)) };",
                 "false",
-                "dE\nv=7\n",
+                "dE\ndR9\nv=7\n",
             ),
             (
                 "call FIRST, UNIT variant second",
                 "let _ = if c { mke(8) } else { E.B };",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             // ── the three shapes that already had an owner
             (
                 "guard: ALL arms are calls — the first-arm rule already named it",
                 "let _ = if c { mke(8) } else { mke(9) };",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             (
                 "guard: a bare CALL tail — the direct spelling",
                 "let _ = mke(8);",
                 "true",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             (
                 "guard: ALL arms are ctors — owned by the redirect, payload too",
@@ -128767,10 +128780,14 @@ fn main() {
             // call-produced enum runs its own body alone in the direct
             // spelling, so a branch containing one must not walk its payload.
             (
+                // B-2026-09-02-13 — the direct spelling's answer is now
+                // `dE dR8`, not `dE`. The invariant this row states is
+                // unchanged (a branch containing a call arm agrees with
+                // `let _ = mke(8);`); the answer both sides give moved.
                 "control: a CALL arm keeps the direct spelling's answer",
                 "fn go() -> i64 { let _ = mke(8); return 7; }\n\
                  fn take() -> i64 { return go(); }",
-                "dE\nv=7\n",
+                "dE\ndR8\nv=7\n",
             ),
             (
                 "control: an enum with NO own `Drop`, payload only",
@@ -130070,6 +130087,206 @@ fn main() {
         ];
         for (label, body, want) in cases {
             let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: interpreter transcript"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backends must agree with the interpreter"
+                );
+            }
+        }
+    }
+
+    /// B-2026-09-02-13 — A DISCARDED ENUM STATEMENT RAN THE ENUM'S OWN `Drop`
+    /// BODY BUT NOT ITS PAYLOAD'S, on all four surfaces.
+    ///
+    /// `mk(1);` printed `dB` where `let x = mk(1);` — the identical value, one
+    /// spelling away — prints `dB dW7`. One `Bx` and one `W` are constructed in
+    /// each and the two differ in nothing but whether the value gets a name, so
+    /// the bound local is the oracle and the discard was short a body.
+    ///
+    /// THE FIX WAS TO RELAX A GATE, NOT TO ADD A WALK, and that distinction is
+    /// the whole of it. For an enum the own-body wrapper (`karac_drop_<E>`,
+    /// whose field-cleanup half is a no-op for an enum name) and the payload
+    /// walker are COMPLEMENTARY registrations. Codegen's discard registrar
+    /// reached the walker only inside its `field_bodies_only` arm, so an enum
+    /// that declares its own `Drop` got the wrapper alone. The interpreter's
+    /// discard gates were then written to MATCH that — each one admits the
+    /// producers codegen walked, and a call-shaped producer was not among them.
+    /// So the codegen registration comes first and the interpreter gates WIDEN
+    /// to follow it; adding a second interpreter walk instead double-fires, as
+    /// the row records twice.
+    ///
+    /// AGREED-AND-WRONG, so no A/B gate could see it, and the storage is
+    /// reclaimed either way — a lost side effect, not a leak.
+    ///
+    /// THE `match`-WITH-LIVE-LOCAL HALF OF B-2026-09-01-39 CLOSES HERE as a
+    /// consequence: that spelling was interp `dE dR5` / compiled `dE`, and both
+    /// now read `dB dW7`. Two rows below pin it. Its `if` sibling is a
+    /// DIVERGENCE and so cannot be a row of this fixture, which asserts one
+    /// transcript against both backends — it is unchanged in direction and
+    /// magnitude by this fix and stays on B-2026-09-01-39, whose own repro
+    /// carries it.
+    ///
+    /// The row's third NOT-MEASURED item — whether the payload's own nested
+    /// Drop-bearing fields are reached once the walker is registered — is
+    /// answered by `test_a_discarded_enum_statement_runs_its_payloads_drop_body`
+    /// on the default leg, which carries the three-level `Bn -> Mid -> Leaf`
+    /// case that does not fit this fixture's single-prelude shape.
+    #[test]
+    fn e2e_a_discarded_enum_statement_runs_its_payloads_drop_body() {
+        const PRELUDE: &str = "struct W { id: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+             enum Bx { Full(W), Empty(W) }\n\
+             impl Drop for Bx { fn drop(mut ref self) { println(\"dB\"); } }\n\
+             fn mk(n: i64) -> Bx {\n\
+             if n < 1 { return Bx.Full(W { id: n }); }\n\
+             return Bx.Empty(W { id: 7 });\n\
+             }\n\
+             enum NoOwn { Full(W), Empty(W) }\n\
+             fn mk2(n: i64) -> NoOwn {\n\
+             if n < 1 { return NoOwn.Full(W { id: n }); }\n\
+             return NoOwn.Empty(W { id: 7 });\n\
+             }\n\
+             enum OwnOnly { A(i64), B(i64) }\n\
+             impl Drop for OwnOnly { fn drop(mut ref self) { println(\"dO\"); } }\n\
+             fn mk3(n: i64) -> OwnOnly {\n\
+             if n < 1 { return OwnOnly.A(n); }\n\
+             return OwnOnly.B(7);\n\
+             }\n\
+             struct Fac { k: i64 }\n\
+             impl Fac { fn make(ref self) -> Bx { return Bx.Empty(W { id: 7 }); } }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "THE ORACLE: the same value, BOUND",
+                "let x = mk(1);",
+                "dB\ndW7\nmid\n",
+            ),
+            ("the row: the bare statement", "mk(1);", "dB\ndW7\nmid\n"),
+            (
+                // The row listed this as NOT MEASURED and it behaves exactly
+                // like the bare statement, before and after.
+                "the wildcard `let` spelling [row: NOT MEASURED]",
+                "let _ = mk(1);",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                // The METHOD producer. Codegen's registrar reaches it through
+                // its own MethodCall arm, so it moved with the call spelling
+                // and both interpreter sites had to follow.
+                "the bare-statement METHOD producer",
+                "let f = Fac { k: 1 };\n\
+                 f.make();",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                "the wildcard-`let` METHOD producer",
+                "let f = Fac { k: 1 };\n\
+                 let _ = f.make();",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                // The row listed a HEAP-carrying payload as NOT MEASURED. It
+                // behaves as the all-scalar one does; the body reads the buffer
+                // (`len()`), so a walk over freed storage would show here.
+                "a HEAP-carrying payload [row: NOT MEASURED]",
+                "mk(1);",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                "a branch of CALLS, bare",
+                "let c: bool = true;\n\
+                 if c { mk(1) } else { mk(0) };",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                "a branch of CALLS, wildcard `let`",
+                "let c: bool = true;\n\
+                 let _ = if c { mk(1) } else { mk(0) };",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                // A branch mixing an inline ctor with a call: the ctor arm was
+                // already correct and the call arm is what this row admits, so
+                // the mixed shape is the one that proves the two agree.
+                "a branch mixing a ctor arm with a call arm",
+                "let c: bool = true;\n\
+                 let _ = if c { Bx.Empty(W { id: 7 }) } else { mk(0) };",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                "the `match` spelling of a call branch",
+                "let c: bool = true;\n\
+                 match c { true => mk(1), false => mk(0) };",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                // B-2026-09-01-39's `match` row, which closes here: it was
+                // interp `dE dR5` against compiled `dE`, and the arm taken is
+                // the one naming the LIVE local.
+                "the `match` live-local arm [closes half of B-2026-09-01-39]",
+                "let c: bool = false;\n\
+                 let e = mk(1);\n\
+                 let _ = match c { true => Bx.Empty(W { id: 9 }), _ => e };",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                "…and its bare-statement spelling",
+                "let c: bool = false;\n\
+                 let e = mk(1);\n\
+                 match c { true => Bx.Empty(W { id: 9 }), _ => e };",
+                "dB\ndW7\nmid\n",
+            ),
+            (
+                // CONTROL, unchanged by the fix: no own `Drop`, so the discard
+                // took the field-bodies leg all along and walked the payload.
+                "control: an enum with NO own `Drop` but a Drop-bearing payload",
+                "mk2(1);",
+                "dW7\nmid\n",
+            ),
+            (
+                // CONTROL, the other direction: an own `Drop` and a payload
+                // that has none, so the own body alone is the whole answer.
+                "control: an own-`Drop` enum whose payload has no `Drop`",
+                "mk3(1);",
+                "dO\nmid\n",
+            ),
+            (
+                // CONTROL for the ordering: the wrapper is pushed AFTER the
+                // walker so the LIFO discard frame drains own-body-then-payload,
+                // which is the order the bound local produces. An inverted push
+                // reads `dW7 dB` here.
+                "control: an inline ctor discard was correct throughout",
+                "let _ = Bx.Empty(W { id: 7 });",
+                "dB\ndW7\nmid\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            // The heap row swaps the prelude's payload for a `String`-carrying
+            // one; every other row uses the scalar `W`.
+            let src = if label.starts_with("a HEAP") {
+                "struct H { tag: String }\n\
+                 impl Drop for H { fn drop(mut ref self) { println(f\"dW{self.tag.len()}\"); } }\n\
+                 enum Bx { Full(H), Empty(H) }\n\
+                 impl Drop for Bx { fn drop(mut ref self) { println(\"dB\"); } }\n\
+                 fn mk(n: i64) -> Bx {\n\
+                 if n < 1 { return Bx.Full(H { tag: \"x\" }); }\n\
+                 return Bx.Empty(H { tag: \"1234567\" });\n\
+                 }\n\
+                 fn main() {\n    mk(1);\n    println(\"mid\");\n}\n"
+                    .to_string()
+            } else {
+                format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"mid\");\n}}\n")
+            };
             let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
             assert!(
                 interp_errs.is_empty(),

@@ -3848,6 +3848,37 @@ impl<'ctx> super::Codegen<'ctx> {
         if memory_only {
             return;
         }
+        // B-2026-09-02-13 — an own-`Drop` ENUM needs BOTH registrations, and
+        // this site made only one. `emit_enum_payload_user_drop_bodies_fn` is
+        // reachable above only inside the `field_bodies_only` arm, so an enum
+        // that declares its own `Drop` took the `None` leg and got the
+        // `karac_drop_<E>` wrapper alone — whose field-cleanup half is a no-op
+        // for an enum name and therefore cannot reach a variant payload. So
+        // `mk(1);` printed `dB` where `let x = mk(1);`, the identical value one
+        // spelling away, prints `dB dW7`.
+        //
+        // The wrapper and the walker are COMPLEMENTARY for an enum, which is
+        // the rule the CALL-ARGUMENT registrar in this same file already
+        // applies (its `fresh_enum_temp` branch registers both, and this is a
+        // copy of that shape down to the empty type name on the walker). Pushed
+        // BEFORE the wrapper because the one-shot discard frame drains LIFO, so
+        // the later-pushed wrapper runs first and the transcript reads
+        // own-body-then-payload — matching the bound local, which is the oracle
+        // the two spellings are judged against.
+        //
+        // No-op for every other shape: `bodies_fn` is `Some` exactly when the
+        // type has no own `Drop`, and that leg already carries the walker.
+        if bodies_fn.is_none() && is_enum {
+            if let Some(w) = self.emit_enum_payload_user_drop_bodies_fn(&ret_ty_name) {
+                self.track_user_drop_var_with_fn(
+                    "",
+                    "__owned_agg_tmp",
+                    slot,
+                    w,
+                    UserDropKind::ContainerElemBodies,
+                );
+            }
+        }
         // The kind travels WITH the function from the branch that built it:
         // this site registers an enum-payload container walk on one leg and a
         // struct field-bodies walk on the other, so there is no single answer

@@ -17603,6 +17603,108 @@ fn test_a_declined_optres_temporary_runs_its_payload_drop_body() {
 }
 
 #[test]
+fn test_a_discarded_enum_statement_runs_its_payloads_drop_body() {
+    // B-2026-09-02-13 — `mk(1);` ran the enum's own `Drop` body but not its
+    // payload's, where `let x = mk(1);` — the identical value one spelling
+    // away — runs both. The bound local is the oracle: the two differ in
+    // nothing but whether the value gets a name.
+    //
+    // The interpreter's half was to WIDEN gates, not to add walks. Each discard
+    // site's payload-walk companion is gated to admit exactly the producers
+    // codegen walked, and codegen's registrar reached its enum payload walker
+    // only on the no-own-`Drop` leg — so a CALL returning an own-`Drop` enum was
+    // outside every gate. Adding a second walk instead double-fires: measured
+    // `dB dW7 dW7` twice while building this, once by widening the shared
+    // `run_discarded_value_user_drops` and once by stacking a walk beside the
+    // wildcard-`let` site's existing companion.
+    //
+    // On the DEFAULT leg because half the fix is the interpreter's, and this
+    // carries the NESTED case (`Bn -> Mid -> Leaf`) that the cross-backend
+    // matrix `e2e_a_discarded_enum_statement_runs_its_payloads_drop_body`
+    // cannot express under its single prelude.
+    const PRELUDE: &str = "struct W { id: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+         enum Bx { Full(W), Empty(W) }\n\
+         impl Drop for Bx { fn drop(mut ref self) { println(\"dB\"); } }\n\
+         fn mk(n: i64) -> Bx {\n\
+         if n < 1 { return Bx.Full(W { id: n }); }\n\
+         return Bx.Empty(W { id: 7 });\n\
+         }\n";
+    let wrap =
+        |body: &str| format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"mid\");\n}}\n");
+
+    // THE ORACLE, then the row.
+    assert_eq!(run(&wrap("let x = mk(1);")), "dB\ndW7\nmid\n");
+    assert_eq!(run(&wrap("mk(1);")), "dB\ndW7\nmid\n");
+    assert_eq!(run(&wrap("let _ = mk(1);")), "dB\ndW7\nmid\n");
+
+    // THE ROW'S THIRD NOT-MEASURED ITEM: the payload's own nested Drop-bearing
+    // field is reached once the walker is registered, and in declaration order.
+    let nested = "struct Leaf { id: i64 }\n\
+         impl Drop for Leaf { fn drop(mut ref self) { println(f\"dL{self.id}\"); } }\n\
+         struct Mid { leaf: Leaf }\n\
+         impl Drop for Mid { fn drop(mut ref self) { println(\"dM\"); } }\n\
+         enum Bn { Full(Mid), Empty(Mid) }\n\
+         impl Drop for Bn { fn drop(mut ref self) { println(\"dBn\"); } }\n\
+         fn mkn(n: i64) -> Bn {\n\
+         if n < 1 { return Bn.Full(Mid { leaf: Leaf { id: n } }); }\n\
+         return Bn.Empty(Mid { leaf: Leaf { id: 7 } });\n\
+         }\n";
+    assert_eq!(
+        run(&format!(
+            "{nested}fn main() {{\n    let x = mkn(1);\n    println(\"mid\");\n}}\n"
+        )),
+        "dBn\ndM\ndL7\nmid\n"
+    );
+    assert_eq!(
+        run(&format!(
+            "{nested}fn main() {{\n    mkn(1);\n    println(\"mid\");\n}}\n"
+        )),
+        "dBn\ndM\ndL7\nmid\n"
+    );
+
+    // THE TWO DOUBLE-FIRE HAZARDS the row records, each measured at `dB dW7 dW7`
+    // while building this. The first is the wildcard-destructure leaf, which
+    // calls the shared walker AND adds its own payload walk (B-2026-08-28-40);
+    // the second is the wildcard-`let` site's own `inline_ctor`-gated companion
+    // (B-2026-08-28-39). Neither may gain a second walk from this fix.
+    assert_eq!(run(&wrap("let (_, _) = (mk(1), 5);")), "dB\ndW7\nmid\n");
+    assert_eq!(
+        run(&wrap("let _ = Bx.Empty(W { id: 7 });")),
+        "dB\ndW7\nmid\n"
+    );
+
+    // CONTROLS, unchanged by the fix and both correct before it: an enum with
+    // no own `Drop` walks its payload through the field-bodies leg, and an
+    // own-`Drop` enum whose payload has none owes only the own body.
+    let noown = "struct W { id: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+         enum NoOwn { Full(W), Empty(W) }\n\
+         fn mk2(n: i64) -> NoOwn {\n\
+         if n < 1 { return NoOwn.Full(W { id: n }); }\n\
+         return NoOwn.Empty(W { id: 7 });\n\
+         }\n";
+    assert_eq!(
+        run(&format!(
+            "{noown}fn main() {{\n    mk2(1);\n    println(\"mid\");\n}}\n"
+        )),
+        "dW7\nmid\n"
+    );
+    let ownonly = "enum OwnOnly { A(i64), B(i64) }\n\
+         impl Drop for OwnOnly { fn drop(mut ref self) { println(\"dO\"); } }\n\
+         fn mk3(n: i64) -> OwnOnly {\n\
+         if n < 1 { return OwnOnly.A(n); }\n\
+         return OwnOnly.B(7);\n\
+         }\n";
+    assert_eq!(
+        run(&format!(
+            "{ownonly}fn main() {{\n    mk3(1);\n    println(\"mid\");\n}}\n"
+        )),
+        "dO\nmid\n"
+    );
+}
+
+#[test]
 fn test_a_bound_optres_local_whose_arm_missed_runs_its_payload_drop_body() {
     // B-2026-09-02-14 — a BOUND `Option`/`Result` local whose arm MISSED lost
     // its payload's `Drop` body, on all four surfaces.
@@ -33485,7 +33587,7 @@ fn test_enum_return_discard_runs_payload_body() {
                  mk_empty();\n\
                  println(\"end\");\n\
              }\n"),
-        "a\ndrop 1 h1\nb\ndrop 2 h2\nc\ndrop 3 m3\ndrop 4 m4\nd\nloud drop\nloud drop\ne\nf\nend\n"
+        "a\ndrop 1 h1\nb\ndrop 2 h2\nc\ndrop 3 m3\ndrop 4 m4\nd\nloud drop\ndrop 5 l5\nloud drop\ndrop 6 l6\ne\nf\nend\n"
     );
 }
 
@@ -38992,7 +39094,7 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
             "call-source-control",
             "fn mk() -> E { E.A(R { id: 41 }) }\n\
              fn main() { let _ = mk(); println(\"end\") }\n",
-            "drop E\nend\n",
+            "drop E\ndrop R41\nend\n",
         ),
         // CONTROL — the wildcard LEAF one level in. Its own site-local walk
         // (B-2026-08-28-40) brought it to two bodies on every backend; it is
@@ -39029,7 +39131,7 @@ fn test_discarded_own_drop_enum_ctor_runs_own_and_payload_bodies() {
             "call-source-stmt-control",
             "fn mk() -> E { E.A(R { id: 41 }) }\n\
              fn main() { mk(); println(\"end\") }\n",
-            "drop E\nend\n",
+            "drop E\ndrop R41\nend\n",
         ),
         // CONTROL — a payloadless variant in statement position, both
         // spellings. One body is correct; these pin that the new walk adds
@@ -41355,7 +41457,7 @@ fn test_wildcard_discard_of_own_drop_enum_runs_its_payload_body() {
             "call-source-control",
             "fn mk() -> E { E.A(R { id: 41 }) }\n\
              fn main() { let _ = mk(); println(\"end\") }\n",
-            "drop E\nend\n",
+            "drop E\ndrop R41\nend\n",
         ),
     ] {
         assert_eq!(run(&format!("{H}{body}")), want, "{label}");
@@ -54790,9 +54892,18 @@ fn moving_one_field_out_leaves_the_others_their_drop_bodies() {
 /// `block-peel` and `no-else-if` are the wrapper positions the same predicate
 /// reaches by recursion, and both compiled backends run the payload there too.
 ///
-/// `producer-call` is the row a later widening would break: both backends run
-/// the enum's own body ALONE for `let _ = mk(6)`, and firing the payload here
-/// would be a fresh divergence rather than a fix.
+/// `producer-call` WAS the row a later widening would break: both backends ran
+/// the enum's own body ALONE for `let _ = mk(6)`, so firing the payload here
+/// would have been a fresh divergence rather than a fix.
+///
+/// B-2026-09-02-13 removed that premise at its source. Codegen's discard
+/// registrar reached its enum payload walker only on the no-own-`Drop` leg, so
+/// a CALL producing an own-`Drop` enum got the `karac_drop_<E>` wrapper alone —
+/// and the wrapper's field-cleanup half is a no-op for an enum name, so the
+/// payload body ran nowhere. Against the bound-local oracle (`let x = mk(6);`,
+/// which prints `dSv dR6` on every surface) that was the under-drop. The
+/// registrar now registers both, this row reads `dSv dR6`, and the widening it
+/// used to forbid is what closed the gap.
 ///
 /// `two-tail-if` and `match` were ABSENT here until B-2026-09-01-34 landed, and
 /// their history is the point. The compiled backends used to emit NO body at
@@ -54839,9 +54950,12 @@ fn discarded_enum_struct_variant_literal_runs_its_payload_body() {
             "dSv\ndR5\nd\n",
         ),
         (
-            "producer-call (control: own body alone)",
+            // B-2026-09-02-13 — no longer "own body alone": a call producer
+            // runs the payload body too, matching the bound local. Kept as
+            // the producer-call control; see the codegen twin.
+            "producer-call (control: a call producer, own body + payload)",
             "let _ = mk(6); println(\"d\")",
-            "dSv\nd\n",
+            "dSv\ndR6\nd\n",
         ),
         (
             "two-tail-if",

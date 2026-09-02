@@ -3903,7 +3903,25 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Path { .. } => true,
                 // The bare spelling of the same construction.
-                ExprKind::Identifier(n) => self.find_enum_for_variant(n).is_some(),
+                // B-2026-09-02-13 — …and a plain FUNCTION call that returns
+                // one. This arm answered `false` for `let _ = mk(1);` because
+                // `mk` is not a variant name, and the premise was accurate at
+                // the time: codegen's discard registrar reached its enum
+                // payload walker only on the no-own-`Drop` leg, so a call
+                // returning an own-`Drop` enum got the wrapper alone and the
+                // compiled backends ran the own body ALONE. That is the gate
+                // this row removes, so the premise is gone with it — a call
+                // producer now walks on every compiled surface, and declining
+                // here would be the divergence rather than the agreement.
+                //
+                // Resolved through `user_fn_return_type_name`, which is the
+                // interpreter's view of the same `fn_return_type_names` table
+                // codegen's registrar looks the type up in, so the two admit
+                // one population.
+                ExprKind::Identifier(n) => {
+                    self.find_enum_for_variant(n).is_some()
+                        || self.user_fn_return_type_name(n).is_some()
+                }
                 _ => false,
             },
             // B-2026-09-01-31 — an enum STRUCT-VARIANT construction
@@ -3979,13 +3997,19 @@ impl<'a> super::Interpreter<'a> {
         //     where it is not the arm contributed nothing. Asking the taken
         //     tail answers it exactly.
         //   * a CALL arm is not a hazard at all; it is a statement about what
-        //     `let _ = mke(9);` does, which is to run the own body ALONE on
-        //     every backend. That answer does not vary per run, and re-asking
-        //     it per run would make the ctor arm of a mixed ctor/call branch
-        //     walk a payload the compiled backends do not — trading this row's
-        //     divergence for a fresh one in the other direction. (Measured:
-        //     `let _ = if c { E.A(mk(8)) } else { mke(9) };` went to `dE dR8`
-        //     here against `dE` on jit and aot.)
+        //     `let _ = mke(9);` does. That answer does not vary per run, so
+        //     re-asking it per run buys nothing — which is why the call
+        //     population is admitted by the STATIC predicate above
+        //     (`discard_producer_runs_payload_walk`'s `Call` arm) rather than
+        //     here.
+        //
+        //     B-2026-09-02-13 changed WHAT that answer is. It used to be "the
+        //     own body ALONE on every backend", and this comment recorded the
+        //     measurement that held the line: `let _ = if c { E.A(mk(8)) }
+        //     else { mke(9) };` went to `dE dR8` here against `dE` on jit and
+        //     aot. That was true of a codegen registrar which could not reach
+        //     its enum payload walker for an own-`Drop` enum; it can now, so
+        //     both spellings read `dE dR8` and the static arm admits calls.
         if !self.branch_arms_are_fresh_or_live_locals(expr) {
             return false;
         }
@@ -5627,7 +5651,24 @@ impl<'a> super::Interpreter<'a> {
                     // reference; one that came off a still-live binding
                     // (`let _ = a;`) does not, and keeps its own path.
                     self.run_discarded_shared_user_drop(&val);
-                    let inline_ctor = self.discard_taken_producer_runs_payload_walk(value);
+                    // B-2026-09-02-13 — …or a METHOD producer returning an
+                    // owned enum by declared return. The static gate has no
+                    // `MethodCall` arm and cannot grow one usefully: deciding it
+                    // needs the RECEIVER's type, which only the evaluated value
+                    // carries here. Asked value-side instead, with the identical
+                    // test `discard_rhs_produces_owned_value` already uses for
+                    // this shape — the builtin borrow names excluded outright,
+                    // then a user `impl` method whose declared return names this
+                    // type. Codegen's registrar reaches `f.make()` through its
+                    // own MethodCall arm and now registers the payload walker
+                    // beside the wrapper, so declining here would be the
+                    // divergence.
+                    let method_producer = matches!(&value.kind, ExprKind::MethodCall { method, .. }
+                        if !matches!(method.as_str(), "get" | "first" | "last" | "peek")
+                            && matches!(&val, Value::EnumVariant { enum_name, .. }
+                                if self.user_method_returns_owned_type(method, enum_name)));
+                    let inline_ctor =
+                        method_producer || self.discard_taken_producer_runs_payload_walk(value);
                     if inline_ctor {
                         if let Value::EnumVariant { enum_name, .. } = &val {
                             if self.program.drop_method_keys.contains_key(enum_name) {
@@ -6283,7 +6324,28 @@ impl<'a> super::Interpreter<'a> {
                                 }
                             } else if let Some(tn) = self.user_fn_return_type_name(fn_name) {
                                 if self.program.drop_method_keys.contains_key(&tn) {
+                                    // B-2026-09-02-13 — the OWN body and, for an
+                                    // enum, the live variant's PAYLOAD bodies.
+                                    // The two are COMPLEMENTARY registrations for
+                                    // an enum — `karac_drop_<E>`'s field-cleanup
+                                    // half is a no-op for an enum name and cannot
+                                    // reach a variant payload — and this arm made
+                                    // only the first, so `mk(1);` printed `dB`
+                                    // where `let x = mk(1);`, the identical value
+                                    // one spelling away, prints `dB dW7`.
+                                    //
+                                    // Same shape and same order as the `Path`-ctor
+                                    // arm above. SITE-LOCAL for the reason that
+                                    // arm records: `run_discarded_value_user_drops`
+                                    // has ~31 callers and widening it doubles the
+                                    // body at the ones that already add their own
+                                    // walk (measured: `let (_, _) = (mk(1), 5);`
+                                    // went to `dB dW7 dW7`).
+                                    let payload_src = discarded.clone();
                                     self.run_user_drop_body_on_value(&tn, discarded);
+                                    if let Value::EnumVariant { .. } = &payload_src {
+                                        self.run_enum_payload_user_drops_value(&payload_src);
+                                    }
                                 } else if self.value_runs_user_drop(&discarded) {
                                     // B-2026-07-30-11 SHAPE 2, discard position —
                                     // the return type declares no `Drop` of its own
@@ -6579,7 +6641,18 @@ impl<'a> super::Interpreter<'a> {
                                 let tn = enum_name.clone();
                                 if self.user_method_returns_owned_type(method, &tn) {
                                     if self.program.drop_method_keys.contains_key(&tn) {
+                                        // B-2026-09-02-13 — the METHOD spelling
+                                        // of the free-fn arm above, and the same
+                                        // complementary pair: `f.make();` ran the
+                                        // enum's own body alone where the bound
+                                        // `let x = f.make();` runs `dB dW7`.
+                                        // Codegen's registrar reaches this shape
+                                        // through its MethodCall arm and now
+                                        // registers both, so the walk here is
+                                        // what keeps the two together.
+                                        let payload_src = discarded.clone();
                                         self.run_user_drop_body_on_value(&tn, discarded);
+                                        self.run_enum_payload_user_drops_value(&payload_src);
                                     } else if tn == "Option" || tn == "Result" {
                                         // B-2026-08-31-47 — `Option`/`Result`
                                         // take the SHARED discard walker, not
