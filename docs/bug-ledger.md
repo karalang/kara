@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 87 | 0 |
 | other | 71 | 2 |
 | crash | 69 | 2 |
-| use-after-free | 27 | 1 |
+| use-after-free | 27 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1358 | 33 |
+| codegen | 1358 | 32 |
 | interp | 318 | 16 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced · 38 open · 1905 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced · 37 open · 1906 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (38)
+### Open (37)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -162,7 +162,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 | B-2026-09-01-45 | 2026-09-01 | runtime | high | `karac-runtime` NO LONGER LINKS ON WINDOWS -- `LNK2019: unresolved external symbol posix_memalign referenced in function karac_alloc_aligned_or_panic`, so `Test (windows-latest)` fails at BUILD time, not on a test. Red on every concluded CI run since 33f43c4. | — |
 | B-2026-09-01-46 | 2026-09-01 | codegen | high | `e2e_vec_of_vector_operations_round_trip` PRODUCES NO OUTPUT AT ALL on x86-64 -- the over-aligned `Vec[Vector[T, N]]` program that B-2026-08-31-24 was supposed to fix still dies, deterministically, on every concluded CI run since that fix landed. | — |
 | B-2026-09-01-47 | 2026-09-01 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that a 1 MiB thread stack is not enough, which is why `Codegen E2E (Linux arm64)` has been red on every concluded run while the 8 MiB-stack hosts pass. | — |
-| B-2026-09-02-1 | 2026-09-02 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on the default `karac build` and `karac run` -- `a10 b1 done dR93841100766318`, a different garbage id every run, with a valgrind `Invalid read of size 8` whose `free` is the PRECEDING instruction in the same scope-exit drain. `KARAC_AUTO_PAR=0` is correct on both, which is B-2026-08-31-6's localization; this is the broader scope that row recorded as NOT probed, and it comes back as memory unsafety rather than ordering | — |
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 | B-2026-09-02-3 | 2026-09-02 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it -- the byte-identical CONCRETE function is correct on all four | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
@@ -202,9 +201,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 
 </details>
 
-### Fixed (1905)
+### Fixed (1906)
 
-<details><summary>1905 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1906 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2113,6 +2112,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1976 surfaced
 | B-2026-09-01-40 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFAC… | cf75c62 |
 | B-2026-09-01-44 | interp | medium | THE ASSOCIATED-FUNCTION SPELLING of a conditional return is wrong under `--interp` in BOTH directions -- the dying argument runs NO `Drop` body and t… | abdffc4 |
 | B-2026-09-01-48 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one retur… | 094c206a |
+| B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
 
 </details>
 
