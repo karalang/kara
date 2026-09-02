@@ -115642,6 +115642,90 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_conditional_param_view_assign_keeps_target_body_per_path() {
+        // B-2026-08-30-53 — `out = r` inside a match arm, where `r` is a
+        // payload view of an OWNED param. The assignment hands the caller's
+        // value to `out`, so `out`'s own body must not fire on the path that
+        // stored; the site enforced that with an ALL-PATHS retraction
+        // (`suppress_user_drop_for_var`), which also deleted the body on the
+        // path where the arm never ran and `out` still held its own
+        // initializer. Nobody else owned that value — the scrutinee is `E.B`
+        // and has no payload to walk — so both compiled backends printed
+        // `mid dE a0` against the interpreter's `mid dR0 dE a0`.
+        //
+        // The fix arms B-2026-08-28-51's `cond_move_drop_flags` on the
+        // assignment TARGET instead: entry-block `true`, a `false` store in the
+        // block the assignment compiles into, and
+        // `emit_user_drop_call_guarded` reading it at both fire sites. The
+        // taken path is byte-identical to the retraction it replaces.
+        //
+        // Six shapes. `a` is the row's repro (arm not taken) and `e` is its
+        // in-loop sibling, both of which lost the body entirely before. `b` is
+        // the taken path, unchanged and the reason the retraction exists — the
+        // displacement fire still prints `dR0` at the assignment, ahead of
+        // `mid`. `c` (a FRESH value assigned in the arm) and `d` (an
+        // unconditional param-view assign) were already correct on all four
+        // surfaces and are the boundaries an over-eager fix would move.
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+
+fn dies(b: E) -> i64 {
+    let mut out: R = R { id: 0, tag: f"t0" };
+    match b { E.A(r) => { out = r; } E.B => { } }
+    println("mid");
+    return out.id
+}
+
+fn fresh(b: E) -> i64 {
+    let mut out: R = R { id: 1, tag: f"t1" };
+    match b { E.A(r) => { out = R { id: 7, tag: f"t7" }; } E.B => { } }
+    return out.id
+}
+
+fn uncond(p: R) -> i64 {
+    let mut out: R = R { id: 2, tag: f"t2" };
+    out = p;
+    return out.id
+}
+
+fn looped(b: E) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 2 {
+        let mut out: R = R { id: 90 + i, tag: f"t" };
+        match b { E.A(r) => { out = r; } E.B => { } }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn main() {
+    println(f"a{dies(E.B)}");
+    println("-");
+    println(f"b{dies(E.A(R { id: 5, tag: f"t5" }))}");
+    println("-");
+    println(f"c{fresh(E.B)}");
+    println("-");
+    println(f"d{uncond(R { id: 9, tag: f"t9" })}");
+    println("-");
+    println(f"e{looped(E.B)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "mid\ndR0\ndE\na0\n-\ndR0\nmid\ndE\ndR5\nb5\n-\ndR1\ndE\nc1\n-\ndR2\ndR9\nd9\n-\ndR90\ndR91\ndE\ne181"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_aggregate_literal_at_explicit_return_single_fire() {
         // B-2026-08-30-18 — an aggregate literal built DIRECTLY at an
         // explicit `return`, carrying a `Vec` of `Drop` elements moved in from

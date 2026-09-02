@@ -38690,6 +38690,99 @@ fn if_let_miss_drops_the_scrutinee_temp_before_the_else_arm() {
     }
 }
 
+/// B-2026-08-30-53 — the ORACLE half of the conditional param-view
+/// assignment. `out = r` inside a match arm, where `r` is a payload view of
+/// an owned param, must run `out`'s OWN body exactly once on the path where
+/// the arm never ran — `out` still holds the value it was declared with and
+/// nobody else owns it, because the scrutinee is `E.B` and has no payload to
+/// walk.
+///
+/// This half was already GREEN before the fix. Codegen enforced the taken
+/// path's suppression with an all-paths retraction, so it lost the body on
+/// the not-taken path too (`mid dE a0` against this `mid dR0 dE a0`); the
+/// interpreter is path-sensitive for free. Pinned here for the usual reason:
+/// it is the oracle the compiled half was moved onto, so a future change
+/// that "reconciles" the two by moving the interpreter has to break this
+/// first.
+///
+/// The parity twin of
+/// `codegen::test_e2e_conditional_param_view_assign_keeps_target_body_per_path`.
+#[test]
+fn conditional_param_view_assign_keeps_the_targets_own_body() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         enum E { A(R), B }\n\
+         impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+         fn dies(b: E) -> i64 {\n\
+             let mut out: R = R { id: 0, tag: f\"t0\" };\n\
+             match b { E.A(r) => { out = r; } E.B => { } }\n\
+             println(\"mid\");\n\
+             return out.id\n\
+         }\n\
+         fn fresh(b: E) -> i64 {\n\
+             let mut out: R = R { id: 1, tag: f\"t1\" };\n\
+             match b { E.A(r) => { out = R { id: 7, tag: f\"t7\" }; } E.B => { } }\n\
+             return out.id\n\
+         }\n\
+         fn uncond(p: R) -> i64 {\n\
+             let mut out: R = R { id: 2, tag: f\"t2\" };\n\
+             out = p;\n\
+             return out.id\n\
+         }\n\
+         fn looped(b: E) -> i64 {\n\
+             let mut i: i64 = 0;\n\
+             let mut acc: i64 = 0;\n\
+             while i < 2 {\n\
+                 let mut out: R = R { id: 90 + i, tag: f\"t\" };\n\
+                 match b { E.A(r) => { out = r; } E.B => { } }\n\
+                 acc = acc + out.id;\n\
+                 i = i + 1;\n\
+             }\n\
+             return acc\n\
+         }\n";
+    for (label, body, want) in [
+        // The row's repro: the arm is NOT taken, so `out` still owns its
+        // initializer and must run its body.
+        (
+            "arm-not-taken",
+            "println(f\"a{dies(E.B)}\")\n",
+            "mid\ndR0\ndE\na0\n",
+        ),
+        // The taken path, unchanged: the displacement fires the OLD value at
+        // the assignment, ahead of `mid`, and the moved-in value's body is the
+        // caller's.
+        (
+            "arm-taken",
+            "println(f\"b{dies(E.A(R { id: 5, tag: f\"t5\" }))}\")\n",
+            "dR0\nmid\ndE\ndR5\nb5\n",
+        ),
+        // The in-loop sibling of the repro: a fresh `out` per iteration, the
+        // arm never taken, one body each.
+        (
+            "in-a-loop",
+            "println(f\"e{looped(E.B)}\")\n",
+            "dR90\ndR91\ndE\ne181\n",
+        ),
+        // Boundaries that were already correct everywhere. A FRESH value
+        // assigned in the arm never triggers the suppression at all, and an
+        // UNCONDITIONAL param-view assign has only one path, so its
+        // suppression was never wrong.
+        (
+            "fresh-value-in-arm",
+            "println(f\"c{fresh(E.B)}\")\n",
+            "dR1\ndE\nc1\n",
+        ),
+        (
+            "unconditional-assign",
+            "println(f\"d{uncond(R { id: 9, tag: f\"t9\" })}\")\n",
+            "dR2\ndR9\nd9\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-30-18 — the ORACLE half of the return-position aggregate
 /// literal. An aggregate literal built directly at an explicit `return`,
 /// carrying a `Vec` of `Drop` elements moved in from a named local, runs

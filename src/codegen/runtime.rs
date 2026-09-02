@@ -9467,7 +9467,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// A binding with no flag — everything but the branch-tail shape — takes
     /// the unguarded call, byte-identical to before.
-    fn emit_user_drop_call_guarded(
+    pub(super) fn emit_user_drop_call_guarded(
         &self,
         binding_name: &str,
         drop_fn: FunctionValue<'ctx>,

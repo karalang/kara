@@ -10712,9 +10712,33 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // shape) and frees through moved-from bits.
                                 Some(wrapper) => {
                                     if self.has_armed_user_drop(name.as_str()) {
-                                        self.builder
-                                            .build_call(wrapper, &[slot.ptr.into()], "")
-                                            .unwrap();
+                                        // B-2026-08-30-53 — GUARDED, because the
+                                        // action can now be armed-but-disarmed.
+                                        // A target assigned a param view TWICE
+                                        // (`out = r` in two arms) must fire the
+                                        // displacement body for the value it
+                                        // genuinely owned (`R{0}`) and NOT for
+                                        // the view it held after the first store
+                                        // — that one is the caller's. The old
+                                        // all-paths retraction achieved this by
+                                        // making `has_armed_user_drop` false at
+                                        // the second store; the per-path flag
+                                        // that replaced it leaves the action
+                                        // armed, so the same silence has to come
+                                        // from the flag instead. It reads `true`
+                                        // at the first store (fires) and `false`
+                                        // at the second (skips), which is the
+                                        // same answer the retraction gave and
+                                        // now also correct on a path where no
+                                        // store ran at all. Unflagged bindings
+                                        // take the unguarded call through this
+                                        // helper, byte-identical to before.
+                                        self.emit_user_drop_call_guarded(
+                                            name.as_str(),
+                                            wrapper,
+                                            slot.ptr,
+                                            "",
+                                        );
                                     }
                                 }
                                 // No `impl Drop`: the "same cleanup the scope
@@ -11130,7 +11154,49 @@ impl<'ctx> super::Codegen<'ctx> {
                                 && !self.borrow_vars.ref_params.contains_key(src.as_str()))
                                 || self.payload_vars.param_view_locals.contains(src.as_str()));
                     if rhs_is_param_view && (lhs_is_tracked_struct || lhs_is_tracked_value_enum) {
-                        self.suppress_user_drop_for_var(name);
+                        // B-2026-08-30-53 — a PER-PATH flag, not the all-paths
+                        // retraction this used to be.
+                        //
+                        // The retraction is right for the value the assignment
+                        // STORES and wrong for the value the target was
+                        // INITIALIZED with, and those are two different values:
+                        // only the second survives on a path where the
+                        // assignment never ran. Inside a match arm
+                        // (`match b { E.A(r) => { out = r; } E.B => {} }`) the
+                        // all-paths removal deleted `out`'s own body on the
+                        // NOT-TAKEN path too, where nothing else owns
+                        // `R { id: 0 }` — the scrutinee is `E.B` and has no
+                        // payload to walk. Both compiled backends printed
+                        // `mid dE v0` against the interpreter's
+                        // `mid dR0 dE v0`, the interpreter being path-sensitive
+                        // for free.
+                        //
+                        // B-2026-08-28-51's `cond_move_drop_flags` is exactly
+                        // the missing runtime bit, applied to the assignment
+                        // TARGET rather than to a handed-over source: the
+                        // entry-block `true` dominates every path, and this
+                        // `false` store lands in the basic block the assignment
+                        // compiles into, so it executes only where the store
+                        // did. `emit_user_drop_call_guarded` reads it at both
+                        // fire sites (the scope-exit drain and the NLL
+                        // live-range end), so the taken path is byte-identical
+                        // to the retraction it replaces.
+                        //
+                        // The DISPLACEMENT fire is untouched and must stay
+                        // ahead of this: the overwritten value's body is
+                        // emitted before the store, well above here, so the
+                        // taken path still prints `dR0` at the assignment.
+                        //
+                        // Falls back to the static retraction when no flag can
+                        // be made (no current function / entry block), which is
+                        // the degenerate case only.
+                        match self.cond_move_drop_flag_for(name) {
+                            Some(flag) => {
+                                let bool_t = self.context.bool_type();
+                                let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+                            }
+                            None => self.suppress_user_drop_for_var(name),
+                        }
                         self.payload_vars.param_view_locals.insert(name.clone());
                         // B-2026-08-04-19 — the retraction above drops only the
                         // LHS's BODIES; the source param's memory drop is
