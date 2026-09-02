@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 345 |
+| miscompile | 346 |
 | run-vs-build | 308 |
 | leak | 252 |
 | missing-feature | 193 |
@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 94 |
 | perf | 87 |
 | other | 71 |
-| crash | 69 |
+| crash | 70 |
 | use-after-free | 27 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1366 |
+| codegen | 1368 |
 | interp | 325 |
 | typecheck | 287 |
 | ownership | 73 |
@@ -153,13 +153,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
 | B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
-| B-2026-09-02-6 | 2026-09-02 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an assignment that runs on SOME iterations leaves it `false` for all later ones and a later iteration's freshly-declared target loses its own `Drop` body. Identical output before and after B-2026-08-30-53 (that fix neither causes nor cures it), and the limitation has been in the mechanism since B-2026-08-28-51 | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 | B-2026-09-02-13 | 2026-09-02 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelling `let x = mk(1);` of the identical value prints `dB dW7`, so the two differ only in whether the value is named | — |
 | B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
 | B-2026-09-02-17 | 2026-09-02 | interp | medium | `let ... else` OVER AN INDEXED ELEMENT RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON ALL THREE COMPILED SURFACES -- `A dE dR3 got 4 dR3 B` vs `A dE dR3 got 4 B`. Specific to this construct: the fresh-temp and named-local scrutinees agree, and so does `if let` over the SAME `v[0]`. WHICH COUNT IS RIGHT IS OPEN -- `let ... else` binds into the ENCLOSING scope, so `r` outlives the container's NLL death (visible in the trace: `dE dR3` prints before `got 4` reads `r`), which is also the escape B-2026-08-31-3 exists to reject | — |
 | B-2026-09-02-18 | 2026-09-02 | typecheck | medium | A GENERIC PREFIX SUM DOES NOT COMPILE: adding an element of an owned local `Vec[T]` to anything that is not also an element of an owned local `Vec[T]` is rejected as `arithmetic on a 'Add'-bounded type parameter requires both operands to have the same type, found 'T' and 'T'` -- a message that states the operands differ and then prints them identically. Blocks `karac run` AND `karac build` (E0200, error). Two owned-local elements added together are FINE, which refutes the obvious `Vec.new()`-poisons-the-element-type explanation. | — |
 | B-2026-09-02-19 | 2026-09-02 | ownership | medium | A DECLARED `T: Copy` BOUND IS NOT HONOURED FOR A BARE TYPE-PARAMETER BINDING: `fn f[T: Copy](x: T) { let a = x; let b = x; }` warns `value 'x' moved here, used again here` (E0500), and `let a = v[0]` on a `ref Vec[T]` with the same bound is a HARD error claiming `this element type is not Copy` (E0285) -- contradicting the bound in the signature and design.md's own rule that `v[i]` requires exactly `T: Copy`. A generic STRUCT FIELD and an `impl[T: Copy]` method body are both unaffected. | — |
+| B-2026-09-02-20 | 2026-09-02 | codegen | high | A LOOP-DECLARED LOCAL WHOSE `Drop`-BEARING STRUCT OWNS TWO HEAP FIELDS SEGFAULTS THE JIT WHEN A CONDITIONAL PARAM-VIEW ASSIGNMENT TARGETS IT -- `karac run` exits 139 having printed NOTHING, while `--interp` and both `karac build` legs are correct. Bisected to three necessary ingredients: two heap-owning fields, the `let` inside the loop, and the conditional assignment; removing any one runs correctly. Pre-dates B-2026-09-02-6's fix (a build of the parent commit crashes identically) | — |
+| B-2026-09-02-21 | 2026-09-02 | codegen | high | THE `for`-RANGE SPELLING OF THE SAME SHAPE NEVER TERMINATES ON THE JIT: the induction variable stops advancing at the iteration that performs the conditional param-view assignment and that iteration repeats forever, while `--interp` and both `karac build` legs are correct. The `while` spelling of the identical program is fine on all four surfaces, and so is a NESTED `for`, so it is not every range loop. Pre-dates B-2026-09-02-6's fix (a build of the parent commit hangs identically) | — |
 
 ### Relocated
 
@@ -2119,6 +2120,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-48 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one retur… | 094c206a |
 | B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
 | B-2026-09-02-3 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it --… | 56cb337 |
+| B-2026-09-02-6 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an ass… | c2b8924 |
 | B-2026-09-02-7 | interp | medium | A `while let` ARM THAT BINDS ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE PER PASS UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the com… | 51491e9 |
 | B-2026-09-02-8 | interp+codegen | medium | AN `Option`-ENVELOPED STRUCT PATTERN THAT BINDS ONLY THE NON-`Drop` FIELD LOSES THE PAYLOAD'S `Drop` BODY IN THE INTERPRETER on both the `if let` and… | b86bef0 |
 | B-2026-09-02-10 | codegen | medium | B-2026-08-01-19's OVER-SUPPRESSION TRADE IS NOW A VISIBLE DIVERGENCE: a param view assigned into ONE field silences EVERY Drop-bearing field's body o… | d3f7d4b |
