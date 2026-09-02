@@ -1865,17 +1865,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // User-controlled count: overflow-checked multiply (the calloc fast
         // path above gets the equivalent check inside the runtime wrapper).
         let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "filled")?;
-        let buf = self
-            .builder
-            .build_call(
-                self.runtime_fns.alloc_or_panic_fn,
-                &[alloc_bytes.into()],
-                "filled.buf",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        let buf = self.emit_vec_buffer_alloc(elem_ty, alloc_bytes, "filled.buf");
 
         if needs_clone {
             // Heap-backed element: move `val` into slot 0, deep-clone into the
@@ -2037,17 +2027,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let elem_size = elem_ty.size_of().unwrap();
         let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "fromfn")?;
-        let buf = self
-            .builder
-            .build_call(
-                self.runtime_fns.alloc_or_panic_fn,
-                &[alloc_bytes.into()],
-                "fromfn.buf",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        let buf = self.emit_vec_buffer_alloc(elem_ty, alloc_bytes, "fromfn.buf");
 
         let i_slot = self.create_entry_alloca(fn_val, "fromfn.i", i64_t.into());
         self.builder

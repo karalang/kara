@@ -235,6 +235,52 @@ impl<'ctx> super::Codegen<'ctx> {
         (a > 16).then_some(a)
     }
 
+    /// Emit the INITIAL allocation for a Vec data buffer, routing an
+    /// OVER-ALIGNED element type to the aligned entry point.
+    ///
+    /// The constructor-side twin of [`Self::emit_vec_buffer_grow_alloc`], and
+    /// the reason it exists as a helper rather than as four open-coded
+    /// `match`es: B-2026-08-31-24 fixed the buffer-producing sites it found by
+    /// hand, and B-2026-09-01-46 was the ones it did not — `Vec.new()` (which
+    /// reaches `Vec.with_capacity` through the presize pass), `with_capacity`
+    /// itself, `Vec.filled` and `Vec.from_fn`. Every future Vec buffer
+    /// allocation should call this instead of `alloc_or_panic_fn` directly, so
+    /// a new constructor cannot silently join that list.
+    pub(super) fn emit_vec_buffer_alloc(
+        &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        alloc_bytes: inkwell::values::IntValue<'ctx>,
+        name: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        match self.over_alignment_for_elem(elem_ty) {
+            Some(align) => {
+                let f = self.alloc_aligned_or_panic_fn_decl();
+                self.builder
+                    .build_call(
+                        f,
+                        &[alloc_bytes.into(), i64_t.const_int(align, false).into()],
+                        name,
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value()
+            }
+            None => self
+                .builder
+                .build_call(
+                    self.runtime_fns.alloc_or_panic_fn,
+                    &[alloc_bytes.into()],
+                    name,
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value(),
+        }
+    }
+
     /// Emit the grow-path (re)allocation for a Vec data buffer, routing an
     /// OVER-ALIGNED element type to the aligned entry point
     /// (B-2026-08-31-24).

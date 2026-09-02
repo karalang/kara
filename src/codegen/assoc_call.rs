@@ -3449,7 +3449,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // A null buffer when `alloc_bytes == 0` — otherwise the zero-cap Vec
             // (`cap = 0`) would own a non-null 1-byte allocation the drop path
             // skips freeing (B-2026-07-11-15).
-            let buf = self.with_capacity_buffer_or_null(alloc_bytes, "with_cap.buf");
+            let buf = self.with_capacity_buffer_or_null(elem_ty, alloc_bytes, "with_cap.buf");
 
             // Build {data=buf, len=0, cap=n} aggregate. `len = 0` is the
             // key difference from `Vec.filled`: capacity is reserved but
@@ -3498,7 +3498,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // allocator (matches the panicking `Vec.with_capacity` policy). A
             // null buffer when `n == 0` — a zero-cap String (`cap = 0`) must not
             // own a non-null buffer the drop path skips freeing (B-2026-07-11-15).
-            let buf = self.with_capacity_buffer_or_null(n, "str_with_cap.buf");
+            // A String's element is a byte: `over_alignment_for_elem` answers
+            // `None` for it, so this keeps the plain allocator it always had.
+            let buf = self.with_capacity_buffer_or_null(
+                self.context.i8_type().into(),
+                n,
+                "str_with_cap.buf",
+            );
             let vec_ty = self.vec_struct_type();
             let zero = self.context.i64_type().const_int(0, false);
             let mut agg = vec_ty.get_undef();
@@ -3825,17 +3831,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_mul(src_len, elem_size, "from_slice.bytes")
                 .unwrap();
-            let new_buf = self
-                .builder
-                .build_call(
-                    self.runtime_fns.alloc_or_panic_fn,
-                    &[alloc_bytes.into()],
-                    "from_slice.buf",
-                )
-                .unwrap()
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
+            let new_buf = self.emit_vec_buffer_alloc(elem_ty, alloc_bytes, "from_slice.buf");
 
             self.copy_from_slice_elems(
                 elem_ty,
@@ -4102,6 +4098,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// keeps its single unconditional allocation.
     fn with_capacity_buffer_or_null(
         &mut self,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
         alloc_bytes: IntValue<'ctx>,
         label: &str,
     ) -> PointerValue<'ctx> {
@@ -4125,17 +4122,13 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Nonzero: a real heap allocation, freed by the owning binding's drop.
         self.builder.position_at_end(alloc_bb);
-        let buf = self
-            .builder
-            .build_call(
-                self.runtime_fns.alloc_or_panic_fn,
-                &[alloc_bytes.into()],
-                label,
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        // B-2026-09-01-46 — through the shared helper, so an OVER-ALIGNED
+        // element type reaches the aligned allocator here too. This arm serves
+        // `Vec.with_capacity` AND, through the presize pass, plain `Vec.new()`
+        // followed by a stabilized push loop — which is how a `Vec.new()` of
+        // `Vector[i64, 4]` got a merely-16-aligned buffer while the literal
+        // spelling of the same program got an aligned one.
+        let buf = self.emit_vec_buffer_alloc(elem_ty, alloc_bytes, label);
         self.builder.build_unconditional_branch(cont_bb).unwrap();
         let alloc_end = self.builder.get_insert_block().unwrap();
 

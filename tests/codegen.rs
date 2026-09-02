@@ -28152,6 +28152,82 @@ fn main() {
             );
         }
 
+        // B-2026-09-01-46 — the CONSTRUCTOR shapes the original sweep missed,
+        // pinned by the NAME of the allocation rather than by the mere presence
+        // of the symbol.
+        //
+        // The weaker assertion above cannot see these. Every case up there
+        // builds its Vec as a LITERAL (`[a]` / `[]`) or calls `reserve`, and a
+        // `push` on any of them emits a conditional GROW path that calls
+        // `karac_realloc_aligned_or_panic` — so "the IR mentions an aligned
+        // entry point somewhere" is satisfied by the grow path even when the
+        // CONSTRUCTOR's own buffer is still a plain `malloc`. That is exactly
+        // the state `Vec.new()` was in when it segfaulted on x86-64 CI while
+        // the literal spelling of the same program ran clean.
+        //
+        // `Vec.new()` appears twice, with two loop forms, because it allocates
+        // nothing by itself: the presize pass rewrites `Vec.new()` + a
+        // stabilized push loop into `Vec.with_capacity(n)`, so `%with_cap.buf`
+        // is the buffer the program actually runs on.
+        for (label, value_name, src) in [
+            (
+                "vec-new-while-push",
+                "with_cap.buf",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = Vec.new();\n\
+                     let mut i = 0;\n\
+                     while i < 40 { v.push(a); i = i + 1; }\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "vec-new-for-push",
+                "with_cap.buf",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = Vec.new();\n\
+                     for i in 0..40 { v.push(a); }\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "with-capacity",
+                "with_cap.buf",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let mut v: Vec[Vector[i64, 4]] = Vec.with_capacity(40);\n\
+                     v.push(a);\n\
+                     println(v.len());\n\
+                 }",
+            ),
+            (
+                "filled",
+                "filled.buf",
+                "fn main() {\n\
+                     let a: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);\n\
+                     let v: Vec[Vector[i64, 4]] = Vec.filled(40, a);\n\
+                     println(v.len());\n\
+                 }",
+            ),
+        ] {
+            let ir = ir_for(src);
+            let want = format!("%{value_name} = call ptr @karac_alloc_aligned_or_panic");
+            let plain = format!("%{value_name} = call ptr @karac_alloc_or_panic");
+            assert!(
+                ir.contains(&want),
+                "case {label}: the Vec's own element buffer `%{value_name}` must \
+                 come from the aligned allocator; it is {}.\n{ir}",
+                if ir.contains(&plain) {
+                    "still the plain one, so it carries only malloc's 16-byte \
+                     guarantee while every element access is emitted at 32"
+                } else {
+                    "not allocated under that name at all — if the emission site \
+                     was renamed, update `value_name` rather than deleting the case"
+                }
+            );
+        }
+
         // Controls: an element type at or below malloc's 16-byte guarantee
         // must NOT pay for the aligned path. `Vector[i64, 2]` is exactly 16 —
         // the boundary, and the case that proves the predicate is `> 16` and
