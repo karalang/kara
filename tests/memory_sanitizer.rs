@@ -59783,6 +59783,90 @@ fn main() {
     /// because the arm binds the scrutinee and returns it. It passes here by
     /// being EXCLUDED from materialization, so if the strict rule is ever
     /// loosened this fixture is what catches it.
+    /// B-2026-09-01-30 — a whole-value MATCH-ARM binding of an owned by-value
+    /// generic param returns the caller's own buffer.
+    ///
+    /// `owned_vecstr_params` is what makes a retaining consume site deep-copy,
+    /// and it holds PARAM names. `match b { v => { return v; } }` returns `v`,
+    /// so the return-position copy asked about a name not in the set, moved the
+    /// caller's buffer out, and the caller freed it again. Measured before the
+    /// fix at `Vec[String]`: `free(): double free detected in tcache 2`, three
+    /// invalid frees under valgrind — both element buffers and the outer one.
+    ///
+    /// THE ELEMENT TYPE IS WHY THIS HID. `Vec[i64]` and a plain `String` are
+    /// both single-free through the same path, so the two shapes a probe
+    /// reaches for first say nothing; only a `Vec` whose ELEMENTS are heap
+    /// shows it. All three are here so a future narrowing cannot pass by
+    /// covering the easy two.
+    ///
+    /// EVERY PATTERN SPELLING IS HERE, not just the `match` the row named.
+    /// `if let` and `let ... else` bind a whole value under a new name exactly
+    /// as a `match` arm does, and each was three invalid frees on its own
+    /// before the fix. Covering only the spelling that happened to get reported
+    /// would leave one convention with two answers, which IS the defect.
+    ///
+    /// `echo` is the control and the whole point: the bare `return x;`
+    /// spelling of the identical function was always correct, which is what
+    /// made this a non-uniformity in one convention rather than a missing
+    /// copy. It must stay single-free too — over-copying it is the dual
+    /// failure, and the loop is here so that leak accumulates for LSan.
+    #[test]
+    fn asan_whole_arm_binding_of_owned_generic_param_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn echo[T](x: T) -> T { return x; }
+fn takeout[T](b: T) -> T { match b { v => { return v; } } }
+fn iflet[T](b: T) -> T { if let w = b { return w; } return b; }
+fn letelse[T](b: T) -> T { let w = b else { return b; }; return w; }
+fn main() {
+    let mut k: i64 = 0;
+    let mut t: i64 = 0;
+    while k < 3 {
+        let vs: Vec[String] = [f"row-{k}-aaaaaaaa", f"row-{k}-bbbbbbbb"];
+        let r1: Vec[String] = takeout(vs);
+        println(r1[0]);
+        let vi: Vec[i64] = [k, k + 1, k + 2];
+        let r2: Vec[i64] = takeout(vi);
+        t = t + r2[2];
+        let s: String = f"str-{k}-cccccccc";
+        let r3: String = takeout(s);
+        println(r3);
+        let es: Vec[String] = [f"ec-{k}-dddddddd", f"ec-{k}-eeeeeeee"];
+        let r4: Vec[String] = echo(es);
+        println(r4[1]);
+        let fs: Vec[String] = [f"il-{k}-ffffffff", f"il-{k}-gggggggg"];
+        let r5: Vec[String] = iflet(fs);
+        println(r5[0]);
+        let gs: Vec[String] = [f"le-{k}-hhhhhhhh", f"le-{k}-iiiiiiii"];
+        let r6: Vec[String] = letelse(gs);
+        println(r6[1]);
+        k = k + 1;
+    }
+    println(f"{t}");
+}
+"#,
+            &[
+                "row-0-aaaaaaaa",
+                "str-0-cccccccc",
+                "ec-0-eeeeeeee",
+                "il-0-ffffffff",
+                "le-0-iiiiiiii",
+                "row-1-aaaaaaaa",
+                "str-1-cccccccc",
+                "ec-1-eeeeeeee",
+                "il-1-ffffffff",
+                "le-1-iiiiiiii",
+                "row-2-aaaaaaaa",
+                "str-2-cccccccc",
+                "ec-2-eeeeeeee",
+                "il-2-ffffffff",
+                "le-2-iiiiiiii",
+                "9",
+            ],
+            "asan_whole_arm_binding_of_owned_generic_param_no_double_free",
+        );
+    }
+
     #[test]
     fn asan_generic_unused_bare_type_param_temp_arg_no_leak() {
         assert_clean_asan_run(

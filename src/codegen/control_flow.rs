@@ -252,6 +252,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .collect();
         }
         let bind_res = self.bind_pattern_values(pattern, val);
+        // B-2026-09-01-30 — the `match`-arm rule applies verbatim to a
+        // whole-value `if let` / `while let` / `let ... else` binding: the value
+        // reaches the return under a NEW name, so the return-position deep-copy
+        // asked about a name that is not an owned param and moved the caller's
+        // buffer out. Measured on the `if let` and `let ... else` spellings of
+        // `takeout[T](b: T) -> T` at `Vec[String]`: three invalid frees each,
+        // identical to the `match` spelling. Fixing only the shape the row
+        // happened to name would leave one convention with two answers again,
+        // which is the defect itself rather than an instance of it.
+        self.propagate_owned_param_to_whole_arm_binding(value, pattern);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.pattern_state.pattern_binding_arm_borrowed_only_names = saved_arm_borrowed_names;
         self.pattern_state.current_variant_payload_bindings.clear();
@@ -935,6 +945,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .collect();
         }
         let bind_res = self.bind_pattern_values(pattern, val);
+        // B-2026-09-01-30 — the `match`-arm rule applies verbatim to a
+        // whole-value `if let` / `while let` / `let ... else` binding: the value
+        // reaches the return under a NEW name, so the return-position deep-copy
+        // asked about a name that is not an owned param and moved the caller's
+        // buffer out. Measured on the `if let` and `let ... else` spellings of
+        // `takeout[T](b: T) -> T` at `Vec[String]`: three invalid frees each,
+        // identical to the `match` spelling. Fixing only the shape the row
+        // happened to name would leave one convention with two answers again,
+        // which is the defect itself rather than an instance of it.
+        self.propagate_owned_param_to_whole_arm_binding(value, pattern);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.pattern_state.pattern_binding_arm_borrowed_only_names = saved_arm_borrowed_names;
         self.pattern_state.current_variant_payload_bindings.clear();
@@ -1524,6 +1544,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_shape_flags =
             self.set_scrutinee_shape_flags_for_pattern(pattern, value, freshtemp_boxed_slot);
         let bind_res = self.bind_pattern_values(pattern, val);
+        // B-2026-09-01-30 — the `match`-arm rule applies verbatim to a
+        // whole-value `if let` / `while let` / `let ... else` binding: the value
+        // reaches the return under a NEW name, so the return-position deep-copy
+        // asked about a name that is not an owned param and moved the caller's
+        // buffer out. Measured on the `if let` and `let ... else` spellings of
+        // `takeout[T](b: T) -> T` at `Vec[String]`: three invalid frees each,
+        // identical to the `match` spelling. Fixing only the shape the row
+        // happened to name would leave one convention with two answers again,
+        // which is the defect itself rather than an instance of it.
+        self.propagate_owned_param_to_whole_arm_binding(value, pattern);
         self.restore_scrutinee_shape_flags(saved_shape_flags);
         self.pattern_state.current_variant_payload_bindings.clear();
         bind_res?;

@@ -832,6 +832,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // covers the plain binding, whose fields were freed by the
                     // box's inner walk as well as by whoever received the value.
                     self.suppress_boxed_payload_whole_binding(scrutinee, &arm.pattern, &arm.body);
+                    // B-2026-09-01-30 — a whole-value arm binding over an
+                    // OWNED by-value param inherits that param's ownership.
+                    //
+                    // `owned_vecstr_params` is what makes a retaining consume
+                    // site deep-copy instead of moving, and it holds PARAM
+                    // NAMES. `match b { v => { return v; } }` returns `v`, not
+                    // `b`, so the return-position copy asked about a name that
+                    // was not in the set, moved the caller's buffer out, and
+                    // the caller freed it a second time. Measured on
+                    // `takeout[T](b: T) -> T` at `Vec[String]`: three invalid
+                    // frees, both element buffers and the outer one.
+                    //
+                    // The bare `return b;` spelling of the same function is
+                    // correct, which is the non-uniformity the row is about:
+                    // one convention, two answers, depending on whether the
+                    // value reached the return through a pattern binding.
+                    self.propagate_owned_param_to_whole_arm_binding(scrutinee, &arm.pattern);
                     // B-2026-06-10-6 companion: the erased-`Option` drop
                     // switch can't classify an inline `String`/`Vec` payload,
                     // so the suppression above no-ops for it. Zero the source
@@ -10041,6 +10058,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+    }
+
+    /// B-2026-09-01-30 — carry an owned by-value param's deep-copy obligation
+    /// onto a whole-value PATTERN binding of it (`match` arm, `if let`,
+    /// `while let`, `let ... else`).
+    ///
+    /// `owned_vecstr_params` names the params whose `String`/`Vec` header the
+    /// callee received by value while the CALLER still frees the buffer, so
+    /// every retaining consume site inside the callee must deep-copy rather
+    /// than hand the same buffer on. The set holds param names, and a match arm
+    /// rebinds the value under a new one — so `match b { v => { return v; } }`
+    /// asked the return-position copy about `v`, got "not an owned param", and
+    /// moved. Both sides then freed one buffer.
+    ///
+    /// Narrow on purpose. It fires only for a scrutinee that is a bare
+    /// identifier naming such a param, and only for a pattern that binds the
+    /// WHOLE value (`v =>`), never a destructure — a sub-pattern binds a PART,
+    /// whose ownership is the business of the payload/field machinery beside
+    /// this call and which has its own disarm rules. The elem-type side tables
+    /// are mirrored too, because the copy helper reads the element type off the
+    /// name it is given and silently no-ops without it.
+    pub(super) fn propagate_owned_param_to_whole_arm_binding(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(src) = &scrutinee.kind else {
+            return;
+        };
+        if !self.borrow_vars.owned_vecstr_params.contains(src.as_str()) {
+            return;
+        }
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        // A `Binding` whose name is a unit enum variant is a tag test, not a
+        // catch-all binding — the same guard the string-dispatch analyzer uses.
+        let variant = name.rsplit('.').next().unwrap_or(name);
+        if self.enum_tag_for_variant(variant).is_some() {
+            return;
+        }
+        let Some(elem_ty) = self.var_types.vec_elem_types.get(src.as_str()).copied() else {
+            return;
+        };
+        let elem_te = self
+            .var_types
+            .var_elem_type_exprs
+            .get(src.as_str())
+            .cloned();
+        self.var_types.vec_elem_types.insert(name.clone(), elem_ty);
+        if let Some(te) = elem_te {
+            self.var_types.var_elem_type_exprs.insert(name.clone(), te);
+        }
+        self.borrow_vars.owned_vecstr_params.insert(name.clone());
     }
 
     pub(super) fn suppress_inline_option_payload_cleanup(
