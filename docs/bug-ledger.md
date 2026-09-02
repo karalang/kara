@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 168 |
 | codegen-gap | 160 |
 | diagnostics | 120 |
-| false-positive | 104 |
+| false-positive | 105 |
 | soundness | 94 |
 | perf | 87 |
 | other | 71 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 1384 |
 | interp | 332 |
-| typecheck | 287 |
+| typecheck | 288 |
 | ownership | 73 |
 | other | 70 |
 | cli | 70 |
@@ -161,6 +161,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-39 | 2026-09-02 | codegen | medium | A TUPLE PARAM REGISTERS NO ELEMENT `TypeExpr`s AND A TUPLE WHOLE-REBIND CARRIES NONE, so any element a NAME cannot spell renders as an EMPTY path: `t.0.0.id` on a nested tuple param, `let t2 = t; t2.0.id`, and `let (inner, y) = t; inner.0.id` all fail to LOWER while `--interp` prints them, and two `let`-destructure `Drop`-body cells stay at two bodies because of it | — |
 | B-2026-09-02-40 | 2026-09-02 | interp+codegen | medium | A PROJECTION SOURCE `let (r, k) = h.pe; let m = r;` STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b12 dR12 dR12` where one is due, while the identifier spelling `let (r, k) = t` is now correct. Codegen would need nothing; the interpreter's destructure gate bails on a non-identifier RHS | — |
 | B-2026-09-02-41 | 2026-09-02 | interp+codegen | medium | THE TWO-STEP DESTRUCTURE OF A NESTED TUPLE FIELD SPLITS THE BACKENDS -- `let (inner, y) = h.pe; let (r, x) = inner; let m = r;` runs ONE `Drop` body under `--interp` and TWO on `karac run` / `karac build` / `KARAC_AUTO_PAR=0`. The interpreter is right; the compiled side records nothing for the tuple-typed leaf under an owner-runs-bodies source | — |
+| B-2026-09-02-42 | 2026-09-02 | typecheck | medium | A BODY TYPE ANNOTATION THAT NAMES THE IMPL'S OWN TYPE PARAMETER POISONS EVERY LATER BOUNDED METHOD CALL ON THAT VALUE: one `let w: T = v;` inside an `impl[T: Copy] Box[T]` method makes the next `b.set(v)` fail with `trait bound 'T: Copy' is not satisfied; 'T' does not implement 'Copy'` (E0236), on an impl block that DECLARES the bound. Deleting the annotation compiles. Blocks run and build. The Named-vs-TypeParam trap fe82c7b fixed for the two arithmetic arms, reaching the method-resolution bound gate. | — |
 
 ### Relocated
 
