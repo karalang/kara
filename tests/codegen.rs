@@ -50112,6 +50112,142 @@ fn main() {
         }
     }
 
+    /// B-2026-09-01-42 — THE `while let` LOOP-EXIT MISS NEVER DROPPED THE
+    /// SCRUTINEE TEMPORARY THAT ENDED THE LOOP, on all four surfaces.
+    ///
+    ///     let mut i: i64 = 0;
+    ///     while let E.A(r) = mk(i) { println(f"v{r.id}"); i = i + 1; }
+    ///
+    ///     was:      v0 dE after      <- two temporaries, ONE body
+    ///     correct:  v0 dE dE after
+    ///
+    /// design.md § `if let` and `let...else` > "Scrutinee temporary scope",
+    /// fourth bullet: "After the loop terminates (the pattern stopped
+    /// matching), the final iteration's scrutinee temporaries are already
+    /// dropped." They were not dropped at all.
+    ///
+    /// WHY IT SURVIVED EVERY GATE, and why this fixture is the only thing that
+    /// can hold it: all four surfaces AGREED on the wrong answer, so the A/B
+    /// parity rule reported green, and the missing body is a lost SIDE EFFECT
+    /// rather than a leak of memory — the temporary's storage was always
+    /// reclaimed (measured: 11 allocs / 11 frees, 0 valgrind errors, before
+    /// the fix as well as after), so no valgrind/LSan check fired either. Only
+    /// an absolute expected-output assertion catches it.
+    ///
+    /// THE DEFECT WAS THE MEMORY/BODIES SPLIT AGAIN.
+    /// `drop_freshtemp_enum_scrutinee_on_miss` emitted only the payload-walking
+    /// drop SWITCH — the memory half — so the enum's own user `Drop` body and
+    /// its payload's bodies never ran. It also returned early when
+    /// `emit_enum_drop_switch` answered `None`, which is the case for an enum
+    /// with no heap-bearing variant, so the row's own repro (all-scalar
+    /// payload) registered nothing whatsoever.
+    ///
+    /// THE ORDER IS MEASURED, NOT ASSUMED. A bound local of the very value
+    /// that ends the loop prints `dB dW7` — the enum's own body, then the
+    /// payload's — on every surface. That transcript is the oracle this
+    /// fixture asserts the exit temporary against, which is why the
+    /// `payload-carrying enum` row spells both bodies out in that order.
+    ///
+    /// THE ROW LEFT THREE SHAPES UNMEASURED AND ALL THREE ARE ANSWERED HERE:
+    /// the enum STRUCT-variant flavour was broken the same way and is fixed;
+    /// `break` out of the body was already correct (it creates no further
+    /// temporary) and is pinned as a control so the fix cannot start
+    /// over-firing on it; and a `Result` scrutinee is NOT fixed by this — see
+    /// the pinned row at the end.
+    #[test]
+    fn e2e_while_let_loop_exit_drops_the_temporary_that_ended_it() {
+        const PRELUDE: &str = "struct R { id: i64 }\n\
+             struct H { s: String }\n\
+             enum E { A(R), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             enum Eh { A(H), B(H) }\n\
+             impl Drop for Eh { fn drop(mut ref self) { println(\"dEH\") } }\n\
+             enum Es { A { r: R }, B }\n\
+             impl Drop for Es { fn drop(mut ref self) { println(\"dES\") } }\n\
+             struct W { id: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\") } }\n\
+             enum Bx { Full(W), Empty(W) }\n\
+             impl Drop for Bx { fn drop(mut ref self) { println(\"dB\") } }\n\
+             fn pad(n: i64) -> String { return f\"payload-{n}-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\"; }\n\
+             fn mk(n: i64) -> E { if n < 1 { return E.A(R { id: n }) } return E.B }\n\
+             fn mkh(n: i64) -> Eh { if n < 1 { return Eh.A(H { s: pad(n) }) } return Eh.B(H { s: pad(7) }) }\n\
+             fn mks(n: i64) -> Es { if n < 1 { return Es.A { r: R { id: n } } } return Es.B }\n\
+             fn mkb(n: i64) -> Bx { if n < 1 { return Bx.Full(W { id: n }) } return Bx.Empty(W { id: 7 }) }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "all-scalar payload — the row's own repro [B-2026-09-01-42]",
+                "let mut i: i64 = 0;\n \
+                 while let E.A(r) = mk(i) { println(f\"v{r.id}\"); i = i + 1; }",
+                "v0\ndE\ndE\nafter\n",
+            ),
+            (
+                "HEAP-carrying payload [B-2026-09-01-42]",
+                "let mut i: i64 = 0;\n \
+                 while let Eh.A(h) = mkh(i) { println(f\"v{h.s.len()}\"); i = i + 1; }",
+                "v38\ndEH\ndEH\nafter\n",
+            ),
+            (
+                "enum STRUCT-variant scrutinee [B-2026-09-01-42, row: NOT MEASURED]",
+                "let mut i: i64 = 0;\n \
+                 while let Es.A { r } = mks(i) { println(f\"v{r.id}\"); i = i + 1; }",
+                "v0\ndES\ndES\nafter\n",
+            ),
+            (
+                // The oracle: a bound local of the exit value prints `dB dW7`
+                // on every surface, so the exit temporary must too.
+                "payload-carrying enum — own body THEN payload body [B-2026-09-01-42]",
+                "let mut i: i64 = 0;\n \
+                 while let Bx.Full(w) = mkb(i) { println(f\"v{w.id}\"); i = i + 1; }",
+                "v0\ndW0\ndB\ndB\ndW7\nafter\n",
+            ),
+            (
+                // THE ORACLE ITSELF, asserted so the row above cannot drift
+                // away from what a plain binding of the same value produces.
+                // `x`'s NLL last use is its own `let`, so both bodies land
+                // before the marker.
+                "control: a bound local of the exit value is the oracle",
+                "let x = mkb(1);\n println(\"mid\");",
+                "dB\ndW7\nmid\nafter\n",
+            ),
+            (
+                "control: `break` creates no further temporary [row: NOT MEASURED]",
+                "let mut i: i64 = 0;\n \
+                 while let E.A(r) = mk3(i) {\n \
+                 println(f\"v{r.id}\");\n \
+                 if r.id == 1 { break; }\n \
+                 i = i + 1;\n \
+                 }",
+                "v0\ndE\nv1\ndE\nafter\n",
+            ),
+            (
+                "control: the `if let` miss, correct throughout",
+                "if let E.A(r) = mk(9) { println(f\"v{r.id}\") }",
+                "dE\nafter\n",
+            ),
+            (
+                "control: a loop that never matches drops its one temporary",
+                "while let E.A(r) = mk(9) { println(f\"v{r.id}\") }",
+                "dE\nafter\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!(
+                "{PRELUDE}\
+                 fn mk3(n: i64) -> E {{ if n < 3 {{ return E.A(R {{ id: n }}) }} return E.B }}\n\
+                 fn main() {{\n    {body}\n    println(\"after\");\n}}\n"
+            );
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(interp_out.join(""), *want, "{label}: interpreter");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want, "{label}: run and build must agree");
+            }
+        }
+    }
+
     #[test]
     fn e2e_freshtemp_enum_scrutinee_while_let_runs_user_drop_per_iter() {
         // The while-let leg: the user Drop fires once per matched iteration.

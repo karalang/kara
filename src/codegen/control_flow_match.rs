@@ -13611,18 +13611,63 @@ impl<'ctx> super::Codegen<'ctx> {
         if is_shared {
             return;
         }
-        // `None` ⇒ no heap-bearing variant anywhere ⇒ nothing to drop.
-        let Some(drop_fn) = self.emit_enum_drop_switch(&enum_name) else {
-            return;
+        // B-2026-09-01-42 — THREE COMPLEMENTARY ACTIONS, NOT ONE. This emitted
+        // only the payload-walking drop SWITCH, which is the memory half; the
+        // enum's own user `Drop` body and its payload's bodies walk were never
+        // run, so the loop-exit temporary was freed silently. design.md
+        // § `if let` and `let...else` > "Scrutinee temporary scope", fourth
+        // bullet, requires the final non-matching temporary to be dropped, and
+        // "dropped" includes its body.
+        //
+        // Exactly the split B-2026-06-10's enum arm fixed for a call-argument
+        // enum temporary (`call_dispatch.rs`, the `fresh_enum_temp` branch),
+        // whose comment states the rule this reuses: UserDrop and EnumDrop are
+        // COMPLEMENTARY for an enum, not mutually exclusive, because the
+        // wrapper's field-cleanup half (`emit_struct_drop_synthesis`) is a
+        // no-op for an enum type name.
+        //
+        // THE HEAP-FREE ENUM IS WHY THE EARLY RETURN MOVED rather than gaining
+        // a companion. `emit_enum_drop_switch` answers `None` for an enum with
+        // no heap-bearing variant, and this returned on it — so the row's own
+        // repro (`enum E { A(R), B }`, `R { id: i64 }`, all scalar) registered
+        // NOTHING at all. Bailing now requires all three to be absent.
+        let drop_fn = self.emit_enum_drop_switch(&enum_name);
+        let user_wrapper = self
+            .drop_rc
+            .user_drop_wrapper_fns
+            .get(enum_name.as_str())
+            .copied();
+        // `Option`/`Result` keep their own payload machinery, the same
+        // carve-out the call-argument precedent makes.
+        let payload_bodies = if enum_name != "Option" && enum_name != "Result" {
+            self.emit_enum_payload_user_drop_bodies_fn(&enum_name)
+        } else {
+            None
         };
+        if drop_fn.is_none() && user_wrapper.is_none() && payload_bodies.is_none() {
+            return;
+        }
         let Some(fn_val) = self.current_fn else {
             return;
         };
         let alloca = self.create_entry_alloca(fn_val, "__whilelet_miss_scrut", llvm_ty.into());
         let _ = self.builder.build_store(alloca, sv);
-        self.builder
-            .build_call(drop_fn, &[alloca.into()], "")
-            .unwrap();
+        // ORDER IS MEASURED, not assumed: a bound local of the very value that
+        // ends the loop prints `dB dW7` on both backends — the enum's own body,
+        // then the payload's. That is what the frame drain produces for the
+        // let-path (LIFO over memory, walker, own-body), and the miss edge
+        // emits inline rather than through a frame, so the sequence is written
+        // out here directly. Bodies precede the switch that frees what they
+        // read (the B-2026-08-01-2 rule).
+        if let Some(w) = user_wrapper {
+            self.builder.build_call(w, &[alloca.into()], "").unwrap();
+        }
+        if let Some(w) = payload_bodies {
+            self.builder.build_call(w, &[alloca.into()], "").unwrap();
+        }
+        if let Some(d) = drop_fn {
+            self.builder.build_call(d, &[alloca.into()], "").unwrap();
+        }
     }
 }
 

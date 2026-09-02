@@ -1266,12 +1266,42 @@ impl<'a> super::Interpreter<'a> {
                     }
                     // B-2026-07-11-26: a fresh-temp enum scrutinee's user `Drop`
                     // runs once per matched iteration (after the body), mirroring
-                    // codegen's per-iteration hit drop. The final MISS scrutinee's
-                    // Drop is a documented residual in BOTH backends (codegen's
-                    // while-let miss path frees heap fields but does not run the
-                    // user body).
+                    // codegen's per-iteration hit drop.
+                    //
+                    // B-2026-09-01-42 — and the final MISS scrutinee's too. That
+                    // used to be "a documented residual in BOTH backends", and
+                    // this comment said so; it is not one any more. design.md
+                    // § `if let` and `let...else` > "Scrutinee temporary scope",
+                    // fourth bullet, requires it: "After the loop terminates
+                    // (the pattern stopped matching), the final iteration's
+                    // scrutinee temporaries are already dropped." The same miss
+                    // through `if let` already ran the body, so the two
+                    // spellings of "evaluate a fresh temp, fail to match,
+                    // discard it" disagreed — the spelling-dependent split this
+                    // family keeps having to close (B-2026-08-28-67).
+                    //
+                    // Moves in lockstep with codegen's
+                    // `drop_freshtemp_enum_scrutinee_on_miss`, which gained the
+                    // user body and the payload-bodies walk in the same commit.
+                    // `run_user_drop_body_on_value` is the twin of the
+                    // `karac_drop_<T>` wrapper that call emits — own body first,
+                    // then Drop-bearing fields — so the two produce the same
+                    // transcript by construction rather than by convention.
                     let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
                     if !self.try_match_pattern(pattern, &val) {
+                        if let Some(tn) = scrut_drop {
+                            self.run_user_drop_body_on_value(&tn, val.clone());
+                        }
+                        // …and the PAYLOAD's bodies, the twin of the
+                        // `emit_enum_payload_user_drop_bodies_fn` call codegen
+                        // makes on the same edge. `run_user_drop_body_on_value`
+                        // walks Drop-bearing STRUCT fields and returns early on
+                        // an `EnumVariant`, so without this an enum whose
+                        // payload carries its own `Drop` printed the enum's body
+                        // and not the payload's: `dB` where a bound local of the
+                        // very same value prints `dB dW7` on every surface. That
+                        // bound local is the oracle this edge is matched against.
+                        self.run_enum_payload_user_drops_value(&val);
                         break;
                     }
                     let drop_snapshot = scrut_drop.map(|tn| (tn, val.clone()));
