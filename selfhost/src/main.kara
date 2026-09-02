@@ -269,6 +269,10 @@ fn render(tok: SpannedToken) -> String {
             line.push_str("RESERVED ");
             line.push_str(kw);
         }
+        RawIdentNotAllowed(m) => {
+            line.push_str("RAWDENIED ");
+            line.push_str(m);
+        }
     }
     line
 }

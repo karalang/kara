@@ -652,10 +652,11 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0227", mf("NotInsideKaraProject")),
     // ── parse ───────────────────────────────────────────────────
     //
-    // The whole band: `ParseErrorKind::code` mints exactly these four.
+    // The whole band: `ParseErrorKind::code` mints exactly these five.
     ("E0001", parse("Syntax")),
     ("E0002", parse("UnexpectedToken")),
     ("E0003", parse("ReservedKeyword")),
+    ("E0004", parse("RawIdentNotAllowed")),
     ("E0005", parse("ReservedSyntax")),
     // ── effect ──────────────────────────────────────────────────
     //
@@ -2175,11 +2176,12 @@ mod tests {
             P::Syntax,
             P::UnexpectedToken,
             P::ReservedKeyword,
+            P::RawIdentNotAllowed,
             P::ReservedSyntax,
         ];
         assert_eq!(
             all.len(),
-            4,
+            5,
             "ParseErrorKind gained a variant — add it here and to CODE_TABLE"
         );
         for kind in all {

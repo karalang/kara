@@ -126,7 +126,7 @@ providers
 alias  independent  self  Self
 ```
 
-All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `mod`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`).
+All keywords are reserved — they cannot be used as identifiers without the `r#` raw-identifier escape (§1.3 IDENTIFIER, design.md § Raw Identifiers). `r#NAME` parses as the identifier `NAME` even when `NAME` is a reserved keyword (`r#async`, `r#try`, `r#move`, `r#comptime`, etc.). Structural markers — `self`, `Self`, `_`, `super`, `crate`, `mod`, `pub`, `priv`, `private`, `mut`, `ref`, `own` — cannot be raw-escaped (`error[E_RAW_IDENT_NOT_ALLOWED]`, emitted as `E0004`; the canonical list is `token::UNESCAPABLE_MARKERS`, which the lexer's rejection and the parser's decision to suggest `r#` at all both read).
 
 **Reserved identifiers** (not keywords, but cannot be used as user-defined identifiers):
 

@@ -218,6 +218,13 @@ pub enum Token {
     // (B-2026-09-02-29); the port models the variant so the differential
     // oracle compares the spelling, not two coincidentally-equal `ERROR`s.
     ReservedFuture(String),
+    // A refused `r#NAME` escape, carrying the structural marker's spelling.
+    // The Rust twin's `Token::RawIdentNotAllowed`. Modelled here for the same
+    // reason `ReservedFuture` is: the differential oracle's corpus exercises
+    // `r#self r#mut r#ref`, so leaving this as an `Error` would let the two
+    // sides agree by both spelling it `ERROR` rather than by the port
+    // matching the seed (B-2026-09-02-36).
+    RawIdentNotAllowed(String),
 }
 pub struct SpannedToken {
     pub token: Token,

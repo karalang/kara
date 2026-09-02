@@ -42,6 +42,14 @@ pub enum ParseErrorKind {
     /// A reserved keyword used where an identifier is required
     /// (the B-2026-07-08-13 family — `let mut group = …`).
     ReservedKeyword,
+    /// An `r#NAME` escape refused because `NAME` is a structural marker —
+    /// `self`, `mut`, `pub`, … (`token::UNESCAPABLE_MARKERS`). syntax.md § 1.1
+    /// and design.md § Raw Identifiers call this `E_RAW_IDENT_NOT_ALLOWED`.
+    ///
+    /// Deliberately NOT folded into `ReservedKeyword`: that family's whole
+    /// remedy is "write `r#NAME`", and this family is the one place where
+    /// that advice is wrong, because the writer already did (B-2026-09-02-36).
+    RawIdentNotAllowed,
     /// Syntax recognized and deliberately frozen at v1 (reserved ABIs and
     /// peers) — valid-looking code the language reserves rather than rejects
     /// as nonsense; tools should surface these as "not yet", not "wrong".
@@ -56,6 +64,12 @@ impl ParseErrorKind {
             ParseErrorKind::Syntax => "E0001",
             ParseErrorKind::UnexpectedToken => "E0002",
             ParseErrorKind::ReservedKeyword => "E0003",
+            // Fills the one gap the parse band had left. Distinct from `E0003`
+            // on purpose: a refused `r#` escape is not "you used a reserved
+            // word", it is "this word cannot be escaped at all", and the two
+            // want opposite advice (B-2026-09-02-36). syntax.md § 1.1 and
+            // design.md § Raw Identifiers name it `E_RAW_IDENT_NOT_ALLOWED`.
+            ParseErrorKind::RawIdentNotAllowed => "E0004",
             ParseErrorKind::ReservedSyntax => "E0005",
         }
     }
@@ -1089,9 +1103,12 @@ impl Parser {
     /// `UnexpectedToken` otherwise. Call this instead of pairing
     /// `unexpected_ident_msg` with plain `error`, which loses the family.
     fn error_unexpected_ident(&mut self, expected: &str) {
-        let kind = match self.peek_token().keyword_spelling() {
-            Some(_) => ParseErrorKind::ReservedKeyword,
-            None => ParseErrorKind::UnexpectedToken,
+        let kind = match self.peek_token() {
+            Token::RawIdentNotAllowed(_) => ParseErrorKind::RawIdentNotAllowed,
+            tok => match tok.keyword_spelling() {
+                Some(_) => ParseErrorKind::ReservedKeyword,
+                None => ParseErrorKind::UnexpectedToken,
+            },
         };
         let msg = self.unexpected_ident_msg(expected);
         self.error_kind(kind, &msg);
@@ -1099,6 +1116,16 @@ impl Parser {
 
     fn unexpected_ident_msg(&self, expected: &str) -> String {
         let tok = self.peek_token();
+        // A refused `r#` escape answers for itself, and must be handled BEFORE
+        // the keyword arms: those close by advising `write \`r#NAME\``, which
+        // is precisely what this writer already tried (B-2026-09-02-36). The
+        // wording is design.md § Raw Identifiers' own.
+        if let Token::RawIdentNotAllowed(marker) = tok {
+            return format!(
+                "'r#{marker}' is not legal; '{marker}' is a structural marker, \
+                 not a reservable keyword"
+            );
+        }
         match tok.keyword_spelling() {
             Some(kw) => {
                 // Two families, one diagnostic path. An ACTIVE keyword is a v1

@@ -1536,7 +1536,7 @@ fn every_escapable_keyword_the_diagnostic_suggests_actually_lexes() {
     for marker in karac::token::UNESCAPABLE_MARKERS {
         let tokens = tokens_only(&format!("r#{marker}"));
         assert!(
-            matches!(tokens[0], Token::Error(ref m) if m.contains("structural marker")),
+            matches!(tokens[0], Token::RawIdentNotAllowed(m) if m == *marker),
             "r#{marker} should be rejected, got {:?}",
             tokens[0],
         );
@@ -1661,19 +1661,31 @@ fn test_raw_ident_with_digits() {
 #[test]
 fn test_raw_ident_rejects_self() {
     let tokens = tokens_only("r#self");
-    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")));
+    assert!(
+        matches!(&tokens[0], Token::RawIdentNotAllowed(_)),
+        "got {:?}",
+        tokens[0]
+    );
 }
 
 #[test]
 fn test_raw_ident_rejects_self_type() {
     let tokens = tokens_only("r#Self");
-    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")));
+    assert!(
+        matches!(&tokens[0], Token::RawIdentNotAllowed(_)),
+        "got {:?}",
+        tokens[0]
+    );
 }
 
 #[test]
 fn test_raw_ident_rejects_underscore() {
     let tokens = tokens_only("r#_");
-    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")));
+    assert!(
+        matches!(&tokens[0], Token::RawIdentNotAllowed(_)),
+        "got {:?}",
+        tokens[0]
+    );
 }
 
 #[test]
@@ -1684,7 +1696,7 @@ fn test_raw_ident_rejects_mut_pub_ref_own() {
         let src = format!("r#{marker}");
         let tokens = tokens_only(&src);
         assert!(
-            matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")),
+            matches!(&tokens[0], Token::RawIdentNotAllowed(m) if *m == marker),
             "expected E_RAW_IDENT_NOT_ALLOWED for '{marker}'",
         );
     }

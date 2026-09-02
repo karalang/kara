@@ -3,7 +3,9 @@
 //! Tokenizer for Kāra source code. Converts a character stream into tokens
 //! with source location tracking (Span).
 
-use crate::token::{is_raw_escapable, FloatSuffix, IntSuffix, Span, SpannedToken, Token};
+use crate::token::{
+    unescapable_marker_spelling, FloatSuffix, IntSuffix, Span, SpannedToken, Token,
+};
 
 /// The Lexer holds state required to tokenize input source code.
 pub struct Lexer<'a> {
@@ -1445,10 +1447,8 @@ impl<'a> Lexer<'a> {
         // `UNESCAPABLE_MARKERS` is shared with the parser, which consults it
         // before suggesting `r#NAME` — a suggestion the lexer would reject is
         // worse than no suggestion (B-2026-09-02-30).
-        if !is_raw_escapable(name) {
-            return self.make_spanned(Token::Error(format!(
-                "'r#{name}' is not legal; '{name}' is a structural marker, not a reservable keyword"
-            )));
+        if let Some(marker) = unescapable_marker_spelling(name) {
+            return self.make_spanned(Token::RawIdentNotAllowed(marker));
         }
         self.make_spanned(Token::Identifier {
             name: name.to_string(),

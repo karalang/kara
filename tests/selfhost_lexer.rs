@@ -573,6 +573,11 @@ fn render_rust(t: &SpannedToken) -> String {
         // so the port cannot agree by both sides merely saying `ERROR`; the
         // corpus exercises all twelve (B-2026-09-02-29).
         Token::ReservedFuture(kw) => return body_with(s, &format!("RESERVED {kw}")),
+        // Its own kind, carrying the marker, for the same reason `RESERVED`
+        // does: the corpus exercises `r#self r#mut r#ref`, so rendering these
+        // as `ERROR` would let the port agree without matching the seed
+        // (B-2026-09-02-36).
+        Token::RawIdentNotAllowed(m) => return body_with(s, &format!("RAWDENIED {m}")),
         Token::EOF => "EOF",
         // The match is now exhaustive over every Token the seed lexer emits — the
         // port models the full token set (slices A–E). A new seed variant fails

@@ -329,6 +329,20 @@ pub enum Token {
     /// `E0003` the active keywords get. Keeping the spelling as a payload lets
     /// them share that one diagnostic path.
     ReservedFuture(&'static str),
+    /// A refused `r#NAME` escape, carrying the structural marker's spelling.
+    ///
+    /// The sibling of [`Token::ReservedFuture`], and it exists for the same
+    /// reason: the rejection used to be a `Token::Error`, which
+    /// `keyword_spelling` reports as a non-keyword, so the parser rendered it
+    /// through the `found {tok:?}` fallback — `Expected pattern, found
+    /// Error("'r#self' is not legal; …")` — under the generic `E0002`
+    /// (B-2026-09-02-36).
+    ///
+    /// Unlike `ReservedFuture` this token deliberately reports NO
+    /// `keyword_spelling`: the keyword paths answer a reserved name by
+    /// advising `write \`r#NAME\``, which is exactly what the writer just
+    /// tried. It carries its own message and its own code instead.
+    RawIdentNotAllowed(&'static str),
     EOF,
 }
 
@@ -357,6 +371,16 @@ pub const UNESCAPABLE_MARKERS: &[&str] = &[
 /// Whether `kw` can be escaped to an ordinary identifier with `r#kw`.
 pub fn is_raw_escapable(kw: &str) -> bool {
     !UNESCAPABLE_MARKERS.contains(&kw)
+}
+
+/// The [`UNESCAPABLE_MARKERS`] entry `name` matches, as a `&'static str` the
+/// token can carry without allocating, or `None` if `name` is escapable.
+///
+/// A linear scan is fine here where it would not be in the keyword table:
+/// this runs only inside `raw_identifier`, after an `r#` has already been
+/// seen, not once per identifier in the source.
+pub fn unescapable_marker_spelling(name: &str) -> Option<&'static str> {
+    UNESCAPABLE_MARKERS.iter().copied().find(|m| *m == name)
 }
 
 impl Token {

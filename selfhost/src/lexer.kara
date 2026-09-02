@@ -1263,7 +1263,7 @@ impl Lexer {
         }
         let name = self.src.substring(name_start, self.current);
         if is_structural_marker(name) {
-            self.make_spanned(Token.Error("structural marker is not reservable".to_string()))
+            self.make_spanned(Token.RawIdentNotAllowed(name))
         } else {
             self.make_spanned(Token.Identifier(name))
         }

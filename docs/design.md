@@ -396,7 +396,7 @@ The no-op rule simplifies code generators and refactor tools — they can emit `
 | `super` / `crate` / `mod` | Reserved navigation / packaging words — Kāra does not currently use these, but if added post-v1 they would carry path-resolution semantics that the escape cannot strip. |
 | `pub` / `priv` / `private` / `mut` / `ref` / `own` | Visibility / parameter-mode markers — appear in syntactic positions where an identifier is *not* expected. Raw-escaping would not change the position they appear in, just produce a confusing diagnostic. |
 
-The lexer rejects an attempt to raw-escape any of the above with `error[E_RAW_IDENT_NOT_ALLOWED]: 'r#NAME' is not legal; NAME is a structural marker, not a reservable keyword`.
+The lexer rejects an attempt to raw-escape any of the above with `error[E_RAW_IDENT_NOT_ALLOWED]: 'r#NAME' is not legal; NAME is a structural marker, not a reservable keyword`. On the wire that code is **`E0004`** — the parse band is numeric (`ParseErrorKind::code`), and `E_RAW_IDENT_NOT_ALLOWED` is this spec's name for it, as `E_RESERVED_KEYWORD` is for `E0003`. It is deliberately distinct from `E0003`: that family's remedy is *write `r#NAME`*, which is the one thing that cannot help here (B-2026-09-02-36).
 
 **Case-class enforcement.** The case-class rule (CN-1, CN-2 — see § Identifiers and Naming) is determined by the identifier *after* the `r#` prefix. `r#async` is Value-class because `async` starts lowercase; `r#Async` would be Type-class. The escape does not relax case-class enforcement — using `r#async` in a Type position is the same `E_CASE_CLASS_MISMATCH` diagnostic as using bare `async` would be (if it were not reserved).
 

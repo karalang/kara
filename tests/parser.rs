@@ -15824,3 +15824,94 @@ fn block_keyword_valid_forms_still_parse() {
         assert!(errors.is_empty(), "should parse: {src}; got {:?}", errors);
     }
 }
+
+// ── Refused `r#` escapes (B-2026-09-02-36) ──────────────────────────
+
+/// The residual of B-2026-09-02-29 on the sibling path. That fix moved
+/// reserved KEYWORDS off `Token::Error`; the raw-identifier REJECTION still
+/// minted one, so `let r#self = 1;` rendered the compiler's internal token:
+///
+///     Expected pattern, found Error("'r#self' is not legal; 'self' is a
+///     structural marker, not a reservable keyword")
+///
+/// Same mechanism, same fallback, one path over: `keyword_spelling()` reports
+/// `None` for an `Error`, so the parser fell through to `found {tok:?}`.
+#[test]
+fn a_refused_raw_escape_does_not_leak_the_internal_error_token() {
+    for marker in karac::token::UNESCAPABLE_MARKERS {
+        for shape in [
+            "fn main() { let r#KW = 1; }",
+            "fn f(r#KW: i64) -> i64 { 0 }",
+            "struct S { r#KW: i64 }",
+            "fn r#KW() {}",
+        ] {
+            let src = shape.replace("KW", marker);
+            let (_p, errors) = parse_with_errors(&src);
+            assert!(!errors.is_empty(), "expected a parse error for: {src}");
+            for e in &errors {
+                assert!(
+                    !e.message.contains("Error("),
+                    "leaks the internal token for `r#{marker}`: {:?} (src: {src})",
+                    e.message,
+                );
+            }
+            assert!(
+                errors.iter().any(|e| e.message
+                    == format!(
+                        "'r#{marker}' is not legal; '{marker}' is a structural marker, \
+                         not a reservable keyword"
+                    )),
+                "no diagnostic states the refusal for `r#{marker}`; got {:?} for: {src}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            );
+        }
+    }
+}
+
+/// The second half of the row: the code. These used to carry the generic
+/// `E0002` "Expected X, found Y" fallback, indistinguishable from any other
+/// parse error, so nothing could key on the refusal. They now carry their own
+/// `E0004` (syntax.md § 1.1 / design.md § Raw Identifiers name it
+/// `E_RAW_IDENT_NOT_ALLOWED`).
+#[test]
+fn a_refused_raw_escape_carries_its_own_diagnostic_code() {
+    use karac::parser::ParseErrorKind;
+    for marker in karac::token::UNESCAPABLE_MARKERS {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let r#{marker} = 1; }}"));
+        assert_eq!(
+            errors[0].kind,
+            ParseErrorKind::RawIdentNotAllowed,
+            "r#{marker} should carry the RawIdentNotAllowed kind",
+        );
+        assert_eq!(errors[0].kind.code(), "E0004");
+    }
+}
+
+/// The refusal must NOT close with `write \`r#NAME\``, the way the
+/// reserved-keyword families do. That advice is the whole remedy there and
+/// exactly wrong here: the writer already tried the escape, and for a
+/// structural marker there is no escape to fall back to.
+#[test]
+fn a_refused_raw_escape_does_not_advise_the_escape_that_was_just_refused() {
+    for marker in karac::token::UNESCAPABLE_MARKERS {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let r#{marker} = 1; }}"));
+        for e in &errors {
+            assert!(
+                !e.message.contains("write `r#"),
+                "`r#{marker}` was just refused; must not advise it: {:?}",
+                e.message,
+            );
+        }
+    }
+}
+
+/// The control the row supplied, kept as a test: the escape itself still
+/// works everywhere it is legitimate. Without this the fix could "pass" by
+/// refusing every raw identifier.
+#[test]
+fn raw_escapes_of_escapable_keywords_still_parse() {
+    for kw in ["async", "try", "comptime", "union", "group", "match", "box"] {
+        let (_p, errors) = parse_with_errors(&format!("fn main() {{ let r#{kw} = 1; }}"));
+        assert!(errors.is_empty(), "r#{kw} should parse; got {:?}", errors);
+    }
+}
