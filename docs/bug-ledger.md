@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 6 |
-| run-vs-build | 294 | 15 |
+| run-vs-build | 295 | 15 |
 | leak | 252 | 8 |
 | missing-feature | 192 | 0 |
 | double-free | 162 | 0 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 87 | 0 |
 | other | 71 | 3 |
 | crash | 69 | 2 |
-| use-after-free | 26 | 0 |
+| use-after-free | 27 | 1 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1353 | 31 |
-| interp | 316 | 16 |
+| codegen | 1354 | 31 |
+| interp | 317 | 17 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
 | other | 70 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1970 surfaced · 37 open · 1900 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-01). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1972 surfaced · 38 open · 1901 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (38)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-30-18 | 2026-08-30 | codegen | medium | A struct literal built DIRECTLY at a `return` site, whose field is a `Vec` of `Drop` elements, runs the element's `Drop` body ONCE TOO MANY on every compiled backend -- `mid dR14 v14 dR14 post` against the interpreter's `mid v14 dR14 post`. The two working spellings both route the value through a named binding first (`let bx = ...; return bx`) or omit `return` entirely (the bare tail), so the return-position literal is the whole trigger; a non-container `Drop` field is correct in all three spellings | — |
 | B-2026-08-30-53 | 2026-08-30 | codegen | medium | The SAME `match` arm as B-2026-08-29-58 with the arm NOT TAKEN loses the assigned-into local's OWN initializer `Drop` body on both compiled backends -- `out` still holds the value it was declared with, nobody else owns it, and only the interpreter runs it. The mirror image of -58, which ran one too many on the taken path | — |
 | B-2026-08-30-54 | 2026-08-30 | interp+codegen | medium | The FIELD-target spelling `h.f = r` of B-2026-08-29-58 is wrong on BOTH backends in different directions: the interpreter runs the payload's `Drop` body twice, and codegen disarms the field PERMANENTLY so a later fresh value assigned to `h.f` never runs its body at all. Neither side is an oracle, which is why -58's fix stops at a bare-identifier target | — |
 | B-2026-08-31-3 | 2026-08-31 | interp+codegen | medium | A `match v[i]` ARM THAT MOVES ITS PAYLOAD INTO A BY-VALUE CALL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS AND ONCE IN THE INTERPRETER -- `got 3 dR3 dE dR3` vs `got 3 dE dR3`; the consuming call is the variable, not the index | — |
@@ -167,6 +166,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1970 surfaced
 | B-2026-09-01-46 | 2026-09-01 | codegen | high | `e2e_vec_of_vector_operations_round_trip` PRODUCES NO OUTPUT AT ALL on x86-64 -- the over-aligned `Vec[Vector[T, N]]` program that B-2026-08-31-24 was supposed to fix still dies, deterministically, on every concluded CI run since that fix landed. | — |
 | B-2026-09-01-47 | 2026-09-01 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that a 1 MiB thread stack is not enough, which is why `Codegen E2E (Linux arm64)` has been red on every concluded run while the 8 MiB-stack hosts pass. | — |
 | B-2026-09-01-48 | 2026-09-01 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one returning the CORRECTLY-ROUNDED f32. A test defect, not a backend divergence: all four Kara surfaces agree with each other on macOS. | — |
+| B-2026-09-02-1 | 2026-09-02 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on the default `karac build` and `karac run` -- `a10 b1 done dR93841100766318`, a different garbage id every run, with a valgrind `Invalid read of size 8` whose `free` is the PRECEDING instruction in the same scope-exit drain. `KARAC_AUTO_PAR=0` is correct on both, which is B-2026-08-31-6's localization; this is the broader scope that row recorded as NOT probed, and it comes back as memory unsafety rather than ordering | — |
+| B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 
 ### Relocated (4)
 
@@ -201,9 +202,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1970 surfaced
 
 </details>
 
-### Fixed (1900)
+### Fixed (1901)
 
-<details><summary>1900 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1901 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2010,6 +2011,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1970 surfaced
 | B-2026-08-30-15 | codegen | medium | A FRESH-TEMP STRUCT SCRUTINEE'S OWN `Drop` BODY NEVER RUNS AT ALL ON EITHER COMPILED BACKEND -- `match mkS() { S { r: r } => . | ed13ce30 |
 | B-2026-08-30-16 | codegen | low | A FRESH-TEMP `shared enum` SCRUTINEE'S OWN `Drop` BODY STILL RUNS AT THE ENCLOSING SCOPE'S EXIT -- `match mkSe() { . | 1de3bd88 |
 | B-2026-08-30-17 | interp+codegen | low | AN `if let` MISS DROPS THE SCRUTINEE TEMPORARY *AFTER* THE `else` ARM ON BOTH BACKENDS, WHERE design.md SAYS BEFORE IT -- `els dE` vs the specified `… | f7a9f48e |
+| B-2026-08-30-18 | codegen | medium | A struct literal built DIRECTLY at a `return` site, whose field is a `Vec` of `Drop` elements, runs the element's `Drop` body ONCE TOO MANY on every… | 8b463471 |
 | B-2026-08-30-19 | codegen | high | THE STRUCT-PAYLOAD RESIDUAL OF B-2026-08-08-25: a read-only `match` arm over an `Option[S]` / `Result[S, E]` whose STRUCT payload carries heap still… | 4f02313 |
 | B-2026-08-30-20 | interp+codegen | medium | AN ARGUMENT PRODUCED BY AN ASSOCIATED CALL HAS NO OWNER ON ANY BACKEND -- `s1(H.mkr(1))` where `H.mkr` is an `impl` block's associated fn runs NO `Dr… | f1bb1102 |
 | B-2026-08-30-21 | codegen | medium | AN ASSOCIATED CALL RETURNING AN ALL-SCALAR STRUCT RECORDS NO TYPE FOR ITS RESULT: a field read off it is a HARD `karac build` failure (`cannot resolv… | f1bb1102 |
