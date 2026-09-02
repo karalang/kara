@@ -13596,6 +13596,118 @@ fn main() { t_t(); t_f(); println("end"); }
         assert_eq!(out, "d41\nT42\nd42\nd44\nT43\nd43\nend\n");
     }
 
+    /// B-2026-08-31-39 — DESTRUCTURING a generic enum's bare-`T` payload
+    /// renders it at the INSTANTIATION, for every nameless aggregate shape.
+    ///
+    /// `def3015` closed the whole-`Option` half (`println(f"{x}")`); this is
+    /// the half it left open, and the three surfaces disagreed with the
+    /// interpreter in three different ways:
+    ///
+    /// Measured on a pristine build of the parent commit — EVERY aggregate
+    /// shape without a name-keyed registration was a SILENT miscompile, and
+    /// the whole program segfaulted:
+    ///
+    ///     T                interp              build (pre-fix)
+    ///     Array[i64, 2]    [1, 2]              1                 first element
+    ///     Slice[i64]       [1, 2]              140736451076536   the data POINTER
+    ///     (i64, i64)       (5, 6)              5                 first element
+    ///     Vector[i64, 4]   Vector(1, 2, 3, 4)  94380923771616    a raw word
+    ///     Slice[String]    [ab, cd]            93933049563920    the data POINTER
+    ///     Vec[i64]         [1]                 [1]               control — correct
+    ///     Vec[String]      [ab, cd]            [ab, cd]          control — correct
+    ///
+    /// The two `Vec` controls were already right because a `Vec` has a
+    /// NAME-keyed registration (`register_var_from_type_expr`) the renderer
+    /// consults ahead of the span-keyed tables; the five broken shapes have no
+    /// such twin, which is exactly why they were the ones that broke.
+    ///
+    /// EVERY LINE IS A DISTINCT CHANNEL, not decoration:
+    ///   * `Array[i64, 2]` then `Array[i64, 3]` — two nameless instantiations
+    ///     of ONE body, whose spans COINCIDE. The span-keyed display tables
+    ///     outlive a function compile, so a seed that neither overwrote nor
+    ///     retracted rendered the second at the first's extent (`[7, 8]`).
+    ///   * `Slice[i64]` — the third failure mode, which this row's opening
+    ///     table never recorded.
+    ///   * `Slice[String]` and `Vec[String]` — heap elements through the same
+    ///     path, where the reconstruction has to reach past word 0.
+    ///   * the tuple and the `Vector` — the two shapes this row never named,
+    ///     which misprinted a first element and a raw word respectively.
+    ///   * `i64` and `String` AFTER the aggregates — the STALE-SEED control. A
+    ///     scalar instantiation shares the same body spans and must not
+    ///     inherit the array entry; without the retraction it printed
+    ///     `[7, <garbage>]`.
+    ///   * a generic METHOD and `Result[T, E]` — the two shapes the row listed
+    ///     as NOT MEASURED, in the destructuring form.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_generic_destructured_payload_renders_at_its_instantiation`,
+    /// pinned to the same string.
+    #[test]
+    fn codegen_generic_destructured_payload_renders_at_its_instantiation() {
+        let Some(out) = run_program(
+            r#"fn show[T: Display](x: Option[T]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
+struct H { }
+impl H {
+    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+}
+fn showr[T: Display](x: Result[T, String]) { match x { Ok(t) => { println(f"r:{t}") } Err(e) => { println(e) } } }
+fn main() {
+    let a2: Array[i64, 2] = [1, 2];
+    let a3: Array[i64, 3] = [7, 8, 9];
+    let s2: Slice[i64] = a2[0..2];
+    let mut v: Vec[i64] = Vec.new(); v.push(4); v.push(5);
+    let vs: Vec[String] = ["ab", "cd"];
+    let vs2: Vec[String] = ["ef"];
+    let sv: Slice[String] = vs.as_slice();
+    let t2: (i64, i64) = (5, 6);
+    let v4: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    show(Some(a2));
+    show(Some(a3));
+    show(Some(s2));
+    show(Some(v));
+    show(Some(sv));
+    show(Some(vs2));
+    show(Some(t2));
+    show(Some(v4));
+    show(Some(7));
+    show(Some("hi"));
+    let h = H { };
+    h.m(Some(a3));
+    showr(Ok(a2));
+    let n: Option[i64] = None;
+    show(n);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "[1, 2]\n[7, 8, 9]\n[1, 2]\n[4, 5]\n[ab, cd]\n[ef]\n(5, 6)\nVector(1, 2, 3, 4)\n7\nhi\nm:[7, 8, 9]\nr:[1, 2]\nn\n");
+    }
+
+    /// B-2026-08-31-39 — the SHADOW control for the fixture above.
+    ///
+    /// The concrete payload type is recorded under the binding's NAME, because
+    /// the span-keyed sibling is keyed by the PATTERN and the display tables
+    /// want the span of each interpolation hole. A name-keyed record outlives
+    /// the arm that made it, so a later local of the same name must not render
+    /// at the payload's shape: without the slot-type guard,
+    /// `let t: i64 = 42; println(f"{t}")` after the match printed `[42, 1]`.
+    #[test]
+    fn codegen_generic_destructured_payload_record_does_not_leak_to_a_shadowing_local() {
+        let Some(out) = run_program(
+            r#"fn show[T: Display](x: Option[T]) {
+    match x { Some(t) => { println(f"{t}") } None => { println("n") } }
+    let t: i64 = 42;
+    println(f"{t}")
+}
+fn main() { let a: Array[i64, 2] = [1, 2]; show(Some(a)); show(Some(9)) }
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "[1, 2]\n42\n9\n42\n");
+    }
+
     #[test]
     fn codegen_generic_option_payload_renders_at_its_instantiation() {
         let Some(out) = run_program(

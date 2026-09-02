@@ -8182,6 +8182,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-08-31-39 — the same two shapes reached through the MONOMORPH
+        // channel instead of the typechecker's. Inside `fn show[T](x:
+        // Option[T])` the typechecker records nothing at the binding span, so
+        // the arm above cannot fire; the concrete `Array[i64, 2]` lives in
+        // `mono_payload_binding_type_exprs`. Without this the target lowered to
+        // `[2 x i64]`, which is not a `StructType`, and the `st` fallback below
+        // silently substituted `vec_struct_type()` — so the arm rebuilt the
+        // two inline element words as a `{ptr, len, cap}` String, `inttoptr`'d
+        // element 0 and SEGFAULTED in the renderer's memcpy.
+        if let Some(te) = self.mono_payload_binding_type_expr_for(&key) {
+            let target = self.llvm_type_for_type_expr(&te);
+            if matches!(
+                target,
+                BasicTypeEnum::ArrayType(_) | BasicTypeEnum::VectorType(_)
+            ) {
+                return self.rebuild_value_from_payload_word_slice(target, field_words);
+            }
+        }
         // Multi-word: resolve the binding's surface type to choose the
         // target LLVM aggregate type. A Struct-PATTERN sub-pattern (slice
         // 3t: `Some(Holder { name, id })`) has no `pattern_binding_types`

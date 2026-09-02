@@ -6399,6 +6399,7 @@ impl<'ctx> Codegen<'ctx> {
                 layout_subst: HashMap::new(),
                 mono_handle_param_infos: HashMap::new(),
                 mono_payload_binding_type_exprs: HashMap::new(),
+                mono_payload_binding_display_types: HashMap::new(),
             },
             fn_sig: FnSig {
                 fn_asts: HashMap::new(),

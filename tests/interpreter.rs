@@ -252,6 +252,55 @@ fn main() {
     );
 }
 
+/// B-2026-08-31-39 — the ORACLE for
+/// `codegen_generic_destructured_payload_renders_at_its_instantiation`
+/// (tests/codegen.rs), pinned to the same string.
+///
+/// The interpreter has no monomorphization, so the arm binding is simply the
+/// value that was there and every line was correct throughout — which is what
+/// made this an A/B divergence rather than a shared gap. Pinned here so the
+/// compiled fix cannot later be "restored" by weakening this side to match a
+/// regressed backend.
+#[test]
+fn test_generic_destructured_payload_renders_at_its_instantiation() {
+    assert_eq!(
+        run(r#"fn show[T: Display](x: Option[T]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
+struct H { }
+impl H {
+    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+}
+fn showr[T: Display](x: Result[T, String]) { match x { Ok(t) => { println(f"r:{t}") } Err(e) => { println(e) } } }
+fn main() {
+    let a2: Array[i64, 2] = [1, 2];
+    let a3: Array[i64, 3] = [7, 8, 9];
+    let s2: Slice[i64] = a2[0..2];
+    let mut v: Vec[i64] = Vec.new(); v.push(4); v.push(5);
+    let vs: Vec[String] = ["ab", "cd"];
+    let vs2: Vec[String] = ["ef"];
+    let sv: Slice[String] = vs.as_slice();
+    let t2: (i64, i64) = (5, 6);
+    let v4: Vector[i64, 4] = Vector[i64, 4](1, 2, 3, 4);
+    show(Some(a2));
+    show(Some(a3));
+    show(Some(s2));
+    show(Some(v));
+    show(Some(sv));
+    show(Some(vs2));
+    show(Some(t2));
+    show(Some(v4));
+    show(Some(7));
+    show(Some("hi"));
+    let h = H { };
+    h.m(Some(a3));
+    showr(Ok(a2));
+    let n: Option[i64] = None;
+    show(n);
+}
+"#),
+        "[1, 2]\n[7, 8, 9]\n[1, 2]\n[4, 5]\n[ab, cd]\n[ef]\n(5, 6)\nVector(1, 2, 3, 4)\n7\nhi\nm:[7, 8, 9]\nr:[1, 2]\nn\n"
+    );
+}
+
 /// B-2026-08-31-29 (oracle half) — `let g = ref arr[i]` over an `Array[T, N]`
 /// base reads the element.
 ///

@@ -43,6 +43,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         if self.mono_state.type_subst_names.is_empty()
             && self.mono_state.type_subst_type_exprs.is_empty()
+            && self.mono_state.type_subst_call_te.is_empty()
         {
             return;
         }
@@ -50,11 +51,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some((_, _, field_tys)) = variants.iter().find(|(_, n, _)| n == variant_name) else {
             return;
         };
-        let mut to_record: Vec<((usize, usize), TypeExpr)> = Vec::new();
+        let mut to_record: Vec<((usize, usize), String, TypeExpr)> = Vec::new();
         for (i, sub_pat) in patterns.iter().enumerate() {
-            if !matches!(sub_pat.kind, PatternKind::Binding(_)) {
+            let PatternKind::Binding(bind_name) = &sub_pat.kind else {
                 continue;
-            }
+            };
             let Some(decl_te) = field_tys.get(i) else {
                 continue;
             };
@@ -68,14 +69,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             if !(self.mono_state.type_subst_names.contains_key(seg)
-                || self.mono_state.type_subst_type_exprs.contains_key(seg))
+                || self.mono_state.type_subst_type_exprs.contains_key(seg)
+                || self.mono_state.type_subst_call_te.contains_key(seg))
             {
                 continue;
             }
             let concrete = self.subst_monomorph_type_params(decl_te);
-            to_record.push(((sub_pat.span.offset, sub_pat.span.length), concrete));
+            to_record.push((
+                (sub_pat.span.offset, sub_pat.span.length),
+                bind_name.clone(),
+                concrete,
+            ));
         }
-        for (k, te) in to_record {
+        for (k, name, te) in to_record {
+            // B-2026-08-31-39: the name-keyed DISPLAY twin. See the field's doc
+            // in `mono_state.rs` for why the span-keyed map cannot serve the
+            // renderer.
+            self.mono_state
+                .mono_payload_binding_display_types
+                .insert(name, te.clone());
             self.mono_state
                 .mono_payload_binding_type_exprs
                 .insert(k, te);

@@ -143,4 +143,25 @@ pub(crate) struct MonoState<'ctx> {
     /// `(span.offset, span.length)`; refreshed on every monomorph's body compile
     /// and cleared per function.
     pub(crate) mono_payload_binding_type_exprs: HashMap<(usize, usize), TypeExpr>,
+
+    /// B-2026-08-31-39 — the DISPLAY twin of `mono_payload_binding_type_exprs`,
+    /// keyed by BINDING NAME rather than span.
+    ///
+    /// The renderer answers "what shape is this operand?" from span-keyed
+    /// tables (`display_array_types` / `display_slice_types` / …) that
+    /// `lowering.rs` fills off the typechecker's `expr_types`. Inside a generic
+    /// fn the typechecker sees `t: T`, so every USE of a bare-`T` payload
+    /// binding misses those tables and falls to the value-kind arms — which
+    /// printed an `Array`'s first element and a `Slice`'s data pointer, and
+    /// refused a slice outright at depth 0. The span-keyed sibling cannot help:
+    /// it is keyed by the PATTERN's span, and the tables want the span of each
+    /// interpolation hole, which the bind site never sees.
+    ///
+    /// So the concrete payload type is recorded under the binding's NAME here
+    /// and the display entry points seed the span-keyed tables lazily, at the
+    /// first use they cannot otherwise resolve. Retracted on any
+    /// re-registration of the name (`register_var_from_type_expr`), the same
+    /// shadow rule `slice_alias_md` documents — a shadowing local must not
+    /// inherit the payload binding's shape.
+    pub(crate) mono_payload_binding_display_types: HashMap<String, TypeExpr>,
 }

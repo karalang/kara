@@ -2235,6 +2235,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // isn't a scoped slice param); harmless during param setup (the map is
         // still empty, as `build_slice_alias_scopes` runs after registration).
         self.slice_alias_md.remove(var_name);
+        // B-2026-08-31-39 — the same shadow rule for the mono payload
+        // binding's display shape: any (re-)binding of this name means the
+        // generic payload binding it was recorded for is out of scope, so a
+        // later `f"{name}"` must not render the new binding at the old
+        // payload's type.
+        self.mono_state
+            .mono_payload_binding_display_types
+            .remove(var_name);
         // Type alias (refinement or plain): register against the instantiated
         // base type so the binding dispatches as its real `Vec`/`String`/struct
         // everywhere. The recursion peels nested aliases (`type A = B`,

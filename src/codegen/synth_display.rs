@@ -4276,6 +4276,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        self.seed_mono_payload_binding_display(e);
         let key = (e.span.offset, e.span.length);
         let Some(tuple_te) = self.display.display_tuple_types.get(&key).cloned() else {
             return Ok(None);
@@ -4350,6 +4351,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        self.seed_mono_payload_binding_display(e);
         let key = (e.span.offset, e.span.length);
         let Some(arr_te) = self.display.display_array_types.get(&key).cloned() else {
             return Ok(None);
@@ -4402,6 +4404,118 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(rendered))
     }
 
+    /// B-2026-08-31-39 — seed the span-keyed display tables for a USE of a
+    /// generic enum's bare-`T` payload binding.
+    ///
+    /// `lowering.rs` fills `display_array_types` / `display_slice_types` off
+    /// the typechecker's `expr_types`, and inside `fn show[T](x: Option[T])`
+    /// the typechecker's answer for `t` is the bare parameter `T` — so every
+    /// interpolation hole reading the binding missed both tables. The
+    /// value-kind fallbacks then printed an `Array`'s first element and a
+    /// `Slice`'s data pointer, and a depth-0 slice refused the build outright,
+    /// where the interpreter renders `[1, 2]`.
+    ///
+    /// The monomorph knows the concrete type; `mono_payload_binding_display_types`
+    /// carries it name-keyed (the span-keyed sibling is keyed by the PATTERN,
+    /// which is not the span the tables want). Seeding OVERWRITES, and
+    /// must: two monomorphs of one generic fn compile the same body SPANS, so
+    /// an `entry().or_insert()` would render `show(Some(a3))` at the
+    /// `Array[i64, 2]` the previous instantiation seeded -- the same
+    /// nameless-instantiation collision B-2026-08-31-48 fixed on the mangle
+    /// axis. Any entry a span inside such a body already carries is the
+    /// UNINSTANTIATED `T`, which is what is being corrected, and the guard
+    /// above fires only for a name the ACTIVE monomorph bound as a bare-`T`
+    /// payload -- so nothing outside a monomorph body is touched.
+    ///
+    /// FOUR shapes are seeded, and every one of them MISPRINTED rather than
+    /// refusing: `Array` its first element, `Slice` and `Vector` a raw word,
+    /// a TUPLE its first element. `Vec` / `Map` / `Set` / `Option` payload
+    /// bindings already rendered, because those have a
+    /// name-keyed registration of their own (`register_var_from_type_expr`) that
+    /// the renderer consults ahead of the span tables — which is exactly why
+    /// `T = Vec[i64]` was correct in the destructuring form while `Array` and
+    /// `Slice`, which have no name-keyed twin, were not.
+    fn seed_mono_payload_binding_display(&mut self, e: &Expr) {
+        let ExprKind::Identifier(name) = &e.kind else {
+            return;
+        };
+        let Some(te) = self
+            .mono_state
+            .mono_payload_binding_display_types
+            .get(name.as_str())
+            .cloned()
+        else {
+            return;
+        };
+        // The record is keyed by NAME and outlives the arm that made it, so
+        // confirm the name still denotes THAT binding before trusting it. The
+        // slot's LLVM type is the check: `Some(t) => …` followed by `let t:
+        // i64 = 42` in the same body rendered the i64 as `[42, 1]` without it,
+        // and a SCALAR instantiation of the same generic fn inherited the
+        // previous instantiation's array entry the same way.
+        let want = self.llvm_type_for_type_expr(&te);
+        if self.variables.get(name.as_str()).map(|v| v.ty) != Some(want) {
+            return;
+        }
+        let key = (e.span.offset, e.span.length);
+        // Retract first, unconditionally: the tables persist across function
+        // compiles while this record does not, so a monomorph whose `T` is a
+        // scalar must not inherit the array entry an earlier monomorph seeded
+        // at the SAME span.
+        self.display.display_array_types.remove(&key);
+        self.display.display_slice_types.remove(&key);
+        self.display.display_tuple_types.remove(&key);
+        self.span_tables.vector_typed_exprs.remove(&key);
+        match &te.kind {
+            // `type_to_type_expr` builds the array node; a source-written
+            // annotation parses as `Path("Array", [T, N])` and is normalised to
+            // the same node here so `try_compile_array_display` (which reads
+            // `TypeKind::Array`) sees one shape.
+            TypeKind::Array { .. } => {
+                self.display.display_array_types.insert(key, te);
+            }
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Slice") => {
+                if let Some(GenericArg::Type(elem)) =
+                    p.generic_args.as_ref().and_then(|a| a.first())
+                {
+                    self.display.display_slice_types.insert(key, elem.clone());
+                }
+            }
+            // The other two NAMELESS shapes, which this row never named and
+            // which misprinted the same way: a tuple printed its first element,
+            // a `Vector` a raw word. A tuple keys off its whole `TypeExpr`; a
+            // `Vector` off two span SETS, the second of which decides lane
+            // signedness — a lane above `i64::MAX` renders negative without it
+            // (B-2026-08-30-9).
+            TypeKind::Tuple(elems) if !elems.is_empty() => {
+                self.display.display_tuple_types.insert(key, te);
+            }
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vector") => {
+                let lane = p
+                    .generic_args
+                    .as_ref()
+                    .and_then(|a| a.first())
+                    .and_then(|g| match g {
+                        GenericArg::Type(t) => match &t.kind {
+                            TypeKind::Path(lp) => lp.segments.last().cloned(),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                self.span_tables.vector_typed_exprs.insert(key);
+                if matches!(
+                    lane.as_deref(),
+                    Some("u8" | "u16" | "u32" | "u64" | "u128" | "usize")
+                ) {
+                    self.span_tables.unsigned_vector_exprs.insert(key);
+                } else {
+                    self.span_tables.unsigned_vector_exprs.remove(&key);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// B-2026-08-31-25 — the DEPTH-0 slice renderer, sibling of
     /// [`Self::try_compile_vec_display`] and `try_compile_array_display`.
     ///
@@ -4423,6 +4537,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        self.seed_mono_payload_binding_display(e);
         let key = (e.span.offset, e.span.length);
         let Some(elem_te) = self.display.display_slice_types.get(&key).cloned() else {
             return Ok(None);
@@ -4740,6 +4855,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         e: &Expr,
     ) -> Result<Option<(PointerValue<'ctx>, BasicValueEnum<'ctx>)>, String> {
+        self.seed_mono_payload_binding_display(e);
         let key = (e.span.offset, e.span.length);
         if !self.span_tables.vector_typed_exprs.contains(&key) {
             return Ok(None);
