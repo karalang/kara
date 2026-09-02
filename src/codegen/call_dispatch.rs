@@ -10512,6 +10512,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             BasicValueEnum::ArrayValue(av) => {
+                // B-2026-09-02-37 — an element spans its OWN word count, exactly
+                // as a struct FIELD does in the arm above. This pushed one word
+                // per element unconditionally, which is right only for a scalar
+                // element: an `Array[String, N]`'s elements are `{ptr, len, cap}`
+                // triples, so `coerce_to_i64` collapsed each to a single word and
+                // the two other strings were ERASED.
+                //
+                // The damage is not the truncation, it is that `out.len()` then
+                // DISAGREES with `llvm_type_word_count`, which every unpack and
+                // drop site recomputes — and the boxing decision below is
+                // `out.len() > num_words`. `Array[String, 1]` produced 1 word
+                // against an area of 3: no boxing, zero-padded, and the unpack
+                // rebuilt an empty String (`Some([])` for `Some([ab])`).
+                // `Array[String, 2]` produced 2 words against the same area: still
+                // no boxing, but the unpack's `want (6) > field_words (3)` DID
+                // fire, so it `inttoptr`'d a word that is not a box pointer —
+                // `[, ]` across a call and a SEGFAULT in `main`. Recursing per
+                // element restores `out.len() == llvm_type_word_count`, so the
+                // pack and unpack sides agree again by construction.
+                let elem_words =
+                    Self::llvm_type_word_count(av.get_type().get_element_type()).max(1);
                 let len = av.get_type().len();
                 for i in 0..len {
                     let f = self
@@ -10523,7 +10544,11 @@ impl<'ctx> super::Codegen<'ctx> {
                                 i, e
                             )
                         })?;
-                    out.push(self.coerce_to_i64(f)?);
+                    if elem_words <= 1 {
+                        out.push(self.coerce_to_i64(f)?);
+                    } else {
+                        out.extend(self.coerce_to_payload_words(f, elem_words)?);
+                    }
                 }
             }
             // `Vector[T, N]` — one word per LANE, the array arm's convention

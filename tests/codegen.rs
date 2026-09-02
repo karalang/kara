@@ -13981,6 +13981,115 @@ fn main() { t_t(); t_f(); println("end"); }
     /// Twin of `tests/interpreter.rs`'s
     /// `test_generic_destructured_payload_renders_at_its_instantiation`,
     /// pinned to the same string.
+    /// B-2026-09-02-37 — an enum payload whose ARRAY elements are themselves
+    /// multi-word packs at its true width.
+    ///
+    /// `coerce_to_payload_words`' `ArrayValue` arm pushed exactly ONE word per
+    /// element, which is right only for a scalar element. An
+    /// `Array[String, N]`'s elements are `{ptr, len, cap}` triples, so
+    /// `coerce_to_i64` collapsed each to a single word and the rest of every
+    /// string was ERASED.
+    ///
+    /// The truncation is not the damage. `out.len()` then DISAGREED with
+    /// `llvm_type_word_count`, which every unpack and drop site recomputes, and
+    /// the boxing decision is `out.len() > num_words` — so the two ends of the
+    /// same payload made OPPOSITE decisions about whether a box exists. That
+    /// split the failure in two, measured on a pristine parent build:
+    ///
+    ///     Array[String, 1]   3 words vs an area of 3 — packed 1, no boxing,
+    ///                        zero-padded: `Some([])` for `Some([one])`
+    ///     Array[String, 2]   6 words vs 3 — packed 2, still no boxing, but the
+    ///                        unpack's `want (6) > field_words (3)` DID fire, so
+    ///                        it `inttoptr`'d a word that is not a box pointer:
+    ///                        `[, ]` across a call, SEGFAULT in `main`
+    ///
+    /// EVERY LINE IS A DISTINCT CHANNEL. Pristine results in parentheses:
+    ///   * a directly-printed `Array[String, 2]` (correct) and an
+    ///     `Option[Array[i64, 2]]` (correct) — the two CONTROLS, so a
+    ///     regression that breaks arrays generally fails here first.
+    ///   * `Array[String, 1]` (`Some([])`) — the under-count leg, which fits
+    ///     the area and therefore never reaches the box at all.
+    ///   * `Array[String, 2]` in `main` (SEGFAULT) and through a CALL (`[, ]`)
+    ///     — the same payload, two positions, two symptoms.
+    ///   * indexing the bound payload, `t[0]` / `t[1]` (two empty strings) —
+    ///     proof the binding really holds erased values, not just a bad render.
+    ///   * `Result[…]` (SEGFAULT) and a user enum (`[, ]`) — the area is not
+    ///     `Option`-specific.
+    ///   * `Array[Vec[i64], 2]` (`[]` `[]`) — a multi-word element that is not
+    ///     a String.
+    ///   * `Array[Array[i64, 2], 2]` (`[0, 0] [0, 0]`) — a nested ARRAY
+    ///     element, where the recursion has to fire twice.
+    ///   * `Array[P, 2]` with a `String` field (` 0` / ` 0`) — eight words, and
+    ///     the only leg whose ints were lost too.
+    ///   * the generic `show[T]` (`[, ]`) — the one leg B-2026-08-31-39's fix
+    ///     left wrong, and the reason this row was filed from it.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_array_of_heap_elements_as_an_enum_payload`, pinned to the same
+    /// string.
+    #[test]
+    fn codegen_array_of_heap_elements_as_an_enum_payload() {
+        let Some(out) = run_program(
+            r#"struct P { s: String, n: i64 }
+enum W { A(Array[String, 2]), B }
+fn takeP(p: ref P) -> i64 { println(f"{p.s} {p.n}"); return p.n }
+fn viaCall(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
+fn generic[T: Display](x: Option[T]) { match x { Some(t) => { println(f"g:{t}") } None => { println("n") } } }
+fn main() {
+    let ctl: Array[String, 2] = ["ab", "cd"];
+    println(f"{ctl}");
+
+    let ai: Array[i64, 2] = [1, 2];
+    let oi: Option[Array[i64, 2]] = Some(ai);
+    match oi { Some(t) => { println(f"{t}") } None => { println("n") } }
+
+    let a1: Array[String, 1] = ["one"];
+    let o1: Option[Array[String, 1]] = Some(a1);
+    println(f"{o1}");
+    match o1 { Some(t) => { println(f"{t}") } None => { println("n") } }
+
+    let a2: Array[String, 2] = ["ab", "cd"];
+    let o2: Option[Array[String, 2]] = Some(a2);
+    println(f"{o2}");
+    match o2 { Some(t) => { println(f"{t}"); println(t[0]); println(t[1]) } None => { println("n") } }
+
+    let a3: Array[String, 2] = ["ef", "gh"];
+    viaCall(Some(a3));
+
+    let a4: Array[String, 2] = ["ij", "kl"];
+    let r: Result[Array[String, 2], String] = Ok(a4);
+    match r { Ok(t) => { println(f"{t}") } Err(e) => { println(e) } }
+
+    let a5: Array[String, 2] = ["mn", "op"];
+    let w = W.A(a5);
+    match w { W.A(t) => { println(f"{t}") } W.B => { println("b") } }
+
+    let v1: Vec[i64] = [1, 2];
+    let v2: Vec[i64] = [3];
+    let av: Array[Vec[i64], 2] = [v1, v2];
+    let ov: Option[Array[Vec[i64], 2]] = Some(av);
+    match ov { Some(t) => { println(f"{t[0]}"); println(f"{t[1]}") } None => { println("n") } }
+
+    let n1: Array[i64, 2] = [5, 6];
+    let n2: Array[i64, 2] = [7, 8];
+    let m: Array[Array[i64, 2], 2] = [n1, n2];
+    let om: Option[Array[Array[i64, 2], 2]] = Some(m);
+    match om { Some(t) => { let r0: Array[i64, 2] = t[0]; let r1: Array[i64, 2] = t[1]; println(f"{r0} {r1}") } None => { println("n") } }
+
+    let ap: Array[P, 2] = [P { s: "qr", n: 1 }, P { s: "st", n: 2 }];
+    let op: Option[Array[P, 2]] = Some(ap);
+    match op { Some(t) => { let x = takeP(t[0]); let y = takeP(t[1]); println(f"{x}{y}") } None => { println("n") } }
+
+    let a6: Array[String, 2] = ["uv", "wx"];
+    generic(Some(a6));
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "[ab, cd]\n[1, 2]\nSome([one])\n[one]\nSome([ab, cd])\n[ab, cd]\nab\ncd\n[ef, gh]\n[ij, kl]\n[mn, op]\n[1, 2]\n[3]\n[5, 6] [7, 8]\nqr 1\nst 2\n12\ng:[uv, wx]\n");
+    }
+
     /// B-2026-09-02-43 — a function parameter's `Option`/`Result` PAYLOAD type
     /// does not outlive the function that declared it.
     ///

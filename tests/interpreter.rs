@@ -252,6 +252,75 @@ fn main() {
     );
 }
 
+/// B-2026-09-02-37 — the ORACLE for
+/// `codegen_array_of_heap_elements_as_an_enum_payload` (tests/codegen.rs),
+/// pinned to the same string.
+///
+/// The interpreter carries values rather than packing them into i64 payload
+/// words, so it has no pack/unpack pair to disagree with itself and was correct
+/// on every line — which is what made this an A/B divergence. Pinned here so
+/// the compiled fix cannot later be "restored" by weakening this side.
+#[test]
+fn test_array_of_heap_elements_as_an_enum_payload() {
+    assert_eq!(
+        run(r#"struct P { s: String, n: i64 }
+enum W { A(Array[String, 2]), B }
+fn takeP(p: ref P) -> i64 { println(f"{p.s} {p.n}"); return p.n }
+fn viaCall(x: Option[Array[String, 2]]) { match x { Some(t) => { println(f"{t}") } None => { println("n") } } }
+fn generic[T: Display](x: Option[T]) { match x { Some(t) => { println(f"g:{t}") } None => { println("n") } } }
+fn main() {
+    let ctl: Array[String, 2] = ["ab", "cd"];
+    println(f"{ctl}");
+
+    let ai: Array[i64, 2] = [1, 2];
+    let oi: Option[Array[i64, 2]] = Some(ai);
+    match oi { Some(t) => { println(f"{t}") } None => { println("n") } }
+
+    let a1: Array[String, 1] = ["one"];
+    let o1: Option[Array[String, 1]] = Some(a1);
+    println(f"{o1}");
+    match o1 { Some(t) => { println(f"{t}") } None => { println("n") } }
+
+    let a2: Array[String, 2] = ["ab", "cd"];
+    let o2: Option[Array[String, 2]] = Some(a2);
+    println(f"{o2}");
+    match o2 { Some(t) => { println(f"{t}"); println(t[0]); println(t[1]) } None => { println("n") } }
+
+    let a3: Array[String, 2] = ["ef", "gh"];
+    viaCall(Some(a3));
+
+    let a4: Array[String, 2] = ["ij", "kl"];
+    let r: Result[Array[String, 2], String] = Ok(a4);
+    match r { Ok(t) => { println(f"{t}") } Err(e) => { println(e) } }
+
+    let a5: Array[String, 2] = ["mn", "op"];
+    let w = W.A(a5);
+    match w { W.A(t) => { println(f"{t}") } W.B => { println("b") } }
+
+    let v1: Vec[i64] = [1, 2];
+    let v2: Vec[i64] = [3];
+    let av: Array[Vec[i64], 2] = [v1, v2];
+    let ov: Option[Array[Vec[i64], 2]] = Some(av);
+    match ov { Some(t) => { println(f"{t[0]}"); println(f"{t[1]}") } None => { println("n") } }
+
+    let n1: Array[i64, 2] = [5, 6];
+    let n2: Array[i64, 2] = [7, 8];
+    let m: Array[Array[i64, 2], 2] = [n1, n2];
+    let om: Option[Array[Array[i64, 2], 2]] = Some(m);
+    match om { Some(t) => { let r0: Array[i64, 2] = t[0]; let r1: Array[i64, 2] = t[1]; println(f"{r0} {r1}") } None => { println("n") } }
+
+    let ap: Array[P, 2] = [P { s: "qr", n: 1 }, P { s: "st", n: 2 }];
+    let op: Option[Array[P, 2]] = Some(ap);
+    match op { Some(t) => { let x = takeP(t[0]); let y = takeP(t[1]); println(f"{x}{y}") } None => { println("n") } }
+
+    let a6: Array[String, 2] = ["uv", "wx"];
+    generic(Some(a6));
+}
+"#),
+        "[ab, cd]\n[1, 2]\nSome([one])\n[one]\nSome([ab, cd])\n[ab, cd]\nab\ncd\n[ef, gh]\n[ij, kl]\n[mn, op]\n[1, 2]\n[3]\n[5, 6] [7, 8]\nqr 1\nst 2\n12\ng:[uv, wx]\n"
+    );
+}
+
 /// B-2026-08-31-39 — the ORACLE for
 /// `codegen_generic_destructured_payload_renders_at_its_instantiation`
 /// (tests/codegen.rs), pinned to the same string.
