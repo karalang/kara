@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 346 |
+| miscompile | 349 |
 | run-vs-build | 308 |
 | leak | 253 |
 | missing-feature | 193 |
-| double-free | 164 |
+| double-free | 165 |
 | codegen-gap | 159 |
 | diagnostics | 116 |
 | false-positive | 104 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1369 |
-| interp | 325 |
+| codegen | 1373 |
+| interp | 328 |
 | typecheck | 287 |
 | ownership | 73 |
 | other | 70 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
@@ -160,6 +159,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-20 | 2026-09-02 | codegen | high | A LOOP-DECLARED LOCAL WHOSE `Drop`-BEARING STRUCT OWNS TWO HEAP FIELDS SEGFAULTS THE JIT WHEN A CONDITIONAL PARAM-VIEW ASSIGNMENT TARGETS IT -- `karac run` exits 139 having printed NOTHING, while `--interp` and both `karac build` legs are correct. Bisected to three necessary ingredients: two heap-owning fields, the `let` inside the loop, and the conditional assignment; removing any one runs correctly. Pre-dates B-2026-09-02-6's fix (a build of the parent commit crashes identically) | — |
 | B-2026-09-02-21 | 2026-09-02 | codegen | high | THE `for`-RANGE SPELLING OF THE SAME SHAPE NEVER TERMINATES ON THE JIT: the induction variable stops advancing at the iteration that performs the conditional param-view assignment and that iteration repeats forever, while `--interp` and both `karac build` legs are correct. The `while` spelling of the identical program is fine on all four surfaces, and so is a NESTED `for`, so it is not every range loop. Pre-dates B-2026-09-02-6's fix (a build of the parent commit hangs identically) | — |
 | B-2026-09-02-22 | 2026-09-02 | codegen | low | A DOUBLY-NESTED `Option[Option[String]]` ARGUMENT LEAKS ITS INNER PAYLOAD -- 45 B in 3 blocks over a three-iteration loop, unmoved by all THREE of B-2026-09-01-29's fixes. The payload is 3 words, so `Option[Option[String]]` exceeds the 3-word boxing limit `optres_param_entry_copied_te` gates on: the param is never ADMITTED to the by-value copy convention, so neither the callee's entry copy nor any caller-side ownership predicate applies and no frame is ever offered the temp | — |
+| B-2026-09-02-23 | 2026-09-02 | codegen | high | A TUPLE PARAM WHOSE ELEMENT STRUCT OWNS BOTH A `Vec` AND A `String` DOUBLE-FREES ON BOTH COMPILED BACKENDS WHEN A `match` ARM READS BOTH HEAP FIELDS OFF THE ELEMENT BINDING -- `free(): double free detected in tcache 2`, exit 134, on a program with NO `impl Drop` anywhere. `--interp` is correct. The bare-param spelling of the identical read is clean, and so are TWO `String`s or TWO `Vec`s: the trigger is the tuple PATTERN plus a MIXED heap-kind pair plus the arm reading both | — |
+| B-2026-09-02-24 | 2026-09-02 | interp+codegen | medium | A MATCH ARM THAT HANDS ITS ELEMENT/PAYLOAD OUT OF THE FUNCTION RUNS THE `Drop` BODY TWICE ON ALL FOUR SURFACES -- `dR4 got4 dR4` where one is due. The scrutinee's walk still fires at the callee's scope exit on a value the arm already gave away. The ENUM spelling is wrong identically, so this is about the ESCAPE, not about tuples; an arm that moves into a BY-VALUE CALLEE is correct everywhere | — |
+| B-2026-09-02-25 | 2026-09-02 | interp+codegen | medium | THE `let (r, k) = t` SPELLING OF B-2026-08-31-7 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b5 dR5 dR5` where one is due, while the `match` spelling of the identical signature is now correct. A spelling gap in that row's rule, NOT folded in because the two halves live in different machinery and landing only the easy one would trade an agreed answer for a divergence | — |
+| B-2026-09-02-26 | 2026-09-02 | interp+codegen | medium | A LOCAL TUPLE SCRUTINEE'S ELEMENT REBIND STILL DOUBLES THE `Drop` BODY on all four surfaces -- `b6 dR6 dR6` where one is due, while the owned-PARAM spelling is now correct and the LOCAL ENUM spelling always was. Needs the OPPOSITE repair from B-2026-08-31-7's: caller-retains does not apply to a local, so the tuple's element walk must be RETRACTED rather than the rebind suppressed | — |
 
 ### Relocated
 
@@ -2048,6 +2051,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
 | B-2026-08-31-5 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding… | 9eeb04a2 |
 | B-2026-08-31-6 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert b… | aa21ffb4 |
+| B-2026-08-31-7 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1… | fe8612ec |
 | B-2026-08-31-8 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfac… | 95fbe26 |
 | B-2026-08-31-9 | codegen | medium | A STRUCT FIELD OF `Vector[T, N]` TYPE HAS NO DERIVED-Display ARM UNDER `karac build`, AND THE REFUSAL DUMPS A RUST `{:?}` OF THE FIELD'S TypeExpr --… | 86c9957 |
 | B-2026-08-31-10 | codegen | medium | AN `Option` WHOSE PAYLOAD LOWERS TO A MULTI-WORD STRUCT CANNOT BE INTERPOLATED IN AN F-STRING UNDER `karac build`, AND THE ERROR MISDESCRIBES ITS OWN… | da529e8 |
