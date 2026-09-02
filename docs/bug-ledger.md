@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 345 |
-| run-vs-build | 302 |
+| run-vs-build | 303 |
 | leak | 252 |
 | missing-feature | 193 |
 | double-free | 162 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1360 |
+| codegen | 1361 |
 | interp | 320 |
 | typecheck | 286 |
 | ownership | 72 |
@@ -130,7 +130,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-31-3 | 2026-08-31 | interp+codegen | medium | A `match v[i]` ARM THAT MOVES ITS PAYLOAD INTO A BY-VALUE CALL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS AND ONCE IN THE INTERPRETER -- `got 3 dR3 dE dR3` vs `got 3 dE dR3`; the consuming call is the variable, not the index | — |
 | B-2026-08-31-4 | 2026-08-31 | interp+codegen | medium | A LOCAL WHOSE LAST USE IS A `ref` ARGUMENT TO A CALLEE RETURNING A HEAP VALUE IS DROPPED AT SCOPE EXIT INSTEAD OF ITS LIVE-RANGE END ON BOTH COMPILED BACKENDS, AGAINST design.md line 866 -- `str end dE` vs interp `dE str end`; an `i64` return is clean | — |
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
@@ -163,6 +162,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-8 | 2026-09-02 | interp+codegen | medium | AN `Option`-ENVELOPED STRUCT PATTERN THAT BINDS ONLY THE NON-`Drop` FIELD LOSES THE PAYLOAD'S `Drop` BODY IN THE INTERPRETER on both the `if let` and `match` spellings -- and the `let ... else` spelling of the same pattern loses it on ALL FOUR SURFACES, which is agreed-and-wrong rather than a divergence; the same pattern WITHOUT the `Option` envelope, and the same envelope binding NOTHING, are correct everywhere | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 | B-2026-09-02-10 | 2026-09-02 | codegen | medium | B-2026-08-01-19's OVER-SUPPRESSION TRADE IS NOW A VISIBLE DIVERGENCE: a param view assigned into ONE field silences EVERY Drop-bearing field's body on the base, on all three compiled surfaces, while the interpreter is per-field since B-2026-08-30-54 -- a sibling that was never moved, never viewed and is read on the line before loses its body (`dR30 s dE dR8 v39` against `--interp`'s `dR30 s dR31 dE dR8 v39`). The flag is keyed by BINDING and the reason is per FIELD; only a struct with two or more Drop-bearing fields can show it | — |
+| B-2026-09-02-11 | 2026-09-02 | codegen | medium | A READ-ONLY `match v[i]` ARM STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON ALL THREE COMPILED SURFACES -- `index got 4 dR3 dE dR3` against `--interp`'s `index got 4 dE dR3`. The arm consumes nothing, so B-2026-08-31-3's rule accepts it; the extra body is the DEFENSIVE COPY's payload, one level in from the enum wrapper B-2026-08-29-37 already withheld on the same clone. Valgrind-clean, so bodies-only | — |
 
 ### Relocated
 
@@ -2046,6 +2046,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-30-55 | interp | medium | A METHOD frame does not participate in the owned-ENUM-param ownership protocol: a fresh-temp enum argument runs ZERO `Drop` bodies on the interpreter… | 3a09311 |
 | B-2026-08-30-56 | codegen | high | BOTH COMPILED BACKENDS BITCAST AN INTEGER INTO AN `Option` / `Result` PAYLOAD AND AN ENUM STRUCT-VARIANT FLOAT FIELD, so `let o: Option[f64] = Some(m… | b9500f80 |
 | B-2026-08-31-1 | interp+codegen | medium | A MATCH ARM THAT MOVES AN OWNED STRUCT PARAM'S ENUM PAYLOAD INTO A FRESH LOCAL RUNS THE PAYLOAD'S `Drop` BODY TWICE UNDER `--interp` AND ONCE ON BOTH… | e59a31b |
+| B-2026-08-31-3 | interp+codegen | medium | A `match v[i]` ARM THAT MOVES ITS PAYLOAD INTO A BY-VALUE CALL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS AND ONCE IN THE INTERPRE… | d1394db7 |
 | B-2026-08-30-57 | codegen | medium | CODEGEN MISHANDLES A SHADOWED BINDING'S `Drop` BODY in two shapes -- a BLOCK-LOCAL shadowed binding (`one({ let t = mk(90); let t = mk(91); t })`) lo… | dd229de4 |
 | B-2026-08-31-5 | codegen | medium | REGRESSION from 07dc9e76 -- a NEVER-READ shadowed binding's `Drop` body moves to FUNCTION EXIT on the compiled backends when any later `Vec` binding… | 9eeb04a2 |
 | B-2026-08-31-8 | interp | medium | A STRUCT-VARIANT PATTERN OVER AN OWNED ENUM PARAM LOSES BOTH `Drop` BODIES UNDER `--interp` -- `b3` against `b3 dSv dR3` on all three compiled surfac… | 95fbe26 |
