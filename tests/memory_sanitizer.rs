@@ -66852,6 +66852,59 @@ fn main() {
         );
     }
 
+    /// B-2026-09-02-12 — the memory half of the declined-temporary fix.
+    ///
+    /// The defect was bodies-only (`valgrind --leak-check=full` at
+    /// `KARAC_OPT_LEVEL=0` showed the declined `Result`'s `String` buffer
+    /// freed, `definitely lost: 0`, with the same profile as the correct
+    /// `match` spelling), so the fix ADDS a body over storage the existing
+    /// drop still frees — which is exactly the shape that becomes a
+    /// use-after-free or a double free if the two get out of order.
+    ///
+    /// Both hazards are live here and both are gated. The bodies READ
+    /// `self.s.len()` through the payload's heap buffer, so a body emitted
+    /// AFTER the drop that frees it reads poisoned memory; and the miss-edge
+    /// call spills the value into its own slot (an all-scalar `Result`
+    /// materializes nowhere on these paths, so there is no slot to be handed),
+    /// so a walker that freed rather than merely read would double-free the
+    /// caller's copy. Measured clean: 32 allocs / 32 frees, 0 errors.
+    ///
+    /// The loop reallocates on every pass, so a stale pointer lands on reused
+    /// memory rather than on quiet garbage.
+    #[test]
+    fn asan_declined_optres_temporary_body_reads_live_memory() {
+        assert_clean_asan_run(
+            r#"
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+struct W { s: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.s.len()}"); } }
+fn mkerr() -> Result[W, W] { return Err(W { s: pad(7) }); }
+fn viaelse() -> i64 {
+    let Ok(w) = mkerr() else { return 0 };
+    return w.s.len();
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        if let Ok(w) = mkerr() { println(f"a{w.s.len()}"); }
+        println(f"e{viaelse()}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dW47", "dW47", "e0", "dW47", "dW47", "e0", "dW47", "dW47", "e0", "done",
+            ],
+            "b0902-12-declined-optres-body-live",
+        );
+    }
+
     #[test]
     fn asan_field_param_view_sibling_bodies_free_exactly_once() {
         // B-2026-09-02-10 — the heap half of the per-FIELD param-view fix.

@@ -13769,6 +13769,74 @@ impl<'ctx> super::Codegen<'ctx> {
     /// its deep clone in the HEADER, so the final non-matching evaluation's
     /// copy is an owned temp this drop must free even though the scrutinee
     /// EXPR is a place (the fresh-temp gate would wrongly bail).
+    /// The concrete `Option[..]` / `Result[.., ..]` TypeExpr the type-checker
+    /// recorded for `e`, if any — B-2026-09-02-12's bridge from a scrutinee
+    /// expression to the payload type its envelope erases.
+    ///
+    /// The same map `track_discarded_optres_payload_bodies` reads for the
+    /// discard spelling, keyed the same way, so a declined match and a bare
+    /// discard of the identical call resolve to the identical payload walker.
+    pub(super) fn optres_inst_type_expr(&self, e: &Expr) -> Option<crate::ast::TypeExpr> {
+        self.type_decls
+            .enum_inst_type_exprs
+            .get(&(e.span.offset, e.span.length))
+            .cloned()
+    }
+
+    /// B-2026-09-02-12 — run the PAYLOAD BODIES of a fresh-temp
+    /// `Option`/`Result` scrutinee that the pattern declined, given the slot it
+    /// was materialized into.
+    ///
+    /// The bodies-only sibling of
+    /// [`Self::drop_freshtemp_enum_scrutinee_on_miss`], for the two legs whose
+    /// MEMORY half is already handled elsewhere (`if let`'s
+    /// `emit_taken_scrutinee_drop` at the top of the else arm, and
+    /// `let ... else`'s at the top of the else block). Calling the full helper
+    /// there would emit a second drop switch over the same slot; calling
+    /// nothing left the body unrun, which is the defect.
+    ///
+    /// MISS EDGE ONLY. On the hit edge the arm's binding owns the payload and
+    /// runs the body itself, so this must not be emitted there.
+    ///
+    /// Ordered BEFORE the memory drop at both call sites, the B-2026-08-01-2
+    /// rule: a body that reads a heap payload must run before the switch that
+    /// frees it.
+    pub(super) fn run_optres_freshtemp_payload_bodies_on_miss(
+        &mut self,
+        scrutinee: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+            return;
+        }
+        // A borrow accessor's `Option` payload ALIASES a container element the
+        // container still owns and still walks; firing here would double it.
+        if self.scrutinee_is_borrow_call(scrutinee) {
+            return;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        let Some(te) = self.optres_inst_type_expr(scrutinee) else {
+            return;
+        };
+        let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&te) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        // Its own slot rather than a caller-supplied one: an ALL-SCALAR
+        // `Result[W, W]` materializes nowhere on this path — every existing
+        // fresh-temp tracker here is a HEAP tracker and declines it — so there
+        // is no slot to be handed. The walker takes a pointer, so the value is
+        // spilled here. Nothing frees this copy: it is bodies-only, and the
+        // memory half runs over the caller's own value.
+        let slot = self.create_entry_alloca(fn_val, "__optres_miss_bodies", sv.get_type().into());
+        let _ = self.builder.build_store(slot, sv);
+        self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+    }
+
     pub(super) fn drop_freshtemp_enum_scrutinee_on_miss(
         &mut self,
         scrutinee: &Expr,
@@ -13820,12 +13888,31 @@ impl<'ctx> super::Codegen<'ctx> {
             .user_drop_wrapper_fns
             .get(enum_name.as_str())
             .copied();
-        // `Option`/`Result` keep their own payload machinery, the same
-        // carve-out the call-argument precedent makes.
+        // B-2026-09-02-12 — `Option`/`Result` reach their payload bodies
+        // through the INSTANTIATION, not through the enum's declaration.
+        //
+        // This used to be a flat `None`, on the reading that the two keep
+        // "their own payload machinery, the same carve-out the call-argument
+        // precedent makes". The carve-out is right about the WALKER and wrong
+        // about the outcome: `emit_enum_payload_user_drop_bodies_fn` is
+        // declared-type driven and skips `Ok(T)` / `Err(E)` because those
+        // payloads are the enum's own generic parameters, so routing them
+        // there would have been a no-op — but routing them NOWHERE meant a
+        // declined `Result` temporary ran no body at all, on any surface,
+        // where the `mkerr();` discard spelling of the same value runs one.
+        //
+        // `emit_optres_payload_user_drop_bodies_fn` takes the concrete
+        // `Result[W, W]` the type-checker recorded for this expression, which
+        // is the same resolution `track_discarded_optres_payload_bodies` makes
+        // for the discard spelling — so the two spellings agree by
+        // construction. An expression with no recorded instantiation (an
+        // erased generic) still answers `None`, which keeps both backends
+        // silent there, the safe direction.
         let payload_bodies = if enum_name != "Option" && enum_name != "Result" {
             self.emit_enum_payload_user_drop_bodies_fn(&enum_name)
         } else {
-            None
+            self.optres_inst_type_expr(scrutinee)
+                .and_then(|te| self.emit_optres_payload_user_drop_bodies_fn(&te))
         };
         if drop_fn.is_none() && user_wrapper.is_none() && payload_bodies.is_none() {
             return;

@@ -4341,6 +4341,57 @@ impl<'a> super::Interpreter<'a> {
     /// Option / Result temp's own body (when declared) and its payloads.
     /// Value-shape recursion mirrors the container-element loop in
     /// `run_array_element_user_drops`.
+    /// B-2026-09-02-12 — the payload bodies of a FRESH-TEMP `Option`/`Result`
+    /// scrutinee that a pattern declined to match.
+    ///
+    /// `if let Ok(w) = mkerr()` builds a `Result[W, W]` holding `Err(W { .. })`,
+    /// the arm does not take it, and the temporary dies right there — so `W`'s
+    /// `Drop` body is due, exactly as it is for the `mkerr();` discard spelling
+    /// one line away. It ran on NO surface: the miss edges reach
+    /// [`Self::run_enum_payload_user_drops_value`], which is DECLARED-type
+    /// driven and skips `Ok(T)` / `Err(E)` because those payloads are the
+    /// enum's own generic parameters.
+    ///
+    /// The machinery that does see through the envelope is the `Option`/`Result`
+    /// arm of [`Self::run_discarded_value_user_drops`] — VALUE-driven, so the
+    /// concrete `W` in the variant is what it walks — and codegen's twin
+    /// registrar `track_discarded_optres_payload_bodies` resolves the same
+    /// payload through the instantiation the type-checker recorded. This routes
+    /// the miss edges into that arm and nothing else, so a user enum keeps the
+    /// declared-type walk it already had and nothing fires twice.
+    /// Is this scrutinee a FRESH TEMPORARY — one whose result nothing else
+    /// owns, so a declined match leaves it to die right there?
+    ///
+    /// B-2026-09-02-12's gate. A NAMED local reaching a miss edge keeps its own
+    /// payload walk and runs the body at its own death, so firing there as well
+    /// would double it; only a temporary has no other owner. Callers pair this
+    /// with `scrutinee_expr_is_consuming`, which is what excludes the borrow
+    /// accessors (`get` / `first` / `last`) whose `Option` payload ALIASES a
+    /// container element the container still owns.
+    pub(super) fn optres_freshtemp_scrutinee(e: &Expr) -> bool {
+        matches!(e.kind, ExprKind::Call { .. } | ExprKind::MethodCall { .. })
+    }
+
+    pub(super) fn run_optres_payload_user_drops_value(&mut self, value: &Value) {
+        let Value::EnumVariant {
+            enum_name, data, ..
+        } = value
+        else {
+            return;
+        };
+        if enum_name != "Option" && enum_name != "Result" {
+            return;
+        }
+        let payloads: Vec<Value> = match data {
+            EnumData::Unit => return,
+            EnumData::Tuple(vs) => vs.clone(),
+            EnumData::Struct(m) => m.values().cloned().collect(),
+        };
+        for v in payloads {
+            self.run_discarded_value_user_drops(v);
+        }
+    }
+
     pub(super) fn run_discarded_value_user_drops(&mut self, val: Value) {
         match val {
             Value::Struct { ref name, .. } => {
@@ -5651,6 +5702,20 @@ impl<'a> super::Interpreter<'a> {
                     // path runs without it held".
                     if let (Some(tn), Some(dv)) = (scrut_drop, drop_val) {
                         self.run_user_drop_body_on_value(&tn, dv);
+                    }
+                    // B-2026-09-02-12 — and the payload bodies of a FRESH-TEMP
+                    // `Option`/`Result` the pattern declined, on the same edge
+                    // and for the same reason as the `if let` / `while let`
+                    // sites: the declared-type walk skips `Ok(T)` / `Err(E)`,
+                    // whose payloads are the enum's own generic parameters, so
+                    // `let Ok(w) = mkerr() else { … }` ran `W`'s body on no
+                    // surface while `mkerr();` ran it on every one. Fresh temps
+                    // only — a named local reaching this edge still has its own
+                    // walk, and firing here as well would double it.
+                    if Self::optres_freshtemp_scrutinee(value)
+                        && self.scrutinee_expr_is_consuming(value)
+                    {
+                        self.run_optres_payload_user_drops_value(&val);
                     }
                     let else_result = self.eval_block_inner(else_block);
                     else_result?;

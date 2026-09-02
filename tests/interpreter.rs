@@ -17515,6 +17515,94 @@ fn test_string_char_at_and_count_interpreter() {
 }
 
 #[test]
+fn test_a_declined_optres_temporary_runs_its_payload_drop_body() {
+    // B-2026-09-02-12 — an `Option`/`Result` TEMPORARY the pattern declined ran
+    // its payload's `Drop` body on no surface, through all three `let`-family
+    // spellings. `if let Ok(w) = mkerr()` builds a `Result[W, W]` holding
+    // `Err(W { .. })`, the arm does not take it, and the temporary dies there —
+    // so the body is due, exactly as it is for `mkerr();`, the discard spelling
+    // of the same value, which has always run it.
+    //
+    // The miss edges reached a DECLARED-type walker that cannot see through
+    // `Ok(T)` / `Err(E)`, whose payloads are the enum's own generic parameters.
+    // They now route into the value-driven `Option`/`Result` arm of
+    // `run_discarded_value_user_drops` — the arm the discard spelling already
+    // used — so the two spellings agree by construction.
+    //
+    // On the DEFAULT leg because half the fix is the interpreter's, and the
+    // cross-backend matrix
+    // (`e2e_a_declined_optres_temporary_runs_its_payload_drop_body`) is gated
+    // on `--features llvm`.
+    const PRELUDE: &str = "struct W { id: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+         fn mkr(n: i64) -> Result[W, W] {\n\
+         if n < 1 { return Ok(W { id: n }); }\n\
+         return Err(W { id: 7 });\n\
+         }\n\
+         fn mkerr() -> Result[W, W] { return Err(W { id: 7 }); }\n\
+         fn mksome() -> Option[W] { return Some(W { id: 3 }); }\n";
+    let wrap =
+        |body: &str| format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
+
+    assert_eq!(
+        run(&wrap("if let Ok(w) = mkerr() { println(f\"v{w.id}\"); }")),
+        "dW7\nafter\n"
+    );
+
+    // TWO `W`s are constructed — the one the last pass bound and the `Err` that
+    // ended the loop — so two bodies are due.
+    assert_eq!(
+        run(&wrap(
+            "let mut i: i64 = 0;\n\
+             while let Ok(w) = mkr(i) { println(f\"v{w.id}\"); i = i + 1; }"
+        )),
+        "v0\ndW0\ndW7\nafter\n"
+    );
+
+    // The spelling the row left unmeasured. The body lands BEFORE the else
+    // block, per design.md § "Scrutinee temporary scope".
+    assert_eq!(
+        run(&wrap(
+            "let Ok(w) = mkerr() else { println(\"miss\"); return };\n\
+             println(f\"v{w.id}\");"
+        )),
+        "dW7\nmiss\n"
+    );
+
+    // The `Option` half: a `None` carries nothing, so the payload has to sit in
+    // the variant the pattern REJECTS.
+    assert_eq!(
+        run(&wrap(
+            "if let None = mksome() { println(\"none\"); } else { println(\"some\"); }"
+        )),
+        "dW3\nsome\nafter\n"
+    );
+
+    // THE GATE on the hit edge: the arm's binding owns the payload and runs the
+    // body itself, so firing on a match would double every `if let`.
+    assert_eq!(
+        run(&wrap("if let Ok(w) = mkr(0) { println(f\"v{w.id}\"); }")),
+        "v0\ndW0\nafter\n"
+    );
+
+    // CONTROL: `match` binding both arms was correct throughout.
+    assert_eq!(
+        run(&wrap(
+            "match mkerr() { Ok(w) => println(f\"v{w.id}\"), Err(e) => println(f\"e{e.id}\") }"
+        )),
+        "e7\ndW7\nafter\n"
+    );
+
+    // FRESH TEMPORARIES ONLY. A bound local keeps its own walk, so firing here
+    // would double it; that local loses its body for an unrelated reason and is
+    // pinned as still-broken in the E2E matrix (B-2026-09-02-14).
+    assert_eq!(
+        run(&wrap("let r: Result[W, W] = mkerr();\n    println(\"x\");")),
+        "dW7\nx\nafter\n"
+    );
+}
+
+#[test]
 fn test_optres_partial_destructure_keeps_the_payload_drop_body() {
     // B-2026-09-02-8 — an `Option`/`Result` pattern that destructures the
     // payload but binds only a NON-`Drop` field lost the payload's body.

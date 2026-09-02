@@ -129252,6 +129252,163 @@ fn main() {
         }
     }
 
+    /// B-2026-09-02-12 — AN `Option`/`Result` TEMPORARY THE PATTERN DECLINED
+    /// RAN ITS PAYLOAD'S `Drop` BODY ON NO SURFACE.
+    ///
+    /// `if let Ok(w) = mkerr()` builds a `Result[W, W]` holding `Err(W { .. })`,
+    /// the arm does not take it, and the temporary dies right there — so `W`'s
+    /// body is due, exactly as it is for `mkerr();`, the discard spelling of
+    /// the same value one line away, which has always run it. It ran nowhere,
+    /// on all four surfaces, through all three `let`-family spellings.
+    ///
+    /// AGREED-AND-WRONG, so no A/B gate could see it: `karac run`, `karac build`
+    /// and `--interp` printed the same missing body, and the storage IS
+    /// reclaimed, so it is a lost side effect rather than a leak. Only an
+    /// absolute expectation catches this class, which is what this fixture is.
+    ///
+    /// THE CARVE-OUT WAS RIGHT ABOUT THE WALKER AND WRONG ABOUT THE OUTCOME.
+    /// Both backends routed `Option`/`Result` past the payload-bodies walk with
+    /// a note that the two "keep their own payload machinery". The walker they
+    /// were being kept away from is declared-type driven and genuinely cannot
+    /// see through `Ok(T)` / `Err(E)` — those payloads are the enum's own
+    /// generic parameters — so sending them there would have been a no-op. But
+    /// sending them NOWHERE lost the body. Both sides now resolve the payload
+    /// through the INSTANTIATION the type-checker recorded
+    /// (`emit_optres_payload_user_drop_bodies_fn` / the value-driven
+    /// `Option`/`Result` arm of `run_discarded_value_user_drops`), which is the
+    /// same resolution the discard spelling already used — so the two spellings
+    /// agree by construction rather than by convention.
+    ///
+    /// `let ... else` WAS ONE OF THE ROW'S UNMEASURED SHAPES. It is affected
+    /// and closes with the other two.
+    ///
+    /// FRESH TEMPORARIES ONLY, and the last row here is why. A NAMED local
+    /// reaching a miss edge still owns its value and has its own walk to run
+    /// the body at its own death — firing here as well would double it. That
+    /// local ALSO loses the body today, but for an unrelated reason (its walk
+    /// is statically retracted before the match test, and on the miss edge
+    /// nothing takes over), which is a different site needing an edge-sensitive
+    /// retraction. Filed as B-2026-09-02-14 and pinned below so the two cannot
+    /// drift apart unnoticed.
+    #[test]
+    fn e2e_a_declined_optres_temporary_runs_its_payload_drop_body() {
+        const PRELUDE: &str = "struct W { id: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n\
+             fn mkr(n: i64) -> Result[W, W] {\n\
+             if n < 1 { return Ok(W { id: n }); }\n\
+             return Err(W { id: 7 });\n\
+             }\n\
+             fn mkerr() -> Result[W, W] { return Err(W { id: 7 }); }\n\
+             fn mksome() -> Option[W] { return Some(W { id: 3 }); }\n\
+             fn mknone() -> Option[W] { return None; }\n";
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "if let, the temporary the arm declined",
+                "if let Ok(w) = mkerr() { println(f\"v{w.id}\"); }",
+                "dW7\nafter\n",
+            ),
+            (
+                // TWO `W`s are constructed: the one the last pass bound, and
+                // the `Err` that ended the loop. Both bodies are due.
+                "while let, the temporary that ends the loop",
+                "let mut i: i64 = 0;\n\
+                 while let Ok(w) = mkr(i) {\n\
+                 println(f\"v{w.id}\");\n\
+                 i = i + 1;\n\
+                 }",
+                "v0\ndW0\ndW7\nafter\n",
+            ),
+            (
+                // The row left this spelling unmeasured. The body lands BEFORE
+                // the else block, per design.md § "Scrutinee temporary scope":
+                // scrutinee temporaries are dropped before the divergent block
+                // runs.
+                "let ... else, the temporary the pattern declined",
+                "let Ok(w) = mkerr() else { println(\"miss\"); return };\n\
+                 println(f\"v{w.id}\");",
+                "dW7\nmiss\n",
+            ),
+            (
+                // The `Option` half of the shape. A `None` carries nothing, so
+                // the payload has to sit in the variant the pattern REJECTS —
+                // here by matching `None` against a `Some`.
+                "an `Option` payload declined by a `None` pattern",
+                "if let None = mksome() { println(\"none\"); } else { println(\"some\"); }",
+                "dW3\nsome\nafter\n",
+            ),
+            (
+                // THE GATE on the hit edge: the arm's binding owns the payload
+                // and runs the body itself, so the miss-edge call must not be
+                // emitted there or every matching `if let` doubles.
+                "control: the same temporary when the arm DOES match",
+                "if let Ok(w) = mkr(0) { println(f\"v{w.id}\"); }",
+                "v0\ndW0\nafter\n",
+            ),
+            (
+                "control: the `let ... else` hit edge",
+                "let Ok(w) = mkr(0) else { println(\"miss\"); return };\n\
+                 println(f\"v{w.id}\");",
+                "v0\ndW0\nafter\n",
+            ),
+            (
+                "control: `match` binding both arms, correct throughout",
+                "match mkerr() { Ok(w) => println(f\"v{w.id}\"), Err(e) => println(f\"e{e.id}\") }",
+                "e7\ndW7\nafter\n",
+            ),
+            (
+                "control: a declined `None` carries nothing, so nothing is due",
+                "if let Some(w) = mknone() { println(f\"v{w.id}\"); }",
+                "after\n",
+            ),
+            (
+                // A borrow accessor's `Option` payload ALIASES a container
+                // element the container still owns and still walks, so the
+                // miss-edge call must decline — this row is that exclusion.
+                "control: a borrow accessor (`v.pop()`) on an empty container",
+                "let mut v: Vec[W] = Vec.new();\n\
+                 if let Some(w) = v.pop() { println(f\"v{w.id}\"); }",
+                "after\n",
+            ),
+            (
+                // STILL BROKEN, deliberately pinned: a NAMED local is not a
+                // temporary, and its lost body has a different cause (a static
+                // retraction the miss edge cannot undo). B-2026-09-02-14.
+                "known remaining: a BOUND local, not a temporary [B-2026-09-02-14]",
+                "let r: Result[W, W] = mkerr();\n\
+                 if let Ok(w) = r { println(f\"v{w.id}\"); }",
+                "after\n",
+            ),
+            (
+                // …and the shape that proves the bound local's walk exists at
+                // all, which is what makes the row above a retraction bug
+                // rather than a missing registration.
+                "control: the same bound local with no `if let` at all",
+                "let r: Result[W, W] = mkerr();\n\
+                 println(\"x\");",
+                "dW7\nx\nafter\n",
+            ),
+        ];
+        for (label, body, want) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"after\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want,
+                "{label}: interpreter transcript"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want,
+                    "{label}: the compiled backends must agree with the interpreter"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-31-23 — A CONSUMING ARM OVER A BOXED USER-ENUM PAYLOAD
     /// DOUBLE FREED, WHILE THE SAME ARM OVER A BOXED STRUCT PAYLOAD WAS FINE.
     ///

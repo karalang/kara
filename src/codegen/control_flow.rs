@@ -665,6 +665,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(else_bb);
+        // B-2026-09-02-12 — the DECLINED temporary's payload bodies, ahead of
+        // the memory drop that frees what they read. `if let Ok(w) = mkerr()`
+        // built a `Result[W, W]` holding `Err(W { .. })`, the arm did not take
+        // it, and `W`'s `Drop` body ran on no surface — while `mkerr();`, the
+        // discard spelling of the same temporary, runs it on every one. Miss
+        // edge only: on the then edge the arm's binding owns the payload.
+        self.run_optres_freshtemp_payload_bodies_on_miss(value, val);
         // B-2026-08-30-17 — before ANY of the else arm's own code, per the
         // bullet quoted above.
         self.emit_taken_scrutinee_drop(scrut_due);
@@ -1505,6 +1512,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
             });
         self.builder.position_at_end(else_bb);
+        // B-2026-09-02-12 — the declined temporary's payload bodies, ahead of
+        // the memory drop that frees what they read. Same shape as the `if let`
+        // site: `let Ok(w) = mkerr() else { … }` ran `W`'s body on no surface.
+        // Else edge only — the match edge hands the payload to the escaping
+        // binding, which runs the body itself.
+        self.run_optres_freshtemp_payload_bodies_on_miss(value, val);
         self.emit_taken_scrutinee_drop(scrut_due);
         self.compile_block_with_frame(else_block)?;
         if self

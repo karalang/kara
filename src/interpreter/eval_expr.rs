@@ -1170,6 +1170,21 @@ impl<'a> super::Interpreter<'a> {
                     if let (Some(tn), Some(dv)) = (scrut_drop.take(), drop_val.take()) {
                         self.run_user_drop_body_on_value(&tn, dv);
                     }
+                    // B-2026-09-02-12 — and the payload bodies of a
+                    // FRESH-TEMP `Option`/`Result` the pattern declined. The
+                    // walk above is declared-type driven and skips `Ok(T)` /
+                    // `Err(E)`, whose payloads are the enum's own generic
+                    // parameters, so `if let Ok(w) = mkerr() { .. }` ran `W`'s body on
+                    // no surface at all -- while `mkerr();`, the discard
+                    // spelling of the same temporary, ran it on every one.
+                    // Fresh temps only: a NAMED local reaching a miss edge has
+                    // its own walk to run the body, and firing here as well
+                    // would double it.
+                    if Self::optres_freshtemp_scrutinee(value)
+                        && self.scrutinee_expr_is_consuming(value)
+                    {
+                        self.run_optres_payload_user_drops_value(&val);
+                    }
                     if let Some(ref else_expr) = else_branch {
                         self.eval_expr_inner(else_expr)
                     } else {
@@ -1324,6 +1339,21 @@ impl<'a> super::Interpreter<'a> {
                         // very same value prints `dB dW7` on every surface. That
                         // bound local is the oracle this edge is matched against.
                         self.run_enum_payload_user_drops_value(&val);
+                        // B-2026-09-02-12 — and the payload bodies of a
+                        // FRESH-TEMP `Option`/`Result` the pattern declined. The
+                        // walk above is declared-type driven and skips `Ok(T)` /
+                        // `Err(E)`, whose payloads are the enum's own generic
+                        // parameters, so `while let Ok(w) = mkr(i)` ran `W`'s body on
+                        // no surface at all -- while `mkerr();`, the discard
+                        // spelling of the same temporary, ran it on every one.
+                        // Fresh temps only: a NAMED local reaching a miss edge has
+                        // its own walk to run the body, and firing here as well
+                        // would double it.
+                        if Self::optres_freshtemp_scrutinee(value)
+                            && self.scrutinee_expr_is_consuming(value)
+                        {
+                            self.run_optres_payload_user_drops_value(&val);
+                        }
                         break;
                     }
                     let drop_snapshot = scrut_drop.map(|tn| (tn, val.clone()));
