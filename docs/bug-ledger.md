@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 345 | 6 |
-| run-vs-build | 301 | 17 |
+| run-vs-build | 301 | 16 |
 | leak | 252 | 8 |
 | missing-feature | 193 | 1 |
 | double-free | 162 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1359 | 31 |
-| interp | 320 | 18 |
+| codegen | 1359 | 30 |
+| interp | 320 | 17 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
 | other | 70 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1979 surfaced · 37 open · 1909 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1979 surfaced · 36 open · 1910 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (37)
+### Open (36)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1979 surfaced
 | B-2026-08-31-4 | 2026-08-31 | interp+codegen | medium | A LOCAL WHOSE LAST USE IS A `ref` ARGUMENT TO A CALLEE RETURNING A HEAP VALUE IS DROPPED AT SCOPE EXIT INSTEAD OF ITS LIVE-RANGE END ON BOTH COMPILED BACKENDS, AGAINST design.md line 866 -- `str end dE` vs interp `dE str end`; an `i64` return is clean | — |
 | B-2026-08-31-6 | 2026-08-31 | codegen | medium | AN AUTO-PAR OUTLINED REGION SWALLOWS THE NLL DROP POINTS OF THE STATEMENTS IT SPANS -- `fire_due_user_drops` early-returns on the terminated insert block for exactly those indices, so a binding whose live-range end falls inside the region never fires there; the visible symptom today is that a NEVER-READ shadowed binding's `Drop` order is wrong in one direction without outlining and the other direction with it | none |
 | B-2026-08-31-7 | 2026-08-31 | interp+codegen | medium | A TUPLE-PATTERN REBIND OVER AN OWNED TUPLE PARAM RUNS THE ELEMENT'S `Drop` BODY TWICE ON BOTH COMPILED BACKENDS AND ONCE UNDER `--interp` -- `b1 dR1 dR1` vs `b1 dR1`; the interpreter is the correct column, and the same arm WITHOUT the rebind agrees at one on every surface | — |
-| B-2026-08-31-28 | 2026-08-31 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, None => .. };` where `Option[R]` and `R` carries a `String` prints `dR1` under `--interp` and nothing under `karac run` / `karac build`; the BRACED spelling of the same arm, the same bare arm over a USER enum, and the same bare arm over an `Option` whose payload carries no heap are all correct at one body on all three. | — |
 | B-2026-08-31-39 | 2026-08-31 | codegen | medium | AN `Option[T]` INSIDE A GENERIC FN REACHES THE DISPLAY GATE WITH `T` UNSUBSTITUTED, so an aggregate instantiation is declined or ICEs where the interpreter renders it -- `T = Vec[i64]` PANICS the compiler, `T = Array`/`Slice` refuse naming `T`, and DESTRUCTURING (the obvious workaround) is a SILENT miscompile printing `1` or nothing | — |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
@@ -201,9 +200,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1979 surfaced
 
 </details>
 
-### Fixed (1909)
+### Fixed (1910)
 
-<details><summary>1909 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1910 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2071,6 +2070,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1979 surfaced
 | B-2026-08-31-25 | codegen | medium | `Slice[T]` HAS NO Display UNDER CODEGEN AT ANY DEPTH -- `f"{s}"` on a slice is a hard build error where the interpreter prints `[1, 2]`, and it is th… | dc3b493 |
 | B-2026-08-31-26 | codegen | medium | BOTH COMPILED BACKENDS RUN A STRUCT FIELD'S `Drop` BODY TWICE WHEN A `match` ARM DESTRUCTURES A BARE STRUCT SCRUTINEE AND MOVES THE FIELD OUT -- the… | 6673f7d |
 | B-2026-08-31-27 | interp | medium | THE INTERPRETER NEVER RUNS A FIELD'S `Drop` BODY WHEN A SINGLE-LEVEL `match` ARM DESTRUCTURES AN `Option`-WRAPPED PAYLOAD AND MOVES THE FIELD OUT --… | 6673f7d |
+| B-2026-08-31-28 | interp+codegen | medium | A BARE `match` ARM HANDING OUT A HEAP-CARRYING `Option` PAYLOAD RUNS NO `Drop` BODY ON EITHER COMPILED BACKEND -- `let _ = match o { Some(r) => r, No… | 8ccadea |
 | B-2026-08-31-29 | codegen | medium | `let g = ref arr[i]` ON AN `Array[Vector[T, N], M]` PANICS THE COMPILER -- the ref binding is loaded as the LANE type (`i64`) instead of the vector,… | 73e6e86 |
 | B-2026-08-31-30 | codegen | high | THE `if let` / `let .. | ac28d68 |
 | B-2026-08-31-32 | interp | medium | THE INTERPRETER RUNS NO `Drop` BODY AT ALL FOR A FRESH-TEMP STRUCT SCRUTINEE THAT AN ARM DESTRUCTURES -- `match H { . | 86e8d7a |
