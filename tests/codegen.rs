@@ -13981,6 +13981,48 @@ fn main() { t_t(); t_f(); println("end"); }
     /// Twin of `tests/interpreter.rs`'s
     /// `test_generic_destructured_payload_renders_at_its_instantiation`,
     /// pinned to the same string.
+    /// B-2026-09-02-43 — a function parameter's `Option`/`Result` PAYLOAD type
+    /// does not outlive the function that declared it.
+    ///
+    /// `var_option_payload_te` / `var_result_payload_te` are keyed by BINDING
+    /// NAME, and they were the only name-keyed type side-tables in codegen that
+    /// were never cleared at a function boundary — `var_type_names`,
+    /// `enum_inst_var_types`, `vec_elem_types`, `array_var_elem_te` and the rest
+    /// all are, for the reason `enum_inst_var_types`' comment spells out.
+    ///
+    /// So an UNUSED declaration published a payload type that any same-named
+    /// binding in a later function inherited, including a scalar: the `let x:
+    /// i64 = 7` below rendered through the `Option` path. B-2026-08-31-49 and
+    /// 78e1389 both patched this class by retracting on RE-REGISTRATION of the
+    /// name, which only helps when the later binding goes through
+    /// `register_var_from_type_expr` — and a scalar `let` does not, which is
+    /// why the hole survived both.
+    ///
+    /// The symptom was heap-state dependent and got WORSE, not better, as
+    /// B-2026-09-02-37's fix landed: with the payload correctly boxed, the
+    /// inherited registration `inttoptr`s a scalar, so a program that printed
+    /// `Some([0, 48])` for `1` started segfaulting instead.
+    #[test]
+    fn codegen_param_payload_type_does_not_leak_into_a_later_function() {
+        let Some(out) = run_program(
+            r#"fn other(x: Option[Vec[String]]) -> i64 { return 1 }
+fn otherR(y: Result[Vec[String], String]) -> i64 { return 2 }
+fn main() {
+    let x: i64 = 7;
+    println(f"{x}");
+    let y: i64 = 8;
+    println(f"{y}");
+    let n: Option[Vec[String]] = None;
+    let e: Result[Vec[String], String] = Err("e");
+    println(f"{other(n)}{otherR(e)}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "7\n8\n12\n");
+    }
+
     #[test]
     fn codegen_generic_destructured_payload_renders_at_its_instantiation() {
         let Some(out) = run_program(

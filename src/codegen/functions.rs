@@ -1618,6 +1618,25 @@ impl<'ctx> super::Codegen<'ctx> {
         self.type_decls.struct_moved_nested_field_bodies.clear();
         self.type_decls.struct_moved_field_payload_bodies.clear();
         self.var_types.optres_var_payload_tes.clear();
+        // The Option/Result PAYLOAD `TypeExpr` maps, for exactly the reason
+        // `enum_inst_var_types` above states, and they were the two the list
+        // was still missing. Both are keyed by BINDING NAME and were the only
+        // name-keyed type side-tables that survived a function boundary, so a
+        // parameter in ONE function published a payload type that any
+        // same-named binding in a LATER function inherited — including a
+        // scalar. `fn viaCall(x: Option[Array[String, 2]])` sitting unused
+        // beside a `main` whose `let x = takeP(t[0])` is an `i64` rendered
+        // that i64 through the Option path; renaming the parameter to
+        // anything else made the program correct. B-2026-09-02-43.
+        //
+        // B-2026-08-31-49 and 78e1389 both patched this class one site at a
+        // time, retracting on RE-REGISTRATION of the same name. That only
+        // helps when the later binding goes through `register_var_from_type_expr`,
+        // and a scalar `let` does not — which is why the hole survived both.
+        // Clearing per function closes it at the boundary instead, and makes
+        // these two consistent with every sibling map in this list.
+        self.var_types.var_option_payload_te.clear();
+        self.var_types.var_result_payload_te.clear();
         self.mapset.map_val_bodies_tes.clear();
         self.var_types.string_vars.clear();
         self.var_types.ascii_const_string_lets.clear();
