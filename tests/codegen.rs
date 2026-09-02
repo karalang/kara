@@ -128758,19 +128758,19 @@ fn main() {
             ),
             (
                 // The COMPILED column is what this fix closes: zero bodies
-                // before it, one after. The interpreter runs TWO here and did
-                // so before the fix as well (measured against the stashed
-                // compiler), which is B-2026-09-02-7 — an interpreter surplus
-                // in the `while let` leg, filed rather than folded in. The
-                // divergence is pinned so that closing that row shows up here
-                // as a failure instead of passing unnoticed.
+                // before it, one after. The interpreter ran TWO here — the
+                // source's payload walk beside the arm's own binding — which
+                // was B-2026-09-02-7, filed rather than folded in and closed
+                // since; the two columns now agree at one body, and
+                // `e2e_while_let_binding_runs_the_payload_drop_body_once_per_pass`
+                // is where that leg is covered in full.
                 "while let, one pass [B-2026-08-31-38 / interp: B-2026-09-02-7]",
                 "let mut q: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
                  while let Some(H { r, .. }) = q {\n \
                  println(f\"{r.s.len()}\");\n \
                  q = None;\n \
                  }",
-                "47\ndR47\ndR47\nend\n",
+                "47\ndR47\nend\n",
                 "47\ndR47\nend\n",
             ),
             // The leg that must KEEP retracting: its binding escapes and owns
@@ -128866,6 +128866,217 @@ fn main() {
                     aot, *want_compiled,
                     "{label}: the compiled backends must run the body exactly once"
                 );
+            }
+        }
+    }
+
+    /// B-2026-09-02-7 — A `while let` ARM THAT BINDS ITS PAYLOAD RAN THE
+    /// PAYLOAD'S `Drop` BODY TWICE PER PASS ON THE INTERPRETER, once on both
+    /// compiled backends.
+    ///
+    /// `if let` retracts the source place's payload-body walk when the pattern
+    /// MOVES a Drop-bearing payload out of it
+    /// (`disarm_moved_out_enum_payload_one`), so the body comes from the arm's
+    /// binding and from nothing else. `while let` never made that call: its
+    /// stash fired beside a still-armed source walk and every pass printed the
+    /// body twice. ONE `R` IS CONSTRUCTED PER PASS, so one body is due per
+    /// pass — the compiled column was the correct one throughout.
+    ///
+    /// THE FIX IS THE PAIR, NOT THE CALL. Adding the disarm alone would break
+    /// the arms that only READ THROUGH the payload: there the disarm declines
+    /// (`takes_payload` asks that same question), the source keeps its walk,
+    /// and an ungated stash would still double. So the `reads_through` gate
+    /// moved across with it, exactly as `if let` carries both.
+    ///
+    /// THE FRESH-TEMP CASE IS DELIBERATELY UNTOUCHED, and the `v.pop()` row
+    /// below is its gate. B-2026-08-28-67 declined to gate this leg because
+    /// "the scrutinee is re-evaluated per iteration, so there is no stable
+    /// binding whose walk could be handed the payload back" — true of a fresh
+    /// temp and only of one. An identifier scrutinee is re-READ per iteration
+    /// but is the same binding throughout and has exactly that walk;
+    /// `place_walk_is_retractable` is the line between the two.
+    ///
+    /// THE TWO-PASS ROW IS ALSO AN AUTO-PAR PROBE, and reading it wrong cost
+    /// this session a nearly-filed row. `karac build`'s DEFAULT (auto-par on)
+    /// prints `47 47 end dR47` for it — both bodies deferred to scope exit and
+    /// one of the two lost — against the correct `47 dR47 47 dR47 end` that
+    /// `KARAC_AUTO_PAR=0` and this harness both produce. That is not a second
+    /// defect: it is B-2026-08-31-6, an outlined region swallowing the NLL
+    /// drop points of the statements it spans, reproduced here on a `while
+    /// let`. Measured identically against the pre-fix compiler, so it is not
+    /// this fix's doing either — the diff is interpreter-only. Noted rather
+    /// than asserted because the harness does not build the auto-par leg.
+    ///
+    /// THE ROW'S TWO "NOT MEASURED" ITEMS ARE ANSWERED HERE. A `while let`
+    /// over `Result` behaves exactly as the `Option` one does (the disarm keys
+    /// on the PLACE, not on the envelope), and a `for` loop over a container
+    /// of the same payload never had the defect: all three surfaces agree
+    /// there, deferring both bodies to the loop's end.
+    #[test]
+    fn e2e_while_let_binding_runs_the_payload_drop_body_once_per_pass() {
+        const PRELUDE: &str = "fn pad(t: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-bytes-\");\n\
+             s.push_str(f\"{t}\");\n\
+             return s;\n\
+             }\n\
+             struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s.len()}\"); } }\n\
+             struct H { r: R, n: i64 }\n\
+             enum W { C(H), D }\n";
+        let cases: &[(&str, &str, &str, &str)] = &[
+            (
+                "destructure binding, one pass",
+                "let mut q: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 while let Some(H { r, .. }) = q {\n\
+                 println(f\"{r.s.len()}\");\n\
+                 q = None;\n\
+                 }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "whole-payload binding, the payload IS the `Drop` type",
+                "let mut p: Option[R] = Some(R { s: pad(1) });\n\
+                 while let Some(r) = p {\n\
+                 println(f\"{r.s.len()}\");\n\
+                 p = None;\n\
+                 }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                // Not the assignment: the same loop with a bare `break` in
+                // place of `q = None` doubled identically before the fix, which
+                // is what rules the overwrite out as the second body's source.
+                "the loop exits by `break`, leaving the source live",
+                "let mut q: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 while let Some(H { r, .. }) = q {\n\
+                 println(f\"{r.s.len()}\");\n\
+                 break;\n\
+                 }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                // The arm MOVES the payload on out of itself, so the stash is
+                // the only owner and the disarm is load-bearing.
+                "the arm moves the payload out (`let m = r`)",
+                "let mut w: Option[R] = Some(R { s: pad(1) });\n\
+                 while let Some(r) = w {\n\
+                 let m = r;\n\
+                 println(f\"{m.s.len()}\");\n\
+                 w = None;\n\
+                 }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                // THE GATE on the fresh-temp exclusion. `v.pop()` has no place
+                // to retract, so the stash must keep firing; standing it down
+                // here would hand the payload to nobody and lose both bodies.
+                "control: fresh-temp scrutinee keeps its stash [B-2026-07-30-11]",
+                "let mut v: Vec[R] = Vec.new();\n\
+                 v.push(R { s: pad(1) });\n\
+                 v.push(R { s: pad(2) });\n\
+                 while let Some(r) = v.pop() {\n\
+                 println(f\"pop{r.s.len()}\");\n\
+                 }",
+                "pop47\ndR47\npop47\ndR47\nend\n",
+                "pop47\ndR47\npop47\ndR47\nend\n",
+            ),
+            (
+                "control: binds nothing, correct throughout",
+                "let mut u: Option[R] = Some(R { s: pad(1) });\n\
+                 while let Some(_) = u {\n\
+                 println(\"hit\");\n\
+                 u = None;\n\
+                 }",
+                "hit\ndR47\nend\n",
+                "hit\ndR47\nend\n",
+            ),
+            (
+                // The row left this NOT MEASURED. The disarm keys on the PLACE,
+                // not on the envelope, so `Result` moves with `Option`.
+                "over `Result` rather than `Option`",
+                "let mut e: Result[H, i64] = Ok(H { r: R { s: pad(1) }, n: 4 });\n\
+                 while let Ok(H { r, .. }) = e {\n\
+                 println(f\"{r.s.len()}\");\n\
+                 e = Err(1);\n\
+                 }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "over a USER enum wrapping the same struct payload",
+                "let mut g: W = W.C(H { r: R { s: pad(1) }, n: 4 });\n\
+                 while let W.C(H { r, .. }) = g {\n\
+                 println(f\"{r.s.len()}\");\n\
+                 g = W.D;\n\
+                 }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                // TWO values constructed, so TWO bodies are due. The
+                // interpreter ran FOUR before the fix and runs two now. The
+                // compiled column here is the auto-par-OFF one, which is also
+                // what this harness builds; `karac build`'s default leg loses
+                // one of the two to B-2026-08-31-6 — see the doc comment.
+                "two passes, a fresh value stored each pass",
+                "let mut k: i64 = 0;\n\
+                 let mut z: Option[R] = Some(R { s: pad(1) });\n\
+                 while let Some(r) = z {\n\
+                 println(f\"{r.s.len()}\");\n\
+                 k = k + 1;\n\
+                 if k < 2 { z = Some(R { s: pad(2) }); } else { z = None; }\n\
+                 }",
+                "47\ndR47\n47\ndR47\nend\n",
+                "47\ndR47\n47\ndR47\nend\n",
+            ),
+            (
+                // The row's other NOT MEASURED item: a `for` loop over a
+                // container of the same payload never had this shape. All three
+                // surfaces agree, deferring both bodies to the loop's end.
+                "control: `for` over a container is a different shape",
+                "let mut v: Vec[R] = Vec.new();\n\
+                 v.push(R { s: pad(1) });\n\
+                 v.push(R { s: pad(2) });\n\
+                 for r in v {\n\
+                 println(f\"it{r.s.len()}\");\n\
+                 }",
+                "it47\nit47\ndR47\ndR47\nend\n",
+                "it47\nit47\ndR47\ndR47\nend\n",
+            ),
+            (
+                // The `while let` spelling of B-2026-09-02-8, which was filed
+                // off the `if let` one. Untouched by this fix (nothing binds
+                // the `Drop`-bearing field, so neither the disarm nor the stash
+                // is in play) and pinned so the two spellings close together.
+                "control: binds only the NON-`Drop` field [interp: B-2026-09-02-8]",
+                "let mut y: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n\
+                 while let Some(H { n, .. }) = y {\n\
+                 println(f\"{n}\");\n\
+                 y = None;\n\
+                 }",
+                "4\nend\n",
+                "4\ndR47\nend\n",
+            ),
+        ];
+        for (label, body, want_interp, want_compiled) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want_interp,
+                "{label}: the interpreter must run one payload body per pass"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, *want_compiled, "{label}: compiled transcript");
             }
         }
     }

@@ -17515,6 +17515,87 @@ fn test_string_char_at_and_count_interpreter() {
 }
 
 #[test]
+fn test_while_let_binding_runs_the_payload_drop_body_once_per_pass() {
+    // B-2026-09-02-7 — a `while let` arm that BINDS its payload ran the
+    // payload's `Drop` body TWICE PER PASS on this backend, where both
+    // compiled backends ran it once. `if let` retracts the source place's
+    // payload-body walk when the pattern moves the payload out
+    // (`disarm_moved_out_enum_payload_one`); `while let` never made that call,
+    // so its arm stash fired beside a still-armed source walk.
+    //
+    // The surplus SCALED with the iteration count, which is what kept it out
+    // of the low band: two passes ran four bodies against the two that were
+    // due.
+    //
+    // This test lives on the DEFAULT leg deliberately. The fix is
+    // interpreter-only, and the cross-backend matrix
+    // (`e2e_while_let_binding_runs_the_payload_drop_body_once_per_pass`) is
+    // gated on `--features llvm`, so without a copy here a regression would
+    // pass CI's default leg unseen.
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s}\"); } }\n\
+         struct H { r: R, n: i64 }\n";
+    // ONE `R` per pass, so ONE body per pass.
+    let one_pass = format!(
+        "{PRELUDE}fn main() {{\n\
+         let mut q: Option[H] = Some(H {{ r: R {{ s: \"a\" }}, n: 4 }});\n\
+         while let Some(H {{ r, .. }}) = q {{ println(f\"{{r.s}}\"); q = None; }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&one_pass), "a\ndRa\nend\n");
+
+    // The whole-payload spelling of the same thing.
+    let whole = format!(
+        "{PRELUDE}fn main() {{\n\
+         let mut p: Option[R] = Some(R {{ s: \"b\" }});\n\
+         while let Some(r) = p {{ println(f\"{{r.s}}\"); p = None; }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&whole), "b\ndRb\nend\n");
+
+    // TWO passes, a fresh value stored each time: two bodies, not four. This
+    // is the row that showed the surplus scaling.
+    let two_pass = format!(
+        "{PRELUDE}fn main() {{\n\
+         let mut k: i64 = 0;\n\
+         let mut z: Option[R] = Some(R {{ s: \"c\" }});\n\
+         while let Some(r) = z {{\n\
+         println(f\"{{r.s}}\");\n\
+         k = k + 1;\n\
+         if k < 2 {{ z = Some(R {{ s: \"d\" }}); }} else {{ z = None; }}\n\
+         }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&two_pass), "c\ndRc\nd\ndRd\nend\n");
+
+    // THE GATE on the fresh-temp exclusion: `v.pop()` has no place whose walk
+    // could be retracted, so its stash must keep firing. Standing it down here
+    // would hand the payload to nobody and lose both bodies — which is the
+    // reading B-2026-08-28-67 left this leg with, and why the fix gates on
+    // `place_walk_is_retractable` rather than disarming unconditionally.
+    let fresh_temp = format!(
+        "{PRELUDE}fn main() {{\n\
+         let mut v: Vec[R] = Vec.new();\n\
+         v.push(R {{ s: \"e\" }});\n\
+         v.push(R {{ s: \"f\" }});\n\
+         while let Some(r) = v.pop() {{ println(f\"pop{{r.s}}\"); }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&fresh_temp), "popf\ndRf\npope\ndRe\nend\n");
+
+    // CONTROL: an arm binding nothing was correct throughout — the same loop
+    // over the same value, differing only in whether it binds, which is what
+    // isolated the trigger to the binding rather than to the loop.
+    let binds_nothing = format!(
+        "{PRELUDE}fn main() {{\n\
+         let mut u: Option[R] = Some(R {{ s: \"g\" }});\n\
+         while let Some(_) = u {{ println(\"hit\"); u = None; }}\n\
+         println(\"end\");\n}}\n"
+    );
+    assert_eq!(run(&binds_nothing), "hit\ndRg\nend\n");
+}
+
+#[test]
 fn test_freshtemp_enum_scrutinee_runs_user_drop() {
     // B-2026-07-11-26: a fresh-temp enum scrutinee whose type has a user
     // `impl Drop` must RUN that Drop under the interpreter too (run/build

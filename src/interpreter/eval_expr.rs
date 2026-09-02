@@ -1288,6 +1288,28 @@ impl<'a> super::Interpreter<'a> {
                     // then Drop-bearing fields — so the two produce the same
                     // transcript by construction rather than by convention.
                     let scrut_drop = self.freshtemp_scrutinee_user_drop_type(value);
+                    // B-2026-09-02-7 — the `if let` disarm, transplanted. A
+                    // pattern that MOVES a Drop-bearing payload out of an
+                    // identifier/`self` place retracts that place's own
+                    // payload-body walk, so the body comes from the arm's
+                    // binding and not from both. Without it this leg ran the
+                    // stash beside a still-armed source walk and printed the
+                    // payload's body TWICE PER PASS, where the `if let`
+                    // spelling of the same destructure printed it once — the
+                    // spelling-dependent split this family keeps closing.
+                    //
+                    // Runs before the match test, exactly as the `if let` site
+                    // does, because codegen's compile-time retraction cannot
+                    // know whether the pattern will match; and it is a
+                    // set-insert keyed by the place's name, so re-running it
+                    // once per iteration is idempotent.
+                    //
+                    // A FRESH-TEMP scrutinee (`while let Some(r) = v.pop()`) is
+                    // untouched: the helper returns early for a place that is
+                    // neither an identifier nor `self`, which is what keeps
+                    // B-2026-07-30-11's while-let case — a stash with no walk to
+                    // stand down to — firing as before.
+                    self.disarm_moved_out_enum_payload_one(value, &val, pattern, Some(body));
                     if !self.try_match_pattern(pattern, &val) {
                         if let Some(tn) = scrut_drop {
                             self.run_user_drop_body_on_value(&tn, val.clone());
@@ -1312,12 +1334,38 @@ impl<'a> super::Interpreter<'a> {
                     // `Vec[Res]` never ran r's body on this backend. Same
                     // gate: owning fresh temps and identifier/`self` places;
                     // borrow accessors excluded.
-                    // B-2026-08-28-67 deliberately does NOT gate here. This
-                    // path has no disarm — the scrutinee is re-evaluated per
-                    // iteration, so there is no stable binding whose walk could
-                    // be handed the payload back — and a stash that stands down
-                    // with nothing to stand down TO loses the body outright.
-                    let consuming_scrutinee = matches!(val, Value::EnumVariant { .. })
+                    // B-2026-08-28-67 declined to gate here, on the reading
+                    // that this path has no disarm: the scrutinee is
+                    // re-evaluated per iteration, so there is no stable binding
+                    // whose walk could be handed the payload back, and a stash
+                    // that stands down with nothing to stand down TO loses the
+                    // body outright. That is true of a FRESH-TEMP scrutinee and
+                    // only of one. An IDENTIFIER scrutinee is re-READ per
+                    // iteration but is the same binding throughout, and it has
+                    // exactly the walk `if let` hands the payload back to — so
+                    // B-2026-09-02-7 gates the identifier case and leaves the
+                    // fresh-temp case, which is the one that note was about,
+                    // ungated. `place_walk_is_retractable` is the line between
+                    // them.
+                    // B-2026-09-02-7 — the other half of the disarm above,
+                    // and the pair has to move together. An arm that only READS
+                    // THROUGH the payload moves nothing out, so the disarm
+                    // declines (`takes_payload` asks the same question) and the
+                    // source keeps its walk; the stash must then stand down, or
+                    // the body fires from both. `place_walk_is_retractable`
+                    // is what confines the stand-down to places that HAVE a walk
+                    // to keep — a fresh temp answers `false` and keeps its
+                    // stash, which is the B-2026-08-28-67 note below.
+                    let reads_through = match &val {
+                        Value::EnumVariant { enum_name, .. } => {
+                            Self::place_walk_is_retractable(value)
+                                && self
+                                    .let_form_only_reads_payload_through(enum_name, pattern, body)
+                        }
+                        _ => false,
+                    };
+                    let consuming_scrutinee = !reads_through
+                        && matches!(val, Value::EnumVariant { .. })
                         && self.scrutinee_expr_is_consuming(value);
                     let stash_names: Vec<String> = if consuming_scrutinee {
                         if let Value::EnumVariant { ref enum_name, .. } = val {
