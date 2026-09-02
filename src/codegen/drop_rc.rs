@@ -25,8 +25,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::types::StructType;
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::{FunctionValue, InstructionValue, PointerValue};
 
 use super::state::CleanupAction;
 use crate::ast::TypeExpr;
@@ -172,6 +173,33 @@ pub(crate) struct DropRc<'ctx> {
     /// created for and no other.
     pub(crate) optres_payload_bodies_flags:
         HashMap<(String, PointerValue<'ctx>), PointerValue<'ctx>>,
+    /// B-2026-09-02-6 — for each binding whose `let` was compiled INSIDE a
+    /// loop, the position in the emitted IR that `let` finished at: the basic
+    /// block, and the instruction the re-arm must follow (`None` when the
+    /// block was still empty, i.e. insert at its front).
+    ///
+    /// Exists because a `cond_move_drop_flags` flag is armed in the function's
+    /// ENTRY block, which runs ONCE PER CALL. That is the right place for the
+    /// alloca — it dominates every path — and the wrong place for the `true`,
+    /// because a binding declared in a loop body is re-initialized on every
+    /// iteration and therefore re-owns its value on every iteration. A single
+    /// entry-block `true` left the flag `false` for all iterations after the
+    /// first one that disarmed it, so a later iteration's freshly-declared
+    /// value lost its own `Drop` body.
+    ///
+    /// An ANCHOR rather than an eager `store`, because the flag is created
+    /// LAZILY at the disarm site — codegen has long since compiled the `let`
+    /// by then, and there is no second pass over the loop body to emit into.
+    /// Recording where that `let` ended costs nothing and lets
+    /// [`Codegen::cond_move_drop_flag_for`] go back and insert the re-arm at
+    /// the declaration point when it finally mints the flag.
+    ///
+    /// Recorded ONLY while `loop_stack` is non-empty. Outside a loop the `let`
+    /// runs at most once per call, so a re-arm there is exactly the
+    /// entry-block `true` that already exists and the map stays empty — which
+    /// is what keeps this fix inert for every non-loop shape in the tree.
+    pub(crate) loop_decl_rearm_anchors:
+        HashMap<String, (BasicBlock<'ctx>, Option<InstructionValue<'ctx>>)>,
     /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
     /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
     /// more than once would otherwise collect one identical `{null, 0, 0}`

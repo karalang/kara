@@ -2515,6 +2515,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
             let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
             let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
+            let saved_decl_anchors = std::mem::take(&mut self.drop_rc.loop_decl_rearm_anchors);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -2539,6 +2540,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
             self.drop_rc.cond_store_flag_params = saved_cond_store_params;
             self.drop_rc.field_view_flags = saved_field_view_flags;
+            self.drop_rc.loop_decl_rearm_anchors = saved_decl_anchors;
             self.accel.soa_return_locals = saved_soa_return_locals;
             self.var_types.binding_layouts = saved_binding_layouts;
             self.borrow_vars.ref_params = saved_ref_params;
@@ -3200,6 +3202,7 @@ impl<'ctx> super::Codegen<'ctx> {
             std::mem::take(&mut self.drop_rc.optres_payload_bodies_flags);
         let saved_cond_store_params = std::mem::take(&mut self.drop_rc.cond_store_flag_params);
         let saved_field_view_flags = std::mem::take(&mut self.drop_rc.field_view_flags);
+        let saved_decl_anchors = std::mem::take(&mut self.drop_rc.loop_decl_rearm_anchors);
 
         let result = self
             .declare_mono_function(func, mangled)
@@ -3209,6 +3212,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.optres_payload_bodies_flags = saved_optres_bodies_flags;
         self.drop_rc.cond_store_flag_params = saved_cond_store_params;
         self.drop_rc.field_view_flags = saved_field_view_flags;
+        self.drop_rc.loop_decl_rearm_anchors = saved_decl_anchors;
         self.accel.soa_return_locals = saved_soa_return_locals;
         self.var_types.binding_layouts = saved_binding_layouts;
         self.borrow_vars.ref_params = saved_ref_params;
@@ -3422,6 +3426,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.drop_rc.optres_payload_bodies_flags.clear();
         self.drop_rc.cond_store_flag_params.clear();
         self.drop_rc.field_view_flags.clear();
+        self.drop_rc.loop_decl_rearm_anchors.clear();
         if let Some(tail) = func.body.final_expr.as_deref() {
             self.note_escaping_site(tail);
         }

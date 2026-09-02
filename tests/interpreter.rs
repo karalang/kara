@@ -39611,6 +39611,98 @@ fn field_param_view_leaves_sibling_field_bodies_armed() {
     }
 }
 
+/// B-2026-09-02-6 — the ORACLE half of the in-loop drop-flag re-arm.
+///
+/// The interpreter is path-sensitive AND iteration-sensitive for free: it
+/// re-runs the `let` on every pass and the binding simply owns whatever it was
+/// last given, so there is no flag to go stale. It printed all of these
+/// correctly before the codegen fix, and that is the point of keeping the twin
+/// — it is what establishes that B-2026-09-02-6 was a codegen-only defect
+/// rather than a shared misunderstanding of when the body is due.
+#[test]
+fn in_loop_decl_rearms_drop_flag_each_iteration() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         fn while_first(p: R) -> i64 {\n\
+             let mut i: i64 = 0;\n\
+             let mut acc: i64 = 0;\n\
+             while i < 3 {\n\
+                 println(f\"w{i}\");\n\
+                 let mut out: R = R { id: 90 + i, tag: f\"t\" };\n\
+                 if i == 0 { out = p; }\n\
+                 acc = acc + out.id;\n\
+                 i = i + 1;\n\
+             }\n\
+             return acc\n\
+         }\n\
+         fn while_middle(p: R) -> i64 {\n\
+             let mut i: i64 = 0;\n\
+             let mut acc: i64 = 0;\n\
+             while i < 3 {\n\
+                 println(f\"m{i}\");\n\
+                 let mut out: R = R { id: 60 + i, tag: f\"t\" };\n\
+                 if i == 1 { out = p; }\n\
+                 acc = acc + out.id;\n\
+                 i = i + 1;\n\
+             }\n\
+             return acc\n\
+         }\n\
+         fn outside(p: R) -> i64 {\n\
+             let mut out: R = R { id: 70, tag: f\"t\" };\n\
+             let mut i: i64 = 0;\n\
+             while i < 3 {\n\
+                 println(f\"o{i}\");\n\
+                 if i == 1 { out = p; }\n\
+                 i = i + 1;\n\
+             }\n\
+             return out.id\n\
+         }\n\
+         fn nested(p: R) -> i64 {\n\
+             let mut acc: i64 = 0;\n\
+             for a in 0..2 {\n\
+                 for b in 0..2 {\n\
+                     println(f\"n{a}{b}\")\n\
+                     let mut out: R = R { id: 10 * a + b, tag: f\"t\" };\n\
+                     if a == 0 and b == 1 { out = p; }\n\
+                     acc = acc + out.id;\n\
+                 }\n\
+             }\n\
+             return acc\n\
+         }\n";
+    for (label, body, want) in [
+        // The row's repro: disarmed on iteration 0, so BOTH later iterations'
+        // own values lost their bodies under codegen.
+        (
+            "disarm-on-first-iteration",
+            "println(f\"a{while_first(R { id: 5, tag: f\"q\" })}\")\n",
+            "w0\ndR90\nw1\ndR91\nw2\ndR92\ndR5\na188\n",
+        ),
+        // Disarmed in the MIDDLE, which separates the two halves: the pass
+        // ahead of the disarm was always right, the pass behind it was not.
+        (
+            "disarm-on-middle-iteration",
+            "println(f\"b{while_middle(R { id: 6, tag: f\"q\" })}\")\n",
+            "m0\ndR60\nm1\ndR61\nm2\ndR62\ndR6\nb128\n",
+        ),
+        // Declared OUTSIDE the loop: a real hand-over, which stays handed over
+        // for every later iteration. The boundary an over-eager re-arm moves.
+        (
+            "declared-outside-the-loop",
+            "println(f\"c{outside(R { id: 7, tag: f\"q\" })}\")\n",
+            "o0\no1\ndR70\no2\ndR7\nc7\n",
+        ),
+        // Nested: the inner `let` re-arms per INNER iteration.
+        (
+            "nested-loops",
+            "println(f\"d{nested(R { id: 8, tag: f\"q\" })}\")\n",
+            "n00\ndR0\nn01\ndR1\nn10\ndR10\nn11\ndR11\ndR8\nd29\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-30-53 — the ORACLE half of the conditional param-view
 /// assignment. `out = r` inside a match arm, where `r` is a payload view of
 /// an owned param, must run `out`'s OWN body exactly once on the path where

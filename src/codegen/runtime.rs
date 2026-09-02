@@ -9499,6 +9499,39 @@ impl<'ctx> super::Codegen<'ctx> {
         let bool_t = self.context.bool_type();
         let slot = b.build_alloca(bool_t, &format!("cmflag.{name}")).ok()?;
         b.build_store(slot, bool_t.const_int(1, false)).ok()?;
+        // B-2026-09-02-6 — the entry-block `true` above arms the flag ONCE PER
+        // CALL. For a binding declared inside a loop that is one arming too
+        // few: the `let` re-initializes it on every iteration, so it re-owns
+        // its value on every iteration, and a `false` stored by one iteration
+        // must not still be standing on the next. Emit a second `true` at the
+        // declaration point recorded by `record_loop_decl_rearm_anchor`, which
+        // executes once per iteration and dominates every later disarm within
+        // that iteration.
+        //
+        // Emitted here, at flag CREATION, so it happens exactly once no matter
+        // how many disarm sites the binding has — and it is emitted into IR
+        // that is already built, which is the whole reason the anchor is
+        // recorded rather than the store being emitted eagerly at the `let`.
+        if let Some((blk, after)) = self.drop_rc.loop_decl_rearm_anchors.get(name).copied() {
+            let rb = self.context.create_builder();
+            // Insert immediately AFTER the recorded instruction. The builder
+            // can only be positioned BEFORE a given instruction, so the target
+            // is the anchor's SUCCESSOR; when the anchor was the block's last
+            // instruction there is no successor, and appending at the end is
+            // right unless the block has since gained a terminator.
+            let next = match after {
+                Some(i) => i.get_next_instruction(),
+                None => blk.get_first_instruction(),
+            };
+            match next {
+                Some(n) => rb.position_before(&n),
+                None => match blk.get_terminator() {
+                    Some(t) => rb.position_before(&t),
+                    None => rb.position_at_end(blk),
+                },
+            }
+            let _ = rb.build_store(slot, bool_t.const_int(1, false));
+        }
         self.drop_rc
             .cond_move_drop_flags
             .insert(name.to_string(), slot);

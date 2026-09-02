@@ -116702,6 +116702,124 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_in_loop_decl_rearms_cond_move_drop_flag_each_iteration() {
+        // B-2026-09-02-6 — a `cond_move_drop_flags` flag is allocated and set
+        // `true` in the function's ENTRY block, which runs ONCE PER CALL. The
+        // entry block is the right home for the ALLOCA (it dominates every
+        // path) and the wrong home for the `true`: a binding declared in a loop
+        // body is re-initialized on every iteration, so it re-owns its value on
+        // every iteration. One entry-block arming left the flag `false` for
+        // every iteration after the first one that disarmed it, and each later
+        // iteration's freshly-declared value silently lost its own `Drop` body.
+        //
+        // The fix records where an in-loop `let` finished emitting and, when
+        // the flag is finally minted at the disarm site, goes back and inserts
+        // a second `true` there. That store executes once per iteration and
+        // dominates every disarm within it.
+        //
+        // Four shapes, and between them they lose FIVE bodies before the fix.
+        //
+        // `a` is the row's repro: the disarm is on iteration 0, so BOTH later
+        // iterations lost their own value. Measured pre-fix as
+        // `w0 dR90 w1 w2 dR5 a188` against `--interp`'s
+        // `w0 dR90 w1 dR91 w2 dR92 dR5 a188`.
+        //
+        // `b` moves the disarm to the MIDDLE iteration, which pins the two
+        // halves separately: iteration 0 is ahead of any disarm and was always
+        // right, iteration 2 is behind one and was not. A fix that armed at the
+        // top of the loop rather than at the declaration passes `a` and `b`
+        // alike, which is why neither is the interesting row.
+        //
+        // `c` IS: the binding is declared OUTSIDE the loop and assigned inside
+        // it. That is a genuine hand-over — `out` holds the caller's value from
+        // the assignment onward and must NOT be re-armed on the next iteration.
+        // It is byte-identical before and after, and it is the row an
+        // over-eager fix breaks by re-arming per iteration instead of per
+        // declaration.
+        //
+        // `d` is the nested spelling, where the inner `let` must re-arm per
+        // INNER iteration: the disarm lands on one of four passes and the two
+        // passes of the second outer iteration both lost their bodies before.
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn while_first(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        println(f"w{i}");
+        let mut out: R = R { id: 90 + i, tag: f"t" };
+        if i == 0 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn while_middle(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        println(f"m{i}");
+        let mut out: R = R { id: 60 + i, tag: f"t" };
+        if i == 1 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn outside(p: R) -> i64 {
+    let mut out: R = R { id: 70, tag: f"t" };
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"o{i}");
+        if i == 1 { out = p; }
+        i = i + 1;
+    }
+    return out.id
+}
+
+fn nested(p: R) -> i64 {
+    let mut acc: i64 = 0;
+    for a in 0..2 {
+        for b in 0..2 {
+            println(f"n{a}{b}")
+            let mut out: R = R { id: 10 * a + b, tag: f"t" };
+            if a == 0 and b == 1 { out = p; }
+            acc = acc + out.id;
+        }
+    }
+    return acc
+}
+
+fn main() {
+    println(f"a{while_first(R { id: 5, tag: f"q" })}");
+    println("-");
+    println(f"b{while_middle(R { id: 6, tag: f"q" })}");
+    println("-");
+    println(f"c{outside(R { id: 7, tag: f"q" })}");
+    println("-");
+    println(f"d{nested(R { id: 8, tag: f"q" })}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                concat!(
+                    "w0\ndR90\nw1\ndR91\nw2\ndR92\ndR5\na188\n-",
+                    "\nm0\ndR60\nm1\ndR61\nm2\ndR62\ndR6\nb128\n-",
+                    "\no0\no1\ndR70\no2\ndR7\nc7\n-",
+                    "\nn00\ndR0\nn01\ndR1\nn10\ndR10\nn11\ndR11\ndR8\nd29",
+                )
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_conditional_param_view_assign_keeps_target_body_per_path() {
         // B-2026-08-30-53 — `out = r` inside a match arm, where `r` is a
         // payload view of an OWNED param. The assignment hands the caller's

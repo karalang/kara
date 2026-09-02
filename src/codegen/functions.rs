@@ -1503,6 +1503,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
         self.drop_rc.optres_payload_bodies_flags.clear();
+        // B-2026-09-02-6 — same reasoning: these are BasicBlock / InstructionValue
+        // handles into the body just compiled, so an entry surviving into the
+        // next function names IR in a module position that has nothing to do
+        // with the binding of that name here.
+        self.drop_rc.loop_decl_rearm_anchors.clear();
         self.drop_rc.cond_store_flag_params.clear();
         self.drop_rc.field_view_flags.clear();
         // B-2026-08-30-2 — same reasoning one map over: `branch_tail_owner_slots`

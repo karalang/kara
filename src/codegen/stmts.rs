@@ -3597,9 +3597,42 @@ impl<'ctx> super::Codegen<'ctx> {
         self.tracing.diag_span = Some(stmt.span);
         let out = self.compile_stmt_tracking_assign_target(stmt);
         if out.is_ok() {
+            self.record_loop_decl_rearm_anchor(stmt);
             self.tracing.diag_span = saved;
         }
         out
+    }
+
+    /// B-2026-09-02-6 — remember where an in-loop `let <name> = ...` finished
+    /// emitting, so a `cond_move_drop_flags` flag minted later can go back and
+    /// re-arm itself at the DECLARATION rather than only at function entry.
+    ///
+    /// Called after the statement compiled, so the recorded instruction is the
+    /// last one the `let` itself emitted and the re-arm lands after the
+    /// binding's slot has been initialized — never before it.
+    ///
+    /// Gated on `loop_stack` being non-empty, which is the entire scope of the
+    /// defect: a `let` outside every loop runs at most once per call, so the
+    /// entry-block `true` the flag already gets is that same re-arm and there
+    /// is nothing to add. Keeping the map empty for those shapes is what makes
+    /// this inert for all non-loop code rather than a change to how every flag
+    /// in the tree is armed.
+    fn record_loop_decl_rearm_anchor(&mut self, stmt: &Stmt) {
+        if self.fn_ctx.loop_stack.is_empty() {
+            return;
+        }
+        let StmtKind::Let { pattern, .. } = &stmt.kind else {
+            return;
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        let Some(blk) = self.builder.get_insert_block() else {
+            return;
+        };
+        self.drop_rc
+            .loop_decl_rearm_anchors
+            .insert(name.clone(), (blk, blk.get_last_instruction()));
     }
 
     fn compile_stmt_tracking_assign_target(&mut self, stmt: &Stmt) -> Result<(), String> {

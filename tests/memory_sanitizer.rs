@@ -67237,6 +67237,103 @@ fn main() {
     }
 
     #[test]
+    fn asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once() {
+        // B-2026-09-02-6 — the heap half of the in-loop drop-flag re-arm.
+        //
+        // The row's own repro carries a scalar plus a one-character tag, so the
+        // whole defect there is a missing line of output: nothing about the
+        // memory side is observable, and a fix can look complete against it
+        // while leaving every restored body unbalanced. That matters more here
+        // than usual, because the fix's entire effect is to make bodies run
+        // that previously did NOT — which is the change most able to introduce
+        // a double free — and the mechanism it does it with is a per-path flag,
+        // where re-arming one iteration too many is a use-after-free on a husk
+        // the caller still owns.
+        //
+        // Each `R` owns an eight-element `Vec[String]` of long strings, so a
+        // body that fails to run strands nine allocations and one that runs
+        // twice is a double free. `dR<id>-<len>` reads the Vec's length from
+        // inside the body, so a body running on a moved-from object shows up as
+        // a wrong count rather than passing quietly.
+        //
+        // The three shapes are the ledger row's, and the outer loop runs them
+        // three times so a flag that fails to reset between CALLS is caught as
+        // well as one that fails to reset between iterations. Pre-fix this
+        // stranded nine bodies (three per call: `dR91`/`dR92` from the first
+        // shape and `dR62` from the second); `outside` is the control whose
+        // hand-over must survive every later iteration, and it is unchanged.
+        //
+        // Measured 0 definitely/indirectly lost under valgrind, and
+        // byte-identical on all four surfaces.
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}-{self.xs.len()}") } }
+
+fn mk(n: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 8 { v.push(f"payloadpayload-{n}-{i}"); i = i + 1; }
+    return R { id: n, xs: v }
+}
+
+fn while_first(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        let mut out: R = mk(90 + i);
+        if i == 0 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn while_middle(p: R) -> i64 {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 3 {
+        let mut out: R = mk(60 + i);
+        if i == 1 { out = p; }
+        acc = acc + out.id;
+        i = i + 1;
+    }
+    return acc
+}
+
+fn outside(p: R) -> i64 {
+    let mut out: R = mk(70);
+    let mut i: i64 = 0;
+    while i < 3 {
+        if i == 1 { out = p; }
+        i = i + 1;
+    }
+    return out.id
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"a{while_first(mk(5))}");
+        println(f"b{while_middle(mk(6))}");
+        println(f"c{outside(mk(7))}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dR90-8", "dR91-8", "dR92-8", "dR5-8", "a188", "dR60-8", "dR61-8", "dR62-8",
+                "dR6-8", "b128", "dR70-8", "dR7-8", "c7", "dR90-8", "dR91-8", "dR92-8", "dR5-8",
+                "a188", "dR60-8", "dR61-8", "dR62-8", "dR6-8", "b128", "dR70-8", "dR7-8", "c7",
+                "dR90-8", "dR91-8", "dR92-8", "dR5-8", "a188", "dR60-8", "dR61-8", "dR62-8",
+                "dR6-8", "b128", "dR70-8", "dR7-8", "c7", "done",
+            ],
+            "b6-in-loop-drop-flag-rearm",
+        );
+    }
+
+    #[test]
     fn asan_optres_temp_arg_ownership_follows_callee_escape() {
         // Escape routes — each of these aborted or leaked before.
         assert_clean_asan_run(
