@@ -48630,3 +48630,126 @@ fn instance_method_default_fill_declines_what_it_cannot_name() {
         "`B.m` has no default, so `A.m`'s must not reach it"
     );
 }
+
+// ── B-2026-09-02-18 / B-2026-09-02-19 — generic-parameter spelling and bounds ──
+
+/// B-2026-09-02-18 — a generic prefix sum must compile.
+///
+/// `Type` compares structurally, and one type parameter has TWO internal
+/// spellings: a SIGNATURE position lowers `T` to `Type::TypeParam("T")`, while
+/// a function-BODY annotation (`let mut a: Vec[T] = Vec.new();`) deliberately
+/// leaves `Type::Named { name: "T", args: [] }` — the Named-vs-TypeParam trap
+/// that `current_body_dim_scope` documents. The arithmetic arms bypass
+/// `types_compatible` (whose `TypeParam` wildcard would have papered over it)
+/// and demanded strict equality, so adding the two spellings of ONE parameter
+/// was rejected as "found 'T' and 'T'" — a message naming the operands
+/// identically because they are identical.
+#[test]
+fn add_bounded_param_accepts_both_spellings_of_the_same_parameter() {
+    typecheck_ok(
+        r#"
+fn f[T: Copy + Add](zero: T) -> T {
+    let mut a: Vec[T] = Vec.new();
+    a.push(zero);
+    return a[0] + zero;
+}
+fn main() { println(f"{f(5)}"); }
+"#,
+    );
+}
+
+/// B-2026-09-02-18 — the whole point of the row: the natural generic prefix
+/// sum, reading back out of the buffer it is building.
+#[test]
+fn generic_prefix_sum_over_an_add_bounded_parameter_typechecks() {
+    typecheck_ok(
+        r#"
+fn prefix[T: Copy + Add](xs: ref Vec[T], zero: T) -> Vec[T] {
+    let mut p: Vec[T] = Vec.new();
+    p.push(zero);
+    let mut i: i64 = 0;
+    while i < xs.len() {
+        p.push(p[i] + xs[i]);
+        i = i + 1;
+    }
+    return p;
+}
+fn main() {
+    let v: Vec[i64] = vec![1, 2, 3];
+    let r = prefix(v, 0);
+    println(f"{r[3]}");
+}
+"#,
+    );
+}
+
+/// B-2026-09-02-18 — the tolerance is per-PARAMETER, not a blanket permit.
+/// Mixing two DIFFERENT parameters must still be rejected, including when one
+/// of them arrives in the body spelling. Without this the fix would have
+/// admitted `T + U`, which no instantiation can lower.
+#[test]
+fn add_bounded_arithmetic_still_rejects_two_different_parameters() {
+    let errs = typecheck_errors(
+        r#"
+fn f[T: Add, U: Add](a: T, b: U) -> T {
+    let mut v: Vec[U] = Vec.new();
+    v.push(b);
+    return a + v[0];
+}
+fn main() { println("x"); }
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("requires both operands to have the same type")),
+        "mixing two distinct type parameters must stay an error; got {errs:?}"
+    );
+}
+
+/// B-2026-09-02-19 (leg 2) — `v[i]` on a `T: Copy` parameter is exactly what
+/// design.md § Deref licenses ("requires `T: Copy`"), so the declared bound
+/// must satisfy `E_INDEX_MOVE_NON_COPY`. It used not to be consulted at all,
+/// and the diagnostic asserted the element type "is not `Copy`" about a
+/// parameter whose signature one line above says it is.
+#[test]
+fn index_read_is_allowed_through_a_copy_bounded_parameter() {
+    typecheck_ok(
+        r#"
+fn f[T: Copy](v: ref Vec[T]) -> T { let a = v[0]; return a; }
+fn main() { let v: Vec[i64] = vec![1, 2]; println(f"{f(v)}"); }
+"#,
+    );
+}
+
+/// B-2026-09-02-19 — `Numeric` is `Copy + Add + Sub + Mul + Div + PartialOrd`
+/// (design.md § Numerical Types), so it licenses the index read too. Spelled
+/// out rather than reached through alias expansion: user-written trait aliases
+/// are still `E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET`.
+#[test]
+fn index_read_is_allowed_through_a_numeric_bounded_parameter() {
+    typecheck_ok(
+        r#"
+fn f[T: Numeric](v: ref Vec[T]) -> T { let a = v[0]; return a; }
+fn main() { let v: Vec[i64] = vec![1, 2]; println(f"{f(v)}"); }
+"#,
+    );
+}
+
+/// B-2026-09-02-19 — an UNBOUNDED parameter keeps the rejection. The bound is
+/// what makes the read sound; without one, `v[i]` really would move out of a
+/// container that cannot hold a hole.
+#[test]
+fn index_read_still_rejected_through_an_unbounded_parameter() {
+    let errs = typecheck_errors(
+        r#"
+fn f[T](v: ref Vec[T]) -> T { let a = v[0]; return a; }
+fn main() { println("x"); }
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_INDEX_MOVE_NON_COPY")),
+        "an unbounded T must still be non-Copy at an index read; got {errs:?}"
+    );
+}

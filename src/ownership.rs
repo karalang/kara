@@ -1103,12 +1103,79 @@ fn is_copy_type_basic(ty: &Type) -> bool {
     )
 }
 
+/// The names of a function's in-scope generic TYPE PARAMETERS that its own
+/// bounds guarantee are `Copy` — `T` in `fn f[T: Copy](..)`, in a
+/// `where T: Copy` clause, or on the enclosing `impl[T: Copy]` block.
+///
+/// `Numeric` counts, for the reason spelled out on the typechecker's
+/// `type_param_has_copy_bound`: design.md defines it as
+/// `Copy + Add + Sub + Mul + Div + PartialOrd`. User-written trait aliases do
+/// NOT, because they are still `E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET` — when they
+/// land, the alias expansion belongs here and in that helper together.
+///
+/// Appends into `out` so an impl block's parameters and its method's own can
+/// be merged (B-2026-09-02-19).
+pub(crate) fn collect_copy_bounded_type_params(
+    generics: &Option<GenericParams>,
+    where_clause: &Option<WhereClause>,
+    out: &mut HashSet<String>,
+) {
+    let names_copy = |bounds: &[crate::ast::TraitBound]| {
+        bounds
+            .iter()
+            .any(|b| b.path.last().is_some_and(|t| t == "Copy" || t == "Numeric"))
+    };
+    if let Some(gp) = generics {
+        for param in &gp.params {
+            if names_copy(&param.bounds) {
+                out.insert(param.name.clone());
+            }
+        }
+    }
+    if let Some(wc) = where_clause {
+        for c in &wc.constraints {
+            if let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = c
+            {
+                if names_copy(bounds) {
+                    out.insert(type_name.clone());
+                }
+            }
+        }
+    }
+}
+
 /// Free-function form of `OwnershipChecker::is_copy_type`. Lives here so
 /// auxiliary passes (use classifier, future RC-fallback predicate driver)
 /// can answer the same question without instantiating an `OwnershipChecker`.
-pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
+///
+/// `copy_params` is the enclosing signature's `Copy`-bounded generic type
+/// parameters, from [`collect_copy_bounded_type_params`]; pass an empty set
+/// outside a generic body.
+///
+/// B-2026-09-02-19 — without the scope, a parameter declared `T: Copy` was
+/// classified non-`Copy` inside its own body, so `fn f[T: Copy](x: T) { let a
+/// = x; let b = x; }` reported a use-after-move against the very bound its
+/// signature declares. The `Named` spelling is what a body annotation and
+/// `lower_type_for_ownership` both produce for a type parameter; `TypeParam`
+/// is what reaches here from `tc.expr_types`. Both are accepted — see the
+/// typechecker's `type_param_has_trait_bound` for the Named-vs-TypeParam trap.
+pub(crate) fn is_copy_type_in_scope(
+    ty: &Type,
+    tc: &TypeCheckResult,
+    copy_params: &HashSet<String>,
+) -> bool {
     if is_copy_type_basic(ty) {
         return true;
+    }
+    if let Type::TypeParam(name) = ty {
+        return copy_params.contains(name);
+    }
+    if let Type::Named { name, args } = ty {
+        if args.is_empty() && copy_params.contains(name) {
+            return true;
+        }
     }
     match ty {
         // B-2026-07-15-3: a `ref` / `mut ref` to a plain SCALAR is a Copy
@@ -1118,8 +1185,10 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         // use-after-move on later uses of the borrow. Heap-typed borrows
         // stay non-Copy (their reads keep the borrow-discipline checks).
         Type::Ref(inner) | Type::MutRef(inner) if is_copy_type_basic(inner) => true,
-        Type::Tuple(types) => types.iter().all(|t| is_copy_type(t, tc)),
-        Type::Array { element, .. } => is_copy_type(element, tc),
+        Type::Tuple(types) => types
+            .iter()
+            .all(|t| is_copy_type_in_scope(t, tc, copy_params)),
+        Type::Array { element, .. } => is_copy_type_in_scope(element, tc, copy_params),
         // A `Vector[T, N]` is a fixed-size, register-resident SIMD value — a POD
         // bundle of `N` scalar lanes, semantically `Copy` exactly like the
         // fixed `Array` arm above (its lane type is always a primitive scalar,
@@ -1129,7 +1198,7 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         // original binding fired a spurious use-after-move — even though a SIMD
         // register copy neither allocates nor aliases owned state (B-2026-07-11-1,
         // surfaced by Slipstream's `Vector[f64, 2]` collide kernel).
-        Type::Vector { element, .. } => is_copy_type(element, tc),
+        Type::Vector { element, .. } => is_copy_type_in_scope(element, tc, copy_params),
         Type::Slice { mutable, .. } => !mutable,
         // Raw pointers (`*const T` / `*mut T`) are `Copy`, regardless of
         // `const`/`mut` — copying a pointer is a bitwise scalar copy that
@@ -1169,7 +1238,9 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         Type::Function { .. } => true,
         Type::Named { name, args } => {
             if matches!(name.as_str(), "Option" | "Result") {
-                return args.iter().all(|a| is_copy_type(a, tc));
+                return args
+                    .iter()
+                    .all(|a| is_copy_type_in_scope(a, tc, copy_params));
             }
             if let Some(info) = tc.struct_info.get(name) {
                 info.derived_traits.contains("Copy")
@@ -1252,6 +1323,13 @@ pub struct OwnershipChecker<'a> {
     pub(crate) arc_values: HashMap<String, HashSet<String>>,
     /// Function currently being analysed (key into the per-function maps).
     pub(crate) current_function: String,
+    /// Names of the generic TYPE PARAMETERS in scope for the function
+    /// currently under check whose bounds guarantee they are `Copy`
+    /// (the enclosing `impl` block's merged with the function's own).
+    /// Set and restored per function by `check_function`; consulted by
+    /// `is_copy_type` so a `T: Copy` parameter is not treated as a
+    /// move-only value inside its own body (B-2026-09-02-19).
+    copy_bounded_type_params: HashSet<String>,
     /// Whether the current function suppresses RC fallback notes via
     /// `#[allow(rc_fallback)]`. Errors from `#[no_rc]` / `@no_rc` are
     /// not suppressed.
@@ -1574,6 +1652,7 @@ impl<'a> OwnershipChecker<'a> {
             rc_values: HashMap::new(),
             arc_values: HashMap::new(),
             current_function: String::new(),
+            copy_bounded_type_params: HashSet::new(),
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
             panic_on_alloc_failure: true,
@@ -1626,9 +1705,11 @@ impl<'a> OwnershipChecker<'a> {
         self
     }
 
-    /// Check whether a type is Copy — primitives, or named types with #[derive(Copy)].
+    /// Check whether a type is Copy — primitives, named types with
+    /// #[derive(Copy)], or a generic parameter the function under check
+    /// declares `Copy` (B-2026-09-02-19).
     fn is_copy_type(&self, ty: &Type) -> bool {
-        is_copy_type(ty, self.typecheck_result)
+        is_copy_type_in_scope(ty, self.typecheck_result, &self.copy_bounded_type_params)
     }
 
     pub fn check(mut self) -> OwnershipCheckResult {
@@ -2237,7 +2318,7 @@ impl<'a> OwnershipChecker<'a> {
                 // support (e.g. `Secret.expose`'s field-borrow placeholder,
                 // spliced from the gated `std.secret` module into user code).
                 Item::Function(f) if !is_compiler_builtin_fn(f) => {
-                    self.check_function(f, None, &prelude)
+                    self.check_function(f, None, None, &prelude)
                 }
                 Item::ImplBlock(imp) => {
                     let type_name = match &imp.target_type.kind {
@@ -2249,7 +2330,7 @@ impl<'a> OwnershipChecker<'a> {
                             if is_compiler_builtin_fn(method) {
                                 continue;
                             }
-                            self.check_function(method, Some(&type_name), &prelude);
+                            self.check_function(method, Some(&type_name), Some(imp), &prelude);
                         }
                     }
                 }
@@ -2262,8 +2343,28 @@ impl<'a> OwnershipChecker<'a> {
         &mut self,
         f: &Function,
         impl_type: Option<&str>,
+        impl_block: Option<&ImplBlock>,
         prelude: &ClassifierPrelude,
     ) {
+        // B-2026-09-02-19 — the `Copy`-bounded generic parameters visible in
+        // this body: the enclosing `impl[T: Copy]` block's, then the
+        // function's own (an inner `[T]` shadows the outer name, but a
+        // shadowing param that drops the bound is rejected upstream, so a
+        // plain union is exact here). Function-local, like every other map
+        // reset just below.
+        self.copy_bounded_type_params.clear();
+        if let Some(imp) = impl_block {
+            collect_copy_bounded_type_params(
+                &imp.generic_params,
+                &imp.where_clause,
+                &mut self.copy_bounded_type_params,
+            );
+        }
+        collect_copy_bounded_type_params(
+            &f.generic_params,
+            &f.where_clause,
+            &mut self.copy_bounded_type_params,
+        );
         let fn_key = if let Some(t) = impl_type {
             format!("{}.{}", t, f.name)
         } else {

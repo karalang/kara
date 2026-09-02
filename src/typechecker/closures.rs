@@ -49,6 +49,20 @@ impl<'a> super::TypeChecker<'a> {
         ) {
             return true;
         }
+        // B-2026-09-02-19 — a generic parameter declared `T: Copy` IS `Copy`
+        // inside its own body, and the bound is checked at every
+        // instantiation, so nothing reaches codegen that the bound does not
+        // already guarantee. Without this the declared bound was simply not
+        // consulted here: `fn f[T: Copy](v: ref Vec[T]) -> T { let a = v[0]; }`
+        // was rejected by `E_INDEX_MOVE_NON_COPY` with "this element type is
+        // not `Copy`" — a message contradicting the signature one line above
+        // it, and contradicting design.md § Deref, which says `v[i]` "requires
+        // `T: Copy`". Both spellings of the parameter are accepted (the
+        // Named-vs-TypeParam trap; see `type_param_has_trait_bound`), which is
+        // what also covers a `Vec[T]` written as a body annotation.
+        if self.type_param_has_copy_bound(ty) {
+            return true;
+        }
         match ty {
             Type::Tuple(types) => types.iter().all(|t| self.is_copy_type_during_check(t)),
             Type::Array { element, .. } => self.is_copy_type_during_check(element),

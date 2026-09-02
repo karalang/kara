@@ -13725,3 +13725,112 @@ fn use_after_move_warnings_are_emitted_in_source_order() {
          unsorted sequence here is per-process hash order leaking into output"
     );
 }
+
+// ── B-2026-09-02-19 — a declared `T: Copy` bound is honoured in the body ──
+
+/// B-2026-09-02-19 (leg 1) — rebinding a `T: Copy` parameter twice is not a
+/// use-after-move. The move checker decides `Consume` vs `Read` from
+/// `is_copy_type`, which knew about `#[derive(Copy)]` types but not about a
+/// parameter whose own signature declares the bound — so correct generic code
+/// drew a false E0500. The concrete twin (`fn f(x: i64)`) was always clean,
+/// which is the whole proof: the only difference is that the type is a
+/// `Copy`-bounded parameter rather than a `Copy` type.
+#[test]
+fn copy_bounded_parameter_may_be_rebound_twice() {
+    ownership_ok(
+        r#"
+fn f[T: Copy](x: T) -> i64 { let a = x; let b = x; return 1; }
+fn main() { println(f"{f(7)}"); }
+"#,
+    );
+}
+
+/// B-2026-09-02-19 — `Numeric` implies `Copy` (design.md § Numerical Types),
+/// so the same holds through it.
+#[test]
+fn numeric_bounded_parameter_may_be_rebound_twice() {
+    ownership_ok(
+        r#"
+fn f[T: Numeric](x: T) -> T { let a = x; let b = x; return a + b; }
+fn main() { println(f"{f(7)}"); }
+"#,
+    );
+}
+
+/// B-2026-09-02-19 — a `where` clause carries the bound just as a `[T: Copy]`
+/// parameter list does.
+#[test]
+fn copy_bound_in_a_where_clause_is_honoured() {
+    ownership_ok(
+        r#"
+fn f[T](x: T) -> i64 where T: Copy { let a = x; let b = x; return 1; }
+fn main() { println(f"{f(7)}"); }
+"#,
+    );
+}
+
+/// B-2026-09-02-19 — an enclosing `impl[T: Copy]` block's parameters count for
+/// its methods, which is why the ownership pass and the use classifier both
+/// merge the impl block's bounds with the method's own.
+#[test]
+fn copy_bound_on_the_enclosing_impl_block_is_honoured() {
+    ownership_ok(
+        r#"
+struct Cell[T] { v: T }
+impl[T: Copy] Cell[T] {
+    fn from_vec(vs: ref Vec[T]) -> T { let a = vs[0]; return a; }
+}
+fn main() {
+    let vs: Vec[i64] = vec![4];
+    println(f"{Cell[i64].from_vec(vs)}");
+}
+"#,
+    );
+}
+
+/// B-2026-09-02-19 — THE scoping test. A parameter named `T` is `Copy` only in
+/// the function that declares it so; a sibling that reuses the letter without
+/// the bound must still be move-checked. A program-wide set of `Copy`-bounded
+/// names would silently suppress the real diagnostic here, which is why the
+/// set is keyed per function body.
+#[test]
+fn a_copy_bound_does_not_leak_to_a_sibling_that_reuses_the_name() {
+    let errs = ownership_errors(
+        r#"
+fn copyfn[T: Copy](x: T) -> i64 { let a = x; let b = x; return 1; }
+fn movefn[T](x: T) -> i64 { let a = x; let b = x; return 2; }
+fn main() { println(f"{copyfn(7)}"); }
+"#,
+    );
+    let uam: Vec<_> = errs
+        .iter()
+        .filter(|e| e.message.contains("moved here, used again here"))
+        .collect();
+    assert_eq!(
+        uam.len(),
+        1,
+        "exactly the unbounded sibling must report a use-after-move; got {errs:?}"
+    );
+    // The reported span must land in `movefn`, on line 3 of the source above.
+    assert_eq!(
+        uam[0].span.line, 3,
+        "the surviving witness must be the unbounded `movefn`; got {:?}",
+        uam[0]
+    );
+}
+
+/// B-2026-09-02-19 — a non-`Copy` binding is unaffected: the fix widens the
+/// predicate only for parameters whose bound guarantees the copy.
+#[test]
+fn a_string_rebind_still_reports_use_after_move() {
+    let errs = ownership_errors(
+        r#"
+fn main() { let s: String = "hi"; let a = s; let b = s; println("x"); }
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("moved here, used again here")),
+        "a String rebind must still report a use-after-move; got {errs:?}"
+    );
+}

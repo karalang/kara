@@ -1902,20 +1902,67 @@ impl<'a> super::TypeChecker<'a> {
     /// pre-populates every param name), so a `Named` whose name is a key there
     /// IS that parameter — accept both spellings.
     pub(super) fn type_param_has_trait_bound(&self, ty: &Type, trait_name: &str) -> bool {
-        let name = match ty {
-            Type::TypeParam(name) => name,
-            Type::Named { name, args }
-                if args.is_empty() && self.enclosing_bounds.contains_key(name) =>
-            {
-                name
-            }
-            _ => return false,
+        let Some(name) = self.type_param_name(ty) else {
+            return false;
         };
         self.enclosing_bounds.get(name).is_some_and(|bounds| {
             bounds
                 .iter()
                 .any(|b| b.path.last().is_some_and(|t| t == trait_name))
         })
+    }
+
+    /// The name of the in-scope generic type parameter `ty` denotes, under
+    /// EITHER of the two spellings the lowering paths produce — see
+    /// `type_param_has_trait_bound` for the Named-vs-TypeParam trap.
+    /// `None` for anything that is not an in-scope type parameter.
+    pub(super) fn type_param_name<'t>(&self, ty: &'t Type) -> Option<&'t String> {
+        match ty {
+            Type::TypeParam(name) => Some(name),
+            Type::Named { name, args }
+                if args.is_empty() && self.enclosing_bounds.contains_key(name) =>
+            {
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// True iff `a` and `b` denote the SAME in-scope generic type parameter,
+    /// whichever spelling each side happens to carry.
+    ///
+    /// B-2026-09-02-18 — the two spellings are not merely a cosmetic wart:
+    /// `Type` derives `PartialEq` structurally, so `Named { name: "T" }` and
+    /// `TypeParam("T")` compare UNEQUAL even though they are the same
+    /// parameter. Every ordinary type check survives that because
+    /// `types_compatible` has a permissive `TypeParam` wildcard, but the
+    /// arithmetic arms below deliberately bypass it and demand strict
+    /// equality — so a generic prefix sum whose accumulator came from a BODY
+    /// annotation (`let mut a: Vec[T] = Vec.new();`, lowered `Named`) added to
+    /// a SIGNATURE-lowered operand (`zero: T`, lowered `TypeParam`) was
+    /// rejected as "both operands must have the same type, found 'T' and 'T'"
+    /// — a message that names the two operands identically because they ARE
+    /// identical, and only their internal spelling differed.
+    pub(super) fn same_type_param(&self, a: &Type, b: &Type) -> bool {
+        match (self.type_param_name(a), self.type_param_name(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
+    }
+
+    /// True iff `ty` is a generic type parameter that the enclosing scope's
+    /// bounds guarantee is `Copy`.
+    ///
+    /// `Numeric` counts because design.md § Numerical Types defines it as
+    /// `Copy + Add + Sub + Mul + Div + PartialOrd` — a `T: Numeric` parameter
+    /// instantiates only to primitive numerics, all of which are `Copy`. It is
+    /// spelled out here rather than reached through general trait-alias
+    /// expansion because user-written aliases are still
+    /// `E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET`; `Numeric` is the one the compiler
+    /// already special-cases (`type_param_has_numeric_bound`).
+    pub(super) fn type_param_has_copy_bound(&self, ty: &Type) -> bool {
+        self.type_param_has_trait_bound(ty, "Copy")
+            || self.type_param_has_trait_bound(ty, "Numeric")
     }
 
     /// True iff `ty` is a generic type parameter carrying a `Numeric` bound in
@@ -2679,7 +2726,10 @@ impl<'a> super::TypeChecker<'a> {
                     // Arithmetic on a `T: Numeric` generic parameter — the bound
                     // guarantees `T` is a primitive numeric type. Both operands
                     // must be the same parameter (no mixed-`T` arithmetic).
-                    if left_ty != right_ty {
+                    //
+                    // `same_type_param` and not bare `!=`: the two spellings of
+                    // one parameter are structurally unequal (B-2026-09-02-18).
+                    if left_ty != right_ty && !self.same_type_param(&left_ty, &right_ty) {
                         self.type_error(
                             format!(
                                 "arithmetic on a 'Numeric' type parameter requires both operands \
@@ -2701,8 +2751,10 @@ impl<'a> super::TypeChecker<'a> {
                     // every instantiation is a primitive numeric / `String` /
                     // distinct-numeric that codegen lowers post-monomorphization
                     // (verified: `T: Numeric` arithmetic already builds+runs).
-                    // Result is `T`; both operands must be the same parameter.
-                    if left_ty != right_ty {
+                    // Result is `T`; both operands must be the same parameter
+                    // — under EITHER spelling, per `same_type_param`
+                    // (B-2026-09-02-18).
+                    if left_ty != right_ty && !self.same_type_param(&left_ty, &right_ty) {
                         self.type_error(
                             format!(
                                 "arithmetic on a '{}'-bounded type parameter requires both \

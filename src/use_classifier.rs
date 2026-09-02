@@ -38,13 +38,13 @@
 //!   block of the call site, mirroring the closure-body lowering.
 
 use crate::ast::{
-    Block, Expr, ExprKind, Item, ParsedInterpolationPart, Pattern, PatternKind, Program,
-    RestPattern, SelfParam, Stmt, StmtKind,
+    Block, Expr, ExprKind, Function, ImplBlock, ImplItem, Item, ParsedInterpolationPart, Pattern,
+    PatternKind, Program, RestPattern, SelfParam, Stmt, StmtKind,
 };
 use crate::cfg::{Classification, ConsumeOrigin, PlacePath, PlaceSeg, UseKind};
 use crate::ownership::{
-    callee_param_modes_key, collect_callee_param_modes, collect_method_param_modes,
-    collect_method_self_modes, is_copy_type, OwnershipMode,
+    callee_param_modes_key, collect_callee_param_modes, collect_copy_bounded_type_params,
+    collect_method_param_modes, collect_method_self_modes, is_copy_type_in_scope, OwnershipMode,
 };
 use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
@@ -69,6 +69,18 @@ pub struct ClassifierPrelude {
     /// Bare names bound by this unit's `import` declarations
     /// (B-2026-07-29-16). See the call-arg gate in `walk_expr`.
     imported_names: HashSet<String>,
+    /// Per-function `Copy`-bounded generic type-parameter names, keyed by the
+    /// function BODY's span — the one thing `classify_function_body_with`
+    /// receives that identifies which function it is about to walk.
+    ///
+    /// B-2026-09-02-19: the classifier decides `Consume` vs `Read` from
+    /// `is_copy_type`, so without the enclosing signature's bounds a
+    /// `T: Copy` parameter was classified move-only and every rebind of it
+    /// produced a use-after-move witness. Keyed rather than global because a
+    /// name like `T` is `Copy` only in the function that declares it so —
+    /// a program-wide set would silently suppress the real diagnostic in an
+    /// unbounded sibling that happens to reuse the letter.
+    copy_bounded_type_params: FxHashMap<SpanKey, HashSet<String>>,
 }
 
 impl ClassifierPrelude {
@@ -82,8 +94,43 @@ impl ClassifierPrelude {
             method_param_modes: collect_method_param_modes(program),
             unit_variant_names: collect_unit_variant_names(tc),
             imported_names: collect_imported_names(program),
+            copy_bounded_type_params: collect_copy_bounded_type_params_by_body(program),
         }
     }
+}
+
+/// Map each function body's span to the `Copy`-bounded generic type-parameter
+/// names in scope for it, merging an enclosing `impl` block's parameters with
+/// the method's own. Mirrors `OwnershipChecker::check_function`'s walk so the
+/// two phases answer `is_copy_type` identically. B-2026-09-02-19.
+fn collect_copy_bounded_type_params_by_body(
+    program: &Program,
+) -> FxHashMap<SpanKey, HashSet<String>> {
+    let mut out: FxHashMap<SpanKey, HashSet<String>> = FxHashMap::default();
+    let mut record = |f: &Function, outer: Option<&ImplBlock>| {
+        let mut names = HashSet::new();
+        if let Some(imp) = outer {
+            collect_copy_bounded_type_params(&imp.generic_params, &imp.where_clause, &mut names);
+        }
+        collect_copy_bounded_type_params(&f.generic_params, &f.where_clause, &mut names);
+        if !names.is_empty() {
+            out.insert(SpanKey::from_span(&f.body.span), names);
+        }
+    };
+    for item in &program.items {
+        match item {
+            Item::Function(f) => record(f, None),
+            Item::ImplBlock(imp) => {
+                for it in &imp.items {
+                    if let ImplItem::Method(method) = it {
+                        record(method, Some(imp));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Bare names this unit `import`s, aliases included (the ALIAS is what the
@@ -167,6 +214,11 @@ pub fn classify_function_body_with(
         method_param_modes: &prelude.method_param_modes,
         unit_variant_names: &prelude.unit_variant_names,
         imported_names: &prelude.imported_names,
+        copy_bounded_type_params: prelude
+            .copy_bounded_type_params
+            .get(&SpanKey::from_span(&body.span))
+            .cloned()
+            .unwrap_or_default(),
         param_types,
         local_types: HashMap::new(),
         classification: Classification::default(),
@@ -194,6 +246,9 @@ struct UseClassifier<'a> {
     unit_variant_names: &'a HashSet<String>,
     imported_names: &'a HashSet<String>,
     param_types: HashMap<String, Type>,
+    /// The enclosing function's `Copy`-bounded generic type parameters — see
+    /// `ClassifierPrelude::copy_bounded_type_params` (B-2026-09-02-19).
+    copy_bounded_type_params: HashSet<String>,
     /// Round 12.18: name-keyed types for `let`-bound locals,
     /// populated as the walker enters each `let pat = value;` and
     /// consulted by `classify_identifier` before falling back to the
@@ -1246,7 +1301,7 @@ impl<'a> UseClassifier<'a> {
             .or_else(|| self.local_types.get(name))
             .or_else(|| self.tc.expr_types.get(&SpanKey::from_span(span)));
         match ty {
-            Some(t) if !is_copy_type(t, self.tc) => UseKind::Consume,
+            Some(t) if !self.is_copy_type(t) => UseKind::Consume,
             _ => UseKind::Read,
         }
     }
@@ -1417,8 +1472,14 @@ impl<'a> UseClassifier<'a> {
         self.tc
             .expr_types
             .get(&SpanKey::from_span(&expr.span))
-            .map(|t| is_copy_type(t, self.tc))
+            .map(|t| self.is_copy_type(t))
             .unwrap_or(false)
+    }
+
+    /// `is_copy_type` against the enclosing function's generic bounds — a
+    /// `T: Copy` parameter is `Copy` inside its own body (B-2026-09-02-19).
+    fn is_copy_type(&self, ty: &Type) -> bool {
+        is_copy_type_in_scope(ty, self.tc, &self.copy_bounded_type_params)
     }
 
     fn pattern_binds_anything(&self, pattern: &Pattern) -> bool {
