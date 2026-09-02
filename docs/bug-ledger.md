@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 345 |
-| run-vs-build | 303 |
+| run-vs-build | 305 |
 | leak | 252 |
 | missing-feature | 193 |
 | double-free | 162 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1361 |
-| interp | 320 |
+| codegen | 1363 |
+| interp | 322 |
 | typecheck | 286 |
 | ownership | 72 |
 | other | 70 |
@@ -152,7 +152,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
 | B-2026-09-01-41 | 2026-09-01 | codegen | medium | A STRUCT'S `Vec` FIELD IS NEVER FREED when the struct is declared OUTSIDE a loop, the field is pushed to INSIDE it, and the loop body also makes a heap TEMPORARY -- all three needed, the element type is irrelevant, and the whole Vec leaks | — |
-| B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 | B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
@@ -163,6 +162,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 | B-2026-09-02-10 | 2026-09-02 | codegen | medium | B-2026-08-01-19's OVER-SUPPRESSION TRADE IS NOW A VISIBLE DIVERGENCE: a param view assigned into ONE field silences EVERY Drop-bearing field's body on the base, on all three compiled surfaces, while the interpreter is per-field since B-2026-08-30-54 -- a sibling that was never moved, never viewed and is read on the line before loses its body (`dR30 s dE dR8 v39` against `--interp`'s `dR30 s dR31 dE dR8 v39`). The flag is keyed by BINDING and the reason is per FIELD; only a struct with two or more Drop-bearing fields can show it | — |
 | B-2026-09-02-11 | 2026-09-02 | codegen | medium | A READ-ONLY `match v[i]` ARM STILL RUNS THE PAYLOAD'S `Drop` BODY TWICE ON ALL THREE COMPILED SURFACES -- `index got 4 dR3 dE dR3` against `--interp`'s `index got 4 dE dR3`. The arm consumes nothing, so B-2026-08-31-3's rule accepts it; the extra body is the DEFENSIVE COPY's payload, one level in from the enum wrapper B-2026-08-29-37 already withheld on the same clone. Valgrind-clean, so bodies-only | — |
+| B-2026-09-02-12 | 2026-09-02 | interp+codegen | medium | AN `Option`/`Result` SCRUTINEE WHOSE NON-MATCHING ARM CARRIES A `Drop` TYPE LOSES THAT PAYLOAD'S BODY ON ALL FOUR SURFACES -- and through `if let` as well as `while let`, so it is the OPTRES ENVELOPE rather than the loop; this is what B-2026-09-01-42 deliberately carved out, and it also refutes that row's `if let` control, which holds for a USER enum and not for `Result` | — |
+| B-2026-09-02-13 | 2026-09-02 | interp+codegen | medium | A DISCARDED ENUM STATEMENT RUNS THE ENUM'S OWN `Drop` BODY BUT NOT ITS PAYLOAD'S, on all four surfaces -- `mk(1);` prints `dB` where the BOUND spelling `let x = mk(1);` of the identical value prints `dB dW7`, so the two differ only in whether the value is named | — |
 
 ### Relocated
 
@@ -2111,6 +2112,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-35 | codegen | high | A FRESH-TEMP `Option`/`Result` ARGUMENT IS DOUBLE-FREED when the callee pushes it into a LOCAL it then RETURNS INSIDE AN AGGREGATE -- neither escape… | b3dbcee |
 | B-2026-09-01-38 | ownership+codegen | high | design.md's "partial moves out of a struct field are rejected if the struct has a `Drop` impl" is UNIMPLEMENTED, and the consequence is that a user's… | 960e840 |
 | B-2026-09-01-40 | codegen | high | A `let`-BOUND SCALAR FIELD READ OFF A STRUCT WITH ITS OWN `impl Drop` RUNS A DROP-BEARING SIBLING FIELD'S BODY AN EXTRA TIME ON EVERY COMPILED SURFAC… | cf75c62 |
+| B-2026-09-01-42 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss thro… | f8e28a7 |
 | B-2026-09-01-44 | interp | medium | THE ASSOCIATED-FUNCTION SPELLING of a conditional return is wrong under `--interp` in BOTH directions -- the dying argument runs NO `Drop` body and t… | abdffc4 |
 | B-2026-09-01-45 | runtime | high | `karac-runtime` NO LONGER LINKS ON WINDOWS -- `LNK2019: unresolved external symbol posix_memalign referenced in function karac_alloc_aligned_or_panic… | 6c2a4fb |
 | B-2026-09-01-46 | codegen | high | `e2e_vec_of_vector_operations_round_trip` PRODUCES NO OUTPUT AT ALL on x86-64 -- the over-aligned `Vec[Vector[T, N]]` program that B-2026-08-31-24 wa… | ce9669c |
