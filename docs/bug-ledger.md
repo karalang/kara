@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 95 | 1 |
 | perf | 87 | 0 |
 | other | 71 | 1 |
-| crash | 69 | 1 |
+| crash | 69 | 0 |
 | use-after-free | 27 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1360 | 30 |
+| codegen | 1360 | 29 |
 | interp | 320 | 16 |
 | typecheck | 286 | 1 |
 | ownership | 72 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced · 36 open · 1911 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced · 35 open · 1912 fixed · 11 wontfix · 4 relocated** (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (36)
+### Open (35)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -156,7 +156,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 | B-2026-09-01-41 | 2026-09-01 | codegen | medium | A STRUCT'S `Vec` FIELD IS NEVER FREED when the struct is declared OUTSIDE a loop, the field is pushed to INSIDE it, and the loop body also makes a heap TEMPORARY -- all three needed, the element type is irrelevant, and the whole Vec leaks | — |
 | B-2026-09-01-42 | 2026-09-01 | interp+codegen | medium | A `while let` LOOP-EXIT MISS RUNS NO `Drop` BODY for the scrutinee temporary that ended the loop, on all four surfaces, where the IDENTICAL miss through `if let` runs it -- two temporaries created and one `dE` printed; design.md's fourth "Scrutinee temporary scope" bullet says "After the loop terminates (the pattern stopped matching), the final iteration's scrutinee temporaries are already dropped", and the missing body is a LOST SIDE EFFECT rather than a leak of memory, so no valgrind/LSan gate fires and the backends agreeing hides it from the A/B rule too | — |
 | B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
-| B-2026-09-01-47 | 2026-09-01 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that a 1 MiB thread stack is not enough, which is why `Codegen E2E (Linux arm64)` has been red on every concluded run while the 8 MiB-stack hosts pass. | — |
 | B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 | B-2026-09-02-3 | 2026-09-02 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it -- the byte-identical CONCRETE function is correct on all four | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
@@ -200,9 +199,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 
 </details>
 
-### Fixed (1911)
+### Fixed (1912)
 
-<details><summary>1911 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1912 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -2115,6 +2114,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1980 surfaced
 | B-2026-09-01-44 | interp | medium | THE ASSOCIATED-FUNCTION SPELLING of a conditional return is wrong under `--interp` in BOTH directions -- the dying argument runs NO `Drop` body and t… | abdffc4 |
 | B-2026-09-01-45 | runtime | high | `karac-runtime` NO LONGER LINKS ON WINDOWS -- `LNK2019: unresolved external symbol posix_memalign referenced in function karac_alloc_aligned_or_panic… | 6c2a4fb |
 | B-2026-09-01-46 | codegen | high | `e2e_vec_of_vector_operations_round_trip` PRODUCES NO OUTPUT AT ALL on x86-64 -- the over-aligned `Vec[Vector[T, N]]` program that B-2026-08-31-24 wa… | ce9669c |
+| B-2026-09-01-47 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that… | 9dab75a |
 | B-2026-09-01-48 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one retur… | 094c206a |
 | B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
 
