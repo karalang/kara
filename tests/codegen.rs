@@ -14090,7 +14090,7 @@ fn main() {
         assert_eq!(out, "[ab, cd]\n[1, 2]\nSome([one])\n[one]\nSome([ab, cd])\n[ab, cd]\nab\ncd\n[ef, gh]\n[ij, kl]\n[mn, op]\n[1, 2]\n[3]\n[5, 6] [7, 8]\nqr 1\nst 2\n12\ng:[uv, wx]\n");
     }
 
-    /// B-2026-09-02-43 — a function parameter's `Option`/`Result` PAYLOAD type
+    /// B-2026-09-02-45 — a function parameter's `Option`/`Result` PAYLOAD type
     /// does not outlive the function that declared it.
     ///
     /// `var_option_payload_te` / `var_result_payload_te` are keyed by BINDING

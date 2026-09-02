@@ -1627,7 +1627,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // scalar. `fn viaCall(x: Option[Array[String, 2]])` sitting unused
         // beside a `main` whose `let x = takeP(t[0])` is an `i64` rendered
         // that i64 through the Option path; renaming the parameter to
-        // anything else made the program correct. B-2026-09-02-43.
+        // anything else made the program correct. B-2026-09-02-45.
         //
         // B-2026-08-31-49 and 78e1389 both patched this class one site at a
         // time, retracting on RE-REGISTRATION of the same name. That only
