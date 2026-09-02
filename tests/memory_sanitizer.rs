@@ -66604,6 +66604,63 @@ fn main() {
     /// value was always clean and must stay so (owning it here would be the
     /// double free the old recursion was avoiding), and a manufactured payload
     /// was the one spelling that always worked.
+    /// B-2026-08-31-38 — THE RESTORED `Drop` BODY MUST READ LIVE MEMORY.
+    ///
+    /// The fix stops the `if let` / `while let` legs retracting the source's
+    /// payload-BODIES walk for a binding that does not own the payload, so
+    /// that walk runs the body again on shapes where it had been silenced.
+    /// The body dereferences `self.s`, so the question this fixture asks is
+    /// not "does it print" — `tests/codegen.rs` asks that — but whether the
+    /// buffer it reads is still live, and whether adding the body back
+    /// introduces a second free anywhere.
+    ///
+    /// The bodies are deliberately CHATTY here rather than silent: reading
+    /// `self.s.len()` is what makes a use-after-free land inside the body,
+    /// which is the failure this fix could plausibly have caused. `pad()`
+    /// gives every payload a real heap buffer, and the loop reallocates after
+    /// each pass so a freed block gets reused rather than sitting quietly
+    /// unreclaimed.
+    #[test]
+    fn asan_restored_let_family_payload_body_reads_live_memory() {
+        assert_clean_asan_run(
+            r#"
+fn pad(t: i64) -> String {
+    let mut s: String = String.new();
+    s.push_str("payload-padded-out-well-past-thirty-six-bytes-");
+    s.push_str(f"{t}");
+    return s;
+}
+struct R { s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.s.len()}"); } }
+struct H { r: R, n: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[H] = Some(H { r: R { s: pad(i) }, n: 4 });
+        if let Some(H { r, .. }) = o { println(f"{r.s.len()}") }
+        let k: Option[H] = Some(H { r: R { s: pad(i) }, n: 5 });
+        if let Some(H { r, n }) = k { println(f"{r.s.len()}{n}") }
+        let e: Result[H, i64] = Ok(H { r: R { s: pad(i) }, n: 6 });
+        if let Ok(H { r, .. }) = e { println(f"{r.s.len()}") }
+        let mut q: Option[H] = Some(H { r: R { s: pad(i) }, n: 7 });
+        while let Some(H { r, .. }) = q {
+            println(f"{r.s.len()}");
+            q = None;
+        }
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "47", "dR47", "475", "dR47", "47", "dR47", "47", "dR47", "47", "dR47", "475",
+                "dR47", "47", "dR47", "47", "dR47", "47", "dR47", "475", "dR47", "47", "dR47",
+                "47", "dR47", "done",
+            ],
+            "b38-let-family-payload-body-live",
+        );
+    }
+
     #[test]
     fn asan_optres_temp_arg_ownership_follows_callee_escape() {
         // Escape routes — each of these aborted or leaked before.

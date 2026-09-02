@@ -127956,6 +127956,209 @@ fn main() {
         }
     }
 
+    /// B-2026-08-31-38 — THE `if let` / `while let` LEGS RETRACTED THE
+    /// SOURCE'S PAYLOAD-BODIES WALK FOR A BINDING THAT DOES NOT OWN IT, SO A
+    /// DESTRUCTURED `Option`-WRAPPED STRUCT PAYLOAD RAN NO `Drop` BODY AT ALL.
+    ///
+    ///     let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });
+    ///     if let Some(H { r, .. }) = o { println(r.s.len()) }
+    ///
+    ///     --interp    47 dR47 47 end     <- correct
+    ///     karac run   47 47 end          <- the body NEVER ran
+    ///     karac build 47 47 end
+    ///
+    /// `suppress_optres_payload_bodies_for_match` retracts the SOURCE's
+    /// `__karac_dropelems_opt_*` action on the premise, stated in its own doc,
+    /// that "the arm's binding owns the resource from then on". The three
+    /// `let`-family legs called it unconditionally, including when the
+    /// binding is a BORROW and owns nothing — leaving the body with no owner
+    /// on either side.
+    ///
+    /// WHY THE `match` SPELLING WAS ALWAYS CORRECT, which is the whole
+    /// diagnosis: its suppression battery sits behind
+    /// `scrut_ref_ptr.is_none() && !pattern_binding_is_borrow`, and this
+    /// pattern's bindings ARE borrows, so `match` never reached the call and
+    /// the source's walk still ran the body. Traced: the retraction fires on
+    /// the `if let` and `let ... else` legs for this program and never on the
+    /// `match` leg.
+    ///
+    /// AND `let ... else` MUST KEEP FIRING, which is why the fix is a gate
+    /// rather than a deletion. Its binding ESCAPES into the enclosing scope
+    /// and is owned (`optres_bindings_owned` measured `true` on this exact
+    /// program, against `false` for `if let`), so there the retraction is
+    /// right and the escaped binding's own drop runs the body. It is a row
+    /// here precisely so a later widening cannot quietly turn it into a
+    /// double body.
+    ///
+    /// THE ROW UNDER-REPORTED THE SURFACE: it recorded `if let` only, and
+    /// `while let` was measured broken in the same way (`44 end`, zero
+    /// bodies, on both compiled backends) and is closed by the same gate.
+    ///
+    /// NO LEAK EITHER WAY — the row asked for this and left it open.
+    /// `valgrind --leak-check=full` at `KARAC_OPT_LEVEL=0`: 11 allocs / 11
+    /// frees pre-fix, 12/12 post (the extra pair is the body's own f-string),
+    /// 0 errors both times. The memory side was always balanced; only the
+    /// user-visible body was lost, which is what keeps this a run-vs-build
+    /// row rather than a leak one.
+    #[test]
+    fn e2e_a_let_family_destructure_runs_the_payload_drop_body_once() {
+        const PRELUDE: &str = "fn pad(t: i64) -> String {\n\
+             let mut s: String = String.new();\n\
+             s.push_str(\"payload-padded-out-well-past-thirty-six-bytes-\");\n\
+             s.push_str(f\"{t}\");\n\
+             return s;\n\
+             }\n\
+             struct R { s: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.s.len()}\"); } }\n\
+             struct H { r: R, n: i64 }\n\
+             struct N { r: R, n: i64 }\n\
+             enum W { C(H), D }\n";
+        // One `R` is constructed in every row, so exactly ONE body is due.
+        // The fourth column is the COMPILED expectation, which differs from
+        // the interpreter's on exactly one row — see the `while let` note.
+        let cases: &[(&str, &str, &str, &str)] = &[
+            (
+                "if let, `..` rest [B-2026-08-31-38]",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let Some(H { r, .. }) = o { println(f\"{r.s.len()}\") }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "if let, every field named [B-2026-08-31-38]",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let Some(H { r, n }) = o { println(f\"{r.s.len()}{n}\") }",
+                "474\ndR47\nend\n",
+                "474\ndR47\nend\n",
+            ),
+            (
+                "if let, RENAMED binding [B-2026-08-31-38]",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let Some(H { r: q, .. }) = o { println(f\"{q.s.len()}\") }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "if let over `Result` [B-2026-08-31-38]",
+                "let o: Result[H, i64] = Ok(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let Ok(H { r, .. }) = o { println(f\"{r.s.len()}\") }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                // The COMPILED column is what this fix closes: zero bodies
+                // before it, one after. The interpreter runs TWO here and did
+                // so before the fix as well (measured against the stashed
+                // compiler), which is B-2026-09-02-7 — an interpreter surplus
+                // in the `while let` leg, filed rather than folded in. The
+                // divergence is pinned so that closing that row shows up here
+                // as a failure instead of passing unnoticed.
+                "while let, one pass [B-2026-08-31-38 / interp: B-2026-09-02-7]",
+                "let mut q: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 while let Some(H { r, .. }) = q {\n \
+                 println(f\"{r.s.len()}\");\n \
+                 q = None;\n \
+                 }",
+                "47\ndR47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            // The leg that must KEEP retracting: its binding escapes and owns
+            // the payload, so the body comes from the binding, not the source.
+            (
+                "control: `let ... else` still runs exactly one body",
+                "let Some(H { r, .. }) = Some(H { r: R { s: pad(1) }, n: 4 }) else { return };\n \
+                 println(f\"{r.s.len()}\")",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            // The spelling that was correct before the fix, for the reason the
+            // fix generalizes.
+            (
+                "control: the `match` spelling, correct throughout",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 match o { Some(H { r, .. }) => println(f\"{r.s.len()}\"), None => {} }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "control: `if let` binding NOTHING",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let Some(_) = o { println(\"hit\") }",
+                "hit\ndR47\nend\n",
+                "hit\ndR47\nend\n",
+            ),
+            (
+                // A SECOND pre-existing divergence this control turned up,
+                // in the other direction and on the other backend: when the
+                // pattern binds only the NON-`Drop` field, the INTERPRETER
+                // runs no body while both compiled backends correctly run
+                // one. Filed as B-2026-09-02-8. It is not this fix's doing —
+                // the `match` row below is the same program with the same
+                // interpreter answer, and the `match` leg never reached the
+                // call this fix gates.
+                "control: binding only the NON-`Drop` field [interp: B-2026-09-02-8]",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let Some(H { n, .. }) = o { println(f\"{n}\") }",
+                "4\nend\n",
+                "4\ndR47\nend\n",
+            ),
+            (
+                "control: the `match` twin of the row above [interp: B-2026-09-02-8]",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 match o { Some(H { n, .. }) => println(f\"{n}\"), None => {} }",
+                "4\nend\n",
+                "4\ndR47\nend\n",
+            ),
+            (
+                "control: payload IS the `Drop` type",
+                "let o: Option[R] = Some(R { s: pad(1) });\n \
+                 if let Some(r) = o { println(f\"{r.s.len()}\") }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "control: the miss edge runs the body too",
+                "let o: Option[H] = Some(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let None = o { println(\"none\") } else { println(\"some\") }",
+                "some\ndR47\nend\n",
+                "some\ndR47\nend\n",
+            ),
+            (
+                "control: bare struct destructure, no `Option` envelope",
+                "let h: H = H { r: R { s: pad(1) }, n: 4 };\n \
+                 if let H { r, .. } = h { println(f\"{r.s.len()}\") }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+            (
+                "control: USER enum wrapping the same struct payload",
+                "let w: W = W.C(H { r: R { s: pad(1) }, n: 4 });\n \
+                 if let W.C(H { r, .. }) = w { println(f\"{r.s.len()}\") }",
+                "47\ndR47\nend\n",
+                "47\ndR47\nend\n",
+            ),
+        ];
+        for (label, body, want_interp, want_compiled) in cases {
+            let src = format!("{PRELUDE}fn main() {{\n    {body}\n    println(\"end\");\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            assert_eq!(
+                interp_out.join(""),
+                *want_interp,
+                "{label}: the interpreter must run the body exactly once"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, *want_compiled,
+                    "{label}: the compiled backends must run the body exactly once"
+                );
+            }
+        }
+    }
+
     /// B-2026-08-31-23 — A CONSUMING ARM OVER A BOXED USER-ENUM PAYLOAD
     /// DOUBLE FREED, WHILE THE SAME ARM OVER A BOXED STRUCT PAYLOAD WAS FINE.
     ///

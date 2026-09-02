@@ -332,7 +332,26 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
-        self.suppress_optres_payload_bodies_for_match(value, pattern);
+        // B-2026-08-31-38 — gated on `optres_bindings_owned`, the same
+        // omission B-2026-09-01-10 fixed one call below. The retraction's
+        // premise, in its own doc, is that "the arm's binding owns the
+        // resource from then on"; a BORROW binding owns nothing, so
+        // retracting the source's walk leaves the payload's `Drop` body
+        // with no owner and it never runs. Measured on
+        // `if let Some(H { r, .. }) = o` over an `Option`-wrapped struct
+        // payload: `44 44 end` on the JIT and AOT against `44 dR44 44 end`
+        // under `--interp`. The `match` spelling was already correct for
+        // exactly this reason -- its whole suppression battery sits behind
+        // `!pattern_binding_is_borrow`, so it never reached this call and
+        // the source's payload-bodies walk still ran the body.
+        //
+        // `let ... else` keeps firing: its binding ESCAPES into the
+        // enclosing scope and is owned (measured `true` on the same
+        // program), so the retraction is right there and the escaped
+        // binding's own drop runs the body.
+        if optres_bindings_owned {
+            self.suppress_optres_payload_bodies_for_match(value, pattern);
+        }
         // B-2026-07-21-16: `if let Some(s) = a.opt { … }` over an OWNED place
         // — zero the source field in the then-arm (the binding owns the
         // payload); the miss edge leaves it for the struct drop.
@@ -986,7 +1005,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
-        self.suppress_optres_payload_bodies_for_match(value, pattern);
+        // B-2026-08-31-38, `while let` leg — gated on `optres_bindings_owned`
+        // like the `if let` site, and broken in exactly the same way before
+        // it: `while let Some(H { r, .. }) = q` ran ZERO `Drop` bodies on both
+        // compiled backends. See the `compile_if_let` site for why an ungated
+        // retraction loses the body and how it was measured.
+        if optres_bindings_owned {
+            self.suppress_optres_payload_bodies_for_match(value, pattern);
+        }
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         // B-2026-07-03-31: skip disarming the source payload drop when the
         // loop body ONLY BORROWS the bound payload (not moved out) — the source
@@ -1548,7 +1574,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // B-2026-07-30-11 (Option/Result leg): the payload-BODIES action is
         // retracted alongside the memory suppressions above — same shape
         // gate, interp twin in `pattern_consumes_user_drop_payload`.
-        self.suppress_optres_payload_bodies_for_match(value, pattern);
+        // B-2026-08-31-38, `let ... else` leg — gated on
+        // `optres_bindings_owned` for symmetry with the two legs above. This
+        // is the leg where the flag is TRUE for the shape that broke them
+        // (the binding escapes into the enclosing scope and owns the
+        // payload), so the gate is a no-op here today and the retraction goes
+        // on firing — which is the point: it records WHY this leg differs
+        // instead of leaving three identical ungated calls for the next
+        // reader to re-derive. See the `compile_if_let` site.
+        if optres_bindings_owned {
+            self.suppress_optres_payload_bodies_for_match(value, pattern);
+        }
         // B-2026-08-05-3 (Option leg): a let-else binding escapes into the
         // enclosing scope, so it always takes the boxed tuple's interior.
         self.retract_boxed_tuple_inner_drop_for_block(value, pattern, None);
