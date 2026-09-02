@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 346 |
 | run-vs-build | 308 |
-| leak | 252 |
+| leak | 253 |
 | missing-feature | 193 |
 | double-free | 164 |
 | codegen-gap | 159 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1368 |
+| codegen | 1369 |
 | interp | 325 |
 | typecheck | 287 |
 | ownership | 73 |
@@ -144,7 +144,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-23 | 2026-09-01 | codegen | low | THE BRANCH ARM-OWNER SLOT IS ONE PER CONSTRUCT AND RESET EACH PASS, so a branch inside a loop whose owner frame lives OUTSIDE the loop frees only the LAST pass's escaping value -- `while i < 3 { let k = if i > 0 { mkA(n) } else { t }.contains("aaa"); }` strands `iterations - 1` of them (42 B in 2 blocks at 3 iterations, 72 B in 4 at 5); the same branch with the sibling binding declared INSIDE the loop body is clean, which isolates the frame CHOICE rather than the slot as the cause | — |
 | B-2026-09-01-27 | 2026-09-01 | interp | low | A FRESH-TEMP owned argument DESTRUCTURED inside a method runs the right Drop bodies in the WRONG ORDER -- the payload's body fires before the enum shell's under `--interp` and after it on both compiled backends, so the counts agree and the sequence does not | — |
 | B-2026-09-01-26 | 2026-09-01 | codegen | medium | A `match` OVER A FRESH-TEMP ENUM IN A NESTED EXPRESSION POSITION LEAKS THE HEAP PAYLOAD ITS ARM MOVED OUT -- `println(f"out[{match mkVe(9) { Ve.A(s) => { s } .. }}]")` loses 15 B at BOTH opt levels while the let-bound spelling of the same match is clean; both enum flavours, and clean for a scalar payload | — |
-| B-2026-09-01-29 | 2026-09-01 | codegen | medium | AN `Option` WHOSE PAYLOAD OWNS HEAP LEAKS THAT HEAP WHENEVER THE VALUE IS PASSED AS A FUNCTION ARGUMENT -- under BOTH parameter modes, by value AND `ref`, generic AND non-generic; the `let`-bound spelling of the identical value is clean | — |
 | B-2026-09-01-36 | 2026-09-01 | cli+codegen | medium | A REPL CELL BINDING WHOSE OWN TYPE IS `shared` CANNOT JOIN THE JIT SNAPSHOT TIER: admitted, `s.n` reads the POINTER'S OWN BITS instead of the field (two different garbage values from the same expression where `--interp` prints `3`), because `register_var_from_type_expr` -- the registrar the snapshot replay path defers to -- re-registers a shared name as an INLINE struct; the OWNERSHIP half is fine (retracting the queued `RcDec` HOLDS the reference), and `shared` as a COMPONENT (`struct W { s: S }`, `Vec[S]`) round-trips correctly | — |
 | B-2026-09-01-37 | 2026-09-01 | cli | medium | A STRUCT LITERAL USED AS A CALL ARGUMENT, ALONE IN A REPL CELL, SILENTLY PRODUCES NO OUTPUT on BOTH backends -- `println(f"{take(H { n: 1 })}")` prints nothing with no diagnostic, and the `v.push(H { .. });` spelling additionally poisons the session so the next cell reports `undefined name 'v'` for a binding accepted two cells earlier; the same code in a `.kara` file works on both backends, and the same statements in ONE cell work | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
@@ -160,6 +159,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-19 | 2026-09-02 | ownership | medium | A DECLARED `T: Copy` BOUND IS NOT HONOURED FOR A BARE TYPE-PARAMETER BINDING: `fn f[T: Copy](x: T) { let a = x; let b = x; }` warns `value 'x' moved here, used again here` (E0500), and `let a = v[0]` on a `ref Vec[T]` with the same bound is a HARD error claiming `this element type is not Copy` (E0285) -- contradicting the bound in the signature and design.md's own rule that `v[i]` requires exactly `T: Copy`. A generic STRUCT FIELD and an `impl[T: Copy]` method body are both unaffected. | — |
 | B-2026-09-02-20 | 2026-09-02 | codegen | high | A LOOP-DECLARED LOCAL WHOSE `Drop`-BEARING STRUCT OWNS TWO HEAP FIELDS SEGFAULTS THE JIT WHEN A CONDITIONAL PARAM-VIEW ASSIGNMENT TARGETS IT -- `karac run` exits 139 having printed NOTHING, while `--interp` and both `karac build` legs are correct. Bisected to three necessary ingredients: two heap-owning fields, the `let` inside the loop, and the conditional assignment; removing any one runs correctly. Pre-dates B-2026-09-02-6's fix (a build of the parent commit crashes identically) | — |
 | B-2026-09-02-21 | 2026-09-02 | codegen | high | THE `for`-RANGE SPELLING OF THE SAME SHAPE NEVER TERMINATES ON THE JIT: the induction variable stops advancing at the iteration that performs the conditional param-view assignment and that iteration repeats forever, while `--interp` and both `karac build` legs are correct. The `while` spelling of the identical program is fine on all four surfaces, and so is a NESTED `for`, so it is not every range loop. Pre-dates B-2026-09-02-6's fix (a build of the parent commit hangs identically) | — |
+| B-2026-09-02-22 | 2026-09-02 | codegen | low | A DOUBLY-NESTED `Option[Option[String]]` ARGUMENT LEAKS ITS INNER PAYLOAD -- 45 B in 3 blocks over a three-iteration loop, unmoved by all THREE of B-2026-09-01-29's fixes. The payload is 3 words, so `Option[Option[String]]` exceeds the 3-word boxing limit `optres_param_entry_copied_te` gates on: the param is never ADMITTED to the by-value copy convention, so neither the callee's entry copy nor any caller-side ownership predicate applies and no frame is ever offered the temp | — |
 
 ### Relocated
 
@@ -2103,6 +2103,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-24 | codegen | medium | A DISCARDED ALL-MINTED STRUCT LITERAL WITH ONE FIELD THAT IS A SCALAR FIELD READ OF A LIVE LOCAL LEAKS EVERY MINTED OBJECT ON BOTH COMPILED BACKENDS… | 7ef82d3 |
 | B-2026-09-01-25 | codegen | medium | THE MEMORY HALF OF B-2026-09-01-21: a DISCARDED aggregate whose fields/elements MIX a live-local source with anything else runs every `Drop` BODY onc… | f909f9a |
 | B-2026-09-01-28 | interp | medium | `if let` AND `while let` OVER AN `Option` WITH A STRUCT PAYLOAD LOSE THE PAYLOAD'S `Drop` BODY, where the `match` spelling of the identical program r… | 213f847 |
+| B-2026-09-01-29 | codegen | medium | AN `Option` WHOSE PAYLOAD OWNS HEAP LEAKS THAT HEAP WHENEVER THE VALUE IS PASSED AS A FUNCTION ARGUMENT -- under BOTH parameter modes, by value AND `… | b5c55d7 |
 | B-2026-09-01-30 | codegen | high | A BARE-`T` BY-VALUE GENERIC PARAM'S OWNERSHIP CONVENTION DEPENDS ON THE COMPILER NOT KNOWING ITS ELEMENT TYPE, so a better-informed monomorph strands… | e49ba40 |
 | B-2026-09-01-31 | interp | medium | A DISCARDED enum STRUCT-VARIANT literal loses its PAYLOAD's `Drop` body under `--interp` -- `let _ = Sv.Hold { inner: R { . | edaca15 |
 | B-2026-09-01-32 | interp+codegen | medium | The UNQUALIFIED enum struct-variant literal `Hold { . | d620c7d |
