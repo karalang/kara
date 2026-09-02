@@ -1812,7 +1812,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 if param_tensor.is_some() && self.expr_yields_fresh_owned_temp(&a.value) {
                     self.track_tensor_var(temp);
                 } else {
-                    self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value);
+                    let ref_optres_te = self.ref_param_inline_optres_te(&name, i);
+                    self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value, ref_optres_te.as_ref());
                 }
                 compiled_args.push(temp.into());
                 continue;
@@ -3157,6 +3158,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(ast_i)
                 .filter(|p| self.optres_param_entry_copied_te(&p.ty))
                 .map(|p| p.ty.clone())
+        };
+        program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
+            crate::ast::Item::ImplBlock(b) => b.items.iter().find_map(|ii| match ii {
+                crate::ast::ImplItem::Method(f) if f.name == bare => {
+                    let ast_i = if f.self_param.is_some() {
+                        arg_index.checked_sub(1)?
+                    } else {
+                        arg_index
+                    };
+                    check(f, ast_i)
+                }
+                _ => None,
+            }),
+            _ => None,
+        })
+    }
+
+    /// B-2026-09-01-29 (the `ref` half) — the INNER `Option`/`Result` type of a
+    /// `ref`-mode parameter, when its payload is one the inline cleanups can
+    /// free.
+    ///
+    /// A `ref` param is the one case where no escape analysis is needed to
+    /// settle ownership: the callee BORROWS, so a fresh `Some(vs)` / `Ok(vs)`
+    /// temp at the call site has exactly one possible owner, and it is this
+    /// frame. Nothing owned it, so 333 B per three-iteration loop went
+    /// unfreed — measured for `Option[Vec[String]]` and
+    /// `Result[Vec[String], i64]`, for a manufactured payload
+    /// (`Some(mkv(i))`) as much as a moved-in one, and in the free-fn, method
+    /// and destructuring-callee spellings alike.
+    ///
+    /// Reuses [`Self::optres_param_entry_copied_te`] on the UNWRAPPED type
+    /// deliberately. That predicate is written as "payload the by-value entry
+    /// copy can duplicate", and its exclusions — shared handles, boxed
+    /// payloads over the boxing-word limit — are exactly the payloads whose
+    /// ownership already belongs to some other machinery here too. The
+    /// `ref`-ness is carried in the param's `TypeExpr` as `TypeKind::Ref`, not
+    /// in a mode flag, so the unwrap is what distinguishes this from the
+    /// by-value lookup above.
+    pub(super) fn ref_param_inline_optres_te(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+    ) -> Option<TypeExpr> {
+        let program = self.program_snapshot.as_deref()?;
+        let bare = callee_name.rsplit('.').next().unwrap_or(callee_name);
+        let check = |f: &crate::ast::Function, ast_i: usize| -> Option<TypeExpr> {
+            let p = f.params.get(ast_i)?;
+            let inner = match &p.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => return None,
+            };
+            self.optres_param_entry_copied_te(inner)
+                .then(|| inner.clone())
         };
         program.items.iter().find_map(|item| match item {
             crate::ast::Item::Function(f) if f.name == callee_name => check(f, arg_index),
@@ -7914,7 +7969,26 @@ impl<'ctx> super::Codegen<'ctx> {
         slot: PointerValue<'ctx>,
         val: BasicValueEnum<'ctx>,
         arg_expr: &Expr,
+        optres_param_te: Option<&TypeExpr>,
     ) {
+        // B-2026-09-01-29 (the `ref` half) — a fresh `Option`/`Result` temp
+        // handed to a `ref` param. `Option`'s layout is type-erased, so the
+        // enum arm below finds no droppable payload on it and registers
+        // nothing; the concrete payload cleanups are keyed on the declared
+        // type instead, which is what `optres_param_te` carries in.
+        //
+        // Gated on `optres_arg_is_unowned_temp`, the same predicate the
+        // BY-VALUE path uses to decide the caller owns a temp. A named binding
+        // (`let o = Some(vs); show(o)`) answers false there and is already
+        // clean — it has an owner, and a second registration here would be the
+        // double free rather than the leak.
+        if let Some(param_te) = optres_param_te {
+            if self.optres_arg_is_unowned_temp(arg_expr) {
+                self.track_inline_option_payload_var("__refarg_optres_tmp", slot, param_te);
+                self.track_inline_result_payload_var("__refarg_optres_tmp", slot, param_te);
+                return;
+            }
+        }
         let span_key = (arg_expr.span.offset, arg_expr.span.length);
         if self.llvm_ty_is_vec_struct(val.get_type()) {
             let container_te = self.drop_rc.owned_temp_drops.get(&span_key).cloned();

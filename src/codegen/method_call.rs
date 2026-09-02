@@ -7840,7 +7840,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             val.get_type(),
                         );
                         self.builder.build_store(temp, val).unwrap();
-                        self.queue_ref_rvalue_arg_cleanup(temp, val, &a.value);
+                        let ref_optres_te = self.ref_param_inline_optres_te(&qualified, pidx);
+                        self.queue_ref_rvalue_arg_cleanup(
+                            temp,
+                            val,
+                            &a.value,
+                            ref_optres_te.as_ref(),
+                        );
                         compiled_args.push(temp.into());
                         continue;
                     }

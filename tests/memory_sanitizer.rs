@@ -1828,6 +1828,87 @@ fn main() {
         assert_eq!(out, "0\n1\n2\n", "unexpected transcript:\n{out}");
     }
 
+    /// B-2026-09-01-29 (the `ref` half) — a fresh `Option`/`Result` temp handed
+    /// to a `ref` parameter had NO owner at all: the callee borrows, the temp
+    /// has no binding, and `Option`'s type-erased layout carries no droppable
+    /// payload for the enum arm of `queue_ref_rvalue_arg_cleanup` to find. The
+    /// row measured 333 B in 6 allocations over a three-iteration loop — one
+    /// `Vec` buffer plus its `String` per iteration.
+    ///
+    /// The `ref` case is the one place ownership needs no escape analysis: a
+    /// borrow cannot take the value, so a temp nothing else names has exactly
+    /// one possible owner. That is why the fix is a registration rather than
+    /// a predicate change, and why it cannot double-free the way the by-value
+    /// half's widening could (B-2026-09-01-35).
+    ///
+    /// FIVE LEGS PER ITERATION, four that leaked and one control:
+    ///   - `temp` / `moved` — `peek(Some(mkv(i)))` against a free fn.
+    ///   - `res` — the `Result` sibling, `peekr(Ok(...))`.
+    ///   - `meth` — the METHOD spelling, whose call site is a second
+    ///     `queue_ref_rvalue_arg_cleanup` caller and threads the parameter
+    ///     index through the receiver offset.
+    ///   - `named` — THE CONTROL. `let o = Some(mkv(i)); peek(o)` was already
+    ///     clean, because the binding owns it; if the new registration ever
+    ///     stops asking whether the argument is an unowned temp, this leg is
+    ///     the double free that says so.
+    ///
+    /// The callee DESTRUCTURES in every leg (`match x { Some(v) => v.len() }`),
+    /// which is deliberate: reading through the borrow is the shape where the
+    /// caller most plausibly believes the callee took over.
+    #[test]
+    fn asan_ref_optres_temp_arg_has_exactly_one_owner() {
+        let Some((out, status)) = run_under_asan(
+            r#"struct H { n: i64 }
+impl H {
+    fn peek(ref self, x: ref Option[Vec[String]]) -> i64 {
+        match x { Some(v) => { return self.n + v.len() } None => { return self.n } }
+    }
+}
+
+fn mkv(n: i64) -> Vec[String] {
+    let mut vs: Vec[String] = Vec.new();
+    vs.push("abcdefghijklmnopqrstuvwxyz0123456789");
+    vs.push(f"tag{n}");
+    return vs
+}
+
+fn peek(x: ref Option[Vec[String]]) -> i64 {
+    match x { Some(v) => { return v.len() } None => { return 0 } }
+}
+
+fn peekr(x: ref Result[Vec[String], i64]) -> i64 {
+    match x { Ok(v) => { return v.len() } Err(e) => { return e } }
+}
+
+fn main() {
+    let h = H { n: 100 };
+    let mut i = 0;
+    while i < 3 {
+        println(f"temp {peek(Some(mkv(i)))}");
+        println(f"moved {peek(Some(mkv(i)))}");
+        println(f"res {peekr(Ok(mkv(i)))}");
+        println(f"meth {h.peek(Some(mkv(i)))}");
+        let o: Option[Vec[String]] = Some(mkv(i));
+        println(f"named {peek(o)}");
+        i = i + 1;
+    }
+    println("end");
+}
+"#,
+            "asan_ref_optres_temp_arg_has_exactly_one_owner",
+        ) else {
+            return;
+        };
+        assert!(status.success(), "ASAN/LSan reported a problem:\n{out}");
+        assert_eq!(
+            out,
+            "temp 2\nmoved 2\nres 2\nmeth 102\nnamed 2\n\
+             temp 2\nmoved 2\nres 2\nmeth 102\nnamed 2\n\
+             temp 2\nmoved 2\nres 2\nmeth 102\nnamed 2\nend\n",
+            "unexpected transcript:\n{out}"
+        );
+    }
+
     /// B-2026-08-31-19 — the memory half of teaching codegen to render an
     /// `Array[T, N]`.
     ///
