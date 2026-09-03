@@ -1722,11 +1722,14 @@ static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 ///
 /// Invalid values (0, negative, non-numeric) silently bypass to the
 /// auto-detect default — same permissive parse posture as `KARAC_AUTO_PAR`
-/// and `KARAC_OPT_LEVEL`. The ENV READ stays per-call rather than cached:
-/// pool construction goes through `OnceLock::get_or_init` so it's read
-/// once there anyway, and the per-call read is cheap libc getenv that lets
-/// a user override the count for a single command-line invocation without
-/// rebuilding.
+/// and `KARAC_OPT_LEVEL`.
+///
+/// This function is the POLICY, not the hot path: it re-reads the
+/// environment on every call, so nothing on a per-parallel-region path may
+/// call it. Use [`pool_workers`], which memoizes it. The unit tests call
+/// this one directly, which is what lets them set and unset
+/// `KARAC_PAR_WORKERS` between assertions without a cfg-divergent
+/// production path (B-2026-09-03-27).
 ///
 /// The AUTO-DETECT tier, by contrast, is cached in [`AUTO_POOL_WORKERS`]
 /// (B-2026-09-03-18). `available_parallelism()` is NOT cheap: on Linux it
@@ -1781,10 +1784,46 @@ fn auto_pool_workers() -> usize {
     })
 }
 
+/// Memoized worker count — the whole of [`resolve_pool_workers`], env tier
+/// included, resolved once per process.
+///
+/// B-2026-09-03-27. B-2026-09-03-18 cached only the AUTO-DETECT tier, which
+/// took the 15.2 µs cgroup probe off the hot path but left the
+/// `std::env::var` above it running once per parallel-region entry. That
+/// read is not the constant its old doc comment implied: `env::var` SCANS
+/// the environment block, so its cost is linear in the caller's environment
+/// size and a MISS (the common case — the variable is usually unset) has to
+/// walk all of it. Measured on one binary by varying only the environment:
+/// 0.66 s under `env -i`, 0.95 s normally, 1.53 s with 300 extra variables
+/// (98 ns and 292 ns per call), against a 0.44 s sequential run of the same
+/// program — 0.29 s of pure environment scanning, two thirds of the
+/// program's entire sequential runtime. It also silently disarmed the
+/// documented escape hatch: once the probe below was cached, setting
+/// `KARAC_PAR_WORKERS` explicitly stopped being faster, because both paths
+/// paid the identical scan.
+///
+/// Memoizing the whole resolution preserves every documented behaviour. The
+/// point of the env tier is to "override the count for a single
+/// command-line invocation without rebuilding", and a process-lifetime
+/// cache is exactly that: the value is read from the environment the
+/// process was started with. Nothing in-process mutates it — the runtime
+/// never calls `set_var`, and doing so from another thread would be
+/// unsound in any case.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+static POOL_WORKERS: OnceLock<usize> = OnceLock::new();
+
+/// See [`POOL_WORKERS`]. This is what every caller outside the unit tests
+/// should use — `pool()` included, so the pool's own size and the dispatch
+/// math below it read the SAME cell and cannot disagree.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+pub(crate) fn pool_workers() -> usize {
+    *POOL_WORKERS.get_or_init(resolve_pool_workers)
+}
+
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 pub(crate) fn pool() -> &'static Arc<Pool> {
     POOL.get_or_init(|| {
-        let n = resolve_pool_workers();
+        let n = pool_workers();
         let pool = Arc::new(Pool {
             queue: Mutex::new(VecDeque::new()),
             cv: Condvar::new(),
@@ -2638,16 +2677,23 @@ unsafe fn karac_par_reduce_pooled(
     unsafe {
         // Worker count: cap at `iter_total` so each worker gets at least one
         // iteration, and at least 1 so the single-thread fast path below
-        // doesn't divide by zero. `resolve_pool_workers` honors
+        // doesn't divide by zero. `pool_workers()` honors
         // `KARAC_PAR_WORKERS` when set so the dispatch math matches the
         // actual `pool()` worker count — without this, an env override
         // would cap `pool_workers` here at the auto-detect value while
         // `pool()` spawned a different count, and the per-worker slot
-        // allocation below would mis-size.
+        // allocation below would mis-size. It reads the same memoized cell
+        // `pool()` sizes itself from, so the two agree by construction
+        // rather than by re-deriving the same answer twice.
+        //
+        // This runs ONCE PER PARALLEL-REGION ENTRY, which is why it must not
+        // be `resolve_pool_workers()` — that one re-scans the environment
+        // every call, and at 3M regions the scan cost exceeded the whole
+        // sequential runtime of the program (B-2026-09-03-27).
         // Worker count fits `usize` everywhere: it's `min`-capped by
         // `pool_workers` (a small host count), so the `u64 → usize` cast
         // after the min is lossless even on wasm32.
-        let pool_workers = resolve_pool_workers();
+        let pool_workers = pool_workers();
         let n_workers = (pool_workers as u64).min(desc.iter_total).max(1) as usize;
 
         // Decode the order-free flag out of the cost field (see the field
@@ -11594,8 +11640,12 @@ mod tests {
         });
     }
 
-    /// The ENV tier stays live per call even once the auto tier is cached
-    /// — the fix memoizes `available_parallelism()`, NOT the resolution.
+    /// The ENV tier stays live per call in `resolve_pool_workers` even once
+    /// the auto tier is cached — B-2026-09-03-18 memoized
+    /// `available_parallelism()`, NOT the resolution. (B-2026-09-03-27 then
+    /// memoized the resolution too, but in the separate `pool_workers()`
+    /// wrapper, precisely so this function stays re-readable for these
+    /// tests and the production hot path still pays nothing.)
     /// This is the property the original doc comment promised (override the
     /// count for a single invocation without rebuilding), so it is pinned
     /// here rather than left implied. Ordering is deliberate: warm the cache
@@ -11611,6 +11661,58 @@ mod tests {
             assert_eq!(super::resolve_pool_workers(), auto);
         });
     }
+
+    /// B-2026-09-03-27: the HOT path must resolve the worker count once per
+    /// process, environment scan included.
+    ///
+    /// Deliberately robust to warm-order: `POOL_WORKERS` is a process-global
+    /// `OnceLock` shared with every other test in this binary, so this test
+    /// cannot assume it owns the first call. It warms the cell itself, then
+    /// changes `KARAC_PAR_WORKERS` to a value the cell definitely does not
+    /// hold and asserts that `pool_workers()` is unmoved while
+    /// `resolve_pool_workers()` — the uncached policy function — follows the
+    /// new value. That pins both halves of the split at once: the hot path
+    /// is memoized, and the tests' re-readable entry point still is not.
+    #[test]
+    fn test_pool_workers_is_resolved_once_per_process() {
+        let warm = super::pool_workers();
+        assert!(warm >= 1, "worker count must be positive, got {warm}");
+        assert_eq!(
+            super::POOL_WORKERS.get(),
+            Some(&warm),
+            "pool_workers() must populate its cell on first call"
+        );
+
+        let other = if warm == 3 { 5 } else { 3 };
+        with_par_workers_env(Some(&other.to_string()), || {
+            assert_eq!(
+                super::resolve_pool_workers(),
+                other,
+                "the policy function must still observe the environment"
+            );
+            assert_eq!(
+                super::pool_workers(),
+                warm,
+                "the hot path must NOT re-read the environment once resolved"
+            );
+        });
+
+        assert_eq!(super::pool_workers(), warm);
+    }
+
+    // NOTE on what is deliberately NOT tested here. The obvious companion
+    // assertion — "the cached value is the one the policy would have
+    // produced" — cannot be written soundly in this binary. `POOL_WORKERS`
+    // is a process-global `OnceLock` and tests run in parallel, so the cell
+    // may legitimately have been warmed from INSIDE another test's
+    // `with_par_workers_env` block, holding that test's temporary override
+    // rather than the process's startup environment. A test comparing the
+    // cell against the environment it observes would then fail for a reason
+    // that is not a defect, and it could only pass by winning a race. The
+    // first draft of this file had exactly that test; it passed on timing
+    // luck and read `std::env::var` outside `PAR_WORKERS_ENV_LOCK` besides.
+    // Pinning the value would need a subprocess, which is not worth it for
+    // a property `test_resolve_pool_workers_*` already covers directly.
 
     // ── std.http client FFI tests (phase-8 line 17 slice 1) ────────────
     //
