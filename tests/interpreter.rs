@@ -57330,3 +57330,115 @@ done
 "#
     );
 }
+
+// ── B-2026-09-03-17: user-defined associated functions on PRIMITIVE types ──
+//
+// `i64.zero()` where the program carries `impl Zero for i64` passed
+// `karac check` clean and then failed on EVERY executor: the interpreter died
+// with "name 'i64' resolved but has no binding at run time" and both compiled
+// backends fell through method dispatch with "no handler for method 'zero' on
+// variable 'i64'". Root cause was in the PARSER, upstream of all three — the
+// `starts_upper` test that decides "this identifier is a type" is the parser's
+// only notion of typehood, and every primitive name is lowercase, so
+// `i64.zero()` parsed as a method call on a *value* named `i64`.
+
+#[test]
+fn test_assoc_fn_on_primitive_via_trait_impl() {
+    // Deliberately NOT 0. Codegen's `compile_assoc_call` has a silent
+    // `Ok(const 0)` tail for an unrecognized `Type.method`, so a `zero()` that
+    // returns 0 passes whether it dispatched to the impl or fell through to
+    // that default — the assertion would hold for the wrong reason.
+    let out = run("trait Zero { fn zero() -> Self; }\n\
+                   impl Zero for i64 { fn zero() -> i64 { return 41; } }\n\
+                   fn main() { let x: i64 = i64.zero(); println(x.to_string()); }");
+    assert_eq!(out.trim(), "41");
+}
+
+#[test]
+fn test_assoc_fn_on_primitive_via_inherent_impl() {
+    // The row's scoping (c): not trait-specific — an inherent `impl i64`
+    // failed identically, so it is fixed and pinned identically.
+    let out = run("impl i64 { fn two() -> i64 { return 42; } }\n\
+                   fn main() { let x: i64 = i64.two(); println(x.to_string()); }");
+    assert_eq!(out.trim(), "42");
+}
+
+#[test]
+fn test_assoc_fn_on_primitive_is_uniform_across_primitives() {
+    // The row measured the fall-through as uniform over i32/i64/u8/bool/f64.
+    // Non-integer primitives matter most here: they are the ones codegen's
+    // `const 0` tail would return the WRONG WIDTH for, not merely a wrong
+    // integer, so they discriminate a real dispatch from a silent default.
+    let out = run("trait Two { fn two() -> Self; }\n\
+                   impl Two for u8 { fn two() -> u8 { return 44; } }\n\
+                   impl Two for bool { fn two() -> bool { return true; } }\n\
+                   impl Two for f64 { fn two() -> f64 { return 45.5; } }\n\
+                   fn main() {\n\
+                       println(u8.two().to_string());\n\
+                       println(bool.two().to_string());\n\
+                       println(f64.two().to_string());\n\
+                   }");
+    assert_eq!(out.trim(), "44\ntrue\n45.5");
+}
+
+#[test]
+fn test_assoc_fn_on_primitive_chains_further_methods() {
+    // The parse fix roots a `Path` and returns the `Call` straight out of
+    // `parse_primary`, so a trailing `.to_string()` has to be picked up by the
+    // caller's postfix loop rather than lost. Pins that it is.
+    let out = run("trait Zero { fn zero() -> Self; }\n\
+                   impl Zero for i64 { fn zero() -> i64 { return 41; } }\n\
+                   fn main() { println(i64.zero().to_string()); }");
+    assert_eq!(out.trim(), "41");
+}
+
+#[test]
+fn test_primitive_assoc_constant_still_parses_as_field_access() {
+    // NEGATIVE CONTROL, and the one the fix was most at risk of breaking. The
+    // parser comment above this heuristic warns in as many words that a
+    // primitive associated CONSTANT (`i64.MAX`, `f64.NAN` — lowercase head,
+    // uppercase member, no parens) must stay a field access. The `(` in the
+    // new lookahead is what keeps that true, including through a `.` chain
+    // where the token after the member is a dot rather than a paren.
+    let out = run("fn main() {\n\
+                       println(i64.MAX.to_string());\n\
+                       println(i64.MIN.to_string());\n\
+                   }");
+    assert_eq!(out.trim(), "9223372036854775807\n-9223372036854775808");
+}
+
+#[test]
+fn test_builtin_primitive_assoc_fn_still_resolves() {
+    // NEGATIVE CONTROL, and the one that decided WHERE this bug gets fixed.
+    // The tempting fix is in the parser: root a `Path` for any
+    // `<primitive>.<name>(`, so the call resolves as an associated function the
+    // way `P.zero()` does on a user struct. That breaks this — the BUILT-IN
+    // primitive associated functions reach their inference through the
+    // identifier-receiver METHOD path, so re-shaping the AST takes them out of
+    // the arm that serves them. This exact snippet, from
+    // `docs/book/ch09b-strings-and-bytes.md`, is what caught it (the
+    // `book_snippets` suite failed on it), and it is pinned here so the cheaper
+    // fix cannot be reintroduced without a direct, named failure.
+    let out = run("fn digit_char(d: i64) -> char {\n\
+                       match char.try_from(b'0' + d as u8) {\n\
+                           Ok(c)  => c,\n\
+                           Err(_) => '?',\n\
+                       }\n\
+                   }\n\
+                   fn main() { println(digit_char(5).to_string()); }");
+    assert_eq!(out.trim(), "5");
+}
+
+#[test]
+fn test_ordinary_lowercase_receivers_are_unaffected() {
+    // NEGATIVE CONTROL: only names in `PRELUDE_PRIMITIVES` root a path, so an
+    // ordinary value receiver still reaches the postfix loop as a method call.
+    let out = run("struct V { f: i64 }\n\
+                   fn main() {\n\
+                       let v = V { f: 9 };\n\
+                       println(v.f.to_string());\n\
+                       let s = \"ab\";\n\
+                       println(s.len().to_string());\n\
+                   }");
+    assert_eq!(out.trim(), "9\n2");
+}

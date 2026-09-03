@@ -1356,6 +1356,44 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-09-03-17 — a user-defined ASSOCIATED FUNCTION (no `self`) on a
+        // PRIMITIVE type: `i64.zero()` under `impl Zero for i64`, or an
+        // inherent `impl i64 { fn two() ... }`.
+        //
+        // Primitive type names are lowercase, so the parser's `starts_upper`
+        // test never treats one as a type root and the call reaches codegen as
+        // a METHOD CALL whose receiver is a "variable" named `i64` — which then
+        // fell out of dispatch as "no handler for method 'zero' on variable
+        // 'i64'". The typechecker resolves the form correctly (it diagnoses a
+        // type mismatch and a wrong arity on it), so this was a lowering gap on
+        // a program the front end had already accepted, and the interpreter had
+        // the mirror-image hole. Routing to `compile_assoc_call` — the same
+        // entry the `P.zero()` spelling on a user struct already uses — is what
+        // makes the two backends agree.
+        //
+        // Gated on `name` not being a real local, mirroring the `process.exit`
+        // guard above, so a binding named after a primitive is never hijacked.
+        //
+        // The `get_function` guard is NOT redundant with the typechecker's
+        // rejection of an unknown associated function, and it is the important
+        // half: `compile_assoc_call` ends in a silent `Ok(const 0)` fallback, so
+        // routing a name it cannot resolve would MISCOMPILE the call to the
+        // integer 0 rather than fail. Requiring the emitted function up front
+        // means an unresolvable shape keeps falling through to the existing
+        // "no handler for method" error, which is honest.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if crate::prelude::PRELUDE_PRIMITIVES.contains(&name.as_str())
+                && !self.variables.contains_key(name.as_str())
+                && self
+                    .module
+                    .get_function(&format!("{name}.{method}"))
+                    .is_some()
+            {
+                let type_name = name.clone();
+                return self.compile_assoc_call(&type_name, method, args);
+            }
+        }
+
         // Fallible-allocation instance companions (phase-8-stdlib-floor item 8).
         // Companions whose codegen lowering has landed
         // (`CODEGEN_FALLIBLE_INSTANCE_BASES`, e.g. `try_push`) fall through to

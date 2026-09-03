@@ -2196,6 +2196,52 @@ impl<'a> super::Interpreter<'a> {
                     span,
                 );
             }
+
+            // B-2026-09-03-17 — a user-defined ASSOCIATED FUNCTION (no `self`)
+            // on a PRIMITIVE type: `i64.zero()` where the program carries
+            // `impl Zero for i64`, or an inherent `impl i64 { fn two() ... }`.
+            //
+            // A primitive type name is lowercase, so the parser's `starts_upper`
+            // test — its whole notion of "this identifier names a type" — never
+            // fires, and the call arrives here as a METHOD CALL on a value named
+            // `i64`. The typechecker resolves it properly against `env.impls`
+            // (it reports a type mismatch and a wrong arity on this exact form),
+            // so `karac check` passed clean and the program then failed on EVERY
+            // executor: here on the unbound receiver with "name 'i64' resolved
+            // but has no binding at run time", and in codegen with "no handler
+            // for method 'zero' on variable 'i64'".
+            //
+            // Fixed at this layer rather than in the parser. Rooting a `Path`
+            // for every `<primitive>.<name>(` is the tempting one-line fix and
+            // it is WRONG: the built-in primitive associated functions
+            // (`char.try_from(b)`, the numeric `from` / `parse` family) resolve
+            // through the identifier-receiver METHOD path, so re-shaping the AST
+            // takes them out of the arm that serves them — measured, it breaks
+            // `char.try_from` in `docs/book/ch09b-strings-and-bytes.md`. Adding a
+            // dispatch where one was missing cannot regress a shape that already
+            // worked, which is the property that makes this the containable fix.
+            //
+            // Guarded on the name having NO binding, exactly like the
+            // `process` / `critical_section` / `cpu` arms above, so a local
+            // genuinely named after a primitive still dispatches its own
+            // methods; and on the impl method actually being registered, so an
+            // unknown `i64.nope()` still reaches the normal rejection path.
+            // `register_impl_methods` binds an impl method under the dotted key
+            // `<type>.<method>`, which is what makes the lookup a plain env hit.
+            if crate::prelude::PRELUDE_PRIMITIVES.contains(&module.as_str())
+                && self.env.get(module).is_none()
+            {
+                let assoc_key = format!("{module}.{method}");
+                if let Some(callee) = self.env.get(&assoc_key) {
+                    if matches!(callee, Value::Function { .. }) {
+                        let arg_vals: Vec<Value> = args
+                            .iter()
+                            .map(|a| self.eval_expr_inner(&a.value))
+                            .collect();
+                        return self.invoke_function_value(callee, arg_vals);
+                    }
+                }
+            }
         }
 
         // SIMD static constructor — `Vector[T, N].splat(x)`. The receiver is

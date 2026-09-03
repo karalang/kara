@@ -139491,6 +139491,69 @@ done
 "#
         );
     }
+
+    // ── B-2026-09-03-17: assoc fn on a PRIMITIVE, compiled backends ────
+    //
+    // The row's defining property is that all THREE executors rejected what
+    // `karac check` accepted, so the interpreter tests alone would not have
+    // covered it: `karac run` (JIT) and `karac build` both failed with
+    // "no handler for method 'zero' on variable 'i64'". The cause sat in the
+    // parser (a lowercase primitive name never satisfied the `starts_upper`
+    // type test), which is why one upstream fix cleared all three at once —
+    // and why this pins the compiled half explicitly rather than trusting
+    // that shared root to stay shared.
+    #[test]
+    fn test_assoc_fn_on_primitive_type_compiles() {
+        // Values are deliberately NON-ZERO. `compile_assoc_call` ends in a
+        // silent `Ok(const 0)` fallback for an unrecognized `Type.method`, so
+        // a `zero()` returning 0 would assert equally well against a real
+        // dispatch and against that fallback — the test would pass while the
+        // bug it guards was fully present.
+        assert_eq!(
+            run_program(
+                "trait Zero { fn zero() -> Self; }\n\
+                 impl Zero for i64 { fn zero() -> i64 { return 41; } }\n\
+                 fn main() { let x: i64 = i64.zero(); println(x.to_string()); }\n"
+            )
+            .as_deref(),
+            Some("41\n"),
+            "a trait-impl associated function on a primitive must compile and run"
+        );
+
+        // Inherent impl — the row's scoping (c), not trait-specific.
+        assert_eq!(
+            run_program(
+                "impl i64 { fn two() -> i64 { return 42; } }\n\
+                 fn main() { let x: i64 = i64.two(); println(x.to_string()); }\n"
+            )
+            .as_deref(),
+            Some("42\n"),
+            "an inherent associated function on a primitive must compile and run"
+        );
+
+        // Non-integer primitives: the widths the `const 0` tail would get
+        // wrong rather than merely returning a wrong integer for.
+        assert_eq!(
+            run_program(
+                "trait Two { fn two() -> Self; }\n\
+                 impl Two for bool { fn two() -> bool { return true; } }\n\
+                 impl Two for f64 { fn two() -> f64 { return 45.5; } }\n\
+                 fn main() { println(bool.two().to_string()); println(f64.two().to_string()); }\n"
+            )
+            .as_deref(),
+            Some("true\n45.5\n"),
+            "bool / f64 associated functions on primitives must compile at the right width"
+        );
+
+        // NEGATIVE CONTROL: associated CONSTANT access has no call parens and
+        // must still lower as a field access, per the parser comment the fix
+        // sits under.
+        assert_eq!(
+            run_program("fn main() { println(i64.MAX.to_string()); }\n").as_deref(),
+            Some("9223372036854775807\n"),
+            "`i64.MAX` must keep lowering as an associated constant, not a path call"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]
