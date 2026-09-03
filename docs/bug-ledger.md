@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 105 |
 | soundness | 95 |
 | perf | 87 |
-| other | 71 |
+| other | 72 |
 | crash | 70 |
 | use-after-free | 27 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total |
 |---|---|
 | codegen | 1389 |
-| interp | 333 |
+| interp | 334 |
 | typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-02). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-03). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -2153,6 +2153,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-40 | interp+codegen | medium | A PROJECTION SOURCE `let (r, k) = h.pe; let m = r;` STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b12 dR12 dR12` where one is due,… | f9bf80d8 |
 | B-2026-09-02-42 | typecheck | medium | A BODY TYPE ANNOTATION THAT NAMES A GENERIC PARAMETER POISONS EVERY LATER BOUNDED USE OF THAT VALUE: one `let w: T = v;` makes the next bounded call… | a7c8af7 |
 | B-2026-09-02-45 | codegen | high | A FUNCTION PARAMETER'S `Option`/`Result` PAYLOAD TYPE OUTLIVES ITS FUNCTION AND IS INHERITED BY ANY SAME-NAMED BINDING LATER IN THE PROGRAM -- an UNU… | 76fd9e1 |
+| B-2026-09-03-1 | interp | low | `test_narrow_float_assoc_call_namespace_runs` SEEDS FROM `env.args().len()`, SO IT PASSES A FULL RUN AND FAILS THE DOCUMENTED SINGLE-TEST WORKFLOW --… | 565dab1 |
 
 </details>
 
