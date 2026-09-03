@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 194 |
 | double-free | 170 |
 | codegen-gap | 161 |
-| diagnostics | 121 |
+| diagnostics | 122 |
 | false-positive | 105 |
 | soundness | 95 |
-| perf | 88 |
+| perf | 89 |
 | other | 73 |
 | crash | 71 |
 | use-after-free | 27 |
@@ -113,12 +113,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1409 |
 | interp | 343 |
 | typecheck | 290 |
-| ownership | 73 |
+| ownership | 74 |
 | other | 70 |
 | cli | 70 |
 | autopar | 55 |
 | parser | 46 |
-| runtime | 36 |
+| runtime | 37 |
 | effect | 29 |
 | resolver | 29 |
 | lexer | 8 |
@@ -159,6 +159,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-23 | 2026-09-03 | codegen | medium | A GENERIC FUNCTION'S MONOMORPH BODY ANSWERS THE `Drop`-OWNERSHIP QUESTION FROM ITS CALLER'S TABLES -- a LOCAL in `fn inner[T]` whose name matches ANY caller's parameter has its tuple-field element's `Drop` body run on a CAP-ZEROED HUSK (`dR60//0`) before the live read, on all three compiled surfaces against a clean `--interp`. `compile_generic_call` populates neither `current_fn_param_names` nor `owned_struct_params` for the body it emits, and because that body is emitted ONCE and shared, the corruption reaches call sites with no such parameter | — |
 | B-2026-09-03-24 | 2026-09-03 | interp+codegen | medium | A STRUCT-FIELD DESTRUCTURE LEAF TYPED `Option[<struct with a Drop body>]` LOSES THE PAYLOAD'S BODY -- `let Ho2 { a, b } = h;` over `{ a: R, b: Option[R] }` runs `dR20` and NOT `dR220` on all four surfaces, where the same struct left undestructured runs both and where the TUPLE twin is correct since d305cad. The wildcard-field sibling `let Ho2 { a, b: _ } = h;` is a run-vs-build ORDER split instead: interp `dR101 dR1` against compiled `dR1 dR101` | — |
 | B-2026-09-03-25 | 2026-09-03 | codegen | medium | A WILDCARD TUPLE LEAF OVER AN `Option[<struct with a Drop body>]` ELEMENT LOSES THE PAYLOAD'S BODY ON THE COMPILED BACKENDS -- `let (r, _) = t;` and `let (_, _) = t;` over `(R, Option[R])` run the payload body under `--interp` and not under run/build/AUTO_PAR=0, while the BINDING spelling `let (a, b) = t;` of the same statement is correct on every surface since d305cad | — |
+| B-2026-09-03-26 | 2026-09-03 | ownership | medium | THE USE-AFTER-MOVE HINT DENIES A `.clone()` THAT EXISTS, AND `karac fix` WITHHOLDS THE EDIT, FOR FIVE TYPE CATEGORIES -- `Option[T]`, `Result[T, E]`, `SortedSet[T]`, `SortedMap[K, V]` and ANY USER TYPE CARRYING `#[derive(Clone)]` all have a working, deep-copying `.clone()`, and all five draw E0500's no-clone branch: "declare the callee parameter `ref` if it only reads, or restructure to avoid reuse ('q' has no `.clone()` -- that exists only on `String`, the built-in heap collections and RC types)". The sentence names the ONE fix that works and asserts it does not exist. Because the same predicate gates the machine-applicable TextEdit, `karac fix` also reports "no fixable diagnostics" on all five, while the `Set` spelling of the identical program is repaired automatically. ROOT CAUSE: `moved_type_supports_clone` (src/ownership.rs:2765) keeps a THIRD, divergent copy of a predicate already reconciled twice -- its `CLONE_COLLECTIONS` is `["Vec", "Map", "Set", "VecDeque"]` plus Str/Rc/Arc/Shared, while the typechecker's authoritative `type_supports_clone` (src/typechecker/derives.rs:1128) lists `Option`, `Result`, `SortedMap` and `SortedSet` as well and consults `#[derive(Clone)]` / `impl Clone` via `env`. The ownership copy's own doc comment states as FACT that `Option`/`Result` have no callable clone and cites B-2026-07-29-31 -- the row whose FIX gave `Option` one (`Result` followed in B-2026-07-30-10). It is a fossil of the world before the rows it cites. | — |
+| B-2026-09-03-27 | 2026-09-03 | runtime | medium | `resolve_pool_workers()` STILL DOES A FULL `std::env::var` SCAN PER PARALLEL-REGION ENTRY after B-2026-09-03-18 cached the tier BELOW it, so an auto-par program's runtime is a linear function of HOW MANY ENVIRONMENT VARIABLES IT WAS STARTED WITH. Counted with an LD_PRELOAD getenv interposer on kata 313's benchmark: 2,999,970 lookups of `KARAC_PAR_WORKERS` -- exactly 30 passes x 99,999 merge steps, one per step -- against ONE getenv in total for the sequential build of the same program. Cost measured on the same binary by varying only the environment: 0.66 s under `env -i`, 0.95 s with a normal environment, 1.53 s with 300 extra variables (98 ns and 292 ns per call). That is 0.29 s of pure environment scanning, or 66% of the program's entire 0.44 s SEQUENTIAL runtime, spent re-asking a question whose answer cannot change. AND THE DOCUMENTED ESCAPE HATCH NO LONGER ESCAPES: under -18, setting `KARAC_PAR_WORKERS` explicitly was a 45x speedup because it returned before the cgroup probe; now that the probe is cached, both paths pay the lookup -- `KARAC_PAR_WORKERS=4` makes the SAME 2,999,970 calls and is not faster (1.60 s vs 1.53 s under a padded environment). | — |
 
 ### Relocated
 
