@@ -22415,6 +22415,88 @@ fn main() {
         }
     }
 
+    /// B-2026-09-03-6, OUTPUT half — a by-value `Result[Option[H], E]` param
+    /// prints the same thing on every surface. The memory half is
+    /// `memory_sanitizer::asan_nested_optres_by_value_param_owns_its_own_payload`,
+    /// which is where the double free itself is pinned; this asserts the
+    /// rendering the AOT binary produced all along, so a fix that stops the
+    /// double free by dropping the payload instead of copying it would be
+    /// caught here rather than looking clean under ASAN.
+    ///
+    /// `option-of-result` is the OTHER NESTING ORDER, and it is here rather than
+    /// in the ASAN fixture on purpose: its output was and is correct, but it
+    /// leaks 45 B in 3 allocations for B-2026-09-02-22's reason (an `Option`
+    /// param's payload is gated at 3 words and a `Result` is 6, so the param is
+    /// never admitted to the entry-copy convention). Pinning the leak there
+    /// would fail that fixture for an unrelated open defect; pinning the OUTPUT
+    /// here costs nothing and still guards the shape.
+    #[test]
+    fn e2e_nested_optres_by_value_param_renders_on_every_surface() {
+        for (label, src, want) in [
+            (
+                "result-of-option-string",
+                r#"
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let s = f"payloadpayload0";
+    show(Ok(Some(s)));
+    println("done");
+}
+"#,
+                "Ok(Some(payloadpayload0))\ndone\n",
+            ),
+            (
+                "result-of-option-vec",
+                r#"
+fn show(x: Result[Option[Vec[i64]], String]) { println(f"{x}"); }
+fn main() {
+    let v: Vec[i64] = [1, 2, 3];
+    show(Ok(Some(v)));
+    println("done");
+}
+"#,
+                "Ok(Some([1, 2, 3]))\ndone\n",
+            ),
+            (
+                "option-of-result",
+                r#"
+fn show(x: Option[Result[String, String]]) { println(f"{x}"); }
+fn main() {
+    let s = f"payloadpayload0";
+    show(Some(Ok(s)));
+    println("done");
+}
+"#,
+                "Some(Ok(payloadpayload0))\ndone\n",
+            ),
+            (
+                "err-half-live",
+                r#"
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let e = f"errerrerrerrerr0";
+    show(Err(e));
+    println("done");
+}
+"#,
+                "Err(errerrerrerrerr0)\ndone\n",
+            ),
+            (
+                "none-payload",
+                r#"
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    show(Ok(None));
+    println("done");
+}
+"#,
+                "Ok(None)\ndone\n",
+            ),
+        ] {
+            assert_eq!(run_program(src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-29-56 — a heap-carrying `Option` BOUND TO A LOCAL and returned
     /// hands its payload to the caller; the callee must not free it on the way
     /// out.

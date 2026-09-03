@@ -3136,6 +3136,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&payload_name)
                 .filter(|l| !l.is_shared)
                 .cloned();
+            // B-2026-09-03-6 — see the copy arm below. `Option`/`Result` are in
+            // `enum_layouts` under their bare names, so a nested one reaches the
+            // enum path with a layout that has no instantiation of its payload.
+            //
+            // Gated on `optres_param_entry_copied_te` for the HALF, not just on
+            // its shape. That predicate is written as "payload the by-value
+            // entry copy can duplicate", and its exclusions are exactly the
+            // payloads that already have an owner: a SHARED handle belongs to
+            // the rc machinery, and a payload over the boxing-word limit belongs
+            // to `boxed_enum_payload_vars` / `boxed_struct_payload_vars`, each
+            // with caller-side retraction rules this copy would be a second,
+            // unsynchronised answer to. Measured: without this clause the
+            // recursion mallocs a fresh box for such a half and three
+            // memory_sanitizer fixtures in the boxed-nested family fail
+            // (`asan_box_nested_in_result_inline_payload_area_no_leak`,
+            // `asan_nested_box_chain_frees_every_envelope`,
+            // `asan_nested_box_owned_by_callee_when_no_binding_owns_it`). A half
+            // the predicate refuses keeps the by-name path below, which is the
+            // behaviour those fixtures were passing with.
+            let nested_optres = matches!(payload_name.as_str(), "Option" | "Result")
+                && matches!(&half.kind, TypeKind::Path(hp) if hp.generic_args.is_some())
+                && self.optres_param_entry_copied_te(&half);
             // Element type for a direct String/Vec half; `None` marks the
             // struct/enum half that takes the boxed-or-inline path.
             let overlay: Option<(BasicTypeEnum<'ctx>, Option<TypeExpr>)> =
@@ -3251,6 +3273,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_ptr_to_int(new_box, i64_t, &format!("p14re.{label}.newbox.w"))
                     .unwrap();
                 self.builder.build_store(payload_base, new_w).unwrap();
+            } else if nested_optres {
+                // B-2026-09-03-6 — a half that is ITSELF an `Option`/`Result`
+                // must be copied through the TYPE-EXPR-driven copier, not the
+                // by-NAME enum one below.
+                //
+                // `Option` and `Result` are GENERIC, and
+                // `deep_copy_enum_heap_payload_in_place` keys everything on the
+                // enum's NAME: it reads `layout.field_drop_kinds["Some"]` for the
+                // erased prelude declaration, whose payload is the type parameter
+                // `T`. `T` is not heap-bearing, so the `Some` case was not even
+                // emitted and the half was copied by NOTHING -- while
+                // `emit_result_drop_fn` recurses with the full instantiated
+                // TypeExpr (`emit_drop_fn_for_type_expr(Option[String])`) and
+                // frees the payload for real. Copy shallower than drop is exactly
+                // the invariant this family's doc comments say must hold, and
+                // breaking it here meant the callee's entry-copied param and the
+                // caller's retained original aliased one buffer:
+                // `fn show(x: Result[Option[String], E])` aborted `karac run` with
+                // `free(): double free detected in tcache 2` on a single call, and
+                // the AOT binary logged an `Invalid free()` per call under
+                // valgrind while still printing correctly. With a
+                // `Result[Option[Vec[i64]], E]` payload the AOT binary aborts too.
+                //
+                // `payload_base` is the Result's word 1 -- the very pointer
+                // `emit_result_drop_fn` hands the half's drop fn -- so the nested
+                // enum's own tag lands where its layout expects it.
+                self.deep_copy_optres_param_in_place(payload_base, &half);
             } else {
                 // INLINE — the payload overlays words 1..5; deep-copy its heap
                 // fields directly (`payload_base` reinterprets as `payload_llty*`).

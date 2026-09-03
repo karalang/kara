@@ -68357,4 +68357,202 @@ fn main() {
             "b26-local-tuple-elem-rebind",
         );
     }
+    /// B-2026-09-03-6 — A BY-VALUE `Result[Option[H], E]` PARAM DOUBLE-FREES ITS
+    /// INNER PAYLOAD. `karac run` aborted with
+    /// `free(): double free detected in tcache 2` on a SINGLE call; the AOT
+    /// binary logged an `Invalid free()` per call under valgrind and only
+    /// escaped a crash because glibc tolerated it in that arrangement. With a
+    /// `Vec` payload the AOT binary aborted as well.
+    ///
+    /// `optres_param_entry_copied_te` admits the param, so the caller stops
+    /// retaining the temp on the promise that the callee owns its own copy. The
+    /// copy is emitted by `deep_copy_result_struct_enum_payload_in_place`, which
+    /// classified the `Option[String]` half as "an enum half" (`Option` is in
+    /// `enum_layouts`) and handed it to `deep_copy_enum_heap_payload_in_place` —
+    /// a BY-NAME copier that reads `field_drop_kinds["Some"]` of the ERASED
+    /// generic `Option` declaration, whose payload is the type parameter `T`.
+    /// `T` is not heap-bearing, so the `Some` case was not even emitted and the
+    /// half was copied by NOTHING. `emit_result_drop_fn` meanwhile recurses with
+    /// the fully instantiated TypeExpr and frees the payload for real, so copy
+    /// depth was shallower than free depth — the one invariant this family's doc
+    /// comments say must hold — and the two frames freed one buffer.
+    ///
+    /// The fix routes a nested `Option`/`Result` half to
+    /// `deep_copy_optres_param_in_place`, the TYPE-EXPR-driven copier, at the
+    /// same `payload_base` (the Result's word 1) that `emit_result_drop_fn`
+    /// hands the half's drop fn.
+    ///
+    /// THE DISCRIMINATORS ARE ALL HERE, each measured:
+    ///
+    ///   * `Result[String, E]` — the un-nested control, always clean.
+    ///   * `Result[Option[i64], E]` — nested but heapless, always clean.
+    ///   * `Result[String, Option[String]]` — the OK half is direct and the ERR
+    ///     half is the nested one, and it was always clean, because only the
+    ///     LIVE half is copied and these programs build `Ok`.
+    ///   * `Option[Result[String, E]]` — the other NESTING ORDER, always clean:
+    ///     the outer `Option`'s own copier is TypeExpr-driven already.
+    ///   * `Err(e)` and `Ok(None)` — the live half carries no nested payload.
+    ///
+    /// The body deliberately does NOT read `x` in one case: the abort survives a
+    /// callee that only prints a constant, which is what places this on the
+    /// entry-copy path rather than the render path (B-2026-09-03-5's subject).
+    #[test]
+    fn asan_nested_optres_by_value_param_owns_its_own_payload() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "result-option-string",
+                r#"
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let s = f"payloadpayload{i}"; show(Ok(Some(s))); i = i + 1; }
+    println("done");
+}
+"#,
+                &[
+                    "Ok(Some(payloadpayload0))",
+                    "Ok(Some(payloadpayload1))",
+                    "Ok(Some(payloadpayload2))",
+                    "done",
+                ],
+            ),
+            (
+                "result-option-vec",
+                r#"
+fn show(x: Result[Option[Vec[i64]], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let v: Vec[i64] = [i, i + 1]; show(Ok(Some(v))); i = i + 1; }
+    println("done");
+}
+"#,
+                &[
+                    "Ok(Some([0, 1]))",
+                    "Ok(Some([1, 2]))",
+                    "Ok(Some([2, 3]))",
+                    "done",
+                ],
+            ),
+            (
+                "callee-never-reads-the-param",
+                r#"
+fn show(x: Result[Option[String], String]) { println("in"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let s = f"payloadpayload{i}"; show(Ok(Some(s))); i = i + 1; }
+    println("done");
+}
+"#,
+                &["in", "in", "in", "done"],
+            ),
+            (
+                "heapless-err-half",
+                r#"
+fn show(x: Result[Option[String], i64]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let s = f"payloadpayload{i}"; show(Ok(Some(s))); i = i + 1; }
+    println("done");
+}
+"#,
+                &[
+                    "Ok(Some(payloadpayload0))",
+                    "Ok(Some(payloadpayload1))",
+                    "Ok(Some(payloadpayload2))",
+                    "done",
+                ],
+            ),
+            // CONTROLS — clean before this change and after it.
+            (
+                "control-unnested-result",
+                r#"
+fn show(x: Result[String, String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let s = f"payloadpayload{i}"; show(Ok(s)); i = i + 1; }
+    println("done");
+}
+"#,
+                &[
+                    "Ok(payloadpayload0)",
+                    "Ok(payloadpayload1)",
+                    "Ok(payloadpayload2)",
+                    "done",
+                ],
+            ),
+            // The OTHER NESTING ORDER, `Option[Result[String, String]]`, is
+            // deliberately NOT pinned here. Its OUTPUT is correct on every
+            // surface (the codegen twin asserts that), but it LEAKS 45 B in 3
+            // allocations, which would fail this fixture for a defect that has
+            // nothing to do with the double free. It is B-2026-09-02-22's shape,
+            // not this one: `optres_param_entry_copied_te` gates an `Option`
+            // param's payload at 3 words and a `Result` is 6, so the param is
+            // never ADMITTED to the entry-copy convention at all and no frame is
+            // offered the temp. Measured identical to that row's own
+            // `Option[Option[String]]` figure, and unchanged by this fix, which
+            // only runs for an ADMITTED param — the measurement is recorded on
+            // that row, whose "NOT MEASURED" list asked for exactly it.
+            (
+                "control-heapless-nested-payload",
+                r#"
+fn show(x: Result[Option[i64], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { show(Ok(Some(i))); i = i + 1; }
+    println("done");
+}
+"#,
+                &["Ok(Some(0))", "Ok(Some(1))", "Ok(Some(2))", "done"],
+            ),
+            (
+                "control-nested-half-is-the-dead-one",
+                r#"
+fn show(x: Result[String, Option[String]]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let s = f"payloadpayload{i}"; show(Ok(s)); i = i + 1; }
+    println("done");
+}
+"#,
+                &[
+                    "Ok(payloadpayload0)",
+                    "Ok(payloadpayload1)",
+                    "Ok(payloadpayload2)",
+                    "done",
+                ],
+            ),
+            (
+                "control-none-payload",
+                r#"
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { show(Ok(None)); i = i + 1; }
+    println("done");
+}
+"#,
+                &["Ok(None)", "Ok(None)", "Ok(None)", "done"],
+            ),
+            (
+                "control-err-half-live",
+                r#"
+fn show(x: Result[Option[String], String]) { println(f"{x}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 { let e = f"errerrerrerrerr{i}"; show(Err(e)); i = i + 1; }
+    println("done");
+}
+"#,
+                &[
+                    "Err(errerrerrerrerr0)",
+                    "Err(errerrerrerrerr1)",
+                    "Err(errerrerrerrerr2)",
+                    "done",
+                ],
+            ),
+        ];
+        for (label, src, want) in cases {
+            assert_clean_asan_run(src, want, &format!("b6-nested-optres-param-{label}"));
+        }
+    }
 }
