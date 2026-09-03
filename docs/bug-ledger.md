@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 358 |
+| miscompile | 359 |
 | run-vs-build | 311 |
 | leak | 256 |
 | missing-feature | 193 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1394 |
-| interp | 337 |
+| codegen | 1395 |
+| interp | 338 |
 | typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-31-46 | 2026-08-31 | interp+codegen | medium | A FRESH-TEMP ARG ESCAPING INSIDE A RETURNED `Option.Some(r)` RUNS ITS `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `let _ = k.f(mk(4), true);` over `fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }` prints the body twice under `karac run` / `karac build` and once under `--interp`; the NAMED-binding and FREE-FN spellings of the same shape print twice on BOTH backends | — |
 | B-2026-08-31-50 | 2026-08-31 | interp+codegen | medium | AN ENUM-CONSTRUCTOR MIXED WRAP LOSES ITS SLOT MASK ACROSS A WHOLE-VALUE REBIND, AND CODEGEN CANNOT INHERIT IT BECAUSE IT STORES NOTHING PER VARIABLE -- `let w = W2.Two(r, mk(2)); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, on all three backends; the STRUCT and TUPLE spellings of the same rebind were fixed by B-2026-08-29-44 and this one could not be, because `enum_ctor_param_view_payload_slots` derives the masked slots from the ctor EXPRESSION at the `let` and keeps no per-var record for a rebind to copy | — |
 | B-2026-09-01-1 | 2026-09-01 | codegen | low | A SELF-ASSIGNMENT WHOSE RHS IS AN `if`/`match` LEAKS THE OVERWRITTEN VALUE -- `e = if c { pass(e) } else { pass(e) }` loses a block (12 allocs / 11 frees at -O0), the same shape B-2026-08-29-51 fixed for blocks and measured UNTOUCHED by it; MIXED arms leak identically, and like its sibling the leak is clean at -O2 | — |
-| B-2026-09-01-3 | 2026-09-01 | interp+codegen | medium | THE TUPLE SPELLING OF B-2026-08-29-47 STILL DOUBLES A PARAM VIEW'S `Drop` BODY -- `let t = (r, 5); let x = t.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-field param-view record that fix added has no tuple peer | none |
 | B-2026-09-01-5 | 2026-09-01 | codegen | low | A DISCARDED BRANCH LITERAL WHOSE FIELD IS A PROJECTION OFF A NAMED LOCAL STILL STRANDS 38 B -- `P { a: t.a, b: 1 }` is the half of B-2026-08-29-32's guard that B-2026-08-31-44 could NOT admit, because the aggregate-literal move takeover does not extend to named locals and admitting it double-frees in a loop | — |
 | B-2026-09-01-16 | 2026-09-01 | codegen | medium | A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON ALL THREE COMPILED SURFACES -- `println(f"field={readf(h.r)}")` is interp `field=43 drop 40 end` vs compiled `field=43 end drop 40`, against design.md line 866; hoisting the call to its own `let` makes all four agree, and the callee returns `i64`, which is B-2026-08-31-4's own passing CONTROL | — |
 | B-2026-09-01-17 | 2026-09-01 | interp+codegen | low | THE PROJECTED SPELLING OF B-2026-08-31-35 STILL RUNS THE LOCAL'S `Drop` BODY TWICE -- `let _ = if c { W { r: t.r, b: 1 } } else { .. };` over a local `W` doubles on all three backends because the aggregate-literal source walker resolves a bare NAME and not a field projection, so the disarm e49a85f wired up never names `t` | — |
@@ -159,6 +158,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-5 | 2026-09-03 | codegen | high | A `ref Option[T]` PARAMETER RENDERS `None` ON ALL THREE COMPILED SURFACES -- `fn show(x: ref Option[String]) { println(f"{x}") }` called with a `Some` prints `None` under jit / build / KARAC_AUTO_PAR=0 where `--interp` prints `Some(payloadpayload0)`. A SILENT WRONG ANSWER on an ordinary signature: no nesting, no generics, payload well within the 3-word boxing limit, and no leak or memory error alongside it | — |
 | B-2026-09-03-6 | 2026-09-03 | codegen | high | A `Result[Option[String], E]` ARGUMENT PASSED BY VALUE DOUBLE-FREES ITS INNER PAYLOAD -- `karac run` ABORTS with `free(): double free detected in tcache 2` on a single call, and the AOT binary racks up an `Invalid free()` per iteration under valgrind while still printing correctly. The `Result` NESTING is required: `Result[String, E]` is clean | — |
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
+| B-2026-09-03-8 | 2026-09-03 | interp+codegen | medium | THE REBIND SPELLING OF B-2026-09-01-3 STILL DOUBLES A TUPLE ELEMENT'S `Drop` BODY -- `let t = (r, 5); let t2 = t; let x = t2.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-element param-view record that fix added does not travel across a whole-value rebind and the tuple path has no peer for the struct's all-views propagation | — |
 
 ### Relocated
 
@@ -2086,6 +2086,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-31-48 | codegen | high | TWO INSTANTIATIONS OF ONE GENERIC FN AT DIFFERENT `Array`/`Slice`/`Vector` TYPE ARGS COLLIDE ON ONE MONO SYMBOL AND FAIL MODULE VERIFICATION -- `fn i… | 007c279 |
 | B-2026-08-31-49 | codegen | high | A GENERIC `Result[T, E]` RENDERS WITH THE `Option` VARIANT TABLE WHEN A GENERIC `Option[T]` DISPLAY IS EMITTED FIRST -- `Ok(7)` prints `Some(7)` and… | e5fd34f |
 | B-2026-09-01-2 | interp | medium | THE INTERPRETER LOSES A MIXED WRAP'S FRESH FIELD BODY WHEN THE VIEW FIELD IS MOVED OUT -- `let s = S3 { a: r, b: mk(2) }; let x = s.a;` prints `dR1`… | 8a3f0a8 |
+| B-2026-09-01-3 | interp+codegen | medium | THE TUPLE SPELLING OF B-2026-08-29-47 STILL DOUBLES A PARAM VIEW'S `Drop` BODY -- `let t = (r, 5); let x = t.0;` prints `dR1 dR1` where one is due, a… | 39d41b6 |
 | B-2026-09-01-4 | codegen | medium | READING A NON-`Copy` FIELD OUT OF A `ref` PARAM MINTS AN IMPLICIT DEEP COPY -- silently allocating and running a user `Drop` body the source never wr… | e207be3 |
 | B-2026-09-01-6 | codegen | medium | CODEGEN DECLINES A NESTED `ref v[0][1]` WITH THE INTERNAL STRING `unreachable: Ref handled in compile_expr` WHILE THE INTERPRETER READS THE ELEMENT C… | b7674909 |
 | B-2026-09-01-7 | interp | medium | A BARE `if` WITH NO `else` IN STATEMENT POSITION, WHOSE ARM LITERAL CONSUMES A LIVE LOCAL, RUNS THAT LOCAL'S `Drop` BODY TWICE UNDER `--interp` AND O… | e49a85f |
