@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 358 |
-| run-vs-build | 310 |
+| run-vs-build | 311 |
 | leak | 256 |
 | missing-feature | 193 |
 | double-free | 169 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1393 |
-| interp | 336 |
+| codegen | 1394 |
+| interp | 337 |
 | typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
@@ -151,7 +151,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-24 | 2026-09-02 | interp+codegen | medium | A MATCH ARM THAT HANDS ITS ELEMENT/PAYLOAD OUT OF THE FUNCTION RUNS THE `Drop` BODY TWICE ON ALL FOUR SURFACES -- `dR4 got4 dR4` where one is due. The scrutinee's walk still fires at the callee's scope exit on a value the arm already gave away. The ENUM spelling is wrong identically, so this is about the ESCAPE, not about tuples; an arm that moves into a BY-VALUE CALLEE is correct everywhere | — |
 | B-2026-09-02-28 | 2026-09-02 | interp+codegen | medium | A TUPLE-DESTRUCTURE DISCARD OF A CALL-PRODUCED ENUM RUNS NEITHER BODY ON THE COMPILED BACKENDS -- `let (_, _) = (mk(1), 5);` is interp `dB dW7` against compiled SILENCE, so the compiled side loses the enum's OWN body as well as its payload's | — |
 | B-2026-09-02-31 | 2026-09-02 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, .. }` in a nested expression position loses 15 B per evaluation at both opt levels where the BRACED `=> { s }` spelling is now clean. Excluded by that fix's block-bodied-arm condition, which is load-bearing: dropping it fails BOTH `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free` and `selfhost_codegen_matches_seed_run`, because a bare-armed match is also how the generic-enum debox hands a value out of its frame | — |
-| B-2026-09-02-38 | 2026-09-02 | interp+codegen | medium | THE `let S { r, k } = s` SPELLING OF B-2026-09-02-25 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b9 dR9 dR9` where one is due, while the TUPLE spelling of the same shape is now correct. The struct half is different machinery: codegen TRANSFERS the body to the leaf instead of leaving it with the source, so its rebind has to MOVE a body, not withhold one | — |
 | B-2026-09-02-41 | 2026-09-02 | interp+codegen | medium | THE TWO-STEP DESTRUCTURE OF A NESTED TUPLE FIELD SPLITS THE BACKENDS -- `let (inner, y) = h.pe; let (r, x) = inner; let m = r;` runs ONE `Drop` body under `--interp` and TWO on `karac run` / `karac build` / `KARAC_AUTO_PAR=0`. The interpreter is right; the compiled side records nothing for the tuple-typed leaf under an owner-runs-bodies source | — |
 | B-2026-09-02-43 | 2026-09-02 | codegen | medium | A LOCAL STRUCT'S PROJECTION DESTRUCTURE RUNS THE ELEMENT'S `Drop` BODY ON A CAP-ZEROED HUSK, BEFORE THE LIVE READ, and then again -- `let h = H { pe: (mk(21), 0) }; let (r, k) = h.pe;` prints `dR21//0` (empty String, zero-length Vec) then the read then the real body on all three compiled surfaces, where `--interp` runs one body on the live value. valgrind-clean, so only a `Drop` body that RENDERS its fields can see it | — |
 | B-2026-09-02-44 | 2026-09-02 | interp+codegen | medium | A WHOLE-REBIND OF A STRUCT PARAM BEFORE PROJECTING STILL DOUBLES THE ELEMENT'S `Drop` BODY -- `let h2 = h; let (r, k) = h2.pe; let m = r;` runs TWO bodies on all four surfaces where one is due, while the direct spelling `let (r, k) = h.pe` is correct since B-2026-09-02-40. Same missing widening as B-2026-09-02-25's `viewsrc` cell, one hop further in | — |
@@ -159,6 +158,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
 | B-2026-09-03-5 | 2026-09-03 | codegen | high | A `ref Option[T]` PARAMETER RENDERS `None` ON ALL THREE COMPILED SURFACES -- `fn show(x: ref Option[String]) { println(f"{x}") }` called with a `Some` prints `None` under jit / build / KARAC_AUTO_PAR=0 where `--interp` prints `Some(payloadpayload0)`. A SILENT WRONG ANSWER on an ordinary signature: no nesting, no generics, payload well within the 3-word boxing limit, and no leak or memory error alongside it | — |
 | B-2026-09-03-6 | 2026-09-03 | codegen | high | A `Result[Option[String], E]` ARGUMENT PASSED BY VALUE DOUBLE-FREES ITS INNER PAYLOAD -- `karac run` ABORTS with `free(): double free detected in tcache 2` on a single call, and the AOT binary racks up an `Invalid free()` per iteration under valgrind while still printing correctly. The `Result` NESTING is required: `Result[String, E]` is clean | — |
+| B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 
 ### Relocated
 
@@ -2151,6 +2151,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-35 | codegen | medium | A BY-VALUE TUPLE PARAM LEAKS ITS ELEMENT VEC'S HEAP-OWNING ELEMENTS -- `fn take(t: (Vec[String], i64))` frees the Vec's `{ptr,len,cap}` BUFFER but ne… | 1bfd07e |
 | B-2026-09-02-36 | parser | low | THE RESIDUAL OF B-2026-09-02-29 ON THE SIBLING PATH: all 12 STRUCTURAL MARKERS still render the internal `Error("...")` Debug wrapper when raw-escape… | 3dd851c |
 | B-2026-09-02-37 | codegen | high | AN `Array[String, N]` AS AN `Option` PAYLOAD IS A SILENT MISCOMPILE UNDER CODEGEN -- its elements render EMPTY (`[, ]`) when the `Option` crosses a f… | 2e891ef |
+| B-2026-09-02-38 | interp+codegen | medium | THE `let S { r, k } = s` SPELLING OF B-2026-09-02-25 STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b9 dR9 dR9` where one is due, w… | 13e29320 |
 | B-2026-09-02-39 | codegen | medium | A TUPLE PARAM REGISTERS NO ELEMENT `TypeExpr`s AND A TUPLE WHOLE-REBIND CARRIES NONE, so any element a NAME cannot spell renders as an EMPTY path: `t… | b1ae9745 |
 | B-2026-09-02-40 | interp+codegen | medium | A PROJECTION SOURCE `let (r, k) = h.pe; let m = r;` STILL DOUBLES THE ELEMENT'S `Drop` BODY on all four surfaces -- `b12 dR12 dR12` where one is due,… | f9bf80d8 |
 | B-2026-09-02-42 | typecheck | medium | A BODY TYPE ANNOTATION THAT NAMES A GENERIC PARAMETER POISONS EVERY LATER BOUNDED USE OF THAT VALUE: one `let w: T = v;` makes the next bounded call… | a7c8af7 |
