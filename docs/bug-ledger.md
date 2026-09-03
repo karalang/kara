@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 365 |
 | run-vs-build | 320 |
-| leak | 258 |
+| leak | 260 |
 | missing-feature | 194 |
 | double-free | 170 |
 | codegen-gap | 161 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1414 |
+| codegen | 1416 |
 | interp | 345 |
 | typecheck | 291 |
 | ownership | 74 |
@@ -158,10 +158,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
 | B-2026-09-03-29 | 2026-09-03 | typecheck | medium | `E_INDEX_MOVE_NON_COPY` IS SITE-BASED IN THE SAME WAY `partial_move_of_drop_struct` WAS, and it is the same four positions -- `return v[0];`, a tail `v[0]`, a struct-literal field and a tuple-literal element all read a non-`Copy` element out of a container that still owns it and fire nothing, while `let x = v[0];` and a call argument are hard errors; both rules are `Deny` | — |
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
-| B-2026-09-03-31 | 2026-09-03 | codegen | medium | A STRUCT WITH ITS OWN `impl Drop` NEVER RELEASES A `shared struct` FIELD'S RC BOX -- 16 B per instance and unbounded in a loop (80 B / 5 instances), on a plain `let` with no call and no assignment; the SAME struct without the `impl Drop` is clean, which isolates the mutually-exclusive `UserDrop` vs `StructDrop` registration as the cause, and `-O2` masks it | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
 | B-2026-09-03-33 | 2026-09-03 | codegen | medium | A `Result[O, E]` STRUCT-FIELD DESTRUCTURE LEAF RUNS A HUSK `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h;` over `{ a: R, b: Result[R, String] }` prints `dR0/` (a body reading a zeroed object) on jit/aot/AUTO_PAR=0 and nothing under `--interp`, while the REAL payload body `dR109` runs on neither; fires for a two-field `R` and not a three-field one, which is why B-2026-09-03-15 recorded this gap as silent | — |
 | B-2026-09-03-34 | 2026-09-03 | codegen | medium | A STRUCT DESTRUCTURED OUT OF A MATCH ARM'S PAYLOAD BINDING LOSES A PLAIN FIELD'S `Drop` BODY ON THE COMPILED BACKENDS -- `match w { Wrap.W(h) => { let Ho2 { a, b } = h; .. } }` runs `dR152 dR52` under `--interp` and only `dR152` on jit/aot/AUTO_PAR=0; the payload half was fixed by B-2026-09-03-24 and this is the residue, because the place-source body transfer is gated on the source owning a `StructFieldBodies` action and a match payload does not | — |
+| B-2026-09-03-35 | 2026-09-03 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` IS NEVER LOWERED, so ADDING IT MAKES A CLEAN PROGRAM LEAK EVERY HEAP FIELD -- `Box3[String] { v, tag }` is clean without the impl and loses 16 B in 2 blocks (both `String`s) with it, while `--interp` runs the body; `nm` shows no `S.drop` symbol at all, so the binding gets neither `UserDrop` NOR the `StructDrop` it had before, and the same impl on a NON-generic struct is completely correct | — |
+| B-2026-09-03-36 | 2026-09-03 | codegen | medium | REASSIGNING A `shared` FIELD OF A PLAIN STRUCT STRANDS THE DISPLACED RC BOX -- `n.s = Sd { m: 9 }` prints the old handle's `Drop` body, so the refcount DOES reach zero, and the 16-byte box is still never freed; one per assignment and unbounded, and it happens with NO `impl Drop` on the owner at all, which is what separates it from B-2026-09-03-31's scope-exit half | — |
 
 ### Relocated
 
@@ -2187,6 +2188,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-24 | interp+codegen | medium | A STRUCT-FIELD DESTRUCTURE LEAF TYPED `Option[<struct with a Drop body>]` LOSES THE PAYLOAD'S BODY -- `let Ho2 { a, b } = h;` over `{ a: R, b: Option… | e187718 |
 | B-2026-09-03-26 | ownership | medium | THE USE-AFTER-MOVE HINT DENIES A `.clone()` THAT EXISTS, AND `karac fix` WITHHOLDS THE EDIT, FOR FIVE TYPE CATEGORIES -- `Option[T]`, `Result[T, E]`,… | f77d2cc |
 | B-2026-09-03-27 | runtime | medium | `resolve_pool_workers()` STILL DOES A FULL `std::env::var` SCAN PER PARALLEL-REGION ENTRY after B-2026-09-03-18 cached the tier BELOW it, so an auto-… | 953006d |
+| B-2026-09-03-31 | codegen | medium | A STRUCT WITH ITS OWN `impl Drop` NEVER RELEASES A `shared struct` FIELD'S RC BOX -- 16 B per instance and unbounded in a loop (80 B / 5 instances),… | dc8cfe24 |
 
 </details>
 
