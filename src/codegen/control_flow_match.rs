@@ -9498,6 +9498,84 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-02-43 — the TUPLE-ELEMENT sibling of
+    /// [`Self::disarm_struct_field_bodies_at`]: a `let`-destructure over a
+    /// LOCAL struct's tuple field (`let h = H { pe: (mk(21), 0) };
+    /// let (r, k) = h.pe;`) hands each element's `Drop` body to its leaf, so
+    /// the owner's walk must stop running it.
+    ///
+    /// It did not, and the second fire landed on the slot
+    /// `zero_tuple_elem_cap_at` had just emptied — so the user body ran against
+    /// a value whose `String` read empty and whose `Vec` read length zero, and
+    /// ran there FIRST, before the live read. `dR21//0` then `b21/t21/1` then
+    /// `dR21/t21/1`, against one live body under `--interp`. Nothing frees
+    /// twice (the husk is zeroed, not freed), so valgrind and LSan are both
+    /// clean and only a `Drop` body that RENDERS its fields can observe it.
+    ///
+    /// ONE HOP, deliberately. `struct_moved_nested_field_bodies` is keyed
+    /// outer-field → inner indices, which is exactly `<ident>.<field>`; a
+    /// deeper chain (`g.h.pe`) needs a PATH-keyed store like
+    /// `struct_moved_field_payload_bodies`, and it doubles on the INTERPRETER
+    /// too, so it is a different defect rather than this one further out and is
+    /// filed separately.
+    ///
+    /// Masking is scoped to the elements whose leaf actually took a body —
+    /// which is why the caller passes them rather than masking the whole field:
+    /// `let (r, k) = h.pe` over `(R, i64)` must leave any other Drop-bearing
+    /// element of the same tuple running.
+    pub(super) fn disarm_struct_field_tuple_elem_bodies_at(
+        &mut self,
+        var_name: &str,
+        field_idx: usize,
+        elem_idxs: &std::collections::HashSet<u32>,
+    ) {
+        if elem_idxs.is_empty() {
+            return;
+        }
+        let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
+            return;
+        };
+        if !self.variables.contains_key(var_name) {
+            return;
+        }
+        self.type_decls
+            .struct_moved_nested_field_bodies
+            .entry(var_name.to_string())
+            .or_default()
+            .entry(field_idx)
+            .or_default()
+            .extend(elem_idxs.iter().map(|i| *i as usize));
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(var_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        // Re-read every mask from its map so this composes with the whole-field
+        // and payload kinds rather than replacing them — the discipline
+        // `field_skip_tree_for_var` exists to enforce.
+        let here: std::collections::BTreeSet<usize> = self
+            .type_decls
+            .struct_moved_field_bodies
+            .get(var_name)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        let skip = self.field_skip_tree_for_var(var_name, here);
+        match self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip) {
+            Some(bodies) => {
+                let _ = self.replace_user_drop_fn_for_var(
+                    var_name,
+                    UserDropKind::StructFieldBodies,
+                    bodies,
+                );
+            }
+            // Nothing survives the mask — leave the action retracted, as the
+            // whole-field sibling does.
+            None => self.suppress_struct_field_bodies_for_var(var_name),
+        }
+    }
+
     /// B-2026-08-29-33 — the PAYLOAD-ONLY sibling of
     /// [`Self::disarm_struct_field_bodies_at`]: a consuming arm over
     /// `<var>.<field>` (`match s.e { E.A(r) => { let m = r; … } }`) took the
@@ -9883,7 +9961,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// walk. `None` for any root that is not an identifier, and for any hop
     /// whose owning type or field name cannot be resolved — the same
     /// uncertain-⇒-silent rule the one-hop form applied.
-    fn projection_field_index_path(&self, expr: &Expr) -> Option<(String, Vec<usize>)> {
+    pub(super) fn projection_field_index_path(&self, expr: &Expr) -> Option<(String, Vec<usize>)> {
         let ExprKind::FieldAccess { object, field } = &expr.kind else {
             return None;
         };

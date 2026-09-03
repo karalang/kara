@@ -13885,6 +13885,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(value) else {
             return;
         };
+        let mut took_bodies: std::collections::HashSet<u32> = std::collections::HashSet::new();
         self.place_source_tuple_leaf_cleanups(
             pats,
             &elems,
@@ -13892,7 +13893,20 @@ impl<'ctx> super::Codegen<'ctx> {
             tuple_ty,
             owner_runs_bodies,
             mark_views,
+            &mut took_bodies,
         );
+        // B-2026-09-02-43 — when the LEAVES took the bodies, the source must
+        // stop running them. `owner_runs_bodies` already says the source is not
+        // a caller-retained param, so the only other owner is this local's own
+        // struct walk, and it kept firing — first, and against the element the
+        // cap-zeroing had just emptied. One hop only; see the disarm's doc.
+        if !owner_runs_bodies && !took_bodies.is_empty() {
+            if let Some((root, path)) = self.projection_field_index_path(value) {
+                if let [field_idx] = path[..] {
+                    self.disarm_struct_field_tuple_elem_bodies_at(&root, field_idx, &took_bodies);
+                }
+            }
+        }
     }
 
     /// Per-leaf half of [`Self::finish_place_source_tuple_destructure`], split
@@ -13920,6 +13934,12 @@ impl<'ctx> super::Codegen<'ctx> {
         tuple_ty: StructType<'ctx>,
         owner_runs_bodies: bool,
         mark_views: bool,
+        // B-2026-09-02-43 — element indices whose BODY this call handed to a
+        // leaf, so the caller can mask them out of the source's own walk. Only
+        // the TOP-level call's set is used; the nested-tuple recursion below
+        // passes a throwaway, because an inner element's index is meaningless
+        // against the outer field.
+        took_bodies: &mut std::collections::HashSet<u32>,
     ) {
         for (idx, pat) in pats.iter().enumerate() {
             let Some(te) = elems.get(idx).cloned() else {
@@ -13987,6 +14007,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     inner_ty,
                     owner_runs_bodies,
                     mark_views,
+                    &mut std::collections::HashSet::new(),
                 );
                 continue;
             }
@@ -14114,6 +14135,14 @@ impl<'ctx> super::Codegen<'ctx> {
             self.register_var_from_type_expr(name, &te);
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 self.track_destructure_leaf_cleanup(name, slot.ptr, !owner_runs_bodies);
+            }
+            // B-2026-09-02-43 — the leaf just took this element's BODY (the
+            // `!owner_runs_bodies` argument above is that decision), and
+            // `zero_tuple_elem_cap_at` below takes its MEMORY. Record the index
+            // so the caller can stop the SOURCE's walk running the same body a
+            // second time, against the slot that cap-zeroing empties.
+            if !owner_runs_bodies {
+                took_bodies.insert(idx as u32);
             }
             // B-2026-09-02-25 — the `let` spelling of B-2026-08-31-7's rule.
             //

@@ -3854,7 +3854,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let inkwell::types::BasicTypeEnum::StructType(agg) =
                         self.llvm_type_for_type_expr(fte)
                     {
-                        if let Some(w) = self.emit_tuple_elem_user_drop_bodies_fn(agg, &elem_tes) {
+                        // B-2026-09-02-43 — the sub-mask for THIS field, read
+                        // exactly as the nested-STRUCT recursion below reads it.
+                        // `skip.nested[i].here` means "indices masked inside
+                        // field i's own walker"; for a struct field those are
+                        // inner field indices, for a tuple field they are
+                        // ELEMENT indices, and the two walkers are the only
+                        // difference. Until now this arm called the UNMASKED
+                        // emitter, so a `let (r, k) = h.pe;` that handed the
+                        // element's body to the leaf left the owner running it
+                        // too — against the slot the destructure had just
+                        // cap-zeroed, which is why the body rendered an empty
+                        // `String` and a zero-length `Vec`.
+                        let elem_skip: std::collections::HashSet<u32> = skip
+                            .nested
+                            .get(&field_idx)
+                            .map(|sub| sub.here.iter().map(|i| *i as u32).collect())
+                            .unwrap_or_default();
+                        if let Some(w) = self.emit_tuple_elem_user_drop_bodies_fn_skipping(
+                            agg, &elem_tes, &elem_skip,
+                        ) {
                             self.builder.build_call(w, &[field_ptr.into()], "").unwrap();
                         }
                     }

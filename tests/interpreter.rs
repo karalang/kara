@@ -35057,6 +35057,107 @@ done
 "#
     );
 }
+
+/// B-2026-09-02-43 — a `let`-destructure over a LOCAL struct's tuple field
+/// (`let h = H {{ pe: (mk(21), 0) }}; let (r, k) = h.pe;`) hands each element's
+/// `Drop` body to its leaf, so the owner's walk must stop running it.
+///
+/// It did not. The owner's walk fired the same body a SECOND time, against the slot
+/// `zero_tuple_elem_cap_at` had just emptied, and fired it FIRST — before the live
+/// read. The user body therefore observed a value whose `String` read empty and
+/// whose `Vec` read length zero: `dR21//0`, then `b21/t21/1`, then the real
+/// `dR21/t21/1`, on all three compiled surfaces against one live body under
+/// `--interp`.
+///
+/// WHY EVERY EXISTING TEST IN THIS FAMILY MISSES IT, and why this one renders. The
+/// husk is ZEROED, not freed, so nothing double-frees: valgrind and LSan are clean
+/// at `-O0` and `-O2` alike, and the memory-sanitizer suite cannot see it. The
+/// regression tests around it assert body COUNTS over an `R {{ id: i64 }}` — a
+/// struct with nothing that can read empty — so a body running on a husk is
+/// indistinguishable from one running on the live value. `R` here carries a
+/// `String` and a `Vec` and the body prints both, which is the only instrument that
+/// detects this class at all. A count-only assertion would have passed on the
+/// defect before the fix, because the COUNT was also wrong but in a way the
+/// `--interp` comparison already covered.
+///
+/// The repair is the mask this arm never consulted. `skip.nested[i].here` means
+/// "indices masked inside field i's own walker" — inner FIELD indices for a struct
+/// field, ELEMENT indices for a tuple one — and the struct recursion honoured it
+/// while the tuple arm called the unmasked emitter.
+///
+/// `baretuple` and `paramroot` are the over-reach controls on the two legs this
+/// does not touch: a bare tuple LOCAL was always correct (no field hop), and a
+/// PARAM root takes the other leg of `owner_runs_bodies`, where the source keeps
+/// the body and the leaf must not gain one. `sibling` proves the mask is scoped to
+/// the destructured field — `other` still runs, on a live value — and `bothelems`
+/// that a tuple whose elements are BOTH taken masks both. `noDestr` reads the
+/// element without destructuring at all and must keep the owner's single body.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_local_struct_tuple_field_destructure_masks_the_owner`, pinned to the same string.
+#[test]
+fn test_local_struct_tuple_field_destructure_masks_the_owner() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct H  { pe: (R, i64) }
+struct H2 { pe: (R, i64), other: R }
+struct H3 { pe: (R, R) }
+
+fn n1() { let h = H { pe: (mk(21), 0) }; let (r, k) = h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
+fn n2() { let h = H { pe: (mk(22), 0) }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n3() { let t = (mk(23), 0); let (r, k) = t; let m = r; println(f"  b{m.id}/{m.tag}") }
+fn n4() { let h = H2 { pe: (mk(24), 0), other: mk(94) }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n5() { let h = H3 { pe: (mk(25), mk(95)) }; let (a, b) = h.pe; println(f"  b{a.id}/{b.id}") }
+fn n6() { let h = H { pe: (mk(26), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
+fn n7(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+
+fn main() {
+    println("local1hop");   n1();                      println("local1hop end")
+    println("norebind");    n2();                      println("norebind end")
+    println("baretuple");   n3();                      println("baretuple end")
+    println("sibling");     n4();                      println("sibling end")
+    println("bothelems");   n5();                      println("bothelems end")
+    println("noDestr");     n6();                      println("noDestr end")
+    println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end")
+    println("done")
+}
+"#),
+        r#"local1hop
+  b21/t21/1
+dR21/t21/1
+local1hop end
+norebind
+  b22/t22
+dR22/t22/1
+norebind end
+baretuple
+  b23/t23
+dR23/t23/1
+baretuple end
+sibling
+dR94/t94/1
+  b24/t24
+dR24/t24/1
+sibling end
+bothelems
+  b25/95
+dR95/t95/1
+dR25/t25/1
+bothelems end
+noDestr
+  b26/t26
+dR26/t26/1
+noDestr end
+paramroot
+  b27/t27
+dR27/t27/1
+paramroot end
+done
+"#
+    );
+}
 /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
 /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
 /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a
