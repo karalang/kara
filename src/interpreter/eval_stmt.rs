@@ -3673,25 +3673,44 @@ impl<'a> super::Interpreter<'a> {
     /// Mirrors the codegen `suppress_cleanup_for_tail_return`
     /// behaviour for the user-Drop family.
     fn suppress_tail_expr_user_drop(&mut self, expr: &Expr, cleanup: &mut Vec<CleanupAction>) {
-        let name = match &expr.kind {
-            ExprKind::Identifier(n) => n.clone(),
-            _ => return,
-        };
-        let type_name = match self.env.get(&name) {
-            Some(Value::Struct { name, .. }) => name.clone(),
-            // Enum-Drop parity (B-2026-07-01-8): with enum bindings now
-            // firing, a moved-out enum binding needs the same suppression
-            // or the source AND the destination both run the user body.
-            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
-            _ => return,
-        };
-        if !self.program.drop_method_keys.contains_key(&type_name) {
-            return;
-        }
-        cleanup.retain(|action| match action {
-            CleanupAction::Drop { name: drop_name } => drop_name != &name,
-            _ => true,
-        });
+        // B-2026-09-02-2 — every source the escaping expression CONSUMES, not
+        // only one it hands out whole. This read a bare `Identifier` and
+        // nothing else, so `return r` was right while the identical move one
+        // aggregate deeper -- `return W { r: r }` -- left `r` armed and ran its
+        // body twice: `mid dR14 v14 dR14 post` from `--interp` against
+        // `mid v14 dR14 post` from all three compiled backends.
+        //
+        // The TUPLE spelling of the same move was already correct, which is
+        // what pinned the cause. It reaches a SECOND channel: the escaping
+        // positions also call `record_container_bodies_move_sources`, whose
+        // `Tuple`/`ArrayLiteral` arms route through
+        // `record_container_move_sources_in_aggregate_arg` and put a source
+        // carrying its own `impl Drop` on the whole-value channel
+        // (`moved_out_user_drop_bindings`, B-2026-08-02-27 / B-2026-08-29-45),
+        // while its `StructLiteral` arm deliberately keeps the container-only
+        // recording. That split is right where it is written -- the whole-value
+        // channel is wrong for the DISCARD position (`let _ = W { r: r0 }`),
+        // where no struct-literal discard walk takes over the retracted body,
+        // and both backends draw the line in the same place. So the struct
+        // literal's escaping half belongs HERE, in the hook that only the two
+        // escaping positions reach, rather than in that shared dispatcher.
+        //
+        // `collect_aggregate_literal_sources` resolves a bare identifier to
+        // itself, so the original behaviour is a special case of this rather
+        // than a branch beside it -- the same widening
+        // `record_conditional_move_tail` took in B-2026-08-31-35, which is why
+        // the ENCLOSING-block spelling (`if k > 0 { return W { r: r } }`) was
+        // already correct: that path records through the conditional-move set
+        // instead, and had been widened to aggregates.
+        let mut names = Vec::new();
+        Self::collect_aggregate_literal_sources(expr, &mut names);
+        // `retract_user_drop_actions_for` applies the same two gates the
+        // identifier-only body did: the source must resolve to a `Struct` or an
+        // `EnumVariant` (Enum-Drop parity, B-2026-07-01-8) whose type declares
+        // a user `impl Drop`. A container source (`Box3 { xs: xs }`) resolves
+        // to `Value::Array` and is left alone, which is why the container
+        // spelling -- correct before this -- stays correct.
+        self.retract_user_drop_actions_for(&names, cleanup);
     }
 
     /// Sub-slice (3) of move-suppression — pre-statement variant for

@@ -22262,6 +22262,159 @@ fn main() {
         }
     }
 
+    /// B-2026-09-02-2 — AN AGGREGATE LITERAL IN AN ESCAPING POSITION CONSUMES ITS
+    /// SOURCES. `return W { r: r }` hands `r` to the caller exactly as `return r`
+    /// does, so ONE `Drop` body is due, at the caller's binding death. The
+    /// interpreter ran it twice -- `mid dR14 v14 dR14 post` against
+    /// `mid v14 dR14 post` from all three compiled backends -- because
+    /// `suppress_tail_expr_user_drop`, the hook both escaping positions drive, read
+    /// a bare `Identifier` and nothing else, so a source one aggregate deeper was
+    /// never retracted from the frame's cleanup.
+    ///
+    /// The TUPLE spelling of the same move was already correct, and that asymmetry
+    /// is what located the cause. Both escaping positions also call
+    /// `record_container_bodies_move_sources`, whose `Tuple`/`ArrayLiteral` arms
+    /// route through `record_container_move_sources_in_aggregate_arg` and put a
+    /// source carrying its own `impl Drop` on the whole-value channel
+    /// (B-2026-08-02-27 / B-2026-08-29-45), while its `StructLiteral` arm keeps the
+    /// container-only recording on purpose: the whole-value channel is wrong for the
+    /// DISCARD position, where no struct-literal discard walk takes over the
+    /// retracted body. `discard-guard` is that line, and both backends draw it in
+    /// the same place. So the struct literal's escaping half went into the hook only
+    /// the escaping positions reach.
+    ///
+    /// `enclosing-block-guard` is the shape that was ALREADY correct and says why:
+    /// a `return` nested one block deeper leaves `r` out of THIS frame's cleanup, so
+    /// the retraction cannot see it and `record_conditional_move_tail` -- widened to
+    /// aggregates by B-2026-08-31-35 -- carries it instead. The fix here is the same
+    /// widening, one hook over.
+    ///
+    /// `enum-field` and `two-fields` are shapes the row never named and the same
+    /// change fixes; `sibling-not-moved` and `container-field-control` are the
+    /// guards in the other direction, where a too-eager retraction would LOSE a body
+    /// rather than duplicate one.
+    ///
+    /// Twin of
+    /// `interpreter::an_escaping_aggregate_literal_consumes_its_sources`, asserting
+    /// the same strings so a later one-sided edit cannot re-negotiate them.
+    #[test]
+    fn e2e_an_escaping_aggregate_literal_consumes_its_sources() {
+        const H: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             enum E { A(i64), B }\n\
+             impl Drop for E { fn drop(mut ref self) { println(\"dE\") } }\n\
+             struct W { r: R }\n\
+             struct Outer { w: W }\n\
+             struct Two { a: R, b: R }\n\
+             struct Box3 { xs: Vec[R] }\n\
+             struct Wrap { e: E }\n\
+             fn t_lit(k: i64) -> W { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return W { r: r } }\n\
+             fn s_lit(k: i64) -> W { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return W { r: r }; }\n\
+             fn b_lit(k: i64) -> W { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); W { r: r } }\n\
+             fn n_lit(k: i64) -> Outer { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return Outer { w: W { r: r } } }\n\
+             fn two_lit(k: i64) -> Two { let x: R = R { id: k, tag: f\"x\" }; let y: R = R { id: k + 1, tag: f\"y\" }; println(\"mid\"); return Two { a: x, b: y } }\n\
+             fn sib_lit(k: i64) -> W { let x: R = R { id: k, tag: f\"x\" }; let y: R = R { id: k + 50, tag: f\"y\" }; println(f\"mid{y.id}\"); return W { r: x } }\n\
+             fn enum_lit(k: i64) -> Wrap { let e: E = E.A(k); println(\"mid\"); return Wrap { e: e } }\n\
+             fn tup_lit(k: i64) -> (R, i64) { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return (r, 3) }\n\
+             fn named_lit(k: i64) -> W { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); let w: W = W { r: r }; return w }\n\
+             fn box_lit(k: i64) -> Box3 { let xs: Vec[R] = [R { id: k, tag: f\"t\" }]; println(\"mid\"); return Box3 { xs: xs } }\n\
+             fn cond_lit(k: i64) -> W { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); if k > 0 { return W { r: r } } return W { r: R { id: 0, tag: f\"z\" } } }\n\
+             fn fresh_lit(k: i64) -> W { println(\"mid\"); return W { r: R { id: k, tag: f\"t\" } } }\n";
+        for (label, body, want) in [
+            // THE ROW, in its three escaping spellings: a `return` statement, a
+            // tail `return` with no semicolon, and a bare tail. All three hand the
+            // literal out, so all three print one body.
+            (
+                "lit-return-stmt",
+                "let v: W = s_lit(1); println(f\"v{v.r.id}\");\n",
+                "mid\nv1\ndR1\npost\n",
+            ),
+            (
+                "lit-tail-return",
+                "let v: W = t_lit(2); println(f\"v{v.r.id}\");\n",
+                "mid\nv2\ndR2\npost\n",
+            ),
+            (
+                "lit-bare-tail",
+                "let v: W = b_lit(3); println(f\"v{v.r.id}\");\n",
+                "mid\nv3\ndR3\npost\n",
+            ),
+            // NESTED literals -- the source walk has to recurse, exactly as the
+            // container-move and conditional-move walks already do.
+            (
+                "nested-literal",
+                "let v: Outer = n_lit(4); println(f\"v{v.w.r.id}\");\n",
+                "mid\nv4\ndR4\npost\n",
+            ),
+            // TWO consumed sources in one literal, and an ENUM-typed source: both
+            // shapes the row never named, both fixed by the same widening. Fields
+            // die in reverse declaration order (design.md § Drop ordering).
+            (
+                "two-fields",
+                "let v: Two = two_lit(10); println(f\"v{v.a.id}-{v.b.id}\");\n",
+                "mid\nv10-11\ndR11\ndR10\npost\n",
+            ),
+            (
+                "enum-field",
+                "let v: Wrap = enum_lit(30); println(\"v\");\n",
+                "mid\ndE\nv\npost\n",
+            ),
+            // GUARD: only the CONSUMED source is retracted. `y` is never moved
+            // into the literal, so it still dies inside `sib_lit`.
+            (
+                "sibling-not-moved",
+                "let v: W = sib_lit(20); println(f\"v{v.r.id}\");\n",
+                "mid70\ndR70\nv20\ndR20\npost\n",
+            ),
+            // The three spellings that were ALREADY correct, kept as controls so a
+            // later edit cannot regress them into the fixed one's shape. The tuple
+            // is the one that located the cause (a second channel, see the doc
+            // comment); the named binding records the move at its `let`; the
+            // container source resolves to a `Value::Array` and is left alone.
+            (
+                "tuple-control",
+                "let v: (R, i64) = tup_lit(40); println(f\"v{v.0.id}\");\n",
+                "mid\nv40\ndR40\npost\n",
+            ),
+            (
+                "named-binding-control",
+                "let v: W = named_lit(50); println(f\"v{v.r.id}\");\n",
+                "mid\nv50\ndR50\npost\n",
+            ),
+            (
+                "container-field-control",
+                "let v: Box3 = box_lit(60); println(f\"v{v.xs.len()}\");\n",
+                "mid\nv1\ndR60\npost\n",
+            ),
+            // GUARD: a `return` one block deeper. `r` is not in the `if`-block's
+            // cleanup, so the retraction is a no-op and the conditional-move set
+            // has to carry it -- the path that was already right.
+            (
+                "enclosing-block-guard",
+                "let v: W = cond_lit(70); println(f\"v{v.r.id}\");\n",
+                "mid\nv70\ndR70\npost\n",
+            ),
+            // GUARD: no local is consumed at all, so nothing is retracted.
+            (
+                "fresh-temp-guard",
+                "let v: W = fresh_lit(80); println(f\"v{v.r.id}\");\n",
+                "mid\nv80\ndR80\npost\n",
+            ),
+            // GUARD: the DISCARD position, which is NOT escaping and keeps its own
+            // channel. Widening the shared dispatcher instead of this hook would
+            // have retracted `r0` here with no discard walk to take the body over,
+            // losing it entirely.
+            (
+                "discard-guard",
+                "let r0: R = R { id: 90, tag: f\"t\" }; println(\"mid\"); let _ = W { r: r0 };\n",
+                "mid\ndR90\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-29-56 — a heap-carrying `Option` BOUND TO A LOCAL and returned
     /// hands its payload to the caller; the callee must not free it on the way
     /// out.
