@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 123 |
 | false-positive | 106 |
 | soundness | 95 |
-| perf | 89 |
+| perf | 90 |
 | other | 74 |
 | crash | 71 |
 | use-after-free | 27 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1417 |
+| codegen | 1418 |
 | interp | 345 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -118,7 +118,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 70 |
 | autopar | 55 |
 | parser | 46 |
-| runtime | 37 |
+| runtime | 38 |
 | effect | 29 |
 | resolver | 29 |
 | lexer | 8 |
@@ -163,6 +163,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-36 | 2026-09-03 | codegen | medium | REASSIGNING A `shared` FIELD OF A PLAIN STRUCT STRANDS THE DISPLACED RC BOX -- `n.s = Sd { m: 9 }` prints the old handle's `Drop` body, so the refcount DOES reach zero, and the 16-byte box is still never freed; one per assignment and unbounded, and it happens with NO `impl Drop` on the owner at all, which is what separates it from B-2026-09-03-31's scope-exit half | — |
 | B-2026-09-03-38 | 2026-09-03 | typecheck | medium | 130 OF THE 935 kara-katas FILES DO NOT TYPE-CHECK ON `main` (238 diagnostics, all `E_INDEX_MOVE_NON_COPY`) and have not since the rule landed on 2026-08-26 -- `karac check`, `karac build` and `karac run` all fail, so roughly one kata in seven is contributing no coverage and any claim that the kata corpus is green is false; `runtime/stdlib` and `examples/` are clean | — |
 | B-2026-09-03-39 | 2026-09-03 | codegen | medium | A FRESH TUPLE SOURCE LOSES AN `Option`/`Result` ELEMENT'S PAYLOAD `Drop` BODY ON BOTH LEAF KINDS -- `let (r, _) = (mk(31), Option.Some(mk(131)));` and its binding sibling run the body under `--interp` and on no compiled surface, because `infer_arg_elem_te` ERASES an enum-constructor element's generic argument, so the leaf's type reaches the payload walker as a bare `Option`. Third time that fallback has erased a type (cf. B-2026-08-28-11, B-2026-09-02-35) | — |
+| B-2026-09-03-40 | 2026-09-03 | codegen+runtime | high | THE AUTO-PAR COST GATE IS DEFEATED BY AN IMPLAUSIBLE `per_iter_cost` ESTIMATE, so the DEFAULT build fans out a region entered ~1M times and runs 7x slower than the sequential one on a natural kata, and 398x slower on a larger program in the same repo. `KARAC_COST_DEBUG=1` reports `per_iter_cost=3578073120 floor=64 substantial=true` for the benchmark and `3597957307` / `3597955192` for the differential. Those numbers cannot be per-ITERATION costs: the whole benchmark executes on the order of 3e8 operations (0.29 s sequential), so a single iteration cannot cost 3.6e9 units. Whatever the estimator is measuring, it clears the floor of 64 by EIGHT ORDERS OF MAGNITUDE, so the gate that exists to decline unprofitable fan-outs cannot fire. MEASURED, AOT, same binary pair, checksum identical in every mode: kata 306's bench.kara is 0.29 s sequential vs 2.05 s under the default auto-par build (7.1x), system time 0.00 s -> 1.42 s; kata 306's differential.kara is 0.069 s vs 27.5 s (398x), 32.7 s of it system. `strace -c` attributes 100% of syscall time to futex: 1,843,996 calls at 4 workers and 1,963,832 at ONE worker -- the volume is driven by DISPATCH COUNT, not by contention between workers, i.e. the region is entered on the order of a million times and each entry pays a pool round trip. Worker count then adds contention on top: 1: 0.68 s, 2: 1.69 s, 4: 1.99 s on the bench, and 2.32 / 9.27 / 27.5 s on the differential -- ADDING WORKERS MAKES IT WORSE, monotonically. | — |
 
 ### Relocated
 
