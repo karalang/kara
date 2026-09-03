@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 360 |
-| run-vs-build | 314 |
+| miscompile | 362 |
+| run-vs-build | 315 |
 | leak | 256 |
 | missing-feature | 193 |
 | double-free | 169 |
@@ -103,15 +103,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | soundness | 95 |
 | perf | 87 |
 | other | 73 |
-| crash | 70 |
+| crash | 71 |
 | use-after-free | 27 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1398 |
-| interp | 340 |
+| codegen | 1402 |
+| interp | 341 |
 | typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
@@ -155,6 +155,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 | B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
 | B-2026-09-03-12 | 2026-09-03 | codegen | medium | A TUPLE BOUND OUT OF A STRUCT FIELD CANNOT BE PROJECTED ON THE COMPILED BACKENDS -- `let x = h.pe; x.0.id` fails `karac build` with "cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while the interpreter prints it. The tuple LITERAL spelling of the same binding compiles, and so do both neighbouring reads (`h.pe.0.id` direct, and `let (a, b) = x;` destructured), so the gap is specifically a tuple-typed LOCAL whose initializer is a field projection | — |
+| B-2026-09-03-15 | 2026-09-03 | interp+codegen | medium | A TUPLE ELEMENT TYPED `Option[T]` LOSES ITS PAYLOAD'S `Drop` BODY WHEN THE TUPLE IS DESTRUCTURED -- `let (r, o) = t;` over `(R, Option[R])` runs NO body for the `Option`'s payload on any of the four surfaces, where the same tuple left undestructured runs it on all four. The projection spelling (`= h.pe`) splits the backends instead: compiled keeps the body only because the source struct's own walk still reaches that element | — |
+| B-2026-09-03-16 | 2026-09-03 | codegen | medium | A GENERIC PARENT'S PROJECTION DESTRUCTURE LEAVES THE BODY WITH THE SOURCE -- `struct G[T] { pe: (T, i64) }; let (r, k) = h.pe;` runs the element's `Drop` at `h`'s NLL death on the three compiled surfaces and at the leaf's on `--interp`. ONE body on both sides, on a LIVE value on both sides, so it is a PLACEMENT split with no husk; the non-generic twin of the same program is correct everywhere | — |
 
 ### Relocated
 
@@ -2165,6 +2167,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-8 | interp+codegen | medium | THE REBIND SPELLING OF B-2026-09-01-3 STILL DOUBLES A TUPLE ELEMENT'S `Drop` BODY -- `let t = (r, 5); let t2 = t; let x = t2.0;` prints `dR1 dR1` whe… | 18bbecf |
 | B-2026-09-03-10 | codegen | high | ALL THREE COMPILED BACKENDS SKIP A LOOP-BODY LOCAL'S `Drop` BODY ON EVERY ITERATION when a conditional `return` inside the loop hands that local out… | 6876c5f |
 | B-2026-09-03-11 | interp+codegen | medium | THE TWO-HOP SPELLING OF B-2026-09-02-43 DOUBLES THE ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `let g = G { h: H { pe: (mk(24), 0) } }; let (r, k)… | 0cc1492 |
+| B-2026-09-03-13 | codegen | high | TWO ORDINARY TUPLE LOCALS SEGFAULT THE PROGRAM, because the per-tuple `Drop`-body walker `__karac_dropelems_tuple_*` is named after the elements it V… | 97b7b871 |
+| B-2026-09-03-14 | codegen | medium | THREE DESTRUCTURE ARMS WERE OUTSIDE B-2026-09-02-43's OWNER MASK, which recorded only the enum / nested-struct BINDING arm -- the WILDCARD arm (`let… | a97f763b |
 
 </details>
 
