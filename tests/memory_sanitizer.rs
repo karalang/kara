@@ -68653,6 +68653,99 @@ fn main() {
             "b26-local-tuple-elem-rebind",
         );
     }
+
+    /// B-2026-09-03-19 — a WHOLE-VALUE REBIND of a tuple holding an
+    /// `Option[<heap struct>]` element double-freed the payload.
+    ///
+    /// `let t = (mkD(1), Option.Some(mkD(2))); let t2 = t;` — no destructure, no
+    /// `match`, no move-out, and (in the `noDrop` case) NO `impl Drop` anywhere
+    /// in the program. The pre-fix binary segfaults before printing a single
+    /// line; valgrind reported three `Invalid free()`, each naming a block freed
+    /// earlier in the same run, so a duplicate owner rather than a wild pointer.
+    ///
+    /// THE MEMORY HALF OF B-2026-07-31-22, which fixed the BODIES half of the
+    /// same statement ("a whole-value MOVE of a binding carrying a
+    /// container-bodies walk left the source's `__karac_dropelems_*` action
+    /// armed"). `noDrop` is the case that separates them: with no user `Drop`
+    /// there is no bodies walker at all and the abort is unchanged.
+    ///
+    /// THE TWO BRANCHES ARE THE POINT. A tuple `let` picks its drop
+    /// registration three ways, and the source neutralizer that follows —
+    /// `suppress_source_vec_cleanup_for_arg` — is LLVM-type driven. That matches
+    /// the `aggregate_has_heap_field` branch, whose drop is the LLVM-type
+    /// walker, and `ctlPlain` (`(D, D)`) rides it and was always clean. An
+    /// `Option[<heap struct>]` element instead selects the deeper,
+    /// `TypeExpr`-driven `synthesize_tuple_drop_fn_te` — measured directly, by
+    /// instrumenting which branch each program takes — and that walker frees a
+    /// payload sitting inline behind a tag, which the neutralizer cannot see. So
+    /// the destination freed it and the un-neutralized source freed it again.
+    /// The fix pairs the deep drop with the deep neutralizer
+    /// (`zero_tuple_elem_caps`, the declared dual of `emit_tuple_elem_drops`,
+    /// which has carried an Option/Result arm since B-2026-08-03-3).
+    ///
+    /// EVERY CONTROL IS A MEASURED INGREDIENT, not a guess: removing any one of
+    /// them made the pre-fix program clean. `ctlPlain` has no Option; `ctlNoReb`
+    /// omits the rebind; `ctlNone` is `None` at runtime. `strElem0` shows the
+    /// other element need only own heap — a bare `String` is enough, so this was
+    /// never struct-specific.
+    ///
+    /// TWO FURTHER CONTROLS ARE DELIBERATELY ABSENT, and their absence is a
+    /// measurement rather than a gap. `(0, Option.Some(mkD(8)))` and
+    /// `(mkD(9), Option.Some(f"p{9}"))` both leak here — 56 and 2 bytes — but
+    /// PRE-FIX AND POST-FIX ALIKE, and only when the other tuple shapes in this
+    /// file are also DEFINED: each is clean as a one-function program and clean
+    /// in a controls-only program. Compiling all eight functions and calling
+    /// only the five that do not crash pre-fix gives 58 bytes on both sides of
+    /// the fix, which is what rules this change out as the cause. Filed as its
+    /// own row; including them here would leave this test red for someone
+    /// else's defect.
+    #[test]
+    fn asan_tuple_rebind_with_an_optres_element_frees_once() {
+        assert_clean_asan_run(
+            "struct D { id: i64, xs: Vec[i64], name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"  dD{self.id}:{self.xs.len()}:{self.name}\") } }\n\
+             fn mkD(id: i64) -> D {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return D { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             struct Q { id: i64, xs: Vec[i64], name: String }\n\
+             fn mkQ(id: i64) -> Q {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return Q { id: id, xs: v, name: f\"q{id}\" }\n\
+             }\n\
+             fn optHeap()   { let t = (mkD(1), Option.Some(mkD(2))); let t2 = t; println(\"  oh\") }\n\
+             fn noDrop()    { let t = (mkQ(3), Option.Some(mkQ(4))); let t2 = t; println(\"  nd\") }\n\
+             fn strElem0()  { let t = (f\"s{5}\", Option.Some(mkD(5))); let t2 = t; println(\"  se\") }\n\
+             fn ctlPlain()  { let t = (mkD(6), mkD(7)); let t2 = t; println(\"  cp\") }\n\
+             fn ctlNoReb()  { let t = (mkD(10), Option.Some(mkD(11))); println(\"  cn\") }\n\
+             fn ctlNone()   { let t: (D, Option[D]) = (mkD(12), Option.None); let t2 = t; println(\"  cz\") }\n\
+             fn main() {\n\
+             \x20   optHeap(); noDrop(); strElem0(); ctlPlain();\n\
+             \x20   ctlNoReb(); ctlNone();\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "dD1:1:n1",
+                "  dD2:1:n2",
+                "  oh",
+                "  nd",
+                "  dD5:1:n5",
+                "  se",
+                "  dD6:1:n6",
+                "  dD7:1:n7",
+                "  cp",
+                "  dD10:1:n10",
+                "  dD11:1:n11",
+                "  cn",
+                "  dD12:1:n12",
+                "  cz",
+                "end",
+            ],
+            "b19-tuple-rebind-optres-elem",
+        );
+    }
     /// B-2026-09-03-6 — A BY-VALUE `Result[Option[H], E]` PARAM DOUBLE-FREES ITS
     /// INNER PAYLOAD. `karac run` aborted with
     /// `free(): double free detected in tcache 2` on a SINGLE call; the AOT

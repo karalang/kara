@@ -8290,6 +8290,56 @@ impl<'ctx> super::Codegen<'ctx> {
                                             }
                                         }
                                         self.suppress_source_vec_cleanup_for_arg(value);
+                                        // B-2026-09-03-19 — and neutralize the source
+                                        // through the SAME TypeExpr the drop above was
+                                        // built from.
+                                        //
+                                        // `suppress_source_vec_cleanup_for_arg` is
+                                        // LLVM-type driven: it zeroes the caps it can
+                                        // SEE as `{ptr,len,cap}` fields. That matches
+                                        // the branch below, whose drop is the
+                                        // LLVM-type walker — but this branch was taken
+                                        // precisely because some element needs the
+                                        // DEEPER, TypeExpr-driven walk, and an
+                                        // `Option[<heap struct>]` element is exactly
+                                        // such a leaf: its payload lives inline behind
+                                        // a tag, invisible as a heap field, so the
+                                        // suppressor left it armed while
+                                        // `synthesize_tuple_drop_fn_te` on the
+                                        // destination freed it. Both slots then freed
+                                        // the same buffers.
+                                        //
+                                        // `let t = (mk(1), Option.Some(mk(2)));
+                                        //  let t2 = t;` — `free(): double free
+                                        // detected in tcache 2` on all three compiled
+                                        // surfaces against a clean interpreter, with
+                                        // NO `impl Drop` in the program: the bodies
+                                        // machinery is not involved, only the memory.
+                                        //
+                                        // `zero_tuple_elem_caps` is the declared dual
+                                        // of `emit_tuple_elem_drops` and already
+                                        // carries the Option/Result arm
+                                        // (B-2026-08-03-3), so the pair now neutralizes
+                                        // exactly what it frees rather than a subset of
+                                        // it. Identifier sources only — a fresh tuple
+                                        // literal or call result has no source binding
+                                        // to disarm, and a self-alias (`let t = t;`)
+                                        // would zero the very slot it just took over.
+                                        if let ExprKind::Identifier(src) = &value.kind {
+                                            if src != var_name {
+                                                if let Some(src_slot) =
+                                                    self.variables.get(src.as_str()).copied()
+                                                {
+                                                    if src_slot.ty == agg_ty.into() {
+                                                        self.zero_tuple_elem_caps(
+                                                            src_slot.ptr,
+                                                            agg_ty,
+                                                            &elem_tes,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
                                     } else if self.aggregate_has_heap_field(agg_ty) {
                                         // Proven LLVM-type path: a tuple whose heap
                                         // is a directly-visible Vec/String field
