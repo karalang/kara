@@ -13189,6 +13189,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !self.borrow_vars.ref_params.contains_key(root.as_str())
                     && self.fn_ctx.current_fn_param_names.contains(root.as_str()));
 
+        // B-2026-09-03-24 — does the SOURCE's own owner already run this
+        // struct's field bodies, so a leaf registration below would fire them a
+        // SECOND time? The struct spelling of the question
+        // `place_source_tuple_leaf_cleanups` asks under the same name, and it is
+        // asked the same way: of the place's ROOT, because a projection source
+        // (`let Ho2 { a, b } = p.inner;`) is owned by whoever owns `p`.
+        //
+        // A by-value param is the shape that makes this load-bearing rather
+        // than defensive. `fn f(h: Ho2) { let Ho2 { a, b } = h; }` already runs
+        // both bodies correctly on all four surfaces — the entry copy's own
+        // walk does it, measured with NO destructure in the function at all, so
+        // it is not the destructure producing them — and registering the leaf
+        // here as well took that cell from one body to two.
+        let owner_runs_bodies = match Self::place_root_ident(value) {
+            Some(root) => {
+                self.fn_ctx.current_fn_param_names.contains(root)
+                    || self.payload_vars.param_view_locals.contains(root)
+            }
+            None => false,
+        };
+
         // Place-source (`let S { a, b } = s`) where the source struct `s` is
         // CALLEE-OWNED — a bare by-value param deep-copied at entry (#14/#17
         // `make_aggregate_param_callee_owned`), so it carries its OWN scope-exit
@@ -13673,6 +13694,53 @@ impl<'ctx> super::Codegen<'ctx> {
                                         enum_lit,
                                         variant,
                                         inner.as_deref(),
+                                    );
+                                }
+                            }
+                            // B-2026-09-03-24 — and the payload's user `Drop`
+                            // BODY, which nothing above registers. Everything
+                            // to this point is MEMORY: the arm hands the leaf
+                            // the payload's buffers and, when the source is
+                            // callee-owned, `zero_struct_field_move_cap` below
+                            // zeroes the source's tag so its own walk skips the
+                            // field. That pair is exactly what made the body
+                            // vanish rather than double — the source's walk
+                            // reaches a `None` tag and prints nothing, and the
+                            // leaf never had a walker — so
+                            // `let Ho2 { a, b } = h;` over
+                            // `Ho2 { a: R, b: Option[R] }` ran `dR20` and never
+                            // `dR220`, on all four surfaces, where the same
+                            // struct left UNDESTRUCTURED ran both.
+                            //
+                            // AFTER the memory registration, never before: the
+                            // frame drains LIFO, so registering the body second
+                            // is what makes it run BEFORE the payload it reads
+                            // is freed. The same ordering rule the tuple leaf
+                            // arm and the `pending_place_bodies` hand-off below
+                            // both state.
+                            //
+                            // `emit_optres_payload_user_drop_bodies_fn` is the
+                            // same walker a plain `let o = Option.Some(mk(1));`
+                            // let-site registers, and it self-declines a payload
+                            // with no user `Drop` — so an `Option[String]` field
+                            // registers nothing here and keeps its behaviour.
+                            // `Result` is untouched for the reason B-2026-09-03-15
+                            // recorded at the tuple leaf: the body half
+                            // generalizes and the MEMORY half does not, and a
+                            // lost body traded for a leak is not a fix.
+                            if !owner_runs_bodies {
+                                if let Some(bodies) =
+                                    self.emit_optres_payload_user_drop_bodies_fn(&field_te)
+                                {
+                                    self.var_types
+                                        .optres_var_payload_tes
+                                        .insert(name.clone(), field_te.clone());
+                                    self.track_user_drop_var_with_fn(
+                                        "",
+                                        &name,
+                                        slot.ptr,
+                                        bodies,
+                                        UserDropKind::ContainerElemBodies,
                                     );
                                 }
                             }

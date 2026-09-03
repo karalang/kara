@@ -2287,6 +2287,106 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-24 — a destructured STRUCT's `Option` FIELD leaf takes its
+    /// payload's MEMORY exactly once, alongside the body it now runs.
+    ///
+    /// The correctness half is pinned by
+    /// `e2e_struct_field_destructure_option_leaf_owns_its_payload_body` in
+    /// `tests/codegen.rs`; this is the half that would show up as a double free
+    /// or a leak rather than a wrong line. The hand-off has two sides and
+    /// exactly one of them must reclaim each payload: the leaf's own tag-guarded
+    /// free (`track_inline_option_agg_payload_var` / `track_boxed_enum_var`) and
+    /// the source's `zero_struct_field_move_cap`. Leave the source armed and it
+    /// is a double free; cap-zero without the leaf and it is a leak.
+    ///
+    /// What this fix ADDS to that pair is a bodies walker registered AFTER the
+    /// memory, which is where the ordering claim becomes a memory-safety claim:
+    /// the frame drains LIFO, so registering second is what makes the body read
+    /// a live buffer. Registered the other way round it prints from freed memory
+    /// — a use-after-free ASAN sees, and one a `Drop` body that renders its
+    /// fields would otherwise report as garbage. Every `R` here carries BOTH a
+    /// `String` and a `Vec[i64]`, and every body renders both, so a stale read
+    /// is observable rather than silent.
+    ///
+    /// `used` MOVES the payload out through a `match` arm — the shape where the
+    /// leaf's registration must be consumed by the arm rather than fire beside
+    /// it. `ostr` is the inline-heap payload (`Option[String]`) that is never
+    /// read, so nothing but ASAN can see whether its buffer was reclaimed.
+    /// Three iterations, so a per-iteration imbalance accumulates instead of
+    /// hiding in a single pass.
+    #[test]
+    fn asan_struct_field_destructure_option_leaf_takes_its_payload_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+struct Ho2 { a: R, b: Option[R] }
+struct HoS { a: R, b: Option[String] }
+fn mk(id: i64) -> R { let mut xs = Vec[i64].new(); xs.push(id); return R { id: id, tag: f"t{id}", xs: xs } }
+
+fn loc(k: i64)  { let h = Ho2 { a: mk(k + 0), b: Option.Some(mk(k + 1)) }; let Ho2 { a, b } = h; println(f"rd{a.id}") }
+fn lit(k: i64)  { let Ho2 { a, b } = Ho2 { a: mk(k + 2), b: Option.Some(mk(k + 3)) }; println(f"rd{a.id}") }
+fn used(k: i64) { let h = Ho2 { a: mk(k + 4), b: Option.Some(mk(k + 5)) }; let Ho2 { a, b } = h;
+                  match b { Option.Some(x) => println(f"got{x.id}/{x.tag}"), Option.None => println("none") }
+                  println(f"rd{a.id}") }
+fn ostr(k: i64) { let h = HoS { a: mk(k + 6), b: Option.Some("heapstr") }; let HoS { a, b } = h; println(f"rd{a.id}") }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let k = i * 10;
+        loc(k); lit(k); used(k); ostr(k);
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "dR1/t1/1",
+                "rd0",
+                "dR0/t0/1",
+                "dR3/t3/1",
+                "rd2",
+                "dR2/t2/1",
+                "got5/t5",
+                "dR5/t5/1",
+                "rd4",
+                "dR4/t4/1",
+                "rd6",
+                "dR6/t6/1",
+                "dR11/t11/1",
+                "rd10",
+                "dR10/t10/1",
+                "dR13/t13/1",
+                "rd12",
+                "dR12/t12/1",
+                "got15/t15",
+                "dR15/t15/1",
+                "rd14",
+                "dR14/t14/1",
+                "rd16",
+                "dR16/t16/1",
+                "dR21/t21/1",
+                "rd20",
+                "dR20/t20/1",
+                "dR23/t23/1",
+                "rd22",
+                "dR22/t22/1",
+                "got25/t25",
+                "dR25/t25/1",
+                "rd24",
+                "dR24/t24/1",
+                "rd26",
+                "dR26/t26/1",
+            ],
+            "asan_struct_field_destructure_option_leaf_takes_its_payload_once",
+            // Floor guards the vacuous direction: were these allocations ever
+            // folded away the fixture would pass over memory it never touched.
+            // Three iterations x four cells x (String + Vec) per `R` is far
+            // above this.
+            30,
+        );
+    }
+
     /// B-2026-08-30-3, second half — a DISCARDED value-block keeps its own
     /// owner, and the two spellings of one discard agree.
     ///

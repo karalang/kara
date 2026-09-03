@@ -35119,6 +35119,106 @@ done
     );
 }
 
+/// B-2026-09-03-24 — the interpreter half: a destructured STRUCT's `Option`
+/// FIELD leaf owns its payload's `Drop` body.
+///
+/// `record_destructure_optres_payload_tes` returned on anything but a
+/// `PatternKind::Tuple`, so a struct pattern's leaves reached no registration
+/// moment at all and `let Ho2 { a, b } = h;` ran `dR1` and never `dR101`. The
+/// two shapes resolve a leaf's type from DIFFERENT places — a tuple leaf is
+/// positional and reads the SOURCE's element types, a struct field leaf is
+/// named and reads the DECLARATION — which is why the arm is a second collector
+/// feeding one shared `Option` filter rather than a widened pattern match.
+///
+/// `ren` is the cell that separates the two field spellings: `Ho2 { a, b }`
+/// parses as a `FieldPattern` with NO sub-pattern (the leaf takes the field's
+/// own name) while `Ho2 { a: p, b: q }` carries `Some(Binding(..))`, so a
+/// collector that handled only one of them would fix half the shapes.
+///
+/// The `param` cell is the constraint, not decoration: the caller/entry copy
+/// already runs those bodies, and registering the leaf as well doubles them —
+/// the same `owned_param_names_stack` gate the tuple arm above uses, now shared
+/// by both.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_struct_field_destructure_option_leaf_owns_its_payload_body`, pinned to
+/// the same string.
+#[test]
+fn test_struct_field_destructure_option_leaf_owns_its_payload_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho2 { a: R, b: Option[R] }
+struct HoS { a: R, b: Option[String] }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+fn mkho(n: i64) -> Ho2 { return Ho2 { a: mk(n), b: Option.Some(mk(n + 100)) } }
+
+fn loc()  { let h = Ho2 { a: mk(1), b: Option.Some(mk(101)) }; let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn lit()  { let Ho2 { a, b } = Ho2 { a: mk(2), b: Option.Some(mk(102)) }; println(f"  rd{a.id}") }
+fn call() { let Ho2 { a, b } = mkho(3); println(f"  rd{a.id}") }
+fn ctl()  { let h = Ho2 { a: mk(4), b: Option.Some(mk(104)) }; println(f"  rd{h.a.id}") }
+fn param(h: Ho2) { let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn used() { let h = Ho2 { a: mk(6), b: Option.Some(mk(106)) }; let Ho2 { a, b } = h;
+            match b { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
+            println(f"  rd{a.id}") }
+fn none() { let h = Ho2 { a: mk(7), b: Option.None }; let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn ostr() { let h = HoS { a: mk(8), b: Option.Some(f"s8") }; let HoS { a, b } = h; println(f"  rd{a.id}/{b.unwrap_or(f"-")}") }
+fn ren()  { let h = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a: p, b: q } = h; println(f"  rd{p.id}") }
+
+fn main() {
+    println("loc");   loc()
+    println("lit");   lit()
+    println("call");  call()
+    println("ctl");   ctl()
+    println("param"); param(mkho(5))
+    println("used");  used()
+    println("none");  none()
+    println("ostr");  ostr()
+    println("ren");   ren()
+    println("done")
+}
+"#),
+        r#"loc
+dR101/t101
+  rd1
+dR1/t1
+lit
+dR102/t102
+  rd2
+dR2/t2
+call
+dR103/t103
+  rd3
+dR3/t3
+ctl
+  rd4
+dR104/t104
+dR4/t4
+param
+  rd5
+dR105/t105
+dR5/t5
+used
+  got106
+dR106/t106
+  rd6
+dR6/t6
+none
+  rd7
+dR7/t7
+ostr
+  rd8/s8
+dR8/t8
+ren
+dR110/t110
+  rd10
+dR10/t10
+done
+"#
+    );
+}
+
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_projection_source_tuple_destructure_is_a_view`, pinned to the same
 /// string.

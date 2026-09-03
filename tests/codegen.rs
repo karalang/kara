@@ -13189,6 +13189,146 @@ done
         );
     }
 
+    /// B-2026-09-03-24 — a destructured STRUCT's `Option` FIELD leaf owns its
+    /// payload's `Drop` body. The struct-field spelling of what B-2026-09-03-15
+    /// fixed at the tuple leaf, and it needed its own pair of halves.
+    ///
+    ///     struct Ho2 { a: R, b: Option[R] }
+    ///     let h = Ho2 { a: mk(1), b: Option.Some(mk(101)) };
+    ///     let Ho2 { a, b } = h;        -> dR1 only; dR101 NOWHERE
+    ///
+    /// The mechanism is the pair of steps that ALREADY worked, with nothing
+    /// joining them: `option_field_agg_drop_ok`'s arm hands the leaf the
+    /// payload's MEMORY and `zero_struct_field_move_cap` zeroes the SOURCE's
+    /// tag, so the source's field-bodies walk reaches a `None` and prints
+    /// nothing — while the leaf was never given a bodies walker. That is why
+    /// the body vanished rather than doubling, and why `ctl` (the same struct
+    /// left undestructured, which runs both bodies) is what proves it was owed.
+    ///
+    /// THE CELLS SPAN EVERY SOURCE, because the defect did. `loc` is a place
+    /// source, `lit` a fresh struct literal and `call` a fresh call — all three
+    /// lost the body on ALL FOUR surfaces, and the filing row recorded only the
+    /// first. `ren` is the renaming spelling (`Ho2 { a: p, b: q }`), which the
+    /// interpreter half has to reach through a different pattern node than the
+    /// shorthand. `used` is the cell that shows this is not only about unused
+    /// leaves: a leaf the program `match`es and BINDS lost the body on the
+    /// compiled side alone — an unregistered leaf leaves the arm nothing to
+    /// consume — so that cell was a run-vs-build split where the others were
+    /// agreed defects.
+    ///
+    /// `param` IS THE CONTROL THAT CONSTRAINS THE FIX, not decoration. A
+    /// by-value param already ran both bodies correctly on all four surfaces
+    /// before this change — measured with NO destructure in the function at
+    /// all, so it is the entry copy's own walk producing them, not the
+    /// destructure — and registering the leaf there as well took the cell from
+    /// one body to two. `owner_runs_bodies` is what keeps it at one.
+    ///
+    /// `none` and `ostr` pin the two self-declining shapes: a `None` payload has
+    /// no body to run, and an `Option[String]` payload has no user `Drop` at
+    /// all, so the walker emitter declines it and the cell keeps its previous
+    /// behaviour.
+    ///
+    /// NO `Result` CELL, deliberately, and the reason is a measurement rather
+    /// than the tuple row's. B-2026-09-03-15 left `Result` alone because its
+    /// memory half has no peer, recording that the spelling stayed "agreed on
+    /// all four surfaces". That is true of the TUPLE leaf and FALSE of this
+    /// one: `struct HoRes { a: R, b: Result[R, String] }` destructured runs a
+    /// HUSK body — `dR0/`, a `Drop` body reading a zeroed object — on jit / aot
+    /// / auto-par-off and nothing on `--interp`, with the real `dR109` running
+    /// nowhere on either side. That reproduces in a module containing ONLY that
+    /// shape, and reproduces identically on the pre-fix compiler, so it is
+    /// neither this fix's doing nor curable by it. It is also why the `R` here
+    /// is TWO fields: the husk fires for `R { id: i64, tag: String }` and NOT
+    /// for `R { id: i64, tag: String, xs: Vec[i64] }`, so a probe of the
+    /// `Result` gap can come back clean purely by picking the wider payload.
+    /// Putting the cell here would
+    /// have forced two different expected strings for one program and pinned a
+    /// husk as if it were intended; it is filed as its own row instead.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_struct_field_destructure_option_leaf_owns_its_payload_body`,
+    /// pinned to the same string.
+    #[test]
+    fn e2e_struct_field_destructure_option_leaf_owns_its_payload_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho2 { a: R, b: Option[R] }
+struct HoS { a: R, b: Option[String] }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+fn mkho(n: i64) -> Ho2 { return Ho2 { a: mk(n), b: Option.Some(mk(n + 100)) } }
+
+fn loc()  { let h = Ho2 { a: mk(1), b: Option.Some(mk(101)) }; let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn lit()  { let Ho2 { a, b } = Ho2 { a: mk(2), b: Option.Some(mk(102)) }; println(f"  rd{a.id}") }
+fn call() { let Ho2 { a, b } = mkho(3); println(f"  rd{a.id}") }
+fn ctl()  { let h = Ho2 { a: mk(4), b: Option.Some(mk(104)) }; println(f"  rd{h.a.id}") }
+fn param(h: Ho2) { let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn used() { let h = Ho2 { a: mk(6), b: Option.Some(mk(106)) }; let Ho2 { a, b } = h;
+            match b { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
+            println(f"  rd{a.id}") }
+fn none() { let h = Ho2 { a: mk(7), b: Option.None }; let Ho2 { a, b } = h; println(f"  rd{a.id}") }
+fn ostr() { let h = HoS { a: mk(8), b: Option.Some(f"s8") }; let HoS { a, b } = h; println(f"  rd{a.id}/{b.unwrap_or(f"-")}") }
+fn ren()  { let h = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a: p, b: q } = h; println(f"  rd{p.id}") }
+
+fn main() {
+    println("loc");   loc()
+    println("lit");   lit()
+    println("call");  call()
+    println("ctl");   ctl()
+    println("param"); param(mkho(5))
+    println("used");  used()
+    println("none");  none()
+    println("ostr");  ostr()
+    println("ren");   ren()
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"loc
+dR101/t101
+  rd1
+dR1/t1
+lit
+dR102/t102
+  rd2
+dR2/t2
+call
+dR103/t103
+  rd3
+dR3/t3
+ctl
+  rd4
+dR104/t104
+dR4/t4
+param
+  rd5
+dR105/t105
+dR5/t5
+used
+  got106
+dR106/t106
+  rd6
+dR6/t6
+none
+  rd7
+dR7/t7
+ostr
+  rd8/s8
+dR8/t8
+ren
+dR110/t110
+  rd10
+dR10/t10
+done
+"#
+        );
+    }
+
     /// Twin of `tests/interpreter.rs`'s
     /// `test_projection_source_tuple_destructure_is_a_view`, pinned to the same
     /// string.

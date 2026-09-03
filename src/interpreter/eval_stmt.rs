@@ -5494,9 +5494,12 @@ impl<'a> super::Interpreter<'a> {
         ty: &Option<TypeExpr>,
         value: &Expr,
     ) {
-        let PatternKind::Tuple(pats) = &pattern.kind else {
+        if !matches!(
+            &pattern.kind,
+            PatternKind::Tuple(_) | PatternKind::Struct { .. }
+        ) {
             return;
-        };
+        }
         if let Some(root) = self.destructure_source_param_root(value) {
             let root = root.to_string();
             if self
@@ -5507,16 +5510,73 @@ impl<'a> super::Interpreter<'a> {
                 return;
             }
         }
-        let Some(elem_tes) = self.destructure_source_elem_tes(ty, value) else {
-            return;
+        // B-2026-09-03-24 — the two destructure shapes resolve a leaf's type
+        // from different places, so they are collected into one list and share
+        // the `Option` filter below rather than each growing a copy of it.
+        //
+        // A TUPLE leaf is positional, so its type comes from the SOURCE (the
+        // annotation, the source variable's recorded element types, the literal's
+        // element expressions). A STRUCT field leaf is named, so its type comes
+        // from the DECLARATION — the same field type codegen reads out of
+        // `struct_field_type_exprs`, which is why the pattern's own path is the
+        // first place looked and the runtime value's struct name only the
+        // fallback for a pathless pattern.
+        let leaf_tes: Vec<(String, TypeExpr)> = match &pattern.kind {
+            PatternKind::Tuple(pats) => {
+                let Some(elem_tes) = self.destructure_source_elem_tes(ty, value) else {
+                    return;
+                };
+                pats.iter()
+                    .enumerate()
+                    .filter_map(|(idx, pat)| {
+                        let PatternKind::Binding(leaf) = &pat.kind else {
+                            return None;
+                        };
+                        match elem_tes.get(idx) {
+                            Some(Some(te)) => Some((leaf.clone(), te.clone())),
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            }
+            PatternKind::Struct { path, fields, .. } => {
+                let Some(sname) = path
+                    .last()
+                    .cloned()
+                    .or_else(|| self.eval_place_type_name(value))
+                else {
+                    return;
+                };
+                let Some(decl) = self.program.items.iter().find_map(|item| match item {
+                    Item::StructDef(sd) if sd.name == sname => Some(sd.fields.clone()),
+                    _ => None,
+                }) else {
+                    return;
+                };
+                fields
+                    .iter()
+                    .filter_map(|fp| {
+                        // `Some(Binding(x))` is `b: x`; `None` is the shorthand
+                        // `b`, which binds the FIELD's own name. A wildcard
+                        // (`b: _`) binds nothing and is deliberately not a leaf
+                        // here — it has no name to register under, and its own
+                        // divergence is filed separately.
+                        let leaf = match fp.pattern.as_ref().map(|p| &p.kind) {
+                            Some(PatternKind::Binding(x)) => x.clone(),
+                            None => fp.name.clone(),
+                            _ => return None,
+                        };
+                        let fte = decl
+                            .iter()
+                            .find(|f| f.name == fp.name)
+                            .map(|f| f.ty.clone())?;
+                        Some((leaf, fte))
+                    })
+                    .collect()
+            }
+            _ => return,
         };
-        for (idx, pat) in pats.iter().enumerate() {
-            let PatternKind::Binding(leaf) = &pat.kind else {
-                continue;
-            };
-            let Some(Some(te)) = elem_tes.get(idx) else {
-                continue;
-            };
+        for (leaf, te) in leaf_tes {
             let TypeKind::Path(p) = &te.kind else {
                 continue;
             };
@@ -5537,8 +5597,7 @@ impl<'a> super::Interpreter<'a> {
                 })
             });
             if runs {
-                self.optres_payload_bodies_tes
-                    .insert(leaf.clone(), te.clone());
+                self.optres_payload_bodies_tes.insert(leaf, te.clone());
             }
         }
     }
