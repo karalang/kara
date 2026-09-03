@@ -12839,6 +12839,83 @@ done
         );
     }
 
+    /// B-2026-09-03-13 — TWO ORDINARY TUPLE LOCALS SEGFAULTED THE PROGRAM, because the
+    /// per-tuple `Drop`-body walker `__karac_dropelems_tuple_*` was named after the elements
+    /// it VISITS and nothing else.
+    ///
+    /// `let t = (0, mk(1));` in one function and `let t = ("sss", mk(2));` in another is the
+    /// whole repro — no destructure, no move-out, no mask. Both tuples have exactly one
+    /// body-bearing element, `R` at index 1, so both resolved to the symbol `..._1_R`; the
+    /// first one emitted the body, GEPping element 1 at its own `{i64, R}` offset, and the
+    /// second reused it against `{Vec, R}`. The walker then read a `String` header from the
+    /// middle of the struct and `memmove`d from a null pointer: SIGSEGV on all three compiled
+    /// surfaces, where `--interp` is correct.
+    ///
+    /// THE ELEMENTS THE WALKER STEPS OVER ARE THE ONES THAT MOVE THE OFFSETS, and they were
+    /// the ones the name left out. The hazard had been seen in a narrower form — the surviving
+    /// element is mangled by its full `TypeExpr` rather than its head name, so `(Vec[Res],
+    /// i64)` and `(Res, i64)` stopped colliding — but that fixed the type of the element the
+    /// walker TOUCHES.
+    ///
+    /// THE KEY IS THE LLVM AGGREGATE TYPE, NOT THE SOURCE TYPES, and the first cut of the fix
+    /// is why: keying on `display_mangle_te` of every element left this program still crashing,
+    /// because the element `TypeExpr`s reaching the emitter are UNRESOLVED for exactly the
+    /// elements in question — `0` and `"sss"` both mangle to the empty string, so both walkers
+    /// were still named `..._1_R$in_R`. `agg_ty` is what the GEPs are emitted against, so
+    /// keying on it makes the symbol and the offsets agree by construction.
+    ///
+    /// Cells: `scalar-first` and `heap-first` are the crashing pair (their ORDER does not
+    /// matter — measured both ways). `masked` is the same collision reached through
+    /// B-2026-08-03-3's move-out mask (`let x = t.0` over `(R, Option[R])` leaves surviving
+    /// target `[1]`), and `unmasked-peer` is the `(i64, Option[R])` local that shared its
+    /// symbol. All four surfaces agree on this output.
+    #[test]
+    fn e2e_tuple_elem_bodies_walker_is_keyed_by_layout() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(id: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(id); return R { id: id, tag: f"t{id}", xs: v } }
+
+fn a1() { let t = (0, mk(1));     println("  e1") }
+fn a2() { let t = ("sss", mk(2)); println("  e2") }
+fn a3() { let t = (mk(3), Option.Some(mk(33))); let x = t.0; println(f"  e3 {x.id}") }
+fn a4() { let t = (0, Option.Some(mk(4)));                   println("  e4") }
+
+fn main() {
+    println("scalar-first");  a1(); println("scalar-first end")
+    println("heap-first");    a2(); println("heap-first end")
+    println("masked");        a3(); println("masked end")
+    println("unmasked-peer"); a4(); println("unmasked-peer end")
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"scalar-first
+dR1/t1/1
+  e1
+scalar-first end
+heap-first
+dR2/t2/1
+  e2
+heap-first end
+masked
+dR33/t33/1
+  e3 3
+dR3/t3/1
+masked end
+unmasked-peer
+dR4/t4/1
+  e4
+unmasked-peer end
+done
+"#
+        );
+    }
+
     /// B-2026-09-02-40 — a `let`-destructure whose source is a FIELD CHAIN rooted at
     /// an owned param (`let (r, k) = h.pe;`) binds views, exactly as the bare-param
     /// spelling does since B-2026-09-02-25.

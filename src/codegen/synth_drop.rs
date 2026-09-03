@@ -7657,7 +7657,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     .join("_")
             )
         };
-        let fn_name = format!("__karac_dropelems_tuple_{}{payload_sig}", key.join("_"));
+        // B-2026-09-03-13 — THE SHAPE OF THE WHOLE TUPLE, not just the elements
+        // this walker visits. `key` above names only the surviving TARGETS, and
+        // an element that runs no body is invisible to it — but it still takes
+        // up space, so it decides where the visited elements SIT. Two tuple
+        // types agreeing on the targets and differing anywhere else therefore
+        // resolved to one symbol, and the second reused a walker whose
+        // `build_struct_gep` had been emitted against the FIRST one's layout.
+        //
+        // `let t = (0, mk(1));` and `let t = ("s", mk(2));` in the same program
+        // is the whole repro: both are `1_R` here, `{i64, R}` and `{Vec, R}`
+        // there, and the second GEPs element 1 at the first's offset — a
+        // SEGFAULT on all three compiled surfaces, from two ordinary tuple
+        // locals and no move-out, mask or destructure anywhere.
+        //
+        // The comment on `key` shows the hazard was seen in a narrower form:
+        // it mangles the surviving element's full `TypeExpr` rather than its
+        // head name, so `(Vec[Res], i64)` and `(Res, i64)` no longer collide.
+        // That fixed the type of the element the walker TOUCHES and left the
+        // ones it steps OVER — the half that moves the offsets — unencoded.
+        // The LLVM AGGREGATE TYPE, not the source `TypeExpr`s. A source-level
+        // shape is not enough and the first cut of this fix proved it: the
+        // element `TypeExpr`s reaching here are unresolved for exactly the
+        // elements that matter — `let t = (0, mk(1));` and
+        // `let t = ("s", mk(2));` BOTH mangle their first element to the empty
+        // string, so both walkers were still named `..._1_R$in_R` and still
+        // shared one body. `agg_ty` is the layout the GEPs are emitted against,
+        // so keying on it makes the symbol and the offsets agree by
+        // construction rather than by the element types happening to be known.
+        let shape: String = agg_ty
+            .print_to_string()
+            .to_string()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '.' })
+            .collect();
+        let fn_name = format!(
+            "__karac_dropelems_tuple_{}{payload_sig}$in{shape}",
+            key.join("_")
+        );
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
