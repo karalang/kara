@@ -13397,6 +13397,116 @@ done
 "#
         );
     }
+
+    /// B-2026-09-03-12 — a tuple bound out of a PLACE (`let x = h.pe;`) records its
+    /// element types, so the binding runs the element's `Drop` body and can be
+    /// projected.
+    ///
+    /// TWO FAILURES FROM ONE MISSING RECORD, and the row was filed for the smaller.
+    /// `x.0.id` failed `karac build` with the loud "cannot resolve field ... its type
+    /// was not recorded for codegen" — a run-vs-build divergence, but one that stops
+    /// the build. The same absent record ALSO cost the element its body outright:
+    /// `bound` ran ONE body under `--interp` and ZERO on all three compiled surfaces, a
+    /// user `Drop` that never fires and says nothing. That half was found by
+    /// re-measuring the row's own repro with a body that RENDERS, the instrument
+    /// B-2026-09-02-43 established for this family, and it is why the cells here print
+    /// a `String` and a `Vec.len()` rather than counting.
+    ///
+    /// THE NAIVE FIX DOUBLE-FREES, which is what the `bound` cell really guards.
+    /// Recording the element `TypeExpr`s alone gives this binding a bodies walker while
+    /// the owning struct's `NestedTuple` drop still frees the same buffers — an
+    /// immediate `free(): double free detected in tcache 2`. The binding has to take
+    /// the MEMORY with the bodies, exactly as the DESTRUCTURE spelling of the identical
+    /// source already does per element. So a future change that keeps the record and
+    /// drops the cap-zeroing passes a body-count assertion and aborts at runtime; this
+    /// cell fails instead.
+    ///
+    /// TWO REGISTRIES, not one, which is why `project` and `bound` are separate cells.
+    /// The full `TypeExpr`s drive the drop walk; a `TupleIndex` RECEIVER is typed from
+    /// the parallel per-element NAMES registry, whose `.or_else` chain is this exact
+    /// family of gaps filed one at a time — annotation, literal, whole rebind
+    /// (B-2026-09-02-39), call result (B-2026-08-28-3). The place source was the one
+    /// member never added.
+    ///
+    /// `literal`, `nobind` and `paramroot` are the over-reach controls: a
+    /// literal-bound tuple and an unbound chain read both worked before and must not
+    /// move, and a PARAM root's element body belongs to the caller and must not gain a
+    /// second owner here. `destr` and `rebound` are the shapes that inherit from this
+    /// binding, and `deep` is the two-hop source.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_place_source_tuple_binding_records_its_elements`, pinned to the same string.
+    #[test]
+    fn e2e_place_source_tuple_binding_records_its_elements() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct H { pe: (R, i64) }
+struct G { h: H }
+
+fn u1()      { let h = H { pe: (mk(41), 0) }; let x = h.pe; println("  bound") }
+fn u2()      { let h = H { pe: (mk(42), 0) }; let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
+fn u3()      { let h = H { pe: (mk(43), 0) }; let x = h.pe; let (a, b) = x; println(f"  b{a.id}/{a.tag}") }
+fn u4()      { let g = G { h: H { pe: (mk(44), 0) } }; let x = g.h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
+fn u5()      { let t = (mk(45), 0); let x = t; println(f"  b{x.0.id}/{x.0.tag}") }
+fn u6()      { let h = H { pe: (mk(46), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
+fn u7(h: H)  { let x = h.pe; println(f"  b{x.0.id}/{x.0.tag}") }
+fn u8()      { let h = H { pe: (mk(48), 0) }; let x = h.pe; let y = x; println(f"  b{y.0.id}/{y.0.tag}") }
+
+fn main() {
+    println("bound");     u1();                      println("bound end")
+    println("project");   u2();                      println("project end")
+    println("destr");     u3();                      println("destr end")
+    println("deep");      u4();                      println("deep end")
+    println("literal");   u5();                      println("literal end")
+    println("nobind");    u6();                      println("nobind end")
+    println("paramroot"); u7(H { pe: (mk(47), 0) }); println("paramroot end")
+    println("rebound");   u8();                      println("rebound end")
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"bound
+dR41/t41/1
+  bound
+bound end
+project
+  b42/t42
+dR42/t42/1
+project end
+destr
+  b43/t43
+dR43/t43/1
+destr end
+deep
+  b44/t44
+dR44/t44/1
+deep end
+literal
+  b45/t45
+dR45/t45/1
+literal end
+nobind
+  b46/t46
+dR46/t46/1
+nobind end
+paramroot
+  b47/t47
+dR47/t47/1
+paramroot end
+rebound
+  b48/t48
+dR48/t48/1
+rebound end
+done
+"#
+        );
+    }
     /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
     /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
     /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

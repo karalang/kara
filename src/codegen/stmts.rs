@@ -8368,6 +8368,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_types
                                         .tuple_var_elem_tes
                                         .insert(var_name.clone(), elem_tes.clone());
+                                    // B-2026-09-03-12 — a PLACE source hands
+                                    // this binding the tuple's MEMORY as well
+                                    // as its bodies, so cap-zero every element
+                                    // in the SOURCE. Without it the owning
+                                    // struct's `NestedTuple` drop frees the
+                                    // same buffers this binding now owns —
+                                    // measured as a `free(): double free
+                                    // detected in tcache 2` abort the moment
+                                    // the element types were recorded. The
+                                    // destructure spelling of the same source
+                                    // does exactly this, per element, in
+                                    // `place_source_tuple_leaf_cleanups`.
+                                    if matches!(&value.kind, ExprKind::FieldAccess { .. }) {
+                                        if let (Some(src_ptr), Some(src_ty)) = (
+                                            self.field_chain_place_ptr(value),
+                                            self.place_chain_aggregate_llvm_type(value),
+                                        ) {
+                                            for (i, te) in elem_tes.iter().enumerate() {
+                                                self.zero_tuple_elem_cap_at(
+                                                    src_ptr, src_ty, i as u32, te,
+                                                );
+                                            }
+                                        }
+                                    }
                                     // B-2026-08-29-24 — `let t = (r, 5);` moves
                                     // a param VIEW into an element, whose body
                                     // the caller runs; mask that element out.
@@ -8648,6 +8672,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // keeps recording `None` for anything it
                                     // cannot bind.
                                     .map(|e| self.call_tuple_elem_type_name(value, e))
+                                    .collect()
+                            })
+                        })
+                        // B-2026-09-03-12 — a PLACE source (`let x = h.pe;`),
+                        // the last member of this family after the whole rebind
+                        // (-09-02-39) and the call (-08-28-3), and it failed the
+                        // same way: `x.0.id` hit the loud "cannot resolve field"
+                        // gap while `h.pe.0.id` and the literal-bound spelling
+                        // both built. The field's DECLARED tuple type is
+                        // full-fidelity by construction, the standard this chain
+                        // holds to, and `place_chain_tuple_tes` is the same
+                        // resolver the destructure spelling of this source
+                        // already uses.
+                        .or_else(|| {
+                            if !matches!(&value.kind, ExprKind::FieldAccess { .. }) {
+                                return None;
+                            }
+                            self.place_chain_tuple_tes(value).map(|elems| {
+                                elems
+                                    .iter()
+                                    .map(|e| match &e.kind {
+                                        TypeKind::Path(p) => p.segments.last().cloned(),
+                                        _ => None,
+                                    })
                                     .collect()
                             })
                         });
@@ -15072,6 +15120,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                     .collect(),
             );
+        }
+        // B-2026-09-03-12 — a PLACE source (`let x = h.pe;`, `let x = g.h.pe;`).
+        // The declared element types are the field's own, which
+        // `place_chain_tuple_tes` already resolves for the DESTRUCTURE spelling
+        // of the identical source; this binding spelling simply never asked.
+        //
+        // The consequence was bigger than the row that found it recorded. With
+        // no element types the binding got no bodies walker at all, and the
+        // source's field mask had already stood its own walk down — so the
+        // element's user `Drop` body ran ZERO times on all three compiled
+        // surfaces against one under `--interp`, and `x.0.<field>` additionally
+        // failed to build, since the same table is what types a `TupleIndex`
+        // receiver.
+        if matches!(&value.kind, ExprKind::FieldAccess { .. }) {
+            if let Some(tes) = self.place_chain_tuple_tes(value) {
+                return Some(tes);
+            }
         }
         // Bare rebind `let t2 = t;` — the destination inherits the source's
         // recorded element types, so its bodies walk re-registers after the
