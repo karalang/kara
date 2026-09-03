@@ -35025,6 +35025,100 @@ done
 /// running NONE, and `refparam` (a borrowed receiver the caller still owns) must
 /// never gain one.
 ///
+/// B-2026-09-03-15 — an `Option[T]` ELEMENT of a destructured tuple owns its
+/// payload's `Drop` body.
+///
+/// The interpreter half of the row. `record_optres_payload_te` — the only thing
+/// that puts a name into `optres_payload_bodies_tes`, which is what
+/// `run_optres_payload_user_drops` consults at drop time — was called under
+/// `PatternKind::Binding` alone, so a destructure's leaves never reached a
+/// registration moment and their payload bodies ran nowhere.
+///
+/// `annres` pins the KNOWN GAP rather than a fix: a `Result` leaf still runs no
+/// payload body, on every surface, because a boxed `Result` payload has no
+/// memory owner to hand it to. Filed as its own row.
+///
+/// THIS BUG COULD HIDE ITSELF, which is why `stale` is a cell. The table is
+/// keyed by variable NAME and never cleared per function, so an earlier
+/// function that bound an `Option[R]` to a variable of the SAME NAME left an
+/// entry a later destructure then read — and the body ran, correctly, by
+/// accident. Two spellings of the identical shape therefore disagreed depending
+/// on what else the program did first. `stale` pins the shape that used to
+/// depend on that: with the fix the leaf registers on its own, so the cell is
+/// correct whether or not anything warmed the name.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_tuple_destructure_optres_leaf_owns_its_payload_body`, pinned to the same
+/// string.
+#[test]
+fn test_tuple_destructure_optres_leaf_owns_its_payload_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho { pe: (R, Option[R]) }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+
+fn loc1() { let t = (mk(1), Option.Some(mk(11))); let (r, o) = t; println(f"  rd{r.id}") }
+fn loc0() { let t = (Option.Some(mk(20)), 0);     let (o, k) = t; println("  rd0") }
+fn ctl()  { let t = (mk(3), Option.Some(mk(33))); println(f"  rd{t.0.id}") }
+fn proj() { let h = Ho { pe: (mk(4), Option.Some(mk(44))) }; let (r, o) = h.pe; println(f"  rd{r.id}") }
+fn used() { let t = (mk(5), Option.Some(mk(55)));
+            let (r, o) = t;
+            match o { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
+            println(f"  rd{r.id}") }
+fn none() { let n: Option[R] = Option.None; let t = (mk(6), n); let (r, o) = t; println(f"  rd{r.id}") }
+fn annres() { let t: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77)));
+              let (r, o) = t; println(f"  rd{r.id}") }
+fn stale() { let t = (mk(8), Option.Some(mk(88))); let (r, o) = t; println(f"  rd{r.id}") }
+
+fn main() {
+    println("loc1");   loc1()
+    println("loc0");   loc0()
+    println("ctl");    ctl()
+    println("proj");   proj()
+    println("used");   used()
+    println("none");   none()
+    println("annres"); annres()
+    println("stale");  stale()
+    println("done")
+}
+"#),
+        r#"loc1
+dR11/t11
+  rd1
+dR1/t1
+loc0
+dR20/t20
+  rd0
+ctl
+  rd3
+dR3/t3
+dR33/t33
+proj
+dR44/t44
+  rd4
+dR4/t4
+used
+  got55
+dR55/t55
+  rd5
+dR5/t5
+none
+  rd6
+dR6/t6
+annres
+  rd7
+dR7/t7
+stale
+dR88/t88
+  rd8
+dR8/t8
+done
+"#
+    );
+}
+
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_projection_source_tuple_destructure_is_a_view`, pinned to the same
 /// string.

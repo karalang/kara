@@ -5340,6 +5340,209 @@ impl<'a> super::Interpreter<'a> {
     /// an unmonomorphized body — fails the gate on BOTH backends, so the
     /// erased-generic residual is a shared leak rather than a divergence.
     /// A let that does NOT qualify removes any stale record for the name.
+    /// B-2026-09-03-15 — the instantiation an EXPRESSION produces, by the
+    /// static half of [`Self::record_optres_payload_te`]'s chain: the
+    /// span-keyed `enum_inst_type_exprs` a constructor records, else a called
+    /// free function's declared return type.
+    ///
+    /// Split out because the tuple-element case needs exactly these two links
+    /// and none of the others: there is no annotation to prefer (an element of
+    /// a tuple literal carries none) and no source-var record to chain through
+    /// (an element is not a binding).
+    fn expr_instantiation_te(&self, e: &Expr) -> Option<TypeExpr> {
+        if let Some(te) = self
+            .program
+            .enum_inst_type_exprs
+            .get(&(e.span.offset, e.span.length))
+        {
+            return Some(te.clone());
+        }
+        match &e.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(f) => self.program.items.iter().find_map(|item| match item {
+                    Item::Function(func) if func.name == *f => func.return_type.clone(),
+                    _ => None,
+                }),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-03-15 — record the element `TypeExpr`s of a tuple-bound
+    /// variable, so a later `let (r, o) = t;` can resolve each leaf's type.
+    /// The interpreter's twin of codegen's `tuple_var_elem_tes` registration,
+    /// populated at the same moment (the binding's own `let`) and from the same
+    /// two sources: the annotation when there is one, else the RHS tuple
+    /// literal's elements.
+    ///
+    /// The bare-rebind arm (`let t2 = t;`) carries the record forward for the
+    /// same reason `record_optres_payload_te`'s identifier arm does — the
+    /// rebind names the same tuple, and codegen's `place_chain_tuple_tes`
+    /// reaches it through the registry its own rebind path propagates.
+    fn record_tuple_var_elem_tes(&mut self, name: &str, ty: &Option<TypeExpr>, value: &Expr) {
+        if let Some(TypeExpr {
+            kind: TypeKind::Tuple(elems),
+            ..
+        }) = ty
+        {
+            let elems = elems.iter().cloned().map(Some).collect();
+            self.tuple_var_elem_tes.insert(name.to_string(), elems);
+            return;
+        }
+        match &value.kind {
+            ExprKind::Tuple(items) => {
+                let tes = items
+                    .iter()
+                    .map(|e| self.expr_instantiation_te(e))
+                    .collect();
+                self.tuple_var_elem_tes.insert(name.to_string(), tes);
+            }
+            ExprKind::Identifier(src) => {
+                if let Some(tes) = self.tuple_var_elem_tes.get(src.as_str()).cloned() {
+                    self.tuple_var_elem_tes.insert(name.to_string(), tes);
+                } else {
+                    self.tuple_var_elem_tes.remove(name);
+                }
+            }
+            _ => {
+                self.tuple_var_elem_tes.remove(name);
+            }
+        }
+    }
+
+    /// B-2026-09-03-15 — the element `TypeExpr`s a tuple-destructure SOURCE
+    /// offers, mirroring codegen's `place_chain_tuple_tes` link for link: the
+    /// `let`'s own annotation, a bare identifier's registry entry, a tuple
+    /// literal's element expressions, or a field chain's declared field type.
+    ///
+    /// The field-chain arm reads the object's struct NAME off its runtime
+    /// value rather than from a static type table, which the interpreter has
+    /// no equivalent of. That is not a value-driven gate creeping in: the name
+    /// only selects which declaration to read, and the `TypeExpr` returned is
+    /// the declared one — the same field type codegen pulls from
+    /// `struct_field_type_exprs`.
+    fn destructure_source_elem_tes(
+        &self,
+        ty: &Option<TypeExpr>,
+        value: &Expr,
+    ) -> Option<Vec<Option<TypeExpr>>> {
+        if let Some(TypeExpr {
+            kind: TypeKind::Tuple(elems),
+            ..
+        }) = ty
+        {
+            return Some(elems.iter().cloned().map(Some).collect());
+        }
+        match &value.kind {
+            ExprKind::Identifier(src) => self.tuple_var_elem_tes.get(src.as_str()).cloned(),
+            ExprKind::Tuple(items) => Some(
+                items
+                    .iter()
+                    .map(|e| self.expr_instantiation_te(e))
+                    .collect(),
+            ),
+            ExprKind::FieldAccess { object, field } => {
+                let obj = self.eval_place_type_name(object)?;
+                let fields = self.program.items.iter().find_map(|item| match item {
+                    Item::StructDef(s) if s.name == obj => Some(&s.fields),
+                    _ => None,
+                })?;
+                let fte = fields.iter().find(|f| &f.name == field).map(|f| &f.ty)?;
+                match &fte.kind {
+                    TypeKind::Tuple(elems) => Some(elems.iter().cloned().map(Some).collect()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-03-15 — the struct NAME a place expression's current value
+    /// carries, for [`Self::destructure_source_elem_tes`]'s field-chain arm.
+    fn eval_place_type_name(&self, e: &Expr) -> Option<String> {
+        let name = match &e.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        match self.env.get(name)? {
+            Value::Struct { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-03-15 — register each `Option`/`Result` LEAF of a tuple
+    /// destructure in `optres_payload_bodies_tes`, the table
+    /// `run_optres_payload_user_drops` consults at drop time.
+    ///
+    /// This is the interpreter half of the row, and it exists because
+    /// `record_optres_payload_te` is called under `PatternKind::Binding` only:
+    /// a destructure's leaves never reached a registration moment, so
+    /// `let t = (mk(2), Option.Some(mk(22))); let (r, o) = t;` ran `dR2` and
+    /// never `dR22`, while the same tuple left undestructured ran both.
+    ///
+    /// GATED ON THE OWNED-PARAM QUESTION, and on the same predicate
+    /// `let_destructures_owned_param` uses for its `Tuple` arm rather than a
+    /// paraphrase of it: when the source is a tuple the CALLER still owns, the
+    /// caller runs the payload's body and registering here would fire it twice.
+    /// That is codegen's `owner_runs_bodies` gate, so the two backends admit
+    /// the same leaves.
+    fn record_destructure_optres_payload_tes(
+        &mut self,
+        pattern: &Pattern,
+        ty: &Option<TypeExpr>,
+        value: &Expr,
+    ) {
+        let PatternKind::Tuple(pats) = &pattern.kind else {
+            return;
+        };
+        if let Some(root) = self.destructure_source_param_root(value) {
+            let root = root.to_string();
+            if self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|params| params.contains(root.as_str()))
+            {
+                return;
+            }
+        }
+        let Some(elem_tes) = self.destructure_source_elem_tes(ty, value) else {
+            return;
+        };
+        for (idx, pat) in pats.iter().enumerate() {
+            let PatternKind::Binding(leaf) = &pat.kind else {
+                continue;
+            };
+            let Some(Some(te)) = elem_tes.get(idx) else {
+                continue;
+            };
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            // `Option` ONLY — codegen takes the `Option` leaf and leaves the
+            // `Result` one alone, because a boxed `Result` payload has no
+            // memory owner to hand it to (see the leaf arm in
+            // `place_source_tuple_leaf_cleanups` for the ASAN measurement).
+            // Registering `Result` here alone would run a body the compiled
+            // backends do not, which is the divergence this family's rules
+            // forbid; the `Result` spelling is filed as its own row.
+            if p.segments.last().map(String::as_str) != Some("Option") {
+                continue;
+            }
+            let runs = p.generic_args.as_ref().is_some_and(|args| {
+                args.iter().any(|a| match a {
+                    crate::ast::GenericArg::Type(t) => self.type_expr_runs_user_drop(t),
+                    _ => false,
+                })
+            });
+            if runs {
+                self.optres_payload_bodies_tes
+                    .insert(leaf.clone(), te.clone());
+            }
+        }
+    }
+
     fn record_optres_payload_te(&mut self, name: &str, ty: &Option<TypeExpr>, value: &Expr) {
         // Borrow-returning accessors are EXCLUDED — `v.get(i)` / `.first()` /
         // `.last()` yield an Option whose payload aliases the container's
@@ -6077,7 +6280,18 @@ impl<'a> super::Interpreter<'a> {
                     self.record_optres_payload_te(&bname, ty, value);
                     // Map-values leg: same registration moment, same chain.
                     self.record_map_val_bodies_te(&bname, ty, value);
+                    // B-2026-09-03-15 — tuple leg. Recording the ELEMENT types
+                    // here is what lets a later `let (r, o) = t;` resolve its
+                    // leaves at all; the destructure's source is a bare name,
+                    // which the span-keyed chain above cannot say anything
+                    // about.
+                    self.record_tuple_var_elem_tes(&bname, ty, value);
                 }
+                // B-2026-09-03-15 — the DESTRUCTURE's own registration moment.
+                // Everything above is gated on a whole-value `Binding`, so a
+                // tuple pattern's `Option`/`Result` leaves reached no
+                // registration and their payload bodies ran nowhere.
+                self.record_destructure_optres_payload_tes(pattern, ty, value);
             }
             StmtKind::LetUninit { name, .. } => {
                 // Declare the binding with a sentinel `Unit` value. Static

@@ -13087,6 +13087,107 @@ done
     /// running NONE, and `refparam` (a borrowed receiver the caller still owns) must
     /// never gain one.
     ///
+    /// B-2026-09-03-15 — an `Option[T]` ELEMENT of a destructured tuple owns its
+    /// payload's `Drop` body.
+    ///
+    /// `place_source_tuple_leaf_cleanups` classified leaves as ENUM or nested
+    /// STRUCT, and its `is_enum` test excluded the names `Option` and `Result`
+    /// outright while `is_struct` never matched them — so the leaf fell through
+    /// the `continue` under that gate: no cleanup registered, no cap-zero, and
+    /// the payload's body owned by NOBODY. The undestructured control (`ctl`) is
+    /// what proves the body was owed: the same tuple, not taken apart, runs it.
+    ///
+    /// The cells span both slot positions and both sources, because the defect
+    /// did too. `loc1` / `loc0` are a bare LOCAL tuple, where nothing else could
+    /// run the body and it simply vanished on all four surfaces. `proj` is the
+    /// projection source, where the compiled backends printed the body anyway —
+    /// incidentally, out of the source struct's own walk, which is why it lands
+    /// BEFORE the live read — while `--interp` lost it: an agreed defect and a
+    /// run-vs-build split from one cause. `used` is the cell that shows this is
+    /// not only about unused leaves: even a leaf the program `match`es and binds
+    /// lost the body on the compiled side, because an unregistered leaf has
+    /// nothing for the arm to consume.
+    ///
+    /// `annres` pins the KNOWN GAP rather than a fix: a `Result` leaf still runs
+    /// no payload body, on every surface. The body half generalizes, but the
+    /// memory half does not — `track_inline_option_agg_payload_var` has no
+    /// `Result` peer and `track_inline_result_payload_var` self-skips a boxed
+    /// payload — so taking the leaf gave it the body and leaked 272 bytes in 9
+    /// allocations (ASAN-clean before). The cell is here so that gap is pinned
+    /// and a future fix has to change it deliberately; it is filed as its own
+    /// row.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_tuple_destructure_optres_leaf_owns_its_payload_body`, pinned to the
+    /// same string.
+    #[test]
+    fn e2e_tuple_destructure_optres_leaf_owns_its_payload_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho { pe: (R, Option[R]) }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+
+fn loc1() { let t = (mk(1), Option.Some(mk(11))); let (r, o) = t; println(f"  rd{r.id}") }
+fn loc0() { let t = (Option.Some(mk(20)), 0);     let (o, k) = t; println("  rd0") }
+fn ctl()  { let t = (mk(3), Option.Some(mk(33))); println(f"  rd{t.0.id}") }
+fn proj() { let h = Ho { pe: (mk(4), Option.Some(mk(44))) }; let (r, o) = h.pe; println(f"  rd{r.id}") }
+fn used() { let t = (mk(5), Option.Some(mk(55)));
+            let (r, o) = t;
+            match o { Option.Some(x) => println(f"  got{x.id}"), Option.None => println("  none") }
+            println(f"  rd{r.id}") }
+fn none() { let n: Option[R] = Option.None; let t = (mk(6), n); let (r, o) = t; println(f"  rd{r.id}") }
+fn annres() { let t: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77)));
+              let (r, o) = t; println(f"  rd{r.id}") }
+
+fn main() {
+    println("loc1");   loc1()
+    println("loc0");   loc0()
+    println("ctl");    ctl()
+    println("proj");   proj()
+    println("used");   used()
+    println("none");   none()
+    println("annres"); annres()
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"loc1
+dR11/t11
+  rd1
+dR1/t1
+loc0
+dR20/t20
+  rd0
+ctl
+  rd3
+dR3/t3
+dR33/t33
+proj
+dR44/t44
+  rd4
+dR4/t4
+used
+  got55
+dR55/t55
+  rd5
+dR5/t5
+none
+  rd6
+dR6/t6
+annres
+  rd7
+dR7/t7
+done
+"#
+        );
+    }
+
     /// Twin of `tests/interpreter.rs`'s
     /// `test_projection_source_tuple_destructure_is_a_view`, pinned to the same
     /// string.

@@ -2187,6 +2187,106 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-15 — a destructured tuple's `Option` leaf takes its payload's
+    /// MEMORY along with the body, and takes it exactly once.
+    ///
+    /// The correctness half is pinned by
+    /// `e2e_tuple_destructure_optres_leaf_owns_its_payload_body` in
+    /// `tests/codegen.rs`; this is the memory half, and the fix is precisely the
+    /// kind that trades a lost body for a double free if the ownership hand-off
+    /// is one-sided. The leaf now registers a tag-guarded payload free AND
+    /// `zero_tuple_elem_cap_at` neutralizes the source, so exactly one of them
+    /// must reclaim each payload: leave the source armed and it is a double
+    /// free, cap-zero without registering the leaf and it is a leak.
+    ///
+    /// All four cells are heap-bearing (`String` + `Vec[i64]` per `R`), and the
+    /// `used` cell additionally MOVES the payload out through a `match` arm —
+    /// the shape where the leaf's registration must be suppressed rather than
+    /// fire alongside the arm. `strp` is the inline-heap payload (`Option[String]`)
+    /// whose buffer has no `Drop` body to observe, so only ASAN can see whether
+    /// it was reclaimed. Three iterations, so a per-iteration imbalance
+    /// accumulates instead of hiding in a single pass.
+    #[test]
+    fn asan_tuple_destructure_optres_leaf_takes_its_payload_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+struct Ho { pe: (R, Option[R]) }
+fn mk(id: i64) -> R { let mut xs = Vec[i64].new(); xs.push(id); return R { id: id, tag: f"t{id}", xs: xs } }
+
+fn loc(b: i64)  { let t = (mk(b + 0), Option.Some(mk(b + 1))); let (r, o) = t; println(f"rd{r.id}") }
+fn proj(b: i64) { let h = Ho { pe: (mk(b + 3), Option.Some(mk(b + 4))) }; let (r, o) = h.pe; println(f"rd{r.id}") }
+fn used(b: i64) { let t = (mk(b + 5), Option.Some(mk(b + 6)));
+                  let (r, o) = t;
+                  match o { Option.Some(x) => println(f"got{x.id}/{x.tag}"), Option.None => println("none") }
+                  println(f"rd{r.id}") }
+fn strp(b: i64) { let t = (mk(b + 7), Option.Some("heapstr")); let (r, o) = t; println(f"rd{r.id}") }
+fn annres(b: i64) { let t: (R, Result[R, String]) = (mk(b + 8), Result[R, String].Ok(mk(b + 9)));
+                    let (r, o) = t; println(f"rd{r.id}") }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let b = i * 10;
+        loc(b); proj(b); used(b); strp(b); annres(b);
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "dR1/t1/1",
+                "rd0",
+                "dR0/t0/1",
+                "dR4/t4/1",
+                "rd3",
+                "dR3/t3/1",
+                "got6/t6",
+                "dR6/t6/1",
+                "rd5",
+                "dR5/t5/1",
+                "rd7",
+                "dR7/t7/1",
+                "rd8",
+                "dR8/t8/1",
+                "dR11/t11/1",
+                "rd10",
+                "dR10/t10/1",
+                "dR14/t14/1",
+                "rd13",
+                "dR13/t13/1",
+                "got16/t16",
+                "dR16/t16/1",
+                "rd15",
+                "dR15/t15/1",
+                "rd17",
+                "dR17/t17/1",
+                "rd18",
+                "dR18/t18/1",
+                "dR21/t21/1",
+                "rd20",
+                "dR20/t20/1",
+                "dR24/t24/1",
+                "rd23",
+                "dR23/t23/1",
+                "got26/t26",
+                "dR26/t26/1",
+                "rd25",
+                "dR25/t25/1",
+                "rd27",
+                "dR27/t27/1",
+                "rd28",
+                "dR28/t28/1",
+            ],
+            "asan_tuple_destructure_optres_leaf_takes_its_payload_once",
+            // Floor guards the vacuous direction: were these allocations ever
+            // folded away the fixture would pass over memory it never touched.
+            // Three iterations x four cells x (String + Vec) per `R` is far above
+            // this.
+            30,
+        );
+    }
+
     /// B-2026-08-30-3, second half — a DISCARDED value-block keeps its own
     /// owner, and the two spellings of one discard agree.
     ///

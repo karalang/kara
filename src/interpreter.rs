@@ -588,6 +588,29 @@ pub struct Interpreter<'a> {
     /// binding codegen registered no walker for — the mirrored chain is what
     /// keeps the two backends firing on the same set of bindings.
     pub(crate) optres_payload_bodies_tes: HashMap<String, TypeExpr>,
+    /// B-2026-09-03-15 — the element `TypeExpr`s of a tuple-bound variable,
+    /// recorded at its `let` so a LATER destructure of that name can resolve
+    /// each leaf's type. The interpreter's twin of codegen's
+    /// `var_types.tuple_var_elem_tes`, and it exists for the same reason: at
+    /// `let (r, o) = t;` the source is a bare identifier, so the span-keyed
+    /// `enum_inst_type_exprs` — which is what `record_optres_payload_te`'s
+    /// chain leans on — has nothing to say about the ELEMENT. Without a
+    /// per-variable record, an `Option[R]` leaf was invisible to
+    /// `optres_payload_bodies_tes` and its payload's `Drop` body ran nowhere.
+    ///
+    /// `Option<TypeExpr>` per element, not `TypeExpr`: the entries are
+    /// positional, so an element whose type is not recoverable has to keep its
+    /// slot rather than shift the ones after it.
+    ///
+    /// NOT cleared per function, matching every other name-keyed table here.
+    /// That is visible: a stale entry from an earlier frame under the same
+    /// variable name is what made this bug's own repro flip between "loses the
+    /// body" and "runs it" depending on whether an unrelated function had
+    /// already bound an `Option[R]` to a variable of the same name. Reading a
+    /// stale entry can only ever ADD a registration the current binding could
+    /// not resolve, and the walk it selects is tag- and type-guarded, so a
+    /// mismatched entry no-ops rather than running a wrong body — measured.
+    pub(crate) tuple_var_elem_tes: HashMap<String, Vec<Option<TypeExpr>>>,
     /// Active impl-method receiver modes, innermost last — pushed around
     /// each user method body by `try_eval_impl_method`. Read by
     /// `scrutinee_expr_is_consuming`: a `self` scrutinee is consuming only
@@ -1068,6 +1091,7 @@ impl<'a> Interpreter<'a> {
             pending_payload_masked_fields: None,
             moved_out_enum_payload_slots: HashSet::new(),
             optres_payload_bodies_tes: HashMap::new(),
+            tuple_var_elem_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),

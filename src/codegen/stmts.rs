@@ -14241,6 +14241,115 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(leaf_name) = p.segments.last().map(|s| s.as_str()) else {
                 continue;
             };
+            // B-2026-09-03-15 — an `Option[T]` / `Result[O, E]` LEAF. The
+            // `is_enum` test below excludes both names outright and `is_struct`
+            // never matches them, so the leaf hit the `continue` under it: not
+            // registered, not cap-zeroed, its payload's `Drop` body owned by
+            // NOBODY. Measured on a bare local tuple — `let t = (mk(2),
+            // Option.Some(mk(22))); let (r, o) = t;` ran `dR2` and never
+            // `dR22`, on all four surfaces — while the SAME tuple left
+            // undestructured ran both. The `Result` spelling and the
+            // Option-in-slot-0 spelling measured identically.
+            //
+            // WHY THE EXCLUSION IS RIGHT WHERE IT IS AND WRONG HERE. It exists
+            // because `track_destructure_leaf_cleanup` (the call under the
+            // gate) dispatches through `var_type_names` → `enum_layouts`, and
+            // the built-in `Option`/`Result` do not live there. That is a
+            // statement about which TRACKER fits, not about whether the leaf
+            // owns anything — so the fix is a leaf arm with the right tracker,
+            // not a widened `is_enum`. Both halves already existed: the memory
+            // side is `track_owned_destructure_field_cleanup`, the same channel
+            // the struct-field destructure uses for an optres field, and the
+            // bodies side is `emit_optres_payload_user_drop_bodies_fn`, the
+            // same walker the plain `let o = Option.Some(mk(1));` let-site
+            // registers. `zero_tuple_elem_cap_at` has had its Option/Result arm
+            // since B-2026-08-03-3 (Option → `None` tag, Result → payload area
+            // zeroed), so the source-neutralizing half needed nothing new.
+            //
+            // GATED ON `!owner_runs_bodies` like every other arm here. A
+            // by-value tuple PARAM source keeps the caller's entry copy running
+            // the bodies, and registering here as well would double-fire. That
+            // cell is not silently correct today — the compiled backends lose
+            // the body there too — but it is a DIFFERENT site (the param entry
+            // copy's own walk, which loses it with no destructure anywhere in
+            // the function) and is filed separately rather than papered over
+            // from here.
+            // `Option` ONLY, and `Result` is left exactly as it was. The body
+            // half generalizes to both — `emit_optres_payload_user_drop_bodies_fn`
+            // has a `Result` arm and the cap-zero has had one since
+            // B-2026-08-03-3 — but the MEMORY half does not:
+            // `track_inline_option_agg_payload_var` has no `Result` peer, and
+            // `track_inline_result_payload_var` deliberately SELF-SKIPS a
+            // heap-BOXED payload on the stated grounds that `BoxedEnumDrop`
+            // owns that case, which nothing registers here. Measured: taking
+            // the `Result` leaf too gave `let t: (R, Result[R, String]) = …;
+            // let (r, o) = t;` its due body and leaked 272 bytes in 9
+            // allocations over three iterations, ASAN-clean before. A lost body
+            // traded for a leak is not a fix, so the `Result` spelling keeps its
+            // pre-existing behaviour — no body, no leak, agreed on all four
+            // surfaces — and is filed as its own row.
+            if leaf_name == "Option" {
+                if !owner_runs_bodies {
+                    self.register_var_from_type_expr(name, &te);
+                    if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                        // MEMORY FIRST, then bodies — the frame drains LIFO, so
+                        // registering memory first is what makes the body run
+                        // BEFORE the payload it reads is freed. Same ordering
+                        // rule the nested-tuple arm above states.
+                        //
+                        // THE BOXED-PAYLOAD ARM IS SPELLED OUT HERE because
+                        // `track_owned_destructure_field_cleanup` does not have
+                        // one. It covers `Option[inline-heap]` (String / Vec,
+                        // via `option_inline_payload_elem`) and the Map/Set
+                        // handle, but an `Option[<struct>]` payload is BOXED and
+                        // falls off the end of that dispatch with no owner.
+                        // Harmless while the leaf owned nothing — the source
+                        // still freed it — and a LEAK the moment the cap-zero
+                        // below hands the element away, which is exactly what
+                        // this fix does. Measured with ASAN: 272 bytes in 9
+                        // allocations over three iterations, and CLEAN before
+                        // the fix, so the leak is the fix's own to carry. The
+                        // `Option[String]` cell stayed clean throughout, which
+                        // is what isolates the boxed arm rather than the
+                        // hand-off itself.
+                        //
+                        // `track_inline_option_agg_payload_var` is the exact
+                        // peer the struct-FIELD destructure already uses for
+                        // this shape (`option_payload_struct_or_enum_drop_ok` →
+                        // the same tracker), so the leaf ends up with the same
+                        // tag-guarded `EnumDrop` a field leaf gets.
+                        let boxed_payload = Self::option_payload_te(&te)
+                            .is_some_and(|pt| self.option_payload_struct_or_enum_drop_ok(&pt));
+                        if boxed_payload {
+                            self.track_inline_option_agg_payload_var(name, slot.ptr, &te);
+                        } else {
+                            self.track_owned_destructure_field_cleanup(name, slot.ptr, &te);
+                        }
+                        if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&te) {
+                            self.var_types
+                                .optres_var_payload_tes
+                                .insert(name.clone(), te.clone());
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                name,
+                                slot.ptr,
+                                bodies,
+                                UserDropKind::ContainerElemBodies,
+                            );
+                            // The leaf took this element's BODY, so the caller
+                            // must mask it out of the SOURCE's own walk. Without
+                            // this the projection spelling (`let (r, o) = h.pe;`)
+                            // goes from one body to two: the source struct's walk
+                            // still reaches the element, which is exactly why that
+                            // spelling was the one cell where the compiled side
+                            // already printed the body.
+                            took_bodies.insert(idx as u32);
+                        }
+                        self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
+                    }
+                }
+                continue;
+            }
             let is_enum = leaf_name != "Option"
                 && leaf_name != "Result"
                 && self
