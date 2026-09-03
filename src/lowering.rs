@@ -186,6 +186,27 @@ fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
 }
 
 /// Rewrite operator expressions across the entire program in place.
+/// B-2026-09-03-5 — strip `ref` / `mut ref` before classifying an expression's
+/// type for the span-keyed Display tables below. A `ref Array[i64, 3]` param is
+/// `Type::Ref(Array { .. })`, which matched none of the arms, so the array /
+/// slice / tuple renderers never saw it: `f"{a}"` on a `ref Array` printed its
+/// FIRST ELEMENT and `println(a)` printed a raw address, while a `ref Slice[T]`
+/// and a `ref (i64, String)` failed the build outright with "Display of this
+/// value is not yet supported". Peeling is sound because codegen renders a
+/// place through `get_data_ptr`, which loads through a ref param and so hands
+/// the renderer a pointer to the SAME aggregate the by-value spelling would.
+/// The Vec/Map/Set/Option/Result tables are deliberately left unpeeled: those
+/// operands reach codegen through the NAME-keyed `var_*` registries that
+/// `register_var_from_type_expr` fills at the parameter binding, so they were
+/// already correct once the pointer was peeled, and adding span entries for
+/// them would only duplicate a working path.
+fn display_peel_ref(ty: &Type) -> &Type {
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => inner,
+        other => other,
+    }
+}
+
 pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     let mut lowerer = Lowerer {
         tc,
@@ -459,9 +480,13 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     program.display_tuple_types = tc
         .expr_types
         .iter()
-        .filter_map(|(k, ty)| match ty {
-            Type::Tuple(elems) if !elems.is_empty() => {
-                Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+        .filter_map(|(k, ty)| match display_peel_ref(ty) {
+            // The PEELED type is forwarded, not `ty`: codegen matches this
+            // entry against `TypeKind::Tuple`, and a `ref (i64, String)`
+            // TypeExpr does not match it, so forwarding the unpeeled type
+            // silently declines exactly the case the peel exists to admit.
+            tup @ Type::Tuple(elems) if !elems.is_empty() => {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(tup)))
             }
             _ => None,
         })
@@ -494,8 +519,8 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     program.display_array_types = tc
         .expr_types
         .iter()
-        .filter_map(|(k, ty)| match ty {
-            Type::Array { .. } => Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty))),
+        .filter_map(|(k, ty)| match display_peel_ref(ty) {
+            arr @ Type::Array { .. } => Some(((k.0, k.1), TypeChecker::type_to_type_expr(arr))),
             _ => None,
         })
         .collect();
@@ -509,7 +534,7 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     program.display_slice_types = tc
         .expr_types
         .iter()
-        .filter_map(|(k, ty)| match ty {
+        .filter_map(|(k, ty)| match display_peel_ref(ty) {
             Type::Slice { element, .. } => {
                 Some(((k.0, k.1), TypeChecker::type_to_type_expr(element)))
             }

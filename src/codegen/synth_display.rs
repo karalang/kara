@@ -4119,6 +4119,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return Ok(None);
         };
+        // B-2026-09-03-5 — every arm below hands the Display fn a POINTER TO
+        // THE VALUE, and for a `ref` param the variable's alloca is not that:
+        // it holds the caller's address, so `slot.ptr` is a pointer-to-pointer.
+        // `render_via_display_fn` then loads the control block out of the slot
+        // that holds the address and renders whatever the address bits happen
+        // to decode as -- measured on `fn f(x: ref T)` at HEAD: `ref Vec[i64]`
+        // and `ref Set[i64]` SEGFAULT, `ref Map[K, V]` prints `{}`,
+        // `ref Option[T]` prints `None`, and `ref Result[T, E]` reads out of
+        // bounds and prints adjacent process memory. `get_data_ptr` is the
+        // existing answer to exactly this question -- it loads through a ref
+        // param and peels an RC-fallback box's header, and the `ref`/`mut ref`
+        // ARGUMENT sites already route through it -- so the render path uses it
+        // too. It returns `slot.ptr` unchanged for an ordinary owned binding,
+        // so the common case emits identical IR.
+        let data_ptr = self.get_data_ptr(&name).unwrap_or(slot.ptr);
         // Vec[T] — `vec_elem_types` + `var_elem_type_exprs` (String sets only
         // the former). Checked before Map since Map lacks `vec_elem_types`.
         if self.var_types.vec_elem_types.contains_key(&name)
@@ -4126,7 +4141,7 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let elem_te = self.var_types.var_elem_type_exprs[&name].clone();
             let disp = self.emit_vec_display_fn_te(&elem_te);
-            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
         }
         if self.mapset.map_key_type_exprs.contains_key(&name)
             && self.var_types.var_elem_type_exprs.contains_key(&name)
@@ -4141,7 +4156,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.emit_map_display_fn(&k, &v)
             };
-            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
         }
         if self.mapset.set_elem_type_exprs.contains_key(&name) {
             let elem_te = self.mapset.set_elem_type_exprs[&name].clone();
@@ -4150,18 +4165,18 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.emit_set_display_fn(&elem_te)
             };
-            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
         }
         // B-2026-07-08-9: Option[T] / Result[T, E] place-expr Display. The
         // payload TypeExpr(s) were captured by `register_var_from_type_expr`;
         // synthesize a concrete `Some(<T>)`/`None` (or `Ok`/`Err`) renderer.
         if let Some(payload_te) = self.var_types.var_option_payload_te.get(&name).cloned() {
             let disp = self.emit_option_display_te(&payload_te);
-            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
         }
         if let Some((ok_te, err_te)) = self.var_types.var_result_payload_te.get(&name).cloned() {
             let disp = self.emit_result_display_te(&ok_te, &err_te);
-            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+            return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
         }
         Ok(None)
     }
@@ -4216,8 +4231,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // a pointer to load from (a plain variable would already have a slot,
         // but that case is handled earlier by `try_compile_collection_display`;
         // here the expr is a call/method result).
+        // A named place goes through `get_data_ptr`, not `variables[..].ptr`,
+        // for the B-2026-09-03-5 reason recorded on the collection sibling
+        // above: a `ref` param's alloca holds the caller's ADDRESS, so passing
+        // it straight to the Display fn renders the pointer bits as the value.
+        // Reached for a `ref Option[T]` / `ref Result[T, E]` param whose
+        // payload type was not registered under the name (the variable arm
+        // above misses it); the span-keyed table still types it, so the render
+        // proceeds here and needs the same peel.
         let val_ptr = if let ExprKind::Identifier(n) = &expr.kind {
-            self.variables.get(n.as_str()).map(|s| s.ptr)
+            self.get_data_ptr(n.as_str())
         } else {
             None
         };
@@ -4290,8 +4313,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let disp = self.emit_tuple_display_fn(elems);
         // A variable already has a slot; spill a non-place value (call/method
         // result) so the Display fn can GEP the aggregate through a pointer.
+        // `get_data_ptr` rather than the raw slot, per B-2026-07-12-18's
+        // user-enum sibling: a `ref` param's slot holds the caller's ADDRESS
+        // (B-2026-09-03-5).
         let val_ptr = if let ExprKind::Identifier(n) = &e.kind {
-            self.variables.get(n.as_str()).map(|s| s.ptr)
+            self.get_data_ptr(n)
         } else {
             None
         };
@@ -4369,7 +4395,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // second reference to the same buffers on the stack).
         if let ExprKind::Identifier(name) = &e.kind {
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
-                return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+                // Through `get_data_ptr`, per B-2026-07-12-18's user-enum sibling
+                // above: a `ref` param's slot holds the caller's ADDRESS, so
+                // rendering from the slot decodes the pointer bits as the value.
+                // Was missed when that fix landed (B-2026-09-03-5).
+                let data_ptr = self.get_data_ptr(name).unwrap_or(slot.ptr);
+                return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
             }
         }
         let val = self.compile_expr(e)?;
@@ -4555,7 +4586,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // copying the two-word header onto the stack again.
         if let ExprKind::Identifier(n) = &e.kind {
             if let Some(slot) = self.variables.get(n.as_str()).copied() {
-                return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+                // Through `get_data_ptr`, per B-2026-07-12-18's user-enum sibling
+                // above: a `ref` param's slot holds the caller's ADDRESS, so
+                // rendering from the slot decodes the pointer bits as the value.
+                // Was missed when that fix landed (B-2026-09-03-5).
+                let data_ptr = self.get_data_ptr(n).unwrap_or(slot.ptr);
+                return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
             }
         }
         let val = self.compile_expr(e)?;
@@ -4583,7 +4619,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Identifier(n) = &e.kind {
             if let Some(slot) = self.variables.get(n.as_str()).copied() {
                 let disp = self.emit_vec_display_fn_te(&elem_te);
-                return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+                // Through `get_data_ptr`, per B-2026-07-12-18's user-enum sibling
+                // above: a `ref` param's slot holds the caller's ADDRESS, so
+                // rendering from the slot decodes the pointer bits as the value.
+                // Was missed when that fix landed (B-2026-09-03-5).
+                let data_ptr = self.get_data_ptr(n).unwrap_or(slot.ptr);
+                return Ok(Some(self.render_via_display_fn(disp, data_ptr)));
             }
         }
         let val = self.compile_expr(e)?;

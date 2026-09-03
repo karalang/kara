@@ -1994,6 +1994,103 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-5 — rendering a `ref` parameter must READ THROUGH the
+    /// reference and must not take ownership of what it reads.
+    ///
+    /// Every Display arm that renders a named place used to hand the
+    /// synthesized Display fn `variables[name].ptr`. For a `ref`/`mut ref`
+    /// param that alloca holds the CALLER'S ADDRESS, so the renderer decoded
+    /// pointer bits as a control block: `ref Vec`/`ref Set` segfaulted,
+    /// `ref Map` printed `{}`, `ref Option` printed `None`, and `ref Result`
+    /// read out of bounds and printed adjacent process memory. The correctness
+    /// half is pinned by `e2e_ref_param_display_reaches_the_pointee_not_the_
+    /// pointer` in `tests/codegen.rs`; this is the MEMORY half, and it is a
+    /// distinct risk: now that the renderer reaches the caller's real buffers
+    /// rather than garbage, a renderer that registered them for cleanup would
+    /// free storage the CALLER still owns. Every value here is heap-bearing and
+    /// is read again after the call, in a loop so a per-iteration double-free
+    /// or leak accumulates rather than hiding in a single pass.
+    #[test]
+    fn asan_ref_param_display_does_not_take_the_callers_buffers() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn pv(x: ref Vec[String]) { println(x); println(f"{x}"); }
+fn pa(a: ref Array[String, 2]) { println(f"{a}"); }
+fn po(x: ref Option[String]) { println(x); println(f"{x}"); }
+fn pr(x: ref Result[String, String]) { println(f"{x}"); }
+fn pm(x: mut ref Map[String, String]) { println(x); }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        let v: Vec[String] = [f"a{i}", f"b{i}"];
+        pv(v);
+        println(f"own-v={v[0]}");
+
+        let arr: Array[String, 2] = [f"p{i}", f"q{i}"];
+        pa(arr);
+        println(f"own-a={arr[1]}");
+
+        let o: Option[String] = Some(f"o{i}");
+        po(o);
+        println(f"own-o={o.is_some()}");
+
+        let r: Result[String, String] = Ok(f"r{i}");
+        pr(r);
+
+        let mut m: Map[String, String] = Map.new();
+        m.insert(f"k{i}", f"w{i}");
+        pm(mut m);
+        println(f"own-m={m.len()}");
+
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "[a0, b0]",
+                "[a0, b0]",
+                "own-v=a0",
+                "[p0, q0]",
+                "own-a=q0",
+                "Some(o0)",
+                "Some(o0)",
+                "own-o=true",
+                "Ok(r0)",
+                "{k0: w0}",
+                "own-m=1",
+                "[a1, b1]",
+                "[a1, b1]",
+                "own-v=a1",
+                "[p1, q1]",
+                "own-a=q1",
+                "Some(o1)",
+                "Some(o1)",
+                "own-o=true",
+                "Ok(r1)",
+                "{k1: w1}",
+                "own-m=1",
+                "[a2, b2]",
+                "[a2, b2]",
+                "own-v=a2",
+                "[p2, q2]",
+                "own-a=q2",
+                "Some(o2)",
+                "Some(o2)",
+                "own-o=true",
+                "Ok(r2)",
+                "{k2: w2}",
+                "own-m=1",
+            ],
+            "asan_ref_param_display_does_not_take_the_callers_buffers",
+            // Floor guards the vacuous direction: if a future change constant-
+            // folds these renders away the fixture would pass over memory it
+            // never touched. Three iterations x five heap-bearing values is far
+            // above this.
+            30,
+        );
+    }
+
     /// B-2026-08-30-3, second half — a DISCARDED value-block keeps its own
     /// owner, and the two spellings of one discard agree.
     ///
@@ -5859,7 +5956,7 @@ fn main() {
         let mut b = Box { name: "n" };
         free_app(mut b.name);
         last = b.name;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
 }
@@ -5881,7 +5978,7 @@ fn main() {
     while i < 50i64 {
         let b = Box { name: "n" + "!" };
         last = b.name;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
 }
@@ -5931,7 +6028,7 @@ fn main() {
         let mut b = Box { name: "n" };
         free_app(mut b.name);
         last = b.name;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
 }
@@ -5949,7 +6046,7 @@ fn main() {
     while i < 50i64 {
         let b = Box { name: "n" + "!" };
         last = b.name;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
 }
@@ -5987,7 +6084,7 @@ fn main() {
         let b = P { x: 1, s: "n" + "!", v: vec![7, 8] };
         let p = P { x: 9, ..b };
         last = p.s;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
 }
@@ -6291,14 +6388,14 @@ fn main() {
     let mut i = 0i64;
     while i < 5i64 {
         v.push(Node { val: i * 2i64, id: i, next: None });
-        i = i + 1i64;
+        i = i + 1;
     }
     i = 0i64;
     while i < 5i64 {
         if i + 1i64 < 5i64 {
             v[i].next = Some(v[i + 1i64]);
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut h = 0i64;
     let mut cur: Option[Node] = Some(v[0i64]);
@@ -6594,13 +6691,13 @@ fn deep_copy(orig: Vec[Node]) -> Vec[Node] {
     let mut i: i64 = 0i64;
     while i < n {
         copies.push(Node { val: orig[i].val, id: orig[i].id, next: None, random: None });
-        i = i + 1i64;
+        i = i + 1;
     }
     i = 0i64;
     while i < n {
         if i + 1i64 < n { copies[i].next = Some(copies[i + 1i64]); }
         match orig[i].random { Some(r) => { copies[i].random = copies[r.id]; } None => {} }
-        i = i + 1i64;
+        i = i + 1;
     }
     return copies;
 }
@@ -6618,7 +6715,7 @@ fn main() {
     while i < 3i64 {
         let rv: i64 = match copies[i].random { Some(r) => r.val, None => 0i64 - 1i64 };
         println(copies[i].val.to_string() + "|" + rv.to_string());
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -7263,7 +7360,7 @@ fn mkstr(c: char, n: i64) -> String {
     let mut i = 0i64;
     while i < n {
         s.push(c);
-        i = i + 1i64;
+        i = i + 1;
     }
     s
 }
@@ -7351,7 +7448,7 @@ fn main() {
         match cell.set(i) { Ok(_) => {}, Err(_) => {}, }
         match cell.set(i) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(v) => { sum = sum + v; }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(sum.to_string());
 }
@@ -7385,7 +7482,7 @@ fn main() {
             total = total + tab.resolve(a).len();
         }
         total = total + tab.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7415,7 +7512,7 @@ fn main() {
         if a == b {
             hits = hits + 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(hits.to_string());
 }
@@ -7450,7 +7547,7 @@ fn main() {
         let s: Arena[String] = Arena.new();
         let sr = s.push("alpha");
         total = total + s.get(sr).len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7477,7 +7574,7 @@ fn main() {
         let p = "al";
         let r = a.push(p + "pha");
         total = total + a.get(r).len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7549,7 +7646,7 @@ fn main() {
         match same { Some(x) => { total = total + x.len(); } None => {} }
         let up: Option[String] = Some(f"hi");
         match up.map(|x: String| x.to_uppercase()) { Some(x) => { total = total + x.len(); } None => {} }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7614,7 +7711,7 @@ fn main() {
         d.map(|x| x);
         let e: Option[String] = Some(f"hello");
         let _ = e.map(|x| x);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7666,7 +7763,7 @@ fn main() {
         let ok: Result[String, String] = Ok(f"fine");
         let ro = ok.map(|x| x);
         match ro { Ok(x) => { if x == "fine" { total = total + 4i64; } } Err(_) => {} }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7694,7 +7791,7 @@ fn main() {
         let cell: OnceLock[String] = OnceLock.new();
         match cell.set("hello".to_string()) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(v) => { total = total + v.len(); }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7723,7 +7820,7 @@ fn main() {
         match cell.set("first".to_string()) { Ok(_) => {}, Err(_) => {}, }
         match cell.set("second".to_string()) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(v) => { total = total + v.len(); }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7754,7 +7851,7 @@ fn main() {
             Ok(_) => {}
             Err(e) => { n = n + e.rejected.len(); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n.to_string());
 }
@@ -7785,7 +7882,7 @@ fn main() {
             Ok(_) => {}
             Err(e) => { let s = e.rejected; n = n + s.len(); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n.to_string());
 }
@@ -7816,7 +7913,7 @@ fn main() {
         match cell.set(Holder { val: "hi".to_string() }) { Ok(_) => {}, Err(_) => {}, }
         match cell.set(Holder { val: "second".to_string() }) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(h) => { total = total + h.val.len(); }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7850,7 +7947,7 @@ fn main() {
             Ok(c) => { total = total + c.val; pool.release(c); }
             Err(_e) => {}
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7908,7 +8005,7 @@ fn main() {
             Ok(v) => { n = n + v; }
             Err(e) => { n = n + use_s(e.msg); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n.to_string());
 }
@@ -7938,7 +8035,7 @@ fn main() {
             Ok(w) => { n = n + w.s.len(); }
             Err(e) => { n = n + e; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n.to_string());
 }
@@ -7969,7 +8066,7 @@ fn main() {
     while i < 30i64 {
         let r = f(String.from("payload-string"));
         total = total + r.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -7999,7 +8096,7 @@ fn main() {
         let a = id1(String.from("first-payload"));
         let b = id2(String.from("second-payload"));
         total = total + a.len() + b.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8030,7 +8127,7 @@ fn main() {
     while i < 30i64 {
         let r = f(Vec.filled(5, 9));
         total = total + r[0];
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8067,7 +8164,7 @@ fn main() {
         b.push(f"c-{i}-padding-padding");
         println(b.len());
         println(b[0]);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -8112,7 +8209,7 @@ fn main() {
         let mut t: Vec[String] = Vec.new();
         t.push(f"t-{i}-padding-padding");
         println(t.len());
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -8161,7 +8258,7 @@ fn main() {
         let mut t: Vec[String] = Vec.new();
         t.push(f"t-{i}-padding-padding");
         println(t.len());
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -8200,7 +8297,7 @@ fn main() {
         v.push(2i64);
         match cell.set(v) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(g) => { total = total + g.len(); }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8234,7 +8331,7 @@ fn main() {
         v.push(i);
         let w = twice(v);
         total = total + w.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8278,7 +8375,7 @@ fn main() {
         temps.push([i, i + 1i64, i + 2i64]);
         let v: Vec[i64] = [i, i + 1i64];
         named.push(v);
-        i = i + 1i64;
+        i = i + 1;
     }
     println((temps.len() + named.len()).to_string());
 }
@@ -8319,7 +8416,7 @@ fn main() {
         let empty: Vec[i64] = Vec.new();
         let w: Vec[i64] = get(Opt.Yes(vv), empty);
         total = total + w.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8373,7 +8470,7 @@ fn main() {
         let b: String = match o { Opt.Yes(v) => v, Opt.No => f"fb" };
         if b.starts_with("bound") { total = total + 1i64; }
         total = total + b.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total);
 }
@@ -8449,7 +8546,7 @@ fn main() {
         } else {
             total = total + 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8700,7 +8797,7 @@ fn main() {
     while i < 200i64 {
         let r = pick(f"apple{i}", f"banana{i}");
         total = total + r.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8737,7 +8834,7 @@ fn main() {
         y.push(f"three{i}");
         let r = choose(x, y, false);
         total = total + r.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8766,7 +8863,7 @@ fn main() {
         match cell.set(Wide { a: 1i64, b: 2i64, c: 3i64, d: 4i64 }) { Ok(_) => {}, Err(_) => {}, }
         match cell.set(Wide { a: 9i64, b: 9i64, c: 9i64, d: 9i64 }) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(w) => { total = total + w.a + w.b + w.c + w.d; }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8796,7 +8893,7 @@ fn main() {
         match cell.set(Rec { id: 7i64, name: "first".to_string() }) { Ok(_) => {}, Err(_) => {}, }
         match cell.set(Rec { id: 8i64, name: "second".to_string() }) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(r) => { total = total + r.id + r.name.len(); }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8828,7 +8925,7 @@ fn main() {
             Ok(_) => {},
             Err(e) => { let r: Rec = e.rejected; total = total + r.id + r.name.len(); },
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8857,7 +8954,7 @@ fn main() {
         v.push(20i64);
         match cell.set(Bag { tag: 3i64, items: v }) { Ok(_) => {}, Err(_) => {}, }
         match cell.get() { Some(b) => { total = total + b.tag + b.items.len(); }, None => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8883,7 +8980,7 @@ fn main() {
         let cell: OnceLock[Point] = OnceLock.new();
         let p = cell.get_or_init(|| Point { x: 3i64, y: 4i64 });
         total = total + p.x + p.y;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8914,7 +9011,7 @@ fn main() {
         let a = cell.get_or_init(|| "alpha".to_string());
         let b = cell.get_or_init(|| "unused".to_string());
         total = total + a.len() + b.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8942,7 +9039,7 @@ fn main() {
         let cell: OnceLock[Config] = OnceLock.new();
         let cfg = cell.get_or_init(|| Config { name: "service".to_string(), port: 8080i64 });
         total = total + cfg.port + cfg.name.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -8967,7 +9064,7 @@ fn main() {
         let cell: OnceCell[Vec[i64]] = OnceCell.new();
         let xs = cell.get_or_init(|| Vec[10i64, 20i64, 30i64]);
         match xs.get(1i64) { Some(n) => { total = total + n + xs.len(); }, None => {} }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -9018,7 +9115,7 @@ fn main() {
             Ok(c) => {}
             Err(e) => { total = total + 1i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -9051,7 +9148,7 @@ fn main() {
         let rl = RateLimiter.new_token_bucket(1i64, 2i64);
         let key = f"client-{i}";
         if rl.try_acquire(key) { total = total + 10i64; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -9096,7 +9193,7 @@ fn main() {
             }
             Err(e) => {}
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -9128,7 +9225,7 @@ fn main() {
     let mut sink: Vec[i64] = Vec.new();
     while i < 40i64 {
         match boom(mut sink) { Ok(_) => {}, Err(_) => {}, }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(sink.len().to_string());
 }
@@ -9165,7 +9262,7 @@ fn main() {
             j = j + 1i64;
         }
         total = total + s.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -9792,7 +9889,7 @@ fn main() {
         println(x.s);
         println(y.s);
         println(z.s);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -9840,7 +9937,7 @@ fn main() {
     while i < 2i64 {
         match take(0i64) { Ok(r) => println(r), Err(_) => println("e") }
         match take(1i64) { Ok(r) => println(r), Err(_) => println("e") }
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10130,7 +10227,7 @@ fn fill(n: i64) -> i64 {
     let mut i = 0i64;
     while i < n {
         v.push(i);
-        i = i + 1i64;
+        i = i + 1;
     }
     v.len()
 }
@@ -10182,7 +10279,7 @@ fn main() {
             }
             Err(_) => println("ERR"),
         }
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10227,7 +10324,7 @@ fn main() {
             Ok(_) => println("OK?"),
             Err(_) => println("interior-nul"),
         }
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10278,7 +10375,7 @@ fn main() {
         println(lo.s);
         println(hi.s);
         println(cl.s);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10317,7 +10414,7 @@ fn main() {
         println(s);
         println(t);
         println(old);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10350,7 +10447,7 @@ fn main() {
     let mut i: i64 = 0i64;
     while i < 4i64 {
         let _ = m.try_insert(i, f"val-{i}-padding-padding-padding");
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut j: i64 = 0i64;
     while j < 4i64 {
@@ -10395,7 +10492,7 @@ fn main() {
             Ok(o) => match o { Some(v) => println(v), None => println("fresh") },
             Err(_) => println("oom"),
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(m.len());
 }
@@ -10422,7 +10519,7 @@ fn main() {
             Ok(b) => println(b),
             Err(_) => println("oom"),
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(s.len());
 }
@@ -10680,7 +10777,7 @@ fn main() {
             Some(r) => println(f"empty:{r}"),
             None => println("none"),
         }
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10717,7 +10814,7 @@ fn main() {
         println(s.replacen(f"-{i}-", "|", 2));
         // Negative count clamps to 0 (replace nothing); receiver untouched.
         println(s.replacen(f"-{i}-", "|", -1i64));
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10760,7 +10857,7 @@ fn main() {
         let got = take(mut s);
         println(got);
         println(f"[{s}]");
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10802,7 +10899,7 @@ fn main() {
         let y = gpick(Name { s: f"gpa-{i}-padding-padding" }, Name { s: f"gpb-{i}-padding-padding" });
         println(x.s);
         println(y.s);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10839,7 +10936,7 @@ fn main() {
     while i < 3i64 {
         let v = build(VecMaker { base: i });
         println(f"{v.len()}");
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10876,7 +10973,7 @@ fn main() {
         let tg = p.steal_tags();
         println(f"{tg.len()}");
         println(f"{p.tags.len()}");
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -10960,7 +11057,7 @@ fn main() {
     while i < 50i64 {
         let r: Vec[String] = build(i);
         println(r[0]);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -11052,7 +11149,7 @@ fn main() {
             Store.Empty => { println(0); }
         }
         let _ = drop_no_move(i);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -11859,7 +11956,7 @@ fn main() {
         let longer = "this-string-is-wider-than-the-width";
         let s4 = f"[{longer:^5}]";
         total = total + s1.len() + s2.len() + s3.len() + s4.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -12471,7 +12568,7 @@ fn main() {
         let re = Regex.compile(p).unwrap();
         if re.is_match("abc") { hits = hits + 1i64; }
         if re.is_match("xyz") { hits = hits + 100i64; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{hits}");
 }
@@ -12503,7 +12600,7 @@ fn main() {
             Some(m) => { total = total + m.text.len(); }
             None => {}
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{total}");
 }
@@ -12534,7 +12631,7 @@ fn main() {
         for m in ms {
             total = total + m.text.len();
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{total}");
 }
@@ -12565,7 +12662,7 @@ fn main() {
         total = total + out.len();
         let empty = re.replace_all("999", "");
         total = total + empty.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{total}");
 }
@@ -13110,7 +13207,7 @@ fn main() {
     let mut i = 1i64;
     while i <= 50i64 {
         g = make(i * 10i64);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{g(5i64)}");
 }
@@ -13184,7 +13281,7 @@ fn main() {
     let mut i = 1i64;
     while i <= 50i64 {
         h.f = make(i * 10i64);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{(h.f)(5i64) + (h.g)(0i64)}");
 }
@@ -13268,7 +13365,7 @@ fn main() {
             v[k] = make(k * 10i64);
             k = k + 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{(v[0i64])(0i64) + (v[1i64])(0i64) + (v[2i64])(0i64) + (v[3i64])(0i64) + (v[4i64])(0i64)}");
 }
@@ -13808,7 +13905,7 @@ fn main() {
         // Control 3 — local moved to another local, never passed.
         let m = DirH { value: Val.Ident(pay(i)) };
         let _m2 = m;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(t);
 }
@@ -15707,7 +15804,7 @@ fn main() {
     while i < keep.len() {
         let z = keep[i].clone();
         acc = acc + z[0i64];
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -15785,7 +15882,7 @@ fn main() {
     let mut i = 0i64;
     while i < 8i64 {
         total = total + g.rows[i].cells.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total);
 }
@@ -17076,7 +17173,7 @@ fn main() {
     let mut i = 0i64;
     while i < 5i64 {
         sink(mk(i));
-        i = i + 1i64;
+        i = i + 1;
     }
     let t = mk(7i64);
     sink(t);
@@ -17096,7 +17193,7 @@ fn main() {
     let mut i = 0i64;
     while i < 5i64 {
         println(i.to_string());
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -17831,7 +17928,7 @@ fn main() {
         println(describe(42i64));
         println(describe("hi".to_string()));
         println(tag(7i64));
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -20886,7 +20983,7 @@ fn main() {
         if let Some(v) = sg {
             println(v);
         };
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -22950,7 +23047,7 @@ fn main() {
         let h6: MapH = MapH { m: mk(i, n), tag: f"tag-{i}-payload" };
         let h7 = h6;
         acc = acc + h7.m.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -23059,7 +23156,7 @@ fn main() {
         let t2 = Trip { a: f"lead-{i}-padding-{n}", v: mk(i, n), n: 3i64 };
         if t2.a.contains("padding") { acc = acc + 1i64; }
         acc = acc + t2.v.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -23136,7 +23233,7 @@ fn main() {
         // types were never affected and must not start being.
         let s5 = { let b = Box { v: f"str-{i}-padded-out-to-force-a-real-heap-{n}" }; b.v };
         acc = acc + s5.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -23240,7 +23337,7 @@ fn main() {
         let h1 = Holder { v: mk(i, n) };
         let x3 = h1.v;
         acc = acc + score(x3);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -23325,7 +23422,7 @@ fn main() {
         let mut o: Outer = Outer { q: Inner { a: mkv(i) } };
         bumpall(mut o.q.a);
         acc = acc + total(o.q.a);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }"#,
@@ -23394,7 +23491,7 @@ fn main() {
         repq(mut q, i);
         if q.s.contains("payload") { acc = acc + 1i64; }
         acc = acc + q.v[1i64];
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -24712,7 +24809,7 @@ fn main() {
             Ok(a) => { println(a.v1.len()); }
             Err(e) => { println(e.message); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     // The Err half too — its payload is narrow and stays INLINE, so the gate
     // must remain per-half rather than disarming the whole action.
@@ -24756,7 +24853,7 @@ fn main() {
             lo = lo + 1i64;
             hi = hi - 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut total = 0i64;
     let mut k = 0i64;
@@ -24858,7 +24955,7 @@ fn main() {
             lo = lo + 1i64;
             hi = hi - 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut total = 0i64;
     let mut k = 0i64;
@@ -26961,7 +27058,7 @@ fn main() {
         let mut t = String.new();
         t.push_str("xxxxxxxxxxxxxxxxxxxx");
         churn.push(t);
-        i = i + 1i64;
+        i = i + 1;
     }
     match m.get(7i64) { Some(g) => println(g), None => println("missing") }
 }
@@ -27296,7 +27393,7 @@ fn main() {
         let mut t = String.new();
         t.push_str("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
         churn.push(t);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(m.get_or("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
 }
@@ -27700,7 +27797,7 @@ fn main() {
         let mut c: Map[i64, i64] = Map.new();
         c.insert(99i64, 1i64);
         churn.push(c);
-        i = i + 1i64;
+        i = i + 1;
     }
     match v[0].get(1i64) { Some(x) => println(x), None => println(-1i64) }
 }
@@ -27747,7 +27844,7 @@ fn make() -> Vec[Map[i64, i64]] {
         let mut m: Map[i64, i64] = Map.new();
         m.insert(i, i * 100i64);
         v.push(m);
-        i = i + 1i64;
+        i = i + 1;
     }
     v
 }
@@ -28321,7 +28418,7 @@ fn main() {
         if a.contains(f"structlit-{n}") { hits = hits + 1i64; }
         if b.contains(f"enumlit-{n}") { hits = hits + 1i64; }
         if c.contains(f"chained-{n}") { hits = hits + 1i64; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"hits={hits}");
 }
@@ -35639,7 +35736,7 @@ fn main() {
             x + y
         };
         println(r);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -39731,7 +39828,7 @@ fn main() {
     while i < 8 {
         es.push(Tok.Word(f"w-{i}-payload"));
         ps.push(Pair { name: f"p-{i}-payload", n: i });
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut total = 0i64;
     let mut j = 0i64;
@@ -39968,7 +40065,7 @@ fn main() {
     while i < 3i64 {
         let t = (i, f"item-{i}");
         println(t.1);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -39993,7 +40090,7 @@ fn main() {
     while i < 3i64 {
         let t = Pair { n: i, s: f"item-{i}" };
         println(t.s);
-        i = i + 1i64;
+        i = i + 1;
     }
 }
 "#,
@@ -40050,7 +40147,7 @@ fn main() {
     let mut i = 0i64;
     while i < 3i64 {
         toks.push(Spanned { start: i, tok: Token.Ident(f"id-{i}") });
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut j = 0;
     while j < toks.len() {
@@ -41813,7 +41910,7 @@ fn main() {
             dp[i][j] = i * 10i64 + j;
             j = j + 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(dp[0][0]);
     println(dp[3][4]);
@@ -44475,7 +44572,7 @@ fn main() {
     while i < 50i64 {
         let n = N { name: "seed string that is also quite long", id: i };
         acc = acc + n.relabel().name.len() + n.relabel().id;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{acc}");
 }
@@ -44510,7 +44607,7 @@ fn main() {
     while i < 50i64 {
         let g = describe(Person { id: i });
         acc = acc + g.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{acc}");
 }
@@ -44541,7 +44638,7 @@ fn main() {
         let vs: Vec[String] = ["a sufficiently long slice element payload", "second sufficiently long element payload"];
         let e = gsum(vs);
         acc = acc + e.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{acc}");
 }
@@ -45566,7 +45663,7 @@ fn main() {
     while i < 100i64 {
         let root = if (i % 2i64) == 0i64 { mk(7i64) } else { mk(9i64) };
         acc = acc + readv(root) + readv(root);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc)
 }
@@ -52941,7 +53038,7 @@ fn get_row(row_index: i64) -> Vec[i64] {
     while i <= row_index {
         let mut k = i - 1i64;
         while k >= 1i64 { row[k] = row[k] + row[k - 1i64]; k = k - 1i64; }
-        i = i + 1i64;
+        i = i + 1;
     }
     row
 }
@@ -53152,7 +53249,7 @@ fn main() {
         s.insert(5i64);
         s.insert(6i64);
         if has_elem(s, 5i64) { hits = hits + 1i64; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(hits);
 }
@@ -53274,7 +53371,7 @@ fn main() {
     while i < 200i64 {
         froms.push(f"K{i % 7i64}");
         tos.push(f"V{i}");
-        i = i + 1i64;
+        i = i + 1;
     }
 
     let mut adj: Map[String, Vec[String]] = Map.new();
@@ -53381,7 +53478,7 @@ fn main() {
         v.push(f"x{i}");
         v.push(f"yy{i}");
         a.m.insert(i, v);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"a={a.m.len()}");
 
@@ -53505,7 +53602,7 @@ fn main() {
     let mut i = 0i64;
     while i < 50i64 {
         s.xs.push(f"e{i}");
-        i = i + 1i64;
+        i = i + 1;
     }
 
     let mut n = 0i64;
@@ -53694,7 +53791,7 @@ fn main() {
         let o: Option[String] = Option.Some("opt-heap");
         let p = o.clone();
         n = n + p.unwrap().len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -53745,7 +53842,7 @@ fn main() {
         let m = MovedOut { res: Res { tag: i, buf: inner2 } };
         let taken = m.res;
         n = n + taken.tag - i;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -53799,7 +53896,7 @@ fn main() {
         b3.push(i);
         let w: Vec[Wrap] = [Wrap { r: Res { tag: 3, buf: b3 } }];
         n = n + w.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -53873,7 +53970,7 @@ fn main() {
         // Same, through `if let`.
         let u = Slot.Full(mk(i));
         if let Slot.Full(q) = u { n = n + q.tag; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -53946,7 +54043,7 @@ fn main() {
         let d = opt(i);
         let r2 = d.unwrap();
         n = n + 1i64;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54016,7 +54113,7 @@ fn main() {
             Option.Some(_) => { n = n + 1i64; }
             Option.None => { n = n + 100i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54085,7 +54182,7 @@ fn main() {
         while let Option.Some(r) = v.pop() {
             n = n + r.buf.len();
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54146,7 +54243,7 @@ fn main() {
             Option.Some(r) => { n = n + r.buf.len(); }
             Option.None => { n = n + 100i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54235,7 +54332,7 @@ fn main() {
             Option.Some(Narrow { name }) => { n = n + name.len(); }
             Option.None => { n = n + 100i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54323,7 +54420,7 @@ fn main() {
             Result.Ok(v) => { n = n + v; }
             Result.Err(_) => { n = n + 1000i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54382,7 +54479,7 @@ fn main() {
         let mut h2: H = H { a: mkv(i), b: 5i64 };
         bump(mut h2.a);
         acc = acc + h2.a[2i64];
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{acc}");
 }
@@ -54677,7 +54774,7 @@ fn main() {
         let hv: Vec[i64] = mkvec(i + 6i64);
         h.items = hv;
         acc = acc + h.items[0i64];
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{acc}");
 }
@@ -54770,7 +54867,7 @@ fn main() {
             Result.Ok(v) => { n = n + v; }
             Result.Err(e) => { let m: String = e.msg; if m.contains(digits(i)) { n = n + m.len(); } }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -54859,7 +54956,7 @@ fn main() {
             Option.Some(Full { name, buf }) => { n = n + name.len() + buf.len(); }
             Option.None => { n = n + 100i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55007,7 +55104,7 @@ fn main() {
             Option.Some(r) => { n = n + r.name.len(); }
             Option.None => { n = n + 100i64; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55079,7 +55176,7 @@ fn main() {
         let m5 = m4;
         n = n + 1i64;
 
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55267,7 +55364,7 @@ fn mk(n: i64) -> Vec[String] {
     let mut i = 0i64;
     while i < n {
         v.push(f"item-{i}-payload");
-        i = i + 1i64;
+        i = i + 1;
     }
     v
 }
@@ -55276,7 +55373,7 @@ fn mk_recs(n: i64) -> Vec[Rec] {
     let mut i = 0i64;
     while i < n {
         v.push(Rec { id: i, s: f"rec-{i}-payload" });
-        i = i + 1i64;
+        i = i + 1;
     }
     v
 }
@@ -55313,7 +55410,7 @@ fn mk_rows(n: i64) -> Vec[Vec[i64]] {
     let mut i = 0i64;
     while i < n {
         v.push(Vec[i, i + 1i64, i + 2i64]);
-        i = i + 1i64;
+        i = i + 1;
     }
     v
 }
@@ -55438,7 +55535,7 @@ fn main() {
         let c: Result[Res, i64] = Result.Ok(mkres(i));
         let d = mkok(i);                             // unannotated — leaked
         n = n + 4i64;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55502,7 +55599,7 @@ fn main() {
         b2.push(i);
         let p = pass(Holder { label: "pt", r: Res { tag: 1, buf: b2 } });
         n = n + p.r.tag;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55620,7 +55717,7 @@ fn main() {
             Result.Ok(j) => { n = n + 1; }
             Result.Err(e) => { n = n + 100000; }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55695,7 +55792,7 @@ fn main() {
             Result.Ok(v) => { n = n + 100000; }
             Result.Err(e) => { n = n + (e.column as i64); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n > 0i64);
 }
@@ -55743,7 +55840,7 @@ fn main() with reads(Ctr) {
     let mut i = 0i64;
     while i < 200i64 {
         n = n + heapy(true) + heapy(false) + blocky(true) + blocky(false);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55773,7 +55870,7 @@ fn main() {
     let mut i = 0i64;
     while i < 200i64 {
         n = n + t(i);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -55816,7 +55913,7 @@ fn main() with reads(Ctr) {
     let mut i = 0i64;
     while i < 200i64 {
         acc = acc + local(9i64) + local(4i64) + heap().len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -55860,7 +55957,7 @@ fn main() with reads(Ctr) {
     let mut i = 0i64;
     while i < 200i64 {
         acc = acc + probe(3i64) + probe(9i64);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(acc);
 }
@@ -56392,7 +56489,7 @@ fn main() {
         // without disarming the source would leak the original every pass.
         let d: Option[String] = Some(f"dead{i}");
         match d.map(|s| s) { Some(v) => { println(v); } None => { println("-"); } }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56444,7 +56541,7 @@ fn acc(n: i64) -> Option[String] {
             Some(prev) => { let mut j = prev; j.push_str("-"); j.push_str(line); buf = Some(j); }
             None => { buf = Some(line); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     buf
 }
@@ -56465,7 +56562,7 @@ fn main() {
         match plain(i) { Some(s) => { println(s); } None => { println("-"); } }
         let _ = plain(100i64 + i);
         println(f"{chain(i)}");
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56533,7 +56630,7 @@ fn main() {
         // without disarming the source would leak the original every pass.
         let d: E = E.A(f"dead{i}");
         match d { E.A(v) => { let k: String = v; println(k); } E.B => { println("-"); } }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56593,7 +56690,7 @@ fn main() {
         let n: N = N.A([i, i]);
         match n { N.A(v) => { for s in v { println(s); } } N.B => { println("-"); } }
         match n { N.A(v) => { for s in v { println(s); } } N.B => { println("-"); } }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56658,7 +56755,7 @@ fn main() {
         // 4. CONTROL — scalar elements own no heap under the buffer.
         let n: N = N.A([i, i]);
         match n { N.A(v) => { println(v[0]); } N.B => { println("-"); } }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56717,7 +56814,7 @@ fn main() {
         // 3. CONTROL — `if let` with the source DEAD, so no clone may be made.
         let d: E = E.A(f"dif{i}");
         if let E.A(v) = d { let k: String = v; println(k); }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56766,7 +56863,7 @@ fn main() {
         row.push(f"r{i}a");
         row.push(f"r{i}b");
         o.push(row);
-        i = i + 1i64;
+        i = i + 1;
     }
     let mut j: i64 = 0i64;
     while j < 4i64 {
@@ -56840,7 +56937,7 @@ fn main() {
         //    the payload, and suppressing here would leak it.
         let mut e: E = E.A(f"ro{i}");
         while let E.A(v) = e { println(v); e = E.B; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -56943,7 +57040,7 @@ fn go() -> i64 {
     while i < 20i64 {
         if seed() > 0 { P { a: payload(i), b: 1 } } else { P { a: payload(i), b: 2 } };
         let _ = match seed() { 1 => { P { a: payload(i), b: 3 } } _ => { P { a: payload(i), b: 4 } } };
-        i = i + 1i64;
+        i = i + 1;
     }
     return 1;
 }
@@ -57121,7 +57218,7 @@ fn go() -> i64 {
     while i < 20i64 {
         let s = payload();
         if seed() > 0 { P { a: s, b: 1 } } else { P { a: payload(), b: 2 } };
-        i = i + 1i64;
+        i = i + 1;
     }
     return 1;
 }
@@ -57153,7 +57250,7 @@ fn go() -> i64 {
     let mut i = 0i64;
     while i < 5i64 {
         if seed() > 0 { P { a: outer, b: 1 } } else { P { a: payload(), b: 2 } };
-        i = i + 1i64;
+        i = i + 1;
     }
     return r.len() - r.len() + 1;
 }
@@ -57200,7 +57297,7 @@ fn go() -> i64 {
     let mut i = 0i64;
     while i < 5i64 {
         if seed() > 0 { P { a: t.a, b: 1 } } else { P { a: payload(), b: 2 } };
-        i = i + 1i64;
+        i = i + 1;
     }
     return 1;
 }
@@ -58256,7 +58353,7 @@ fn main() {
         let d: Box2 = Box2.Full(Res { id: i, name: f"kp{i}" });
         let v: i64 = take_keep(d);
         println(f"kp {v}");
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -58330,7 +58427,7 @@ fn main() {
         take(s);
         // Drain the source's own elements — see the doc above.
         match s.e { E.A(x) => { for t in x { println(t); } } E.B => { println("-"); } }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -58373,7 +58470,7 @@ fn main() {
         // 3. CONTROL — absent key, so the DEFAULT is returned and must not be
         // cloned (that would leak it once per iteration).
         println(m.get(f"zz{i}").unwrap_or(f"dd{i}"));
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -58438,7 +58535,7 @@ fn main() {
         let d: String = f"dd{i}";
         let moved: String = d;
         println(moved);
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -58482,7 +58579,7 @@ fn main() {
         // The shape that leaked: the mapper only reads, so the arm borrows —
         // and `unwrap_or` must then NOT disarm `opt`, which still owns it.
         total = total + opt.map(|xs| xs.len()).unwrap_or(0i64);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -58528,7 +58625,7 @@ fn main() {
             Ok(v) => { total = total + v; }
             Err(e) => { total = total + e.len(); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -58573,7 +58670,7 @@ fn main() {
             Ok(v) => { total = total + v.len(); }
             Err(e) => { total = total + e.len(); }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total.to_string());
 }
@@ -58619,7 +58716,7 @@ fn main() with reads(FileSystem) {{
             Ok(f) => {{ hs.push(f); n = n + 1i64; }}
             Err(_) => {{ n = n - 1i64; }}
         }}
-        i = i + 1i64;
+        i = i + 1;
     }}
     println(n.to_string());
 }}
@@ -58656,7 +58753,7 @@ fn main() with reads(FileSystem) {{
             Ok(fh) => {{ let _h = Holder {{ f: fh }}; n = n + 1i64; }}
             Err(_) => {{ n = n - 1i64; }}
         }}
-        i = i + 1i64;
+        i = i + 1;
     }}
     println(n.to_string());
 }}
@@ -58710,7 +58807,7 @@ fn main() with reads(FileSystem) writes(FileSystem) panics {{
         let h2 = make("{path}");
         let g2 = h2.f;
         match g2.read(mut buf) {{ Ok(_) => {{ n = n + 1i64; }} Err(_) => {{}} }}
-        i = i + 1i64;
+        i = i + 1;
     }}
     println(n.to_string());
 }}
@@ -58744,7 +58841,7 @@ fn main() with reads(FileSystem) {{
             Err(_) => {{ n = n - 1i64; }}
         }}
         outer.push(inner);
-        i = i + 1i64;
+        i = i + 1;
     }}
     println(n.to_string());
 }}
@@ -59855,7 +59952,7 @@ fn main() {
         let fresh: Vec[String] = Vec.new();
         o.inner.v = fresh;
         o.inner.n = i;
-        i = i + 1i64;
+        i = i + 1;
     }
     let b = o.inner;
     println(f"{b.v.len()} {b.n}");
@@ -59953,7 +60050,7 @@ fn main() {
         a += piece;
         b.push_str(piece);
         c = c + piece;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(a.len());
     println(b.len());
@@ -60399,7 +60496,7 @@ fn main() {
     while i < 20i64 {
         let f: String = f"epsilonepsilonepsilon-{i}-zetazetazeta";
         p.label = f;
-        i = i + 1i64;
+        i = i + 1;
     }
     println("end");
 }
@@ -61305,7 +61402,7 @@ fn main() {
     let mut i = 0i64;
     while i < 1000i64 {
         data.push(i);
-        i = i + 1i64;
+        i = i + 1;
     }
     let (a, b) = process_in_parallel(data);
     println(a);
@@ -61332,7 +61429,7 @@ fn count_long(docs: ref Vec[Doc], lo: i64, hi: i64) -> i64 {
         if docs[i as usize].title.len() > 4 {
             n = n + 1i64;
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     n
 }
@@ -61354,7 +61451,7 @@ fn main() {
         } else {
             docs.push(Doc { title: "abc", words: i });
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     let (a, b) = scan(docs);
     println(a);
@@ -61389,7 +61486,7 @@ fn main() {
         last = take(H { s: "v", n: i });
         last = both(P { a: "x", b: "y" });
         last = pair(("p", "q"));
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
 }
@@ -61422,7 +61519,7 @@ fn main() {
         let sl = names.as_slice();
         last = sl[i % 3i64].clone();
         sum = sum + s.bytes()[i % 5i64] as i64;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(sum);
@@ -61498,7 +61595,7 @@ fn main() {
         let owned: Array[String, 3] = ["one", "two", "three"];
         total = total + h.count(owned) + h.count(held.rows);
         last = h.first(owned);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(total);
@@ -61542,7 +61639,7 @@ fn main() {
         let h = H { n: 0 };
         h.grow(mut b.rows);
         total = total + b.rows.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total);
 }
@@ -61576,7 +61673,7 @@ fn main() {
         let held = src.normalize(Nfd);
         total = total + held.len();
         last = src.normalize(Nfc).to_uppercase();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(total);
@@ -61622,7 +61719,7 @@ fn main() {
         let held = a_node(i);
         total = total + held.label().len();
         last = a_node(i).label();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(total);
@@ -61660,7 +61757,7 @@ fn main() {
     while i < 50i64 {
         last = take_first(mk(i));
         n = n + last.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(n);
@@ -61692,7 +61789,7 @@ fn main() {
         let p = mk(i);
         last = p.take_a();
         n = n + last.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(n);
@@ -61724,7 +61821,7 @@ fn main() {
     let mut total = 0i64;
     while i < 50i64 {
         total = total + mk(i).tag();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(total);
 }
@@ -61753,7 +61850,7 @@ fn main() {
     while i < 50i64 {
         last = mk(i).take_first();
         n = n + last.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(n);
@@ -61787,7 +61884,7 @@ fn main() {
     while i < 50i64 {
         last = outer(mk(i));
         n = n + last.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(last);
     println(n);
@@ -61834,7 +61931,7 @@ fn main() {
         let y = mk(i);
         let a: Array[String, 2] = [x, y];
         n = n + a[0].len() + a[1].len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -61851,7 +61948,7 @@ fn main() {
     while i < 50i64 {
         let a: Array[String, 2] = [mk(i), mk(i)];
         n = n + a[0].len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(n);
 }
@@ -63351,7 +63448,7 @@ fn main() {
     while i < 20i64 {
         let c: String = row[0].clone();
         t = t + c.len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{t}");
 }
@@ -63386,7 +63483,7 @@ fn main() {
     while i < 20i64 {
         let c: String = s.clone();
         t = t + c.len() + s.len() + s.substring(0, 3).len();
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{t}");
     println(f"{d[1]}");
@@ -64124,7 +64221,7 @@ fn main() {
     while i < 40i64 {
         m.insert(K { id: i, name: f"key-{i}-padding-padding-padding" }, i);
         m.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{m.len()}");
 }
@@ -64148,7 +64245,7 @@ fn main() {
     while i < 40i64 {
         s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
         s.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{s.len()}");
 }
@@ -64171,7 +64268,7 @@ fn main() {
     while i < 40i64 {
         m.insert(K { id: i, name: f"key-{i}-padding-padding-padding" }, i);
         m.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{m.len()}");
 }
@@ -64194,7 +64291,7 @@ fn main() {
     let mut i = 0i64;
     while i < 40i64 {
         m.insert(K { id: i, name: f"key-{i}-padding-padding-padding" }, i);
-        i = i + 1i64;
+        i = i + 1;
     }
     m.clear();
     println(f"{m.len()}");
@@ -64220,7 +64317,7 @@ fn main() {
     while i < 40i64 {
         m.insert(f"key-{i}-padding-padding-padding", i);
         m.remove(f"key-{i}-padding-padding-padding");
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{m.len()}");
 }
@@ -64243,7 +64340,7 @@ fn main() {
     let mut i = 0i64;
     while i < 40i64 {
         s.insert(f"key-{i}-padding-padding-padding");
-        i = i + 1i64;
+        i = i + 1;
     }
     s.clear();
     println(f"{s.len()}");
@@ -64266,7 +64363,7 @@ fn main() {
     let mut i = 0i64;
     while i < 40i64 {
         s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
-        i = i + 1i64;
+        i = i + 1;
     }
     s.clear();
     println(f"{s.len()}");
@@ -64290,7 +64387,7 @@ fn main() {
     while i < 40i64 {
         s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
         s.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{s.len()}");
 }
@@ -64319,7 +64416,7 @@ fn main() {
         probe.push(f"key-{i}-padding-padding-padding");
         m.insert(k, i);
         m.remove(probe);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{m.len()}");
 }
@@ -64360,7 +64457,7 @@ fn main() {
         let k = K { id: i, name: f"key-{i}-padding-padding-padding" };
         m.insert(k, i);
         m.remove(k);
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{m.len()}");
 }
@@ -64413,7 +64510,7 @@ fn main() {
         s.outer();
         let s0 = s.at(0);
         n = n + s0.1;
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{n}");
 }
@@ -64436,7 +64533,7 @@ fn main() {
         let a = Tiny { next: None };
         let b = Tiny { next: None };
         if a == b { hits = hits + 1i64; }
-        i = i + 1i64;
+        i = i + 1;
     }
     println(f"{hits}");
 }
@@ -66794,7 +66891,7 @@ fn main() {
             Result.Ok(v) => { n = n + v; }
             Result.Err(e) => { let m: String = e.msg; if m.contains(digits(i)) { n = n + m.len(); } }
         }
-        i = i + 1i64;
+        i = i + 1;
     }
     println("done");
 }
@@ -66885,7 +66982,7 @@ fn main() {
     let mut i = base;
     while i < base + 50i64 {
         n = n + boxed(i) + inline_if_let(i) + moved(i);
-        i = i + 1i64;
+        i = i + 1;
     }
     if n > 0i64 { println("done"); }
 }
@@ -67156,7 +67253,7 @@ fn main() {
     let mut i = base;
     while i < base + 50i64 {
         n = n + nested(i) + single(i) + two_fields_one_taken(i) + read_only(i);
-        i = i + 1i64;
+        i = i + 1;
     }
     if n > 0i64 { println("done"); }
 }

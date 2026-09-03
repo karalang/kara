@@ -2132,6 +2132,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // (function returns, fresh literals) where the source-level type is
         // not in the side-tables, so we leave them in place as fallbacks.
         if let ExprKind::Identifier(var_name) = &args[0].value.kind {
+            // Each arm below renders through `get_data_ptr`, not the raw
+            // `variables[var_name].ptr`: for a `ref` param the alloca holds the
+            // CALLER'S ADDRESS, so handing it to a Display fn renders the
+            // pointer bits as the value (B-2026-09-03-5 -- `ref Vec`/`ref Set`
+            // segfaulted, `ref Map` printed `{}`, `ref Option` printed `None`,
+            // `ref Result` read out of bounds). `get_data_ptr` returns the slot
+            // unchanged for an owned binding, so only the ref/RC cases change.
+            // The f-string twin of these five arms lives in
+            // `try_compile_collection_display` and carries the same note.
             // Vec[T]: side-table both `vec_elem_types` and `var_elem_type_exprs`
             // are set (the latter is what distinguishes a Vec variable from a
             // String variable, which only sets `vec_elem_types`).
@@ -2145,7 +2154,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_vec_display_fn_te(&elem_te);
-                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                let data_ptr = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, data_ptr);
                 self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
@@ -2167,7 +2177,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.emit_map_display_fn(&k_te, &v_te)
                 };
-                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                let data_ptr = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, data_ptr);
                 self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
@@ -2184,7 +2195,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     self.emit_set_display_fn(&elem_te)
                 };
-                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                let data_ptr = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, data_ptr);
                 self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
@@ -2198,7 +2210,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_option_display_te(&payload_te);
-                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                let data_ptr = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, data_ptr);
                 self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
@@ -2212,7 +2225,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .copied()
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_result_display_te(&ok_te, &err_te);
-                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                let data_ptr = self.get_data_ptr(var_name).unwrap_or(slot.ptr);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, data_ptr);
                 self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }

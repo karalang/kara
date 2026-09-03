@@ -5062,6 +5062,95 @@ fn main() { println(build2().v); }
     }
 
     #[test]
+    fn e2e_ref_param_display_reaches_the_pointee_not_the_pointer() {
+        // B-2026-09-03-5: every Display arm that renders a NAMED place handed
+        // the Display fn `variables[name].ptr` — the variable's alloca. For a
+        // `ref`/`mut ref` param that alloca holds the CALLER'S ADDRESS, not the
+        // value, so the renderer decoded the pointer bits as a control block.
+        // Measured at HEAD, on the same `fn f(x: ref T)` shape, all three
+        // compiled surfaces (`karac run`, default `karac build`, and
+        // `KARAC_AUTO_PAR=0`) against a correct interpreter: `ref Vec[i64]` and
+        // `ref Set[i64]` SEGFAULTED, `ref Map[K, V]` printed `{}`,
+        // `ref Option[T]` printed `None` for a `Some`, and
+        // `ref Result[T, E]` read out of bounds and printed adjacent process
+        // memory. Both display sites were affected (`println(x)` in
+        // `compile_print`, `f"{x}"` in `try_compile_collection_display` /
+        // `try_compile_option_result_display`), which is why this pins all five
+        // container types at BOTH sites — a fix applied to one site alone
+        // leaves the other rendering the pointer, and that is exactly the state
+        // the first half of this fix was in.
+        //
+        // The `Array` / `Slice` half has a SECOND cause and needs both fixes to
+        // pass: their Display tables are span-keyed off the typechecker's
+        // `expr_types`, and a `ref Array[i64, 3]` is `Type::Ref(Array { .. })`,
+        // which matched no arm -- so peeling the pointer alone still left
+        // `f"{a}"` printing the array's FIRST ELEMENT (`1`) and `println(a)`
+        // printing a raw address, because the operand never reached the array
+        // renderer at all. `ref Slice[i64]` and `ref (i64, String)` failed the
+        // build outright. Hence the `display_peel_ref` peel in `lowering.rs`
+        // alongside the pointer fix -- and note that the peel must forward the
+        // PEELED type, not the original: codegen matches these entries against
+        // `TypeKind::Array` / `TypeKind::Tuple`, which a `ref ...` TypeExpr does
+        // not satisfy, so forwarding the unpeeled type declines the very case
+        // the peel exists to admit. The tuple arm was written that way first and
+        // still refused the build; the array/slice/tuple lines below all fail if
+        // it regresses.
+        //
+        // Expected output is the interpreter's, byte for byte.
+        if let Some(out) = run_program(
+            "fn pv(x: ref Vec[i64]) { println(x); println(f\"{x}\"); }\n\
+             fn pm(x: ref Map[String, i64]) { println(x); println(f\"{x}\"); }\n\
+             fn ps(x: ref Set[i64]) { println(x); println(f\"{x}\"); }\n\
+             fn po(x: ref Option[String]) { println(x); println(f\"{x}\"); }\n\
+             fn pr(x: ref Result[String, String]) { println(x); println(f\"{x}\"); }\n\
+             fn mv(x: mut ref Vec[i64]) { println(x); println(f\"{x}\"); }\n\
+             fn mo(x: mut ref Option[i64]) { println(x); println(f\"{x}\"); }\n\
+             fn pa(a: ref Array[i64, 3]) { println(a); println(f\"{a}\"); }\n\
+             fn pas(a: ref Array[String, 2]) { println(f\"{a}\"); }\n\
+             fn ma(a: mut ref Array[i64, 2]) { println(f\"{a}\"); }\n\
+             fn psl(s: ref Slice[i64]) { println(s); println(f\"{s}\"); }\n\
+             fn pt(t: ref (i64, String)) { println(t); println(f\"{t}\"); }\n\
+             fn mt(t: mut ref (i64, String)) { println(f\"{t}\"); }\n\
+             fn main() {\n\
+                 let v: Vec[i64] = [1i64, 2i64, 3i64];\n\
+                 pv(v);\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"a\", 1i64);\n\
+                 pm(m);\n\
+                 let mut s: Set[i64] = Set.new();\n\
+                 s.insert(9i64);\n\
+                 ps(s);\n\
+                 let o: Option[String] = Some(\"pay0\");\n\
+                 po(o);\n\
+                 let r: Result[String, String] = Ok(\"pay1\");\n\
+                 pr(r);\n\
+                 let mut mv0: Vec[i64] = [7i64];\n\
+                 mv(mut mv0);\n\
+                 let mut mo0: Option[i64] = Some(4i64);\n\
+                 mo(mut mo0);\n\
+                 let arr: Array[i64, 3] = [1i64, 2i64, 3i64];\n\
+                 pa(arr);\n\
+                 let arrs: Array[String, 2] = [\"p\", \"q\"];\n\
+                 pas(arrs);\n\
+                 let mut marr: Array[i64, 2] = [8i64, 9i64];\n\
+                 ma(mut marr);\n\
+                 let sv: Vec[i64] = [4i64, 5i64];\n\
+                 let sl = sv[0..2];\n\
+                 psl(sl);\n\
+                 let tup = (3i64, \"t\");\n\
+                 pt(tup);\n\
+                 let mut mtup = (4i64, \"u\");\n\
+                 mt(mut mtup);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "[1, 2, 3]\n[1, 2, 3]\n{a: 1}\n{a: 1}\nSet{9}\nSet{9}\nSome(pay0)\nSome(pay0)\nOk(pay1)\nOk(pay1)\n[7]\n[7]\nSome(4)\nSome(4)\n[1, 2, 3]\n[1, 2, 3]\n[p, q]\n[8, 9]\n[4, 5]\n[4, 5]\n(3, t)\n(3, t)\n(4, u)\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_whole_tuple_display_matches_interpreter() {
         // B-2026-07-18-14: interpolating / printing a WHOLE tuple value (`f"{t}"`,
         // `println(t)`) passed `karac check` and rendered `(3, 7)` in the
