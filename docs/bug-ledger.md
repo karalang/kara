@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 362 |
+| miscompile | 363 |
 | run-vs-build | 316 |
 | leak | 256 |
 | missing-feature | 194 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1406 |
+| codegen | 1407 |
 | interp | 342 |
 | typecheck | 290 |
 | ownership | 73 |
@@ -152,11 +152,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 | B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
-| B-2026-09-03-16 | 2026-09-03 | codegen | medium | A GENERIC PARENT'S PROJECTION DESTRUCTURE LEAVES THE BODY WITH THE SOURCE -- `struct G[T] { pe: (T, i64) }; let (r, k) = h.pe;` runs the element's `Drop` at `h`'s NLL death on the three compiled surfaces and at the leaf's on `--interp`. ONE body on both sides, on a LIVE value on both sides, so it is a PLACEMENT split with no husk; the non-generic twin of the same program is correct everywhere | — |
 | B-2026-09-03-19 | 2026-09-03 | codegen | high | A WHOLE-VALUE REBIND OF A TUPLE HOLDING AN `Option[<heap struct>]` DOUBLE-FREES THE PAYLOAD -- `let t = (mk(1), Option.Some(mk(2))); let t2 = t;` is `free(): double free detected in tcache 2` on all three compiled surfaces against a clean interpreter, with NO `impl Drop` anywhere in the program. Valgrind: three `Invalid free()`, the payload's String/Vec buffers freed once from `main` and once from a drop walker. The MEMORY half of B-2026-07-31-22, which fixed the BODIES half for the same statement | — |
 | B-2026-09-03-20 | 2026-09-03 | typecheck | medium | `partial_move_of_drop_struct` IS SITE-BASED, NOT SHAPE-BASED, so five value positions escape the now-BLOCKING rule -- `return w.r;`, a tail `w.r`, a call argument, a struct-literal field and a tuple-literal element all move a field out of an own-`Drop` parent and fire nothing, while `let x = w.r;` is a hard error, so the lint's own message points at a workaround that is exactly as unsound | — |
 | B-2026-09-03-21 | 2026-09-03 | codegen | medium | A BY-VALUE TUPLE PARAM WITH AN `Option[T]` ELEMENT LOSES THE PAYLOAD'S `Drop` BODY ON ALL THREE COMPILED SURFACES, with NO DESTRUCTURE anywhere in the function -- `fn p(t: (R, Option[R])) { println(f"{t.0.id}") }` runs `dR11` under `--interp` and nothing on jit/build/AUTO_PAR=0, while the USER-ENUM element in the identical position is correct on both backends | — |
 | B-2026-09-03-22 | 2026-09-03 | codegen | low | A `Result[O, E]` LEAF OF A DESTRUCTURED TUPLE CANNOT TAKE ITS PAYLOAD'S `Drop` BODY, because a heap-BOXED Result payload has no memory owner to hand it to -- `track_inline_option_agg_payload_var` has no `Result` peer and `track_inline_result_payload_var` self-skips the boxed case; taking the leaf anyway ran the due body and LEAKED 272 B in 9 allocations | — |
+| B-2026-09-03-23 | 2026-09-03 | codegen | medium | A GENERIC FUNCTION'S MONOMORPH BODY ANSWERS THE `Drop`-OWNERSHIP QUESTION FROM ITS CALLER'S TABLES -- a LOCAL in `fn inner[T]` whose name matches ANY caller's parameter has its tuple-field element's `Drop` body run on a CAP-ZEROED HUSK (`dR60//0`) before the live read, on all three compiled surfaces against a clean `--interp`. `compile_generic_call` populates neither `current_fn_param_names` nor `owned_struct_params` for the body it emits, and because that body is emitted ONCE and shared, the corruption reaches call sites with no such parameter | — |
 
 ### Relocated
 
@@ -2173,6 +2173,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-13 | codegen | high | TWO ORDINARY TUPLE LOCALS SEGFAULT THE PROGRAM, because the per-tuple `Drop`-body walker `__karac_dropelems_tuple_*` is named after the elements it V… | 97b7b871 |
 | B-2026-09-03-14 | codegen | medium | THREE DESTRUCTURE ARMS WERE OUTSIDE B-2026-09-02-43's OWNER MASK, which recorded only the enum / nested-struct BINDING arm -- the WILDCARD arm (`let… | a97f763b |
 | B-2026-09-03-15 | interp+codegen | medium | A TUPLE ELEMENT TYPED `Option[T]` LOSES ITS PAYLOAD'S `Drop` BODY WHEN THE TUPLE IS DESTRUCTURED -- `let (r, o) = t;` over `(R, Option[R])` runs NO b… | d305cad |
+| B-2026-09-03-16 | codegen | medium | A GENERIC PARENT'S PROJECTION DESTRUCTURE LEAVES THE BODY WITH THE SOURCE -- `struct G[T] { pe: (T, i64) }; let (r, k) = h.pe;` runs the element's `D… | 421af57 |
 | B-2026-09-03-17 | resolver+interp+codegen | medium | A user-defined ASSOCIATED FUNCTION (no `self`) on a PRIMITIVE type passes `karac check` clean and then fails on EVERY executor | 335261c |
 | B-2026-09-03-18 | runtime | high | THE DEFAULT AUTO-PAR BUILD IS 123x SLOWER THAN THE SEQUENTIAL BUILD on a natural interval DP, and 45x slower than THE SAME BINARY run with `KARAC_PAR… | e62f74a |
 
