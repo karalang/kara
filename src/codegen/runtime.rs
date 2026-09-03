@@ -3631,7 +3631,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// double-free. The shared rc-dec is refcount-safe even when the element is
     /// ALSO consumed by value elsewhere (the consume site rc-incs the shared
     /// handle on its element copy, balancing this dec). Memoized by symbol name.
-    fn emit_vec_elem_struct_with_shared_drop_fn(
+    pub(super) fn emit_vec_elem_struct_with_shared_drop_fn(
         &mut self,
         struct_name: &str,
     ) -> Option<inkwell::values::FunctionValue<'ctx>> {

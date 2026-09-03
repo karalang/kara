@@ -6998,7 +6998,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(user_drop_fn, &[self_ptr.into()], "")
             .unwrap();
-        if let Some(field_drop_fn) = self.emit_struct_drop_synthesis(type_name) {
+        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn(type_name) {
             self.builder
                 .build_call(field_drop_fn, &[self_ptr.into()], "")
                 .unwrap();
@@ -7072,7 +7072,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(bodies_fn, &[self_ptr.into()], "")
             .unwrap();
-        if let Some(field_drop_fn) = self.emit_struct_drop_synthesis(type_name) {
+        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn(type_name) {
             self.builder
                 .build_call(field_drop_fn, &[self_ptr.into()], "")
                 .unwrap();
@@ -9219,6 +9219,40 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(walker)
     }
 
+    /// B-2026-09-03-31 — the MEMORY half of a user-`Drop` wrapper, which is the
+    /// COMBINED drop whenever the type owns a `shared` field.
+    ///
+    /// `__karac_drop_struct_<T>` deliberately skips a direct `shared` /
+    /// `Option[shared]` scalar field: those are RC machinery, not buffer-owned,
+    /// and the contract (B-2026-06-14-28 #3, restated on
+    /// [`Self::emit_vec_elem_struct_with_shared_drop_fn`]) is that *the owner's
+    /// own cleanup* rc-decs them. `track_struct_var_inst` honours that contract
+    /// — it asks `struct_owns_shared_field_subst` and registers the combined
+    /// `__karac_vec_elem_full_drop_<T>` (value drop + `emit_nested_struct_shared_rc_decs`)
+    /// instead of the value drop alone.
+    ///
+    /// The three user-`Drop` wrappers did not. They are the owner's own cleanup
+    /// for a `Drop`-bearing type — `UserDrop` and `StructDrop` are mutually
+    /// exclusive by construction, so the wrapper is the ONLY cleanup that runs —
+    /// yet each called the narrow value drop, so nothing ever rc-dec'd the
+    /// shared child. Measured: 16 B per instance on a plain `let`, with no call
+    /// and no assignment anywhere in the program, and unbounded in a loop; the
+    /// same struct with the `impl Drop` deleted was clean, which is what
+    /// isolated the wrapper rather than the synthesizer.
+    ///
+    /// Adding the pass here cannot double-release. A `Vec` element of such a
+    /// struct never reaches a wrapper — `vec_elem_agg_drop_for_type_expr` routes
+    /// it to the combined drop directly, for this same reason — and every other
+    /// caller of `karac_drop_<T>` is the sole cleanup for the value it drops.
+    fn user_drop_wrapper_field_drop_fn(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
+        if self.struct_owns_shared_field(type_name, &mut Vec::new()) {
+            if let Some(f) = self.emit_vec_elem_struct_with_shared_drop_fn(type_name) {
+                return Some(f);
+            }
+        }
+        self.emit_struct_drop_synthesis(type_name)
+    }
+
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
         if let Some(f) = self.drop_rc.user_drop_wrapper_fns.get(type_name) {
             return Some(*f);
@@ -9275,7 +9309,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // synthesizer for heap-owning fields. Returns `None` for structs
         // with no heap-bearing fields (primitive-only) — skip the call
         // in that case since there's nothing to free.
-        if let Some(field_drop_fn) = self.emit_struct_drop_synthesis(type_name) {
+        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn(type_name) {
             self.builder
                 .build_call(field_drop_fn, &[self_ptr.into()], "")
                 .unwrap();

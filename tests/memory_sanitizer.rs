@@ -68578,6 +68578,106 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-31 — a struct with its own `impl Drop` never released a
+    /// `shared struct` field's RC box.
+    ///
+    /// `__karac_drop_struct_<T>` skips a direct `shared` / `Option[shared]`
+    /// scalar field ON PURPOSE: those are RC machinery, not buffer-owned, and
+    /// the contract (B-2026-06-14-28 #3) is that the OWNER's own cleanup rc-decs
+    /// them. `track_struct_var_inst` honours it — it asks
+    /// `struct_owns_shared_field_subst` and registers the COMBINED
+    /// `__karac_vec_elem_full_drop_<T>` (value drop + rc-dec walker). The three
+    /// user-`Drop` wrappers did not, and for a `Drop`-bearing type the wrapper is
+    /// the ONLY cleanup that runs — `UserDrop` and `StructDrop` are mutually
+    /// exclusive by construction. So the handle was released by nobody.
+    ///
+    /// WHAT ISOLATED IT was a one-line discriminator, not a trace: the same
+    /// struct with the `impl Drop` DELETED is clean, which points at the wrapper
+    /// rather than the synthesizer. The leak needs no call and no assignment —
+    /// a plain `let` in `main` loses 16 B — and it is unbounded, one box per
+    /// live instance.
+    ///
+    /// THE FIXTURE IS BUILT TO BITE AT `-O2`, which is where the row's own repro
+    /// does not. A constant-seeded `Sd { m: 7 }` whose `note` is never read folds
+    /// away entirely and measures clean at the default level — the level CI's
+    /// ASAN leg runs at — so a fixture written to the repro would have passed on
+    /// the pre-fix compiler. Seeding from `env.args().len()` (a stable 1, opaque
+    /// to the optimizer) and READING the payload from inside each `Drop` body
+    /// keeps the boxes alive through the pass pipeline. Measured against the
+    /// pre-fix compiler: 720 B definitely + 522 B indirectly lost at
+    /// `KARAC_OPT_LEVEL=0` AND 360 + 261 at the default `-O2`; both go to zero.
+    ///
+    /// FIVE CELLS, and the second is the one that fails an over-eager fix:
+    ///
+    ///   * `one` — the row's shape, one owner.
+    ///   * `two_owners` — ONE handle in TWO `Drop`-bearing structs. The refcount
+    ///     is 2 and exactly one `dSd20` may print. A wrapper that released
+    ///     unconditionally rather than through the rc-dec would double-free here.
+    ///   * `opt` — an `Option[shared]` field, the other spelling the value drop
+    ///     classifies as no-cleanup.
+    ///   * `two_fields` — two shared fields on one struct, so a walker that
+    ///     stops after the first shows up as a leak rather than as silence.
+    ///   * `eat` — the struct passed BY VALUE, whose entry copy rc-incs and must
+    ///     be balanced by the callee's own wrapper.
+    ///
+    /// THE `dSd` LINES ARE NEW OUTPUT, and they are the point: pre-fix the
+    /// refcount never reached zero, so the shared child's `Drop` body never ran
+    /// at all. `--interp` still runs none of them — that is B-2026-09-03-9, whose
+    /// own title asserts "both compiled backends run it exactly once", i.e. this
+    /// fix is what makes the compiled half match the behaviour that row already
+    /// describes as correct. This harness asserts the compiled side only.
+    #[test]
+    fn asan_own_drop_struct_releases_its_shared_field_rc_box() {
+        assert_clean_asan_run(
+            r#"
+shared struct Sd { m: i64, note: String }
+impl Drop for Sd { fn drop(mut ref self) { println(f"dSd{self.m}-{self.note.len()}") } }
+
+struct H { id: i64, s: Sd, tag: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}-{self.tag.len()}") } }
+
+struct G { id: i64, s: Option[Sd], tag: String }
+impl Drop for G { fn drop(mut ref self) { println(f"dG{self.id}-{self.tag.len()}") } }
+
+struct T2 { id: i64, a: Sd, b: Sd }
+impl Drop for T2 { fn drop(mut ref self) { println(f"dT{self.id}") } }
+
+fn mk(n: i64) -> Sd { return Sd { m: n, note: f"note-payloadpayloadpayload-{n}" } }
+fn tg(n: i64) -> String { return f"tag-payloadpayloadpayload-{n}" }
+
+fn one(k: i64) -> i64 { let h: H = H { id: k, s: mk(10 * k), tag: tg(k) }; return h.tag.len() }
+fn two_owners(k: i64) -> i64 { let g: Sd = mk(20 * k); let a: H = H { id: 2 * k, s: g, tag: tg(2) }; let b: H = H { id: 3 * k, s: g, tag: tg(3) }; return a.tag.len() + b.tag.len() }
+fn opt(k: i64) -> i64 { let q: G = G { id: 4 * k, s: Option.Some(mk(30 * k)), tag: tg(4) }; return q.tag.len() }
+fn two_fields(k: i64) -> i64 { let t: T2 = T2 { id: 5 * k, a: mk(40 * k), b: mk(41 * k) }; return t.id }
+fn eat(x: H) -> i64 { return x.tag.len() }
+
+fn main() {
+    let k: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 3 {
+        acc = acc + one(k);
+        acc = acc + two_owners(k);
+        acc = acc + opt(k);
+        acc = acc + two_fields(k);
+        acc = acc + eat(H { id: 6 * k, s: mk(50 * k), tag: tg(6) });
+        i = i + 1;
+    }
+    println(f"acc{acc}");
+}
+"#,
+            &[
+                "dH1-27", "dSd10-29", "dH3-27", "dH2-27", "dSd20-29", "dG4-27", "dSd30-29", "dT5",
+                "dSd40-29", "dSd41-29", "dH6-27", "dSd50-29", "dH1-27", "dSd10-29", "dH3-27",
+                "dH2-27", "dSd20-29", "dG4-27", "dSd30-29", "dT5", "dSd40-29", "dSd41-29",
+                "dH6-27", "dSd50-29", "dH1-27", "dSd10-29", "dH3-27", "dH2-27", "dSd20-29",
+                "dG4-27", "dSd30-29", "dT5", "dSd40-29", "dSd41-29", "dH6-27", "dSd50-29",
+                "acc420",
+            ],
+            "b0903-31-own-drop-shared-field-rc",
+        );
+    }
+
     #[test]
     fn asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once() {
         // B-2026-09-02-6 — the heap half of the in-loop drop-flag re-arm.
