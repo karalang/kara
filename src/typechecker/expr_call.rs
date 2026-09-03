@@ -551,6 +551,59 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// B-2026-09-02-47 — report the first bound an associated call's enclosing
+    /// `impl[T: Bound]` block declares that the call's inferred type argument
+    /// does not satisfy.
+    ///
+    /// `Pair.twin(Holder { .. })` against `impl[T: Copy] Pair[T]` was accepted,
+    /// so a body entitled to rely on `Copy` performed a double move of a
+    /// heap-owning value — silently, and with the two backends disagreeing
+    /// about the result (the interpreter copied, codegen moved). The identical
+    /// bound on the associated fn's OWN generic params was already rejected,
+    /// and so was the INSTANCE-method spelling; the hole was reachable only
+    /// through the associated-call form.
+    ///
+    /// Argument types are read back from `expr_types` rather than re-inferred:
+    /// `check_call_args_with_substitution_full` has just typed and recorded
+    /// them, and inferring them a second time here would duplicate every
+    /// diagnostic those arguments produce. An argument with no recorded type
+    /// is treated as `Type::Error`, which the discharge skips — a call whose
+    /// arguments did not type is not a call whose bounds are decidable.
+    fn discharge_assoc_impl_bounds(
+        &mut self,
+        target: Option<&(String, String)>,
+        args: &[CallArg],
+        span: &Span,
+    ) {
+        let Some((type_name, method)) = target else {
+            return;
+        };
+        let arg_types: Vec<Type> = args
+            .iter()
+            .map(|a| {
+                self.expr_types
+                    .get(&SpanKey::from_span(&a.value.span))
+                    .cloned()
+                    .unwrap_or(Type::Error)
+            })
+            .collect();
+        let Some((param_name, bound, concrete)) = self
+            .env
+            .assoc_call_unsatisfied_impl_bound(type_name, method, &arg_types)
+        else {
+            return;
+        };
+        let Some(trait_name) = bound.path.last().cloned() else {
+            return;
+        };
+        // Same renderer the fn-level and instance-method paths use, so the
+        // three spellings of one unsatisfied bound report identically —
+        // `#[diagnostic::on_unimplemented]` payload included.
+        let message =
+            self.render_unsatisfied_bound_message(&param_name, &trait_name, &concrete, &bound);
+        self.type_error(message, *span, TypeErrorKind::TypeMismatch);
+    }
+
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         // Comptime `Type` reflection in the path-call form. `MyType.name()`,
         // `MyType.fields()`, … parse as `Call(Path([Type, method]))` (the
@@ -1986,6 +2039,26 @@ impl<'a> super::TypeChecker<'a> {
         // already threads the where-clause; this branch covers the
         // type-inferred case (`f(arr)` where N is inferred from
         // `arr`'s type).
+        // B-2026-09-02-47 — remember a two-segment path THE IMPL TABLE CLAIMS,
+        // so the enclosing `impl[T: Bound]` block's own bounds can be
+        // discharged once the arguments have been typed.
+        //
+        // `callee_where_clause` just below recovers the associated fn's OWN
+        // bounds (B-2026-08-22-10 / 5514b6f). It cannot recover the impl
+        // block's: measured on `impl[T: Copy] Pair[T] { fn twin(v: T) }`, the
+        // recovered `FunctionSig` reports `generic_params = []` and
+        // `where_clause = None` while its parameter type is `TypeParam("T")`
+        // — the impl's parameter, which the signature does not declare. So the
+        // two halves are recovered from two different tables, and only the
+        // second needs the arguments.
+        let assoc_impl_call: Option<(String, String)> = match &callee.kind {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                .env
+                .find_method(&segments[0], &[], &segments[1])
+                .map(|_| (segments[0].clone(), segments[1].clone())),
+            _ => None,
+        };
+
         let callee_where_clause: Option<WhereClause> = match &callee.kind {
             ExprKind::Identifier(name) => self
                 .env
@@ -2280,7 +2353,7 @@ impl<'a> super::TypeChecker<'a> {
                     .collect();
                 let return_type =
                     resolve_type_var_top(return_type.as_ref(), &self.env.substitutions);
-                self.check_call_args_with_substitution_full(
+                let ret = self.check_call_args_with_substitution_full(
                     args,
                     &params,
                     &return_type,
@@ -2290,7 +2363,13 @@ impl<'a> super::TypeChecker<'a> {
                     None,
                     callee_where_clause.as_ref(),
                     span,
-                )
+                );
+                // B-2026-09-02-47 — discharge the IMPL BLOCK's bounds. Runs
+                // AFTER the line above, because that is what types the
+                // arguments, and the impl's type arguments are recoverable
+                // only from them.
+                self.discharge_assoc_impl_bounds(assoc_impl_call.as_ref(), args, span);
+                ret
             }
             Type::Error => {
                 for arg in args {

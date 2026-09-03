@@ -44823,6 +44823,142 @@ fn a_where_clause_bound_is_discharged_on_a_static_assoc_call() {
     );
 }
 
+/// B-2026-09-02-47 — the IMPL-LEVEL half. The three tests above cover bounds
+/// declared on the associated FUNCTION's own generic params; a bound inherited
+/// from the enclosing `impl[T: Bound]` block was not consulted at this call
+/// site at all, so `Pair.twin(<non-Copy>)` was accepted and a body entitled to
+/// rely on `Copy` performed a double move of a heap-owning value.
+///
+/// The fn-level call in the same program is the control, and it is the whole
+/// point of the row: that half ALREADY rejected, which is what made this a
+/// divergence between two places a bound can be written rather than a
+/// uniformly missing check. A regression that silenced both would still fail
+/// on the control.
+#[test]
+fn an_impl_level_bound_is_discharged_on_a_static_assoc_call() {
+    let src = "trait Marker {}\n\
+               struct Marked {}\n\
+               impl Marker for Marked {}\n\
+               struct NotMarked {}\n\
+               struct H {}\n\
+               impl H { fn f[T: Marker](x: T) -> i64 { 0 } }\n\
+               struct P[T] { v: T }\n\
+               impl[T: Marker] P[T] {\n\
+               \x20   fn make(x: T) -> P[T] { P { v: x } }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let p = P.make(Marked {{}}); println(1); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let p = P.make(NotMarked {{}}); println(1); }}"
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "an impl block's inline bound must be discharged at an associated call, got {errs:?}"
+    );
+    // The fn-level control: never broken, must stay rejected.
+    let control = typecheck_errors(&format!(
+        "{src}fn main() {{ let a: i64 = H.f(NotMarked {{}}); println(a); }}"
+    ));
+    assert!(
+        control
+            .iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "fn-level control must still reject, got {control:?}"
+    );
+}
+
+/// The `where` SPELLING of the impl-level bound. Its own test because — unlike
+/// a function signature, whose inline bounds are normalized INTO its where
+/// clause — an impl's inline bounds and its where clause are stored separately
+/// and must both be walked. Measured: with only the inline arm implemented,
+/// this spelling still passed `karac check` on the program the inline one
+/// rejects, so the two arms fail independently and say which spelling broke.
+#[test]
+fn an_impl_level_where_clause_bound_is_discharged_on_a_static_assoc_call() {
+    let src = "trait Marker {}\n\
+               struct Marked {}\n\
+               impl Marker for Marked {}\n\
+               struct NotMarked {}\n\
+               struct P[T] { v: T }\n\
+               impl[T] P[T] where T: Marker {\n\
+               \x20   fn make(x: T) -> P[T] { P { v: x } }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let p = P.make(Marked {{}}); println(1); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let p = P.make(NotMarked {{}}); println(1); }}"
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "an impl block's where-clause bound must be discharged at an associated call, got {errs:?}"
+    );
+}
+
+/// The INSTANCE-METHOD control. The same bound on the same impl was already
+/// enforced through `b.dup()`, which is why the row is scoped to the
+/// associated-call spelling. If a future change moves the discharge somewhere
+/// that covers only one of the two, this fails and names the other.
+#[test]
+fn an_impl_level_bound_still_rejects_the_instance_method_spelling() {
+    let src = "trait Marker {}\n\
+               struct NotMarked {}\n\
+               struct P[T] { v: T }\n\
+               impl[T: Marker] P[T] {\n\
+               \x20   fn get(ref self) -> i64 { 0 }\n\
+               }\n";
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let p = P {{ v: NotMarked {{}} }}; let a: i64 = p.get(); println(a); }}"
+    ));
+    assert!(
+        !errs.is_empty(),
+        "the instance-method spelling of an unsatisfied impl bound must stay rejected"
+    );
+}
+
+/// PERMISSIVENESS, both shapes — the half that makes this a fix rather than a
+/// new false positive, and the reason the discharge skips instead of failing
+/// when it cannot bind a parameter.
+///
+/// An impl parameter that appears in NO parameter type (`fn count()`) binds
+/// nothing at the call site: undecidable, not unsatisfied. And a call from
+/// inside a generic function passes an argument that is itself a type
+/// parameter, discharged by the CALLER's own bound and by the eventual
+/// monomorphization — the same treatment `impl_bounds_discharge` gives both.
+/// Rejecting either would break every bounded generic container in the stdlib.
+#[test]
+fn an_impl_level_bound_is_permissive_when_nothing_binds_it() {
+    // No parameter mentions `T`.
+    typecheck_ok(
+        "struct P[T] { v: T }\n\
+         impl[T: Copy] P[T] {\n\
+         \x20   fn count() -> i64 { 7 }\n\
+         }\n\
+         fn main() { println(P.count()); }",
+    );
+    // The argument is the CALLER's still-generic parameter.
+    typecheck_ok(
+        "struct P[T] { v: T }\n\
+         impl[T: Copy] P[T] {\n\
+         \x20   fn twin(v: T) -> P[T] { P { v: v } }\n\
+         }\n\
+         fn relay[U: Copy](x: U) -> P[U] { P.twin(x) }\n\
+         fn main() { let p = relay(5); println(p.v); }",
+    );
+    // And the satisfied case is still accepted, which is what separates
+    // "discharged" from "always rejected".
+    typecheck_ok(
+        "struct P[T] { v: T }\n\
+         impl[T: Copy] P[T] {\n\
+         \x20   fn twin(v: T) -> P[T] { P { v: v } }\n\
+         }\n\
+         fn main() { let p = P.twin(5); println(p.v); }",
+    );
+}
+
 /// The associated-type-equality arm (B-2026-08-22-3) on the static path —
 /// the third bound class, and the one whose diagnostic names both sides.
 #[test]

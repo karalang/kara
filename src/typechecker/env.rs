@@ -853,6 +853,144 @@ impl TypeEnv {
         None
     }
 
+    /// B-2026-09-02-47 — the ASSOCIATED-CALL half of impl-level bound
+    /// discharge. Returns the first bound the enclosing `impl[T: Bound]`
+    /// block declares that the call's inferred type argument does NOT
+    /// satisfy, as `(param_name, bound, concrete_arg)`.
+    ///
+    /// WHY THIS CANNOT REUSE THE WHERE-CLAUSE ROUTE that `5514b6f`
+    /// (B-2026-08-22-10) built for FUNCTION-level bounds. Measured on
+    /// `impl[T: Copy] Pair[T] { fn twin(v: T) }`: the `FunctionSig` the impl
+    /// table returns for `Pair.twin` reports `generic_params = []` and
+    /// `where_clause = None`, while its parameter type is `TypeParam("T")` —
+    /// a reference to a parameter the SIGNATURE does not declare. So the
+    /// bound is not reachable by appending predicates to that clause: there
+    /// is no call-site generic named `T` for the instantiation machinery to
+    /// map. The impl's params live in `ImplInfo::generic_params`, and the only
+    /// thing connecting them to this call is the shape of the declared
+    /// parameter types — hence the structural bind below.
+    ///
+    /// The instance-method path already enforces these bounds (via
+    /// [`Self::find_method_with_args`], which gets `target_args` free from the
+    /// receiver's `Type::Named { args }`). An associated call has no receiver
+    /// VALUE, only a receiver NAME, so the type arguments have to be recovered
+    /// from the arguments instead.
+    ///
+    /// Permissive in exactly the places [`Self::impl_bounds_discharge`] is,
+    /// and for the same reason — an unbindable parameter is undecidable here,
+    /// not unsatisfied, and the concrete instantiation checks it later:
+    /// a param that appears in no parameter type (`fn make() -> Pair[T]`)
+    /// binds nothing; an argument that is itself a type parameter or an
+    /// unresolved variable (a call inside a generic fn) is discharged by the
+    /// enclosing scope's own bound; and a `Type::Error` argument is a
+    /// diagnostic already reported, which must not cascade into a second one.
+    pub(super) fn assoc_call_unsatisfied_impl_bound(
+        &self,
+        target_type: &str,
+        method: &str,
+        arg_types: &[Type],
+    ) -> Option<(String, TraitBound, Type)> {
+        // Mirror `find_method`'s inherent-beats-trait priority, so the impl
+        // whose bounds are checked is the impl whose method the call resolved
+        // to. Anything else could report a bound from a block the call never
+        // reaches.
+        let mut inherent: Option<&ImplInfo> = None;
+        let mut trait_impl: Option<&ImplInfo> = None;
+        for imp in &self.impls {
+            if imp.target_type != target_type
+                || !impl_args_match(&imp.target_args, &[])
+                || !imp.methods.contains_key(method)
+            {
+                continue;
+            }
+            if imp.trait_name.is_none() {
+                if inherent.is_none() {
+                    inherent = Some(imp);
+                }
+            } else if trait_impl.is_none() {
+                trait_impl = Some(imp);
+            }
+        }
+        let imp = inherent.or(trait_impl)?;
+        let gp = imp.generic_params.as_ref()?;
+        let sig = imp.methods.get(method)?;
+
+        // The associated fn's DECLARED parameter types are written in terms of
+        // the impl's parameters, so matching them against the call's actual
+        // argument types recovers the impl's type arguments. Same structural
+        // walk the receiver-side binder uses.
+        let mut subst: HashMap<String, Type> = HashMap::new();
+        for (decl, actual) in sig.params.iter().zip(arg_types.iter()) {
+            bind_impl_param_one(decl, actual, &mut subst);
+        }
+
+        for param in &gp.params {
+            let Some(concrete) = subst.get(param.name.as_str()) else {
+                continue;
+            };
+            if matches!(
+                concrete,
+                Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
+            ) {
+                continue;
+            }
+            for bound in &param.bounds {
+                if !self.bound_satisfied(concrete, bound) {
+                    return Some((param.name.clone(), bound.clone(), concrete.clone()));
+                }
+            }
+        }
+
+        // The `where` SPELLING of the same bound — `impl[T] Pair[T] where
+        // T: Copy`. Measured, not assumed: with only the inline arm above,
+        // this spelling still passed `karac check` on the very program the
+        // inline one now rejects. Inline bounds are NOT normalized into the
+        // impl's where clause the way a function signature's are, so the two
+        // arms are both required. `impl_bounds_discharge` walks both for the
+        // same reason, and this mirrors it predicate for predicate — including
+        // treating a predicate whose `type_name` is not an impl parameter as a
+        // bare concrete type, which covers `where SomeOtherType: Ord`.
+        if let Some(wc) = &imp.where_clause {
+            for constraint in &wc.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = constraint
+                else {
+                    // `AssocTypeEq` predicates are out of scope here exactly as
+                    // they are for `impl_bounds_discharge`.
+                    continue;
+                };
+                let owned;
+                let target_ty: &Type = if let Some(t) = subst.get(type_name.as_str()) {
+                    t
+                } else if gp.params.iter().any(|p| p.name == *type_name) {
+                    // Names an impl parameter that bound to nothing — the same
+                    // undecidable case the inline arm skips.
+                    continue;
+                } else {
+                    owned = Type::Named {
+                        name: type_name.clone(),
+                        args: Vec::new(),
+                    };
+                    &owned
+                };
+                if matches!(
+                    target_ty,
+                    Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
+                ) {
+                    continue;
+                }
+                for bound in bounds {
+                    if !self.bound_satisfied(target_ty, bound) {
+                        return Some((type_name.clone(), bound.clone(), target_ty.clone()));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Discharge `bound` against `ty`. The bound's last path segment names
     /// the trait. Walks the supertrait graph via [`Self::type_satisfies_trait`].
     fn bound_satisfied(&self, ty: &Type, bound: &TraitBound) -> bool {
