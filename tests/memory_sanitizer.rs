@@ -636,6 +636,7 @@ fn w1() { let h = H  { pe: (mk(1), 0) };            let (_, k) = h.pe;      prin
 fn w2() { let h = Hi { pe: (0, mk(2)) };            let (k, _) = h.pe;      println("  end") }
 fn w3() { let h = Hw { pe: (0, Option.Some(mk(3))) }; let (k, _) = h.pe;    println("  end") }
 fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+#[allow(partial_move_of_drop_struct)]
 fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
@@ -3009,8 +3010,10 @@ impl Drop for W { fn drop(mut ref self) { println(f"drop W{self.n}") } }
 struct Two { a: R, b: R }
 impl Drop for Two { fn drop(mut ref self) { println("drop Two") } }
 
+#[allow(partial_move_of_drop_struct)]
 fn take(w: W) -> R { let W { r, n } = w; r }
 fn take_field(w: W) -> R { return w.r; }
+#[allow(partial_move_of_drop_struct)]
 fn take_a(t: Two) -> R { let Two { a, b } = t; a }
 fn use_n(w: W) -> i64 { return w.n; }
 fn mk() -> W { return W { r: R { id: 7, name: f"m{7}" }, n: 9 }; }
@@ -66788,6 +66791,7 @@ fn main() {
              impl Drop for R { fn drop(mut ref self) { println(f\"drop R{self.name}\") } }\n\
              struct W { r: R, tag: String }\n\
              impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.tag}\") } }\n\
+             #[allow(partial_move_of_drop_struct)]\n\
              fn take(w: W) -> R { let W { r, tag } = w; r }\n";
         const MK: &str = "W { r: R { id: 47, name: f\"n{47}\" }, tag: f\"t{5}\" }";
         for (label, body, want) in [

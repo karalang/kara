@@ -275,18 +275,19 @@ pub const STARTER_LINTS: &[LintInfo] = &[
     },
     LintInfo {
         name: "partial_move_of_drop_struct",
-        default_level: LintLevel::Warn,
+        default_level: LintLevel::Deny,
         description:
             "A field is moved out of a struct that has its own `impl Drop` (`let m = h.r;`, \
              `match h { H { r, .. } }`). design.md § Part 8 `Drop` rejects the shape outright: \
              the struct stays bound and still reaches its destructor, so the drop body and the \
              field walk after it run over a half-populated value — measured as a second `Drop` \
-             body over a ZEROED field on both compiled backends. `Warn` rather than the `Deny` \
-             the spec's wording implies, and the gap is a MEASUREMENT, not an oversight: eight \
-             `--features llvm` fixtures are written in this shape, and each is the regression \
-             test for a bug FIXED in it (B-2026-08-28-21's family among them), so denying today \
-             would delete the coverage that keeps those fixes honest. Promotion to `Deny` is \
-             tracked as B-2026-09-01-43. B-2026-09-01-38.",
+             body over a ZEROED field on both compiled backends. `Deny`, the level that \
+             wording implies. It landed at `Warn` only because eight `--features llvm` \
+             fixtures were written in the shape and each is the regression test for a bug \
+             FIXED in it (B-2026-08-28-21's family among them); B-2026-09-01-43 resolved \
+             them — one was a TRUE POSITIVE and was rewritten, the other seven now carry \
+             `#[allow(partial_move_of_drop_struct)]`, which keeps the drop behaviour they \
+             pin under test because the opt-out leaves it reachable. B-2026-09-01-38.",
     },
     LintInfo {
         name: "chained_field_receiver",

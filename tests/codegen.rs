@@ -12954,6 +12954,13 @@ done
     /// `R { id: i64 }` a husk and a live value print the same thing and a count-only
     /// assertion cannot tell them apart.
     ///
+    /// `d1` (the `owndrop` cell) carries `#[allow(partial_move_of_drop_struct)]` since
+    /// B-2026-09-01-43: moving a tuple field out of a parent that declares its own `Drop`
+    /// is exactly the shape design.md § Part 8 `Drop` rejects, so at `Deny` the cell no
+    /// longer compiles without the opt-out. Keeping it is deliberate — the drop placement
+    /// it pins stays reachable through that attribute, so the coverage still guards
+    /// programs someone can write.
+    ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_destructure_owner_mask_reaches_the_remaining_arms`, pinned to the same string.
     /// `e2e_local_struct_tuple_field_destructure_masks_the_owner` pins B-2026-09-02-43's own
@@ -12977,6 +12984,7 @@ fn w1() { let h = H  { pe: (mk(1), 0) };            let (_, k) = h.pe;      prin
 fn w2() { let h = Hi { pe: (0, mk(2)) };            let (k, _) = h.pe;      println("  end") }
 fn w3() { let h = Hw { pe: (0, Option.Some(mk(3))) }; let (k, _) = h.pe;    println("  end") }
 fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+#[allow(partial_move_of_drop_struct)]
 fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
@@ -17201,6 +17209,7 @@ fn main() {
              impl Drop for R { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }\n\
              struct W { r: R, n: i64 }\n\
              impl Drop for W { fn drop(mut ref self) { println(f\"drop W{self.n}\"); } }\n\
+             #[allow(partial_move_of_drop_struct)]\n\
              fn take(w: W) -> R { let W { r, n } = w; r }\n";
         for (label, body, want) in [
             (
@@ -19404,7 +19413,8 @@ fn main() {
             // The row's own repro.
             (
                 "destructure-return",
-                "fn take(w: W) -> R { let W { r, n } = w; r }\n\
+                "#[allow(partial_move_of_drop_struct)]\n\
+                 fn take(w: W) -> R { let W { r, n } = w; r }\n\
                  fn main() { let x = take(W { r: R { id: 41 }, n: 1 }); println(f\"{x.id}\"); }\n",
                 "drop W1\n41\ndrop 41\n",
             ),
@@ -19422,6 +19432,7 @@ fn main() {
             (
                 "from-call",
                 "fn mk() -> W { return W { r: R { id: 43 }, n: 3 }; }\n\
+                 #[allow(partial_move_of_drop_struct)]\n\
                  fn take(w: W) -> R { let W { r, n } = w; r }\n\
                  fn main() { let x = take(mk()); println(f\"{x.id}\"); }\n",
                 "drop W3\n43\ndrop 43\n",
@@ -19432,6 +19443,7 @@ fn main() {
                 "two-droppers",
                 "struct Two { a: R, b: R }\n\
                  impl Drop for Two { fn drop(mut ref self) { println(\"drop Two\"); } }\n\
+                 #[allow(partial_move_of_drop_struct)]\n\
                  fn take(t: Two) -> R { let Two { a, b } = t; a }\n\
                  fn main() { let x = take(Two { a: R { id: 44 }, b: R { id: 45 } });\n\
                  \x20            println(f\"{x.id}\"); }\n",
@@ -20803,7 +20815,20 @@ fn main() {
                 "v7\ndR7\npost\n",
             ),
         ] {
-            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            // Exactly two cells bind a non-`Copy` field out of an own-`Drop`
+            // scrutinee, which `partial_move_of_drop_struct` denies
+            // (B-2026-09-01-43). The opt-out is the point rather than a
+            // workaround: what they pin is codegen's drop placement for that
+            // shape, and the shape stays reachable through this attribute.
+            // Applied per cell, not to the shared wrapper, so the other eight
+            // keep `assert_check_clean`'s gate.
+            let attr = match label {
+                "heap-field-bound" | "destructuring-arm-boundary" => {
+                    "#[allow(partial_move_of_drop_struct)]\n"
+                }
+                _ => "",
+            };
+            let src = format!("{H}{attr}fn main() {{ {body} println(\"post\") }}\n");
             assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
         }
     }
@@ -27108,7 +27133,8 @@ fn main() {
             // `dR1` goes.
             (
                 "own-Drop wrapper, move the view out",
-                "fn take(r: R) -> i64 { let d = D1 { r: r }; let x = d.r; return 7; }",
+                "#[allow(partial_move_of_drop_struct)]\n\
+                 fn take(r: R) -> i64 { let d = D1 { r: r }; let x = d.r; return 7; }",
                 "let v = take(mk(1)); println(f\"v={v}\");",
                 "dD\ndR1\nv=7\n",
             ),
@@ -27149,7 +27175,8 @@ fn main() {
             ),
             (
                 "control: own-Drop wrapper, local source",
-                "fn take() -> i64 { let d = D1 { r: mk(1) }; let x = d.r; return 7; }",
+                "#[allow(partial_move_of_drop_struct)]\n\
+                 fn take() -> i64 { let d = D1 { r: mk(1) }; let x = d.r; return 7; }",
                 "let v = take(); println(f\"v={v}\");",
                 "dR1\ndD\nv=7\n",
             ),
@@ -37120,7 +37147,7 @@ fn main() {
              \x20   }\n\
              \x20   let sp: Pool[Conn] = Pool.new(make_conn, 2i64, 4i64);\n\
              \x20   match sp.acquire(0i64) {\n\
-             \x20       Ok(sc) => { let cv: Conn = sc.val; println(cv.fd.to_string()); println(cv.port.to_string()); }\n\
+             \x20       Ok(sc) => { println(f\"{sc.val.fd}\"); println(f\"{sc.val.port}\"); sp.release(sc); }\n\
              \x20       Err(_e) => println(\"t3\"),\n\
              \x20   }\n\
              }",
@@ -102350,8 +102377,20 @@ fn main() {
                 "dH\ndR4\n5\n",
             ),
         ] {
+            // Every other cell reads the `Copy` field `n`, which is a READ and
+            // stays legal. "reading the Drop-bearing field" reads `h.r` off an
+            // own-`Drop` `H`, which `partial_move_of_drop_struct` denies
+            // (B-2026-09-01-43) — it is the control that makes the scalar cells
+            // mean something, so it is kept under the designed opt-out rather
+            // than dropped. Per cell, so the other seven keep the check-gate.
+            let attr = match label {
+                "reading the Drop-bearing field (control)" => {
+                    "#[allow(partial_move_of_drop_struct)]\n"
+                }
+                _ => "",
+            };
             assert_eq!(
-                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                run_program(&format!("{H}{attr}fn main() {{\n{body}\n}}\n")),
                 Some(want.to_string()),
                 "{label}"
             );
@@ -102827,8 +102866,17 @@ fn main() {
                 "e\ndR[e]\n",
             ),
         ] {
+            // `own-drop-struct` binds `Q`'s field out of an own-`Drop`
+            // scrutinee — denied since B-2026-09-01-43, kept under the designed
+            // opt-out because the drop placement it pins stays reachable that
+            // way. The other four cells use `P`, which declares no `Drop`, so
+            // they keep `assert_check_clean`'s gate.
+            let attr = match label {
+                "own-drop-struct" => "#[allow(partial_move_of_drop_struct)]\n",
+                _ => "",
+            };
             assert_eq!(
-                run_program(&format!("{H}fn main() {{\n{body}\n}}\n")),
+                run_program(&format!("{H}{attr}fn main() {{\n{body}\n}}\n")),
                 Some(want.to_string()),
                 "{label}"
             );

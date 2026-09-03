@@ -48209,6 +48209,16 @@ fn partial_move_diagnostics(source: &str) -> usize {
 /// with NO `Drop` impl may have fields moved out (the sentence says so
 /// outright), and a `ref`/`mut ref` scrutinee binds borrows, so nothing leaves
 /// the struct at all.
+///
+/// THE NAME OVERCLAIMS, and B-2026-09-03-20 records by how much. "Every
+/// spelling" means every spelling AT THE TWO EMIT SITES — a `let` initializer
+/// and an assignment RHS — plus the struct-pattern route. The rule is
+/// site-based rather than shape-based, so `return w.r;`, a tail `w.r`, a call
+/// argument `eat(w.r)`, a struct-literal field `Box2 { r: w.r }` and a
+/// tuple-literal element `(w.r, 1)` all move the same field out of the same
+/// own-`Drop` parent and fire nothing. Measured at `Deny`; not fixed here
+/// because adding emit sites to a blocking rule newly rejects programs and
+/// wants its own corpus sweep.
 #[test]
 fn partial_move_out_of_a_drop_struct_is_rejected_in_every_spelling() {
     const PRELUDE: &str = "struct R { s: String }\n\
@@ -48284,6 +48294,86 @@ fn partial_move_out_of_a_drop_struct_is_rejected_in_every_spelling() {
         )),
         0,
         "a `_` sub-pattern binds nothing, so the heap-bearing field never leaves"
+    );
+}
+
+/// B-2026-09-01-43 — the rule's LEVEL, which B-2026-09-01-38 deliberately left
+/// at `Warn` and which nothing pinned.
+///
+/// design.md § Part 8 `Drop` says the shape is *"rejected"*. The sibling test
+/// above pins WHICH spellings the rule reaches, but it counts `errors` and
+/// `warnings` together — on purpose, so it could be written before the level
+/// was settled. The consequence is that it passes identically at either level,
+/// so a silent demotion back to `Warn` would take the whole rule with it and
+/// leave every one of those cells green: `karac check` would exit 0 and
+/// `karac build` would compile the half-moved struct.
+///
+/// The `#[allow]` half is not decoration. Seven `--features llvm` fixtures are
+/// the regression tests for bugs FIXED in this shape, and B-2026-09-01-43 kept
+/// them rather than retiring them by giving each an
+/// `#[allow(partial_move_of_drop_struct)]` — so the opt-out is load-bearing for
+/// that coverage now. If it ever stopped suppressing, those seven would fail
+/// through `tests/common/mod.rs`'s check-gate with a message about codegen
+/// being fed bad input, several files away from the cause.
+#[test]
+fn partial_move_of_drop_struct_is_denied_by_default_and_allowable() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.s); } }\n\
+         struct H { r: R, n: i64 }\n\
+         impl Drop for H { fn drop(mut ref self) { println(\"dH\"); } }\n";
+    const BODY: &str =
+        "fn main() { let h = H { r: R { s: \"d\" }, n: 4 }; let m = h.r; println(m.s); }";
+
+    // The registry level is what `karac check` reads, so it is the rule.
+    let info =
+        karac::lints::lint_by_name("partial_move_of_drop_struct").expect("lint is registered");
+    assert!(
+        matches!(info.default_level, karac::lints::LintLevel::Deny),
+        "design.md § Part 8 `Drop` rejects the shape outright, so the default \
+         level must be Deny; got {:?}",
+        info.default_level
+    );
+
+    // ...and the diagnostic must actually land in `errors`. Asserting the
+    // registry alone would pass even if the emit site routed around it.
+    let source = format!("{PRELUDE}{BODY}");
+    let parsed = parse(&source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let result = typecheck(&parsed.program, &resolved);
+    let count = |v: &[TypeError]| {
+        v.iter()
+            .filter(|e| e.lint_name.as_deref() == Some("partial_move_of_drop_struct"))
+            .count()
+    };
+    assert_eq!(
+        count(&result.errors),
+        1,
+        "`let m = h.r;` over an own-`Drop` `H` must be a hard error"
+    );
+    assert_eq!(
+        count(&result.warnings),
+        0,
+        "at Deny the diagnostic belongs in `errors` alone, not both lists"
+    );
+
+    // The escape hatch, on the same program. `partial_move_diagnostics` counts
+    // BOTH lists, so a zero here means suppressed rather than demoted.
+    let allowed = format!("{PRELUDE}#[allow(partial_move_of_drop_struct)]\n{BODY}");
+    assert_eq!(
+        partial_move_diagnostics(&allowed),
+        0,
+        "`#[allow(partial_move_of_drop_struct)]` on the enclosing fn must \
+         suppress the rule — seven codegen fixtures depend on it"
     );
 }
 

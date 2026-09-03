@@ -34897,6 +34897,13 @@ done
 /// `R { id: i64 }` a husk and a live value print the same thing and a count-only
 /// assertion cannot tell them apart.
 ///
+/// `d1` (the `owndrop` cell) carries `#[allow(partial_move_of_drop_struct)]` since
+/// B-2026-09-01-43: moving a tuple field out of a parent that declares its own `Drop`
+/// is exactly the shape design.md § Part 8 `Drop` rejects, so at `Deny` the cell no
+/// longer compiles without the opt-out. Keeping it is deliberate — the drop placement
+/// it pins stays reachable through that attribute, so the coverage still guards
+/// programs someone can write.
+///
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_destructure_owner_mask_reaches_the_remaining_arms`, pinned to the same string.
 /// All four surfaces agree here, which is the point: three of these cells were compiled-
@@ -34920,6 +34927,7 @@ fn w1() { let h = H  { pe: (mk(1), 0) };            let (_, k) = h.pe;      prin
 fn w2() { let h = Hi { pe: (0, mk(2)) };            let (k, _) = h.pe;      println("  end") }
 fn w3() { let h = Hw { pe: (0, Option.Some(mk(3))) }; let (k, _) = h.pe;    println("  end") }
 fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+#[allow(partial_move_of_drop_struct)]
 fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
 fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
