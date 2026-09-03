@@ -1853,6 +1853,81 @@ fn main() {
         );
     }
 
+    /// B-2026-09-01-9 — a branch MIXING an f-string arm with a string-LITERAL
+    /// arm frees the f-string, and an aliased-place arm still does not.
+    ///
+    /// Its parent (B-2026-08-30-3, the fixture above) admitted an
+    /// `InterpolatedStringLit` tail, closing every all-f-string spelling. A
+    /// MIXED branch still declined, because the predicate was fail-closed on
+    /// EVERY tail and a `StringLit` tail was not admitted — so the f-string
+    /// arm's rendered buffer stranded once per evaluation. Measured at that
+    /// fix, `-O0`, valgrind: 2 B / 1 block for each of `a1` (mixed `if`),
+    /// `a2` (the mirror, literal `then`) and `a3` (`match`) below. The row
+    /// listed only the first; the other two were measured while closing it and
+    /// leak identically.
+    ///
+    /// THE WIDENING IS NOT "MINTS OR IS HARMLESS", which is what the parent row
+    /// warned would put every future candidate up for re-argument at each of
+    /// the eight gates the predicate feeds. It is "every tail is ACCOUNTED FOR,
+    /// and at least one MINTS", over a CLOSED two-member set — `Mints`, or a
+    /// string literal, which is rodata (`cap == 0`, naming no place). See
+    /// `BranchTailClass` in `codegen/stmts.rs`.
+    ///
+    /// `c1`/`c2` ARE THE CONTROLS THAT MATTER, and they are aliased-place arms:
+    /// a tail handing back a BINDING leaves it readable afterwards, so a
+    /// use-site free there would DANGLE rather than leak — strictly worse than
+    /// the leak being closed. Both read the binding AFTER the branch, once with
+    /// the place arm not taken and once with it taken, so a regression that
+    /// admitted a place tail shows up as an ASAN use-after-free rather than as
+    /// a quiet wrong answer. `c3` is the all-literal construct, which was
+    /// already clean and must stay declining: `InertLiteral` propagates upward
+    /// so it never qualifies on its own.
+    #[test]
+    fn asan_branch_tail_mixed_fstring_and_literal_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let n: i64 = env.args().len();
+    let c = n > 0;
+
+    let a1 = if c { f"i{n}" } else { "lit" }.contains("i");
+    let a2 = if not c { "lit" } else { f"i{n}" }.contains("i");
+    let a3 = match n { 0 => "lit", _ => f"m{n}" }.contains("m");
+    println(f"a1={a1} a2={a2} a3={a3}");
+
+    let a4 = if c { if c { f"p{n}" } else { "q" } } else { "lit" }.contains("p");
+    println(f"a4={a4}");
+
+    let loc1 = mk(3);
+    let c1 = if c { loc1 } else { "lit" }.contains("v");
+    println(f"c1={c1} loc1={loc1}");
+
+    let loc2 = mk(4);
+    let c2 = if not c { "lit" } else { loc2 }.contains("v");
+    println(f"c2={c2} loc2={loc2}");
+
+    let c3 = if c { "lit1" } else { "lit2" }.contains("lit");
+    println(f"c3={c3}");
+}
+"#,
+            &[
+                "a1=true a2=true a3=true",
+                "a4=true",
+                "c1=true loc1=v3",
+                "c2=true loc2=v4",
+                "c3=true",
+            ],
+            "asan_branch_tail_mixed_fstring_and_literal_frees_once",
+            // Same purpose as the parent's floor: guard the direction that
+            // makes a clean-run assertion vacuous, so a future pipeline change
+            // that folds these f-strings away cannot let the fixture pass over
+            // memory it never touched.
+            10,
+        );
+    }
+
     /// B-2026-08-30-3, second half — a DISCARDED value-block keeps its own
     /// owner, and the two spellings of one discard agree.
     ///

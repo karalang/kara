@@ -16314,6 +16314,40 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 }
 
+/// B-2026-09-01-9 — how a single branch TAIL is accounted for by
+/// `Codegen::branch_tail_class`.
+///
+/// Ordered by strength for [`Self::combine`]: `No` poisons a construct, `Mints`
+/// carries it, and `InertLiteral` is neutral — it neither disqualifies a
+/// construct nor qualifies one on its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BranchTailClass {
+    /// A fresh owned temp with no later reader — the original admitted shape.
+    Mints,
+    /// A string literal: rodata, `cap == 0`, names no place. Accounted for, but
+    /// never enough on its own (see `branch_tail_class`).
+    InertLiteral,
+    /// Anything else, including an ALIASED PLACE. Fail-closed: one of these
+    /// anywhere declines the whole construct, which is what keeps a tail that
+    /// hands out a binding — where a use-site free would DANGLE — out of every
+    /// gate the predicate feeds.
+    No,
+}
+
+impl BranchTailClass {
+    /// Fold two sibling tails. `No` dominates (fail-closed), then `Mints`
+    /// (at least one tail mints), and `InertLiteral` only survives when EVERY
+    /// tail is one — which keeps an all-literal construct declining, since it
+    /// is already clean and has nothing to free.
+    fn combine(a: Self, b: Self) -> Self {
+        match (a, b) {
+            (Self::No, _) | (_, Self::No) => Self::No,
+            (Self::Mints, _) | (_, Self::Mints) => Self::Mints,
+            _ => Self::InertLiteral,
+        }
+    }
+}
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Detect statements that discard the result of a direct method call:
     /// `let _ = obj.method(...)` (Wildcard let-binding) or a bare
@@ -16587,21 +16621,64 @@ impl<'ctx> super::Codegen<'ctx> {
         e: &Expr,
         block_local_tail_ok: bool,
     ) -> bool {
+        self.branch_tail_class(e, block_local_tail_ok) == BranchTailClass::Mints
+    }
+
+    /// B-2026-09-01-9 — the three-valued core of
+    /// [`Self::branch_tail_mints_fresh_owned_temp_inner`], which is a boolean
+    /// view of it (`== Mints`).
+    ///
+    /// The boolean form could not express a MIXED branch. Its quantifier is
+    /// "every tail MINTS", and that is what keeps an ALIASED-PLACE arm out: a
+    /// tail handing back a binding leaves it readable afterwards, so a use-site
+    /// free would DANGLE rather than leak — strictly worse than the leak being
+    /// closed. So `if c { f"i{n}" } else { "lit" }` declined, and the f-string
+    /// arm's rendered buffer stranded once per evaluation (2 B / 1 block under
+    /// valgrind; the `match` spelling and the mirrored `if c { "lit" } else
+    /// { f"i{n}" }` measure identically).
+    ///
+    /// The widening this row was filed to carry is NOT "mints or is harmless",
+    /// which is the formulation its parent row warned about — that turns every
+    /// future candidate for "harmless" into an argument to be re-had at each of
+    /// the eight gates the predicate feeds. It is the strictly narrower
+    /// **every tail is ACCOUNTED FOR, and at least one MINTS**, over a CLOSED
+    /// set of two accounted kinds:
+    ///
+    ///   * `Mints` — a fresh owned temp with no later reader, as before.
+    ///   * `InertLiteral` — a string literal, and ONLY that. It is rodata: it
+    ///     names no place, so nothing can read it after a free, and it carries
+    ///     `cap == 0`, so every one of the gates' frees is a runtime no-op on
+    ///     it (they all reach the heap through the `cap > 0` guard in
+    ///     `free_str_vec_buffer_if_heap` or an equivalent).
+    ///
+    /// An aliased-place tail is neither, so it still poisons the whole
+    /// construct exactly as it did — the fail-closed property is preserved by
+    /// construction rather than by re-argument, because the admitted set is
+    /// closed and syntactic rather than a judgement about harmlessness.
+    ///
+    /// "At least one mints" is what keeps the ALL-LITERAL construct declining.
+    /// That case is already clean (rodata, nothing to free), so admitting it
+    /// would change eight gates' behaviour to no benefit; `InertLiteral`
+    /// propagates upward so a nest of all-literal branches stays out too.
+    fn branch_tail_class(&self, e: &Expr, block_local_tail_ok: bool) -> BranchTailClass {
         match &e.kind {
             ExprKind::Block(b)
             | ExprKind::Seq(b)
             | ExprKind::Unsafe(b)
             | ExprKind::LabeledBlock { body: b, .. } => {
                 let Some(tail) = b.final_expr.as_deref() else {
-                    return false;
+                    return BranchTailClass::No;
                 };
-                self.branch_tail_mints_fresh_owned_temp_inner(tail, block_local_tail_ok)
-                    || (block_local_tail_ok
-                        && self
-                            .block_local_binding_tail_rhs(b, tail)
-                            .is_some_and(|rhs| {
-                                self.branch_tail_mints_fresh_owned_temp_inner(rhs, true)
-                            }))
+                let direct = self.branch_tail_class(tail, block_local_tail_ok);
+                if direct != BranchTailClass::No {
+                    return direct;
+                }
+                if block_local_tail_ok {
+                    if let Some(rhs) = self.block_local_binding_tail_rhs(b, tail) {
+                        return self.branch_tail_class(rhs, true);
+                    }
+                }
+                BranchTailClass::No
             }
             ExprKind::If {
                 then_block,
@@ -16611,17 +16688,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 let (Some(else_branch), Some(then_tail)) =
                     (else_branch.as_deref(), then_block.final_expr.as_deref())
                 else {
-                    return false;
+                    return BranchTailClass::No;
                 };
-                self.branch_tail_mints_fresh_owned_temp_inner(then_tail, block_local_tail_ok)
-                    && self
-                        .branch_tail_mints_fresh_owned_temp_inner(else_branch, block_local_tail_ok)
+                BranchTailClass::combine(
+                    self.branch_tail_class(then_tail, block_local_tail_ok),
+                    self.branch_tail_class(else_branch, block_local_tail_ok),
+                )
             }
             ExprKind::Match { arms, .. } => {
-                !arms.is_empty()
-                    && arms.iter().all(|a| {
-                        self.branch_tail_mints_fresh_owned_temp_inner(&a.body, block_local_tail_ok)
-                    })
+                if arms.is_empty() {
+                    return BranchTailClass::No;
+                }
+                arms.iter()
+                    .map(|a| self.branch_tail_class(&a.body, block_local_tail_ok))
+                    .reduce(BranchTailClass::combine)
+                    .unwrap_or(BranchTailClass::No)
             }
             // B-2026-08-30-3 — an F-STRING tail mints a fresh owned temp just
             // as a call does, but by a different route, so
@@ -16656,10 +16737,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // weakening it to "mints or is harmless" puts every future
             // candidate for "harmless" up for re-argument at seven sites.
             // B-2026-09-01-9 carries that widening, with the measurement.
-            ExprKind::InterpolatedStringLit(_) => true,
+            ExprKind::InterpolatedStringLit(_) => BranchTailClass::Mints,
+            // B-2026-09-01-9 — the CLOSED second accounted kind. A string
+            // literal is rodata with `cap == 0`: it names no place, so no gate
+            // can read it after a free, and every gate's free reaches the heap
+            // behind a `cap > 0` guard, so the emitted free is a runtime no-op.
+            // It is admitted only as `InertLiteral`, never as `Mints`, so it
+            // can never by itself make a construct qualify.
+            ExprKind::StringLit(..) | ExprKind::MultiStringLit(..) => BranchTailClass::InertLiteral,
             _ => {
-                self.expr_yields_fresh_owned_temp(e)
+                if self.expr_yields_fresh_owned_temp(e)
                     || (block_local_tail_ok && self.arg_producer_mints_fresh_owned_temp(e))
+                {
+                    BranchTailClass::Mints
+                } else {
+                    BranchTailClass::No
+                }
             }
         }
     }
