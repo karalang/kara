@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 363 |
-| run-vs-build | 316 |
+| miscompile | 364 |
+| run-vs-build | 317 |
 | leak | 256 |
 | missing-feature | 194 |
 | double-free | 170 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1407 |
-| interp | 342 |
+| codegen | 1409 |
+| interp | 343 |
 | typecheck | 290 |
 | ownership | 73 |
 | other | 70 |
@@ -157,6 +157,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-21 | 2026-09-03 | codegen | medium | A BY-VALUE TUPLE PARAM WITH AN `Option[T]` ELEMENT LOSES THE PAYLOAD'S `Drop` BODY ON ALL THREE COMPILED SURFACES, with NO DESTRUCTURE anywhere in the function -- `fn p(t: (R, Option[R])) { println(f"{t.0.id}") }` runs `dR11` under `--interp` and nothing on jit/build/AUTO_PAR=0, while the USER-ENUM element in the identical position is correct on both backends | — |
 | B-2026-09-03-22 | 2026-09-03 | codegen | low | A `Result[O, E]` LEAF OF A DESTRUCTURED TUPLE CANNOT TAKE ITS PAYLOAD'S `Drop` BODY, because a heap-BOXED Result payload has no memory owner to hand it to -- `track_inline_option_agg_payload_var` has no `Result` peer and `track_inline_result_payload_var` self-skips the boxed case; taking the leaf anyway ran the due body and LEAKED 272 B in 9 allocations | — |
 | B-2026-09-03-23 | 2026-09-03 | codegen | medium | A GENERIC FUNCTION'S MONOMORPH BODY ANSWERS THE `Drop`-OWNERSHIP QUESTION FROM ITS CALLER'S TABLES -- a LOCAL in `fn inner[T]` whose name matches ANY caller's parameter has its tuple-field element's `Drop` body run on a CAP-ZEROED HUSK (`dR60//0`) before the live read, on all three compiled surfaces against a clean `--interp`. `compile_generic_call` populates neither `current_fn_param_names` nor `owned_struct_params` for the body it emits, and because that body is emitted ONCE and shared, the corruption reaches call sites with no such parameter | — |
+| B-2026-09-03-24 | 2026-09-03 | interp+codegen | medium | A STRUCT-FIELD DESTRUCTURE LEAF TYPED `Option[<struct with a Drop body>]` LOSES THE PAYLOAD'S BODY -- `let Ho2 { a, b } = h;` over `{ a: R, b: Option[R] }` runs `dR20` and NOT `dR220` on all four surfaces, where the same struct left undestructured runs both and where the TUPLE twin is correct since d305cad. The wildcard-field sibling `let Ho2 { a, b: _ } = h;` is a run-vs-build ORDER split instead: interp `dR101 dR1` against compiled `dR1 dR101` | — |
+| B-2026-09-03-25 | 2026-09-03 | codegen | medium | A WILDCARD TUPLE LEAF OVER AN `Option[<struct with a Drop body>]` ELEMENT LOSES THE PAYLOAD'S BODY ON THE COMPILED BACKENDS -- `let (r, _) = t;` and `let (_, _) = t;` over `(R, Option[R])` run the payload body under `--interp` and not under run/build/AUTO_PAR=0, while the BINDING spelling `let (a, b) = t;` of the same statement is correct on every surface since d305cad | — |
 
 ### Relocated
 
