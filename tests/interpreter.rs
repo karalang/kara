@@ -34879,11 +34879,21 @@ nan  false false false false
 ///
 /// Twin of `tests/codegen.rs`'s `e2e_narrow_float_assoc_call_namespace_runs`,
 /// pinned to the same string.
+///
+/// The seed is the literal 1 rather than `env.args().len()` (B-2026-09-03-1):
+/// an IN-PROCESS interpreter test sees the TEST binary's argv, which is 1 only
+/// when the suite runs unfiltered and 2+ under `cargo test <filter>`. Written
+/// the other way, this fixture PASSED a full run and FAILED the single-test
+/// workflow CLAUDE.md documents (`cargo test -- test_name`) -- every numeric
+/// slot shifted with the seed, which reads exactly like a `main`-is-red
+/// regression and cost a session a bisect before the filter was suspected. The
+/// codegen twin keeps `env.args()` because it needs an opaque seed to survive
+/// -O2 folding, and 1 is what that yields under its harness.
 #[test]
 fn test_narrow_float_assoc_call_namespace_runs() {
     assert_eq!(
         run(r#"fn main() {
-    let n = env.args().len() as i64;
+    let n: i64 = 1;
     let a: f16 = ((n as f32) + 1.5f32) as f16;
     let b: bf16 = ((n as f32) + 2.5f32) as bf16;
     let c: f32 = (n as f32) + 3.5f32;
@@ -46157,7 +46167,7 @@ fn mk_map(k: i64) -> Map[i64, String] {
     m
 }
 fn main() {
-    let n = env.args().len() as i64;
+    let n: i64 = 1;
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
     while i < 40 {
