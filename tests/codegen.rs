@@ -12610,10 +12610,19 @@ done
     /// measurement rather than by taste. All four surfaces agree at two bodies on
     /// every one of them, and marking a view on ONE side would turn that agreement
     /// into a run-vs-build split:
-    /// - `structpat` — `let S { r, k } = s;`. Its codegen half is different
-    ///   machinery: `finish_owned_struct_destructure` TRANSFERS the body to the
-    ///   leaf rather than leaving it with the source, so the rebind there has to
-    ///   MOVE a body, not withhold one.
+    /// - `structpat` — `let S { r, k } = s;`. FIXED SINCE, by B-2026-09-02-38,
+    ///   and the reason it was pinned turned out to hold for a different source
+    ///   than this one. `finish_owned_struct_destructure` does TRANSFER the body
+    ///   to the leaf rather than leaving it with the source — for a LOCAL
+    ///   source. For the PARAM source this cell uses it does not: the transfer
+    ///   is gated on `var_owns_struct_field_bodies`, i.e. on the source having a
+    ///   `StructFieldBodies` action, and a by-value param has none. Measured
+    ///   with an END-OF-CALLEE marker, the body here fires AFTER that marker on
+    ///   both backends (the source's owner) where the local spelling fires it
+    ///   BEFORE (the leaf's live-range end) — so a view mark is exactly right,
+    ///   and -38 lifted both sides together. One body here now, and
+    ///   `e2e_struct_pattern_destructure_of_owned_param_is_a_view` pins the
+    ///   widened shape in full.
     /// - `nested` — `let ((r, a), b) = t;`. FIXED SINCE, by B-2026-09-02-39: a
     ///   tuple PARAM used to register no `tuple_var_elem_type_exprs`, so its
     ///   nested element resolved to an EMPTY `TypeExpr` and the compiled
@@ -12714,7 +12723,6 @@ dR7
 local end
 structpat
   b9
-dR9
 dR9
 structpat end
 nested
@@ -12833,6 +12841,133 @@ refparam
   b6
 dR6
 refparam end
+done
+"#
+        );
+    }
+
+    /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
+    /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
+    /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a
+    /// second owner. Was `b9 dR9 dR9` on all four surfaces where one body is due.
+    ///
+    /// THE `end` MARKER IS LOAD-BEARING, and it is what refutes the reason this shape
+    /// was held out of -25. That row expected `param_view_locals` to be the wrong
+    /// instrument here, because `finish_owned_struct_destructure` TRANSFERS the
+    /// field's body to the leaf instead of leaving it with the source — and after a
+    /// transfer "someone else runs it" is false. Measured: the transfer happens for a
+    /// LOCAL source and NOT for a param, being gated on `var_owns_struct_field_bodies`
+    /// — on the source carrying a `StructFieldBodies` action, which a by-value param
+    /// has none of. So the `local` cell fires its body BEFORE `end` (the leaf's
+    /// live-range end) while every param cell fires AFTER it (the source's owner),
+    /// which is also where the tuple spelling puts it. Both orderings in one pinned
+    /// string is what would catch a regression that MOVES a fire rather than losing
+    /// one.
+    ///
+    /// `heapstr` is the `owned_struct_params` cell. `Hs { r: R, name: String }` has a
+    /// direct `String` field, so the param IS in that set — the set whose presence
+    /// makes `finish_place_source_tuple_destructure` bail outright. The struct path
+    /// has no such bail and converges at one body here, the same refutation
+    /// `e2e_projection_source_tuple_destructure_is_a_view`'s `ownstr` cell records for
+    /// the tuple side.
+    ///
+    /// `nested` binds a whole nested STRUCT FIELD (`let Ou { inner, k } = o;`), not a
+    /// nested PATTERN: codegen registers only dispatch for a nested pattern's leaves
+    /// and leaves their cleanup a tracked narrow leak, so the interpreter's
+    /// `collect_destructure_binding_names` deliberately does not recurse into one
+    /// either.
+    ///
+    /// `norebind` and `refparam` are the over-reach controls, failing in opposite
+    /// directions: withholding a body too eagerly shows up as `norebind` running NONE,
+    /// and `refparam` (a borrowed receiver the caller still owns) must never gain one.
+    ///
+    /// NO METHOD CELL, deliberately. A by-value param destructure inside a METHOD
+    /// places this body at the callee's scope exit on the compiled backends and at the
+    /// leaf's NLL death interpreted — one body either way, different point — and that
+    /// split is PRE-EXISTING and family-wide: the TUPLE spelling has it on `main`
+    /// today, from -25/-40. This fix takes the struct spelling's method case from two
+    /// bodies to one, i.e. onto exactly the tuple spelling's behaviour, rather than
+    /// inventing a new answer for it. Filed separately.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_struct_pattern_destructure_of_owned_param_is_a_view`, pinned to the
+    /// same string.
+    #[test]
+    fn e2e_struct_pattern_destructure_of_owned_param_is_a_view() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct S  { r: R, k: i64 }
+struct Hs { r: R, name: String }
+struct In { r: R }
+struct Ou { inner: In, k: i64 }
+
+fn g1(s: S)  { let S { r, k } = s;      let m = r;  println(f"  b{m.id}"); println("  end") }
+fn g2(s: S)  { let S { r: rr, k } = s;  let m = rr; println(f"  b{m.id}"); println("  end") }
+fn g3(s: S)  { let S { r, .. } = s;     let m = r;  println(f"  b{m.id}"); println("  end") }
+fn g4(h: Hs) { let Hs { r, name } = h;  let m = r;  println(f"  b{m.id} {name}"); println("  end") }
+fn g5(o: Ou) { let Ou { inner, k } = o; let m = inner; println(f"  b{m.r.id}"); println("  end") }
+fn g6(s: S)  { let S { r, k } = s;      println(f"  b{r.id}"); println("  end") }
+fn g7(s: ref S) { println(f"  b{s.r.id}"); println("  end") }
+fn g8()      { let s = S { r: R { id: 8 }, k: 0 }; let S { r, k } = s; let m = r; println(f"  b{m.id}"); println("  end") }
+
+fn main() {
+    println("plain");    g1(S { r: R { id: 1 }, k: 0 });  println("plain end")
+    println("rename");   g2(S { r: R { id: 2 }, k: 0 });  println("rename end")
+    println("rest");     g3(S { r: R { id: 3 }, k: 0 });  println("rest end")
+    println("heapstr");  g4(Hs { r: R { id: 4 }, name: "nm" }); println("heapstr end")
+    println("nested");   g5(Ou { inner: In { r: R { id: 5 } }, k: 0 }); println("nested end")
+    println("norebind"); g6(S { r: R { id: 6 }, k: 0 });  println("norebind end")
+    println("refparam"); let rs = S { r: R { id: 7 }, k: 0 }; g7(rs); println("refparam end")
+    println("local");    g8();                             println("local end")
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"plain
+  b1
+  end
+dR1
+plain end
+rename
+  b2
+  end
+dR2
+rename end
+rest
+  b3
+  end
+dR3
+rest end
+heapstr
+  b4 nm
+  end
+dR4
+heapstr end
+nested
+  b5
+  end
+dR5
+nested end
+norebind
+  b6
+  end
+dR6
+norebind end
+refparam
+  b7
+  end
+dR7
+refparam end
+local
+  b8
+dR8
+  end
+local end
 done
 "#
         );

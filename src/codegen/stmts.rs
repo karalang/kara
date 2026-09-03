@@ -12980,6 +12980,35 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
 
+        // B-2026-09-02-38 — may this destructure's leaves be recorded as param
+        // VIEWS, so a later `let m = r;` moves the body rather than minting a
+        // second owner? The struct spelling of what B-2026-09-02-25 did for
+        // tuples, and the interpreter's twin is the `Struct` arm of
+        // `collect_destructure_binding_names`.
+        //
+        // THE ROW THAT FILED THIS PREDICTED `param_view_locals` WOULD BE THE
+        // WRONG INSTRUMENT HERE, on the ground that `place_body_src` above
+        // TRANSFERS the field's body to the leaf, so after the transfer nobody
+        // else runs it and "someone else runs it" is a lie. That is true of a
+        // LOCAL source and false of the PARAM source this row is about, which
+        // measurement settles rather than argument: with a printing `Drop` and
+        // an END-OF-CALLEE marker, the body of
+        // `fn f(s: S) { let S { r, k } = s; read(r) }` fires AFTER that marker
+        // on both backends — the source's owner, not the leaf's live-range end
+        // — whereas the local `let s = S { .. }; let S { r, k } = s;` fires it
+        // BEFORE, at the leaf's. The transfer simply does not happen for a
+        // param: `var_owns_struct_field_bodies` asks whether the source has a
+        // `StructFieldBodies` action registered, and a by-value param has none.
+        //
+        // So the two are mutually exclusive already; the `place_body_src`
+        // conjunct below makes that structural rather than incidental, so this
+        // can never mark a leaf that did take the body.
+        let mark_views = place_body_src.is_none()
+            && !fresh
+            && matches!(&value.kind, ExprKind::Identifier(root)
+                if !self.borrow_vars.ref_params.contains_key(root.as_str())
+                    && self.fn_ctx.current_fn_param_names.contains(root.as_str()));
+
         // Place-source (`let S { a, b } = s`) where the source struct `s` is
         // CALLEE-OWNED — a bare by-value param deep-copied at entry (#14/#17
         // `make_aggregate_param_callee_owned`), so it carries its OWN scope-exit
@@ -13178,6 +13207,13 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(name) = bound_name {
                 // Dispatch always (so `field.method()` compiles for any RHS).
                 self.register_var_from_type_expr(&name, &field_te);
+                // B-2026-09-02-38 — see `mark_views`. Recorded before the arm
+                // chain because it is a statement about who runs the BODY, not
+                // about which arm ends up owning the MEMORY: the arms below
+                // still transfer buffers to this leaf exactly as they did.
+                if mark_views {
+                    self.payload_vars.param_view_locals.insert(name.clone());
+                }
                 // B-2026-08-05-7: tracks whether the chain below already gave
                 // this leaf a cleanup, so the `option_field_agg_drop_ok` branch
                 // further down does not register a SECOND one for the same

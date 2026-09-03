@@ -2084,16 +2084,51 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    /// B-2026-09-02-39 — the binding names a TUPLE pattern reaches, descending
-    /// through nested `Tuple` elements and stopping everywhere else.
+    /// B-2026-09-02-39, widened by B-2026-09-02-38 — the binding names a
+    /// destructure pattern reaches: a `Struct` pattern's bound fields, or a
+    /// `Tuple`/`TupleVariant` pattern's elements descending through nested
+    /// `Tuple` elements.
     ///
-    /// The stop set is not a style choice: it mirrors codegen's
+    /// EACH HALF MIRRORS A DIFFERENT CODEGEN SITE, which is why one function
+    /// with two shapes rather than one uniform walk. The tuple half mirrors
     /// `place_source_tuple_leaf_cleanups`, whose recursion descends into a
-    /// `PatternKind::Tuple` element and no other kind. A `Struct` or
-    /// `TupleVariant` sub-pattern is a different ownership shape with its own
-    /// machinery, and marking one here would mark a name the compiled side
-    /// never marks.
-    fn collect_tuple_pattern_binding_names(pattern: &Pattern, out: &mut Vec<String>) {
+    /// `PatternKind::Tuple` element and no other kind. The struct half mirrors
+    /// `finish_owned_struct_destructure`'s `bound_name`, which takes the
+    /// shorthand `r`, takes `rr` from `r: rr`, and treats a wildcard or a
+    /// nested pattern as unbound — so the struct half does NOT recurse, even
+    /// though the tuple half does.
+    ///
+    /// The asymmetry is deliberate and measured against codegen rather than
+    /// against symmetry: marking a name the compiled side never marks is how
+    /// this family splits the backends.
+    fn collect_destructure_binding_names(pattern: &Pattern, out: &mut Vec<String>) {
+        // B-2026-09-02-38 — the STRUCT spelling (`let S { r, k } = s;`). Its
+        // leaves are views of the callee's entry copy for the same reason the
+        // tuple ones are, and the shape of "which name does this field bind"
+        // is copied from codegen's `bound_name` in
+        // `finish_owned_struct_destructure` so the two gates admit the same
+        // set: the shorthand `r` binds `r`, `r: rr` binds `rr`, and anything
+        // else — a wildcard, or a NESTED pattern — binds nothing here.
+        //
+        // Nested struct/tuple patterns are deliberately NOT recursed into,
+        // which is the opposite of the `Tuple` arm below and matches codegen
+        // rather than symmetry: its struct path registers DISPATCH for a
+        // nested leaf and explicitly leaves per-leaf cleanup as a tracked
+        // narrow leak, so a nested leaf never reaches a marking site there.
+        // Marking one here alone would split the backends.
+        if let PatternKind::Struct { fields, .. } = &pattern.kind {
+            for f in fields {
+                match &f.pattern {
+                    None => out.push(f.name.clone()),
+                    Some(p) => {
+                        if let PatternKind::Binding(b) = &p.kind {
+                            out.push(b.clone());
+                        }
+                    }
+                }
+            }
+            return;
+        }
         let elems: &[Pattern] = match &pattern.kind {
             PatternKind::Tuple(elems) => elems,
             PatternKind::TupleVariant { patterns, .. } => patterns,
@@ -2102,7 +2137,7 @@ impl<'a> super::Interpreter<'a> {
         for p in elems {
             match &p.kind {
                 PatternKind::Binding(b) => out.push(b.clone()),
-                PatternKind::Tuple(_) => Self::collect_tuple_pattern_binding_names(p, out),
+                PatternKind::Tuple(_) => Self::collect_destructure_binding_names(p, out),
                 _ => {}
             }
         }
@@ -2335,15 +2370,16 @@ impl<'a> super::Interpreter<'a> {
         // answer rather than trading an agreed-wrong cell for a divergence —
         // the trade this row's own opener declined. Every one is measured.
         //
-        //  * TUPLE SPELLINGS ONLY. Codegen's tuple destructure is fixed in the
-        //    same commit, so `Tuple` converges at one body on all four
-        //    surfaces, and `TupleVariant` (`let W.A(r) = w else { … }`)
-        //    converges because codegen was ALREADY at one there — the
-        //    interpreter was the lone doubler. The `Struct` spelling
-        //    (`let S { r, k } = s;`) is at two everywhere and its codegen half
-        //    is different machinery: `finish_owned_struct_destructure`
-        //    TRANSFERS the body to the leaf instead of leaving it with the
-        //    source, so its rebind has to MOVE a body, not withhold one.
+        //  * TUPLE SPELLINGS ONLY — LIFTED by B-2026-09-02-38, which added the
+        //    `Struct` spelling (`let S { r, k } = s;`). It was held back
+        //    because `finish_owned_struct_destructure` TRANSFERS the body to
+        //    the leaf instead of leaving it with the source, which would make a
+        //    view mark a lie; measurement showed that transfer is gated on
+        //    `var_owns_struct_field_bodies` and so happens for a LOCAL source
+        //    and NOT for a param, whose body fires past the callee's own block
+        //    on both backends exactly as the tuple spelling's does. `Tuple` and
+        //    `TupleVariant` converge as before. `Slice` is still absent, with
+        //    no measurement behind it.
         //  * A SEEDED PARAM SOURCE, not an inherited view. See
         //    `owned_param_seed_names_stack` — codegen cannot see through a
         //    tuple whole-rebind at all.
@@ -2364,7 +2400,7 @@ impl<'a> super::Interpreter<'a> {
             .is_some_and(|seed| seed.contains(n.as_str()));
         if seeded_param {
             let mut names: Vec<String> = Vec::new();
-            Self::collect_tuple_pattern_binding_names(pattern, &mut names);
+            Self::collect_destructure_binding_names(pattern, &mut names);
             if let Some(top) = self.owned_param_names_stack.last_mut() {
                 top.extend(names);
             }

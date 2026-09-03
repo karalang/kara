@@ -598,6 +598,72 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-02-38 — the STRUCT-PATTERN sibling of the case above, under
+    /// ASAN + LSan.
+    ///
+    /// `let S { r, k } = s; let m = r;` over an owned struct param ran the
+    /// element's `Drop` body TWICE on all four surfaces. The body count is
+    /// pinned by `e2e_struct_pattern_destructure_of_owned_param_is_a_view`;
+    /// what this case pins is that withholding the second body did not strand
+    /// or double-free the MEMORY behind it, which a transcript test cannot see.
+    ///
+    /// The heap matters here more than in the tuple sibling, because the fix
+    /// marks the leaf a param VIEW while the arm chain below the mark still
+    /// transfers Vec/String buffers to that same leaf — so mark and transfer
+    /// have to coexist. `heapstr` and `heapvec` are the two shapes where they
+    /// meet: a `String` field alongside the destructured one puts the param in
+    /// `owned_struct_params`, and a `Vec` field does the same by the other arm
+    /// of that gate.
+    ///
+    /// Each `Drop` body READS both heap fields, so a premature free is a
+    /// use-after-free ASAN catches rather than a silent leak — and a body run
+    /// against a cap-zeroed husk (the B-2026-09-02-43 class) shows up in the
+    /// transcript as an empty name and a zero length rather than passing.
+    #[test]
+    fn asan_struct_pattern_destructure_leaf_has_one_owner() {
+        assert_clean_asan_run(
+            "struct R { id: i64, name: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.name}:{self.xs.len()}\") } }\n\
+             struct S { r: R, k: i64 }\n\
+             struct Hs { r: R, name: String }\n\
+             struct Vs { r: R, ys: Vec[i64] }\n\
+             struct In { r: R }\n\
+             struct Ou { inner: In, k: i64 }\n\
+             fn mk(id: i64) -> R {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return R { id: id, name: f\"n{id}\", xs: v }\n\
+             }\n\
+             fn plain(s: S) { let S { r, k } = s; let m = r; println(f\"  p{m.xs.len()}:{m.name}\") }\n\
+             fn heapstr(h: Hs) { let Hs { r, name } = h; let m = r; println(f\"  o:{m.name}:{name}\") }\n\
+             fn heapvec(v: Vs) { let Vs { r, ys } = v; let m = r; println(f\"  v:{m.name}:{ys.len()}\") }\n\
+             fn nested(o: Ou) { let Ou { inner, k } = o; let m = inner; println(f\"  t:{m.r.name}\") }\n\
+             fn norebind(s: S) { let S { r, k } = s; println(f\"  nr{r.xs.len()}:{r.name}\") }\n\
+             fn main() {\n\
+             \x20   plain(S { r: mk(1), k: 0 });\n\
+             \x20   heapstr(Hs { r: mk(2), name: \"s\" });\n\
+             \x20   heapvec(Vs { r: mk(3), ys: [7, 8] });\n\
+             \x20   nested(Ou { inner: In { r: mk(4) }, k: 0 });\n\
+             \x20   norebind(S { r: mk(5), k: 0 });\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "p1:n1",
+                "dR1:n1:1",
+                "  o:n2:s",
+                "dR2:n2:1",
+                "  v:n3:2",
+                "dR3:n3:1",
+                "  t:n4",
+                "dR4:n4:1",
+                "  nr1:n5",
+                "dR5:n5:1",
+                "end",
+            ],
+            "b38-struct-pattern-destructure-single-owner",
+        );
+    }
+
     /// B-2026-09-01-33 — the heap-carrying producer-call argument under
     /// ASAN + LSan.
     ///
