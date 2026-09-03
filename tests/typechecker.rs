@@ -48492,6 +48492,280 @@ fn partial_move_of_drop_struct_fires_at_every_value_position() {
     }
 }
 
+/// B-2026-09-03-29 — `E_INDEX_MOVE_NON_COPY`'s SITE SET IS A DELIBERATE DESIGN,
+/// NOT THE SITE-BASED ACCIDENT ITS SIBLING ABOVE WAS, and this pins both halves
+/// so the question is not reopened and re-worked a third time.
+///
+/// The row that prompted this test read the rule as having the same defect
+/// B-2026-09-03-20 had just fixed: a shape-based predicate called from only a
+/// few places, mechanically widened by "adding the second rule at the same
+/// lines". Measured, that premise does not hold. The four positions that
+/// reject and the eleven that do not split on a real distinction:
+///
+///   REJECTS -- `let x = v[0];`, an assignment RHS, a call argument, a method
+///   argument. Every one of these has `ref v[i]` available as a zero-cost
+///   remedy, which is exactly what design.md's fix-it table offers.
+///
+///   PERMITS (deep-copies) -- `return`, a block / `if` / `match` tail, a bare
+///   match-arm body, a struct-literal field, a tuple- or array-literal element,
+///   `Vec.push`, and the `Some` / `Ok` / `Err` payload. Every one of these
+///   REQUIRES an owned value and cannot be spelled with a borrow, so rejecting
+///   them offers nothing to migrate to.
+///
+/// THE EVIDENCE THAT THE SECOND GROUP IS INTENDED, not overlooked:
+///
+///  * Widening the rule to those positions fails 58 tests across four binaries
+///    (codegen 26, memory_sanitizer 24, par_codegen 5, typechecker 3), and the
+///    fixtures are NAMED for the behaviour being rejected:
+///    `e2e_heap_vec_index_read_into_owning_sinks` (whose cells are commented
+///    `// tuple literal`, `// push into another Vec`, `// struct field`),
+///    `test_e2e_if_arm_vec_element_binding_is_cloned`,
+///    `e2e_return_field_index_element_clones`,
+///    `e2e_generic_slice_heap_elem_return_is_deep_cloned`. Several are the
+///    regression tests for bugs FIXED by teaching codegen to deep-clone here
+///    (B-2026-07-11-35 among them).
+///  * Two of those shapes cannot be migrated at all. `fn first[T](s: Slice[T])
+///    -> T { s[0] }` and `PriorityQueue.peek`'s `Some(self.xs[0])` under
+///    `impl[T: Ord]` both answer "no method 'clone' on type parameter 'T'",
+///    and a borrow-carrying `Option` is not constructible in a Kāra body --
+///    `peek`'s own doc comment says so and takes the copy on purpose.
+///  * design.md S "The index operator" settles it: "A rule whose fix-it does
+///    not exist is not enforceable, whatever this document says about it."
+///    That is the same ordering constraint that made `ref` in expression
+///    position land BEFORE the original rejection.
+///  * The permitted copy is CORRECT, not a miscompile. Measured on all four
+///    surfaces (`--interp`, JIT, AOT, `KARAC_AUTO_PAR=0`) for
+///    `fn f(v: Vec[R]) -> R { return v[0]; }`: identical transcripts, and the
+///    two values are independent -- a drop body that mutates `self.s` does not
+///    change what the other prints, and a 2000-iteration stress loop reports no
+///    corruption. Two drop bodies for one value is the visible cost, and that
+///    is what `borrow_projection_copy` (a `Warn`) exists to name.
+///
+/// Unlike its sibling, this rule is a plain `type_error` with NO registered
+/// lint and therefore no `#[allow]`, so the second group cannot be "landed with
+/// opt-outs" the way B-2026-09-01-43 and B-2026-09-03-20 handled their
+/// fixtures. It is reject-or-permit, and permit is the answer that has a
+/// migration path.
+#[test]
+fn index_move_rejects_where_a_borrow_is_available_and_permits_where_it_is_not() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         struct B2 { r: R }\n\
+         struct Sink { k: i64 }\n\
+         impl Sink {\n\
+             fn take(mut ref self, x: R) { println(x.s); }\n\
+             fn peek(mut ref self, x: ref R) { self.k = self.k + x.s.len(); }\n\
+         }\n\
+         fn eat(x: R) { println(x.s); }\n\
+         fn borrows(x: ref R) -> i64 { return x.s.len(); }\n\
+         fn mkv() -> Vec[R] { let mut v: Vec[R] = Vec.new(); v.push(R { s: \"a\" }); \
+             v.push(R { s: \"b\" }); return v; }\n";
+    const MAIN: &str = "fn main() { let v = mkv(); println(f\"{v.len()}\"); }\n";
+
+    fn hits(src: &str) -> usize {
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolved.errors
+        );
+        typecheck(&parsed.program, &resolved)
+            .errors
+            .iter()
+            .filter(|e| e.message.contains("E_INDEX_MOVE_NON_COPY"))
+            .count()
+    }
+    let fires = |items: &str| -> usize { hits(&format!("{PRELUDE}{items}{MAIN}")) };
+
+    // ── REJECTED: a borrow is spellable, so the rule has somewhere to point ──
+    for (label, items) in [
+        (
+            "let initializer",
+            "fn f(v: Vec[R]) -> i64 { let x = v[0]; return x.s.len(); }\n",
+        ),
+        (
+            "assignment RHS",
+            "fn f(v: Vec[R]) -> i64 { let mut x = R { s: \"z\" }; x = v[0]; \
+             return x.s.len(); }\n",
+        ),
+        ("call argument", "fn f(v: Vec[R]) { eat(v[0]); }\n"),
+        (
+            "method argument -- reached through \
+             `check_call_args_with_substitution_full`, which method calls share \
+             with free-function calls (the row believed this cell was silent)",
+            "fn f(v: Vec[R]) { let mut s = Sink { k: 0 }; s.take(v[0]); }\n",
+        ),
+    ] {
+        assert_eq!(
+            fires(items),
+            1,
+            "{label}: `ref v[i]` is available here, so the move must be rejected"
+        );
+    }
+
+    // ── PERMITTED: an owned value is required and no borrow can be spelled ──
+    //
+    // These assert ZERO deliberately. Each is covered by a named codegen
+    // fixture asserting the deep copy is correct; flipping any of them to 1
+    // fails that fixture, and for the generic cases there is nothing to
+    // migrate to. If a future change makes borrows constructible in these
+    // positions, revisit the whole group together rather than one cell.
+    for (label, items) in [
+        (
+            "return -- `e2e_return_field_index_element_clones`",
+            "fn f(v: Vec[R]) -> R { return v[0]; }\n",
+        ),
+        (
+            "block tail -- `e2e_generic_slice_heap_elem_return_is_deep_cloned` \
+             covers the unmigratable `fn first[T](s: Slice[T]) -> T { s[0] }`",
+            "fn f(v: Vec[R]) -> R { v[0] }\n",
+        ),
+        (
+            "if-arm tail -- `test_e2e_if_arm_vec_element_binding_is_cloned`",
+            "fn f(v: Vec[R], c: bool) -> R { if c { v[0] } else { R { s: \"z\" } } }\n",
+        ),
+        (
+            "bare match-arm body -- same fixture",
+            "fn f(v: Vec[R], c: bool) -> R { match c { true => v[0], \
+             false => R { s: \"z\" } } }\n",
+        ),
+        (
+            "struct-literal field -- `e2e_heap_vec_index_read_into_owning_sinks`, \
+             cell commented `// struct field`",
+            "fn f(v: Vec[R]) -> B2 { return B2 { r: v[0] }; }\n",
+        ),
+        (
+            "tuple-literal element -- same fixture, cell `// tuple literal`",
+            "fn f(v: Vec[R]) -> (R, i64) { return (v[0], 1); }\n",
+        ),
+        (
+            "array-literal element",
+            "fn f(v: Vec[R]) -> Array[R, 1] { return [v[0]]; }\n",
+        ),
+        (
+            "Vec.push -- same fixture (`// push into another Vec`), and the \
+             snapshot idiom in \
+             `test_e2e_second_field_move_of_one_binding_still_defensively_copies`",
+            "fn f(v: Vec[R]) -> i64 { let mut w: Vec[R] = Vec.new(); w.push(v[0]); \
+             return w.len(); }\n",
+        ),
+        (
+            "Some payload -- `PriorityQueue.peek` is this shape and has no \
+             `Clone` bound to migrate through",
+            "fn f(v: Vec[R]) -> Option[R] { return Some(v[0]); }\n",
+        ),
+        (
+            "Ok payload -- same",
+            "fn f(v: Vec[R]) -> Result[R, i64] { return Ok(v[0]); }\n",
+        ),
+    ] {
+        assert_eq!(
+            fires(items),
+            0,
+            "{label}: this position requires an owned value and cannot be \
+             spelled with a borrow, so rejecting it would leave no migration"
+        );
+    }
+
+    // ── the exemptions the rejecting group must keep ──
+    for (label, items) in [
+        (
+            "`.clone()` is the sanctioned spelling",
+            "fn f(v: Vec[R]) -> i64 { let x = v[0].clone(); return x.s.len(); }\n",
+        ),
+        (
+            "a `ref T` PARAMETER takes no ownership",
+            "fn f(v: Vec[R]) -> i64 { return borrows(v[0]); }\n",
+        ),
+        (
+            "the same through a METHOD's `ref` parameter",
+            "fn f(v: Vec[R]) -> i64 { let mut s = Sink { k: 0 }; s.peek(v[0]); \
+             return s.k; }\n",
+        ),
+        (
+            "a `Copy` element copies out with no hole left behind",
+            "fn f(v: Vec[i64]) -> i64 { let x = v[0]; return x; }\n",
+        ),
+        (
+            "a PROJECTION off the element reads through the borrow",
+            "fn f(v: Vec[R]) -> i64 { let n = v[0].s.len(); return n; }\n",
+        ),
+        (
+            "a DESTROYING store of a fresh value is the one legal element write",
+            "fn f(v: Vec[R]) -> i64 { let mut w = v; w[0] = R { s: \"z\" }; \
+             return w.len(); }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 0, "{label}: must stay accepted");
+    }
+}
+
+/// B-2026-09-03-37 — `Vec.push` asked the partial-move rule about the
+/// DESTINATION SLOT, which is not yet resolved when the rule runs.
+///
+/// The site was added in 0ae5836 (B-2026-09-03-20) passing `elem`, the
+/// receiver's element type. `method_vec_mutation.rs` pins an unsolved element
+/// typevar with a `unify_types` that runs AFTER the gates, so under the
+/// ordinary `let mut v = Vec.new();` idiom `elem` is still unresolved at that
+/// point -- and an unresolved type is not `Copy`. The consequence was a `Deny`
+/// rule firing on a `Copy` field, with the accept/reject decision hanging on
+/// whether the destination happened to carry an annotation.
+///
+/// Found by B-2026-09-03-29's corpus sweep, which hit the identical bug in the
+/// index-move rule at the same site: `out.push(self.bytes[i])` over a
+/// `Vec[u8]` in `runtime/stdlib/protobuf.kara` was rejected with "this element
+/// type is not `Copy`" about a `u8`. Only the partial-move half is fixed here,
+/// because only the partial-move half has the site.
+#[test]
+fn vec_push_partial_move_asks_the_value_type_not_the_unresolved_slot() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.s); } }\n\
+         struct W { r: R, n: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(\"dW\"); } }\n\
+         fn mkw() -> W { return W { r: R { s: \"d\" }, n: 4 }; }\n";
+    let fires =
+        |body: &str| -> usize { partial_move_diagnostics(&format!("{PRELUDE}fn main() {body}\n")) };
+
+    // A `Copy` field pushed into an UNANNOTATED `Vec.new()`. This is the
+    // regression: `i64` is `Copy`, nothing is moved out of `W`, and the rule
+    // must stay silent whether or not the slot type is known yet.
+    assert_eq!(
+        fires("{ let w = mkw(); let mut v = Vec.new(); v.push(w.n); println(f\"{v.len()}\"); }"),
+        0,
+        "`w.n` is an i64 -- pushing it moves nothing out of `W`"
+    );
+    // The annotated spelling was always accepted; the two must now agree.
+    assert_eq!(
+        fires(
+            "{ let w = mkw(); let mut v: Vec[i64] = Vec.new(); v.push(w.n); \
+             println(f\"{v.len()}\"); }"
+        ),
+        0,
+        "the annotated form was already accepted -- the two spellings must agree"
+    );
+    // ...and the true positive the site exists for still fires, in both
+    // spellings, so the fix narrowed the rule to the right set rather than
+    // switching it off.
+    assert_eq!(
+        fires("{ let w = mkw(); let mut v = Vec.new(); v.push(w.r); println(f\"{v.len()}\"); }"),
+        1,
+        "`w.r` IS a partial move out of an own-`Drop` `W`"
+    );
+    assert_eq!(
+        fires(
+            "{ let w = mkw(); let mut v: Vec[R] = Vec.new(); v.push(w.r); \
+             println(f\"{v.len()}\"); }"
+        ),
+        1,
+        "and likewise when the slot type is known"
+    );
+}
+
 /// B-2026-09-01-43 — the rule's LEVEL, which B-2026-09-01-38 deliberately left
 /// at `Warn` and which nothing pinned.
 ///

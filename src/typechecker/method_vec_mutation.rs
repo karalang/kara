@@ -141,7 +141,21 @@ impl<'a> super::TypeChecker<'a> {
                 // position has to be re-hung here by hand. `v.push(w.r)`
                 // measured two `R` bodies with the second diverging
                 // run-vs-build.
-                self.warn_partial_move_of_drop_struct(&args[0].value, &elem);
+                // ASKED OF `arg_ty`, NOT `elem`, and that is load-bearing.
+                // The `unify_types` below is what pins an unsolved element
+                // typevar to the first push's value type, so at THIS point the
+                // slot type of the ordinary `let mut v = Vec.new();` idiom is
+                // still unresolved -- and an unresolved type is not `Copy`, so
+                // asking `elem` rejected `v.push(w.n)` over an `i64` field of
+                // an own-`Drop` struct while ACCEPTING the identical push into
+                // an annotated `Vec[i64]`. `arg_ty` is the type of the value
+                // actually being consumed, which is what the rule means to ask
+                // about, so this makes the two spellings agree rather than
+                // loosening either. The rule still fires on `v.push(w.r)`.
+                //
+                // A false positive introduced with this site in 0ae5836 and
+                // found by B-2026-09-03-29's corpus sweep; B-2026-09-03-37.
+                self.warn_partial_move_of_drop_struct(&args[0].value, &arg_ty);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise
