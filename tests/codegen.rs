@@ -23308,6 +23308,113 @@ fn main() {
         }
     }
 
+    /// B-2026-09-02-28 — A WILDCARD TUPLE-DESTRUCTURE OF A CALL-PRODUCED
+    /// AGGREGATE RUNS ITS `Drop` BODIES. `let (_, _) = (mk(1), 5);` ran NOTHING
+    /// on the compiled backends -- not the payload walk, and not the enum's own
+    /// `karac_drop_<Bx>` wrapper either -- against the interpreter's correct
+    /// `dB dW7`.
+    ///
+    /// ALREADY FIXED when this fixture landed, by `1bfd07e` ("name a call
+    /// element's type so a tuple argument's Vec elements are freed"), which was
+    /// filed against a different payload family. Bisected: the bug reproduces at
+    /// its parent `1bd23f1` and not at `1bfd07e`. The shape had no test of its
+    /// own, so nothing pinned it -- which is exactly how it came to be fixed by
+    /// accident, and why it gets one now.
+    ///
+    /// THE CALL IS THE DISCRIMINATOR, not the destructure. Measured at the buggy
+    /// parent, `inline-ctor-element` is CORRECT while `call-enum-element` is
+    /// not, so the hole is in resolving an owner for an element whose value came
+    /// from a CALL -- the same distinction that mattered for B-2026-09-02-13,
+    /// the parent row.
+    ///
+    /// A STRUCT ELEMENT BEHAVES THE SAME as an enum one, and BOTH elements of a
+    /// two-call tuple were lost, so the defect was per-element rather than
+    /// per-statement. The row listed both as NOT MEASURED.
+    ///
+    /// THE STRUCT-PATTERN WILDCARD LEAF DOES NOT have this hole, on EITHER
+    /// source -- which keeps this fixture's subject to the TUPLE leaf. The row
+    /// asked about its own place-sourced spelling (`let St { w: _, n } = w;`)
+    /// and that was correct at the buggy parent; so was the call-sourced twin
+    /// the row did not name (`let St { w: _, n } = mks();`), measured in the
+    /// same build where `call-enum-element` reproduces. So a call producer
+    /// broke the tuple leaf's element-type derivation specifically -- there is
+    /// no shared "call-produced element" notion that both leaves consult.
+    ///
+    /// NOTHING LEAKED, at either revision: valgrind reports 0 errors and 0 bytes
+    /// lost for the heap-carrying payload too. The storage was always reclaimed;
+    /// only the observable body went missing, which is why no leak gate saw it
+    /// and why an absolute expected-output assertion is the only thing that can.
+    #[test]
+    fn e2e_wildcard_tuple_destructure_of_a_call_runs_its_drop_bodies() {
+        const H: &str = "struct W { id: i64 }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\") } }\n\
+             enum Bx { Full(W), Empty(W) }\n\
+             impl Drop for Bx { fn drop(mut ref self) { println(\"dB\") } }\n\
+             fn mk(n: i64) -> Bx {\n\
+             \x20   if n < 1 { return Bx.Full(W { id: n }) }\n\
+             \x20   return Bx.Empty(W { id: 7 });\n\
+             }\n\
+             struct P { s: String }\n\
+             impl Drop for P { fn drop(mut ref self) { println(f\"dP{self.s}\") } }\n\
+             enum Hx { One(P), Zero }\n\
+             impl Drop for Hx { fn drop(mut ref self) { println(\"dH\") } }\n\
+             fn mkh(n: i64) -> Hx { return Hx.One(P { s: f\"payloadpayload{n}\" }); }\n\
+             struct St { w: W, n: i64 }\n\
+             fn mks() -> St { return St { w: W { id: 3 }, n: 1 }; }\n";
+        for (label, body, want) in [
+            // THE ROW: a call-produced ENUM element behind a wildcard tuple leaf.
+            (
+                "call-enum-element",
+                "let (_, _) = (mk(1), 5);\n",
+                "dB\ndW7\nmid\n",
+            ),
+            // A call-produced STRUCT element -- the row's first NOT-MEASURED.
+            (
+                "call-struct-element",
+                "let (_, _) = (mks(), 5);\n",
+                "dW3\nmid\n",
+            ),
+            // BOTH elements from calls: the loss was per-element.
+            (
+                "two-call-elements",
+                "let (_, _) = (mk(1), mk(0));\n",
+                "dB\ndW7\ndB\ndW0\nmid\n",
+            ),
+            // A HEAP-carrying payload. Correct output AND no leak, at either
+            // revision -- the row asked whether this one additionally leaked.
+            (
+                "heap-carrying-payload",
+                "let (_, _) = (mkh(1), 5);\n",
+                "dH\ndPpayloadpayload1\nmid\n",
+            ),
+            // CONTROLS, each correct at the buggy parent and here.
+            (
+                "ctl-inline-ctor-element",
+                "let (_, _) = (Bx.Empty(W { id: 7 }), 5);\n",
+                "dB\ndW7\nmid\n",
+            ),
+            ("ctl-single-wildcard", "let _ = mk(1);\n", "dB\ndW7\nmid\n"),
+            ("ctl-bound-binding", "let x = mk(1);\n", "dB\ndW7\nmid\n"),
+            (
+                "ctl-struct-pattern-wildcard-leaf",
+                "let w: St = St { w: W { id: 4 }, n: 2 };\n\
+                 \x20 let St { w: _, n } = w; println(f\"n{n}\");\n",
+                "dW4\nn2\nmid\n",
+            ),
+            // The CALL-sourced struct-pattern twin, which the row did not name.
+            // Also correct at the buggy parent, so the hole was the TUPLE
+            // leaf's derivation and not a shared call-producer blind spot.
+            (
+                "ctl-call-source-struct-pattern",
+                "let St { w: _, n } = mks(); println(f\"n{n}\");\n",
+                "dW3\nn1\nmid\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"mid\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-29-56 — a heap-carrying `Option` BOUND TO A LOCAL and returned
     /// hands its payload to the caller; the callee must not free it on the way
     /// out.
