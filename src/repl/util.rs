@@ -606,104 +606,58 @@ pub(super) enum CellShape {
 }
 
 pub(super) fn classify_input(src: &str) -> CellShape {
-    // Item-starter keywords. `pub` / `private` are visibility modifiers
-    // that always precede an item. `#` introduces an attribute that
-    // attaches to the next item.
-    const ITEM_PREFIXES: &[&str] = &[
-        "fn ",
-        "fn(",
-        "pub ",
-        "private ",
-        "struct ",
-        "enum ",
-        "trait ",
-        "impl ",
-        "impl<",
-        "impl[",
-        "const ",
-        "type ",
-        "distinct ",
-        "extern ",
-        "use ",
-        "import ",
-        "layout ",
-        "effect ",
-        "mod ",
-        "#",
-    ];
-    for raw_line in src.lines() {
-        let line = raw_line.trim_start();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with("//") || line.starts_with("/*") {
-            continue;
-        }
-        // Continuation of a prior item's body — `}` closing a brace block
-        // is permitted in pure-items mode. Same for trailing `,` etc. We
-        // approximate by treating any line that is purely closing punctuation
-        // or that begins with a bracket-closer as item-continuation.
-        if line.starts_with('}') || line.starts_with(')') || line.starts_with(']') {
-            continue;
-        }
-        // Field / variant / arm bodies inside an item — punted to the
-        // pessimistic side: any line we can't classify as item-prefixed
-        // forces statements mode. To keep the heuristic tight enough that
-        // real item bodies aren't misclassified, we additionally accept
-        // lines that look like field declarations (`name: Type,`) and
-        // variant declarations (`Name,` / `Name { ... },`).
-        if ITEM_PREFIXES.iter().any(|p| line.starts_with(p)) {
-            continue;
-        }
-        if looks_like_item_body_line(line) {
-            continue;
-        }
+    // B-2026-09-01-37 — ASK THE PARSER, do not guess from line prefixes.
+    //
+    // `evaluate_cell`'s own doc has always stated the rule as "pure items iff
+    // a standalone parse of the input produces at least one top-level item AND
+    // no top-level statements are present". This function used to approximate
+    // that with a per-line keyword scan, and one clause of the approximation
+    // ("a line containing `:` but no `=` is a struct field or enum variant")
+    // matched ordinary STATEMENTS:
+    //
+    //     println(f"{H { n: 1 }.n}")      // `n: 1` -- a struct literal field
+    //     println(f"{take(a: 10, b: 3)}") // `a: 10` -- a LABELED CALL ARG
+    //     v.push(H { n: 1 });
+    //
+    // Each was classified `PureItems`, so the cell was appended to the items
+    // region and never executed: no output, no diagnostic. A silent no-op is
+    // the worst shape of this failure, being indistinguishable from a program
+    // that legitimately printed nothing. The `v.push(...)` spelling then
+    // poisoned the session, because a statement parked among the items left
+    // `v` undeclared for every later cell.
+    //
+    // The parser already answers the question exactly, so no heuristic is
+    // needed and no future spelling can drift out of one.
+    //
+    // WHY THE PREDICATE IS "no top-level statements" RATHER THAN "parses
+    // cleanly": a syntactically BROKEN item cell must keep going down the
+    // items path, where `validate_accumulated` reports its parse error
+    // against the accumulated source. Routing it through the statement
+    // wrapper instead buries a plain syntax error inside a synthetic
+    // `fn main()` -- measured, on `struct Bad { a: }`: the items path says
+    // "Expected type, found RightBrace", the wrapper path says "`struct` is a
+    // reserved keyword and cannot be used as an identifier; write `r#struct`",
+    // which names a construct the author did not write. So a cell is
+    // statements only when the parser actually FOUND a statement at top
+    // level, never merely because it found a problem.
+    let parsed = crate::parse(src);
+    if parsed.had_top_level_statements {
         return CellShape::Statements;
     }
-    // All non-blank lines were item-shaped (or item-body lines).
+    // No items AND no errors: the cell is genuinely empty -- blank, or
+    // comments only. `append_items` would grow the accumulated source with
+    // nothing and re-validate for no reason, so let the wrapper path treat it
+    // as the no-op it is.
+    //
+    // The `errors.is_empty()` half is load-bearing and was measured, not
+    // assumed: a malformed item cell parses to ZERO items (`struct Bad { a: }`
+    // -> items=0, errors=1, no top-level statements), so testing emptiness
+    // alone would have sent exactly the broken-item cell down the wrapper path
+    // the paragraph above rules out.
+    if parsed.program.items.is_empty() && parsed.errors.is_empty() {
+        return CellShape::Statements;
+    }
     CellShape::PureItems
-}
-
-/// Heuristic: a line that lives inside an item body but doesn't itself
-/// start an item. Recognizes struct field declarations, enum variants,
-/// trait method headers, and so on. Conservative — when in doubt, returns
-/// `false` and the cell falls into statements mode.
-pub(super) fn looks_like_item_body_line(line: &str) -> bool {
-    // "name: Type," / "name: Type" — struct field.
-    // "Name," / "Name { ... }," / "Name(...)," — enum variant.
-    // "fn name(...) -> ...;" — trait method header (no body).
-    // We accept any line that contains a `:` before any `=` (rules out
-    // `let x: T = 5;`-style statements; `let` statements always start with
-    // `let`, which `classify_input` already rejects).
-    if line.starts_with("let ") || line.starts_with("return ") {
-        return false;
-    }
-    // Pure punctuation / comment trailers.
-    if line
-        .chars()
-        .all(|c| c.is_whitespace() || c == ',' || c == ';' || c == '{' || c == '}')
-    {
-        return true;
-    }
-    // Field / variant / where-clause / attribute body line — accept if
-    // the line is identifier-ish followed by `:` or comma-separated.
-    if line.contains(':') && !line.contains("=") {
-        return true;
-    }
-    // Bare variant name (possibly with payload).
-    let first = line
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .next();
-    if let Some(name) = first {
-        if let Some(c) = name.chars().next() {
-            // Heuristic: identifiers starting uppercase look like enum
-            // variants when they appear at body-line position.
-            if c.is_ascii_uppercase() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Extract the bare name of a named top-level item. Anonymous items

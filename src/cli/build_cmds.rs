@@ -1882,6 +1882,9 @@ pub(super) fn run_multi_file_late_phases(
     let parsed = ParseResult {
         program: super_program,
         errors: Vec::new(),
+        // Stitched from already-parsed modules; no statement ever sat at
+        // this super-program's top level.
+        had_top_level_statements: false,
         fix_edits: FxHashMap::default(),
         fix_diffs: FxHashMap::default(),
     };

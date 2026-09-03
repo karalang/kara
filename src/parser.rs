@@ -95,6 +95,21 @@ impl std::fmt::Display for ParseError {
 pub struct ParseResult {
     pub program: Program,
     pub errors: Vec<ParseError>,
+    /// Did the source carry TOP-LEVEL STATEMENTS (script mode)?
+    ///
+    /// True whenever at least one statement was found outside any item,
+    /// regardless of what happened next -- synthesized into a `fn main()`
+    /// (script mode), rejected because an explicit `main` was also present,
+    /// or rejected because the context is item-only ([`Parser::items_only`]).
+    /// So it answers "was this written as statements", not "did that
+    /// succeed", which is what a caller classifying INPUT needs.
+    ///
+    /// B-2026-09-01-37: the REPL's cell classifier needs exactly this
+    /// question answered, and had been guessing at it from line prefixes.
+    /// The answer is not otherwise recoverable from the result -- a
+    /// synthesized `main` is byte-identical to a user-written one in the
+    /// AST, so `items` alone cannot distinguish them.
+    pub had_top_level_statements: bool,
     /// Span-keyed machine-applicable edits synthesized during parsing (e.g.
     /// delete a stray comma in a comma-separated `with` clause). Consumed by
     /// `collect_diagnostics` (JSON `replacement`) and `cmd_fix`.
@@ -228,6 +243,9 @@ pub struct Parser {
     /// [`Parser::items_only`], turning top-level statements into a parse
     /// error instead of a synthesized entry point.
     pub(crate) allow_script_mode: bool,
+    /// Set when top-level statements are seen; surfaced as
+    /// [`ParseResult::had_top_level_statements`].
+    pub(crate) saw_top_level_statements: bool,
     /// Active labels for disambiguating `break label` vs `break value` and
     /// for routing labeled-block label scopes. Each entry carries a
     /// `LabelKind` tag (`Loop` for labeled loops, `Block` for labeled
@@ -352,6 +370,7 @@ impl Parser {
             stmt_lint_overrides: rustc_hash::FxHashMap::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
             allow_script_mode: true,
+            saw_top_level_statements: false,
             pending_doc: None,
             fn_context_stack: Vec::new(),
             effect_var_stack: Vec::new(),
@@ -428,6 +447,7 @@ impl Parser {
         ParseResult {
             program,
             errors: self.errors,
+            had_top_level_statements: self.saw_top_level_statements,
             fix_edits: self.fix_edits,
             fix_diffs: self.fix_diffs,
         }
@@ -560,6 +580,10 @@ impl Parser {
             }
             script_stmts = kept;
         }
+        // Record the shape BEFORE branching on what to do about it: both
+        // arms below mean the source carried top-level statements, and the
+        // item-only arm turns them into an error that erases the evidence.
+        self.saw_top_level_statements |= !script_stmts.is_empty();
         if !script_stmts.is_empty() && !self.allow_script_mode {
             // Item-only context (`ast.item` quote, module file): top-level
             // statements are an error here, never a synthesized main.

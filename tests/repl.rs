@@ -2759,3 +2759,131 @@ fn in_cell_mutation_survives_the_cell_boundary_on_the_interpreter_lane() {
         );
     }
 }
+
+// ── B-2026-09-01-37: the cell classifier asks the parser ────────────────────
+
+/// B-2026-09-01-37 — a struct literal used as a CALL ARGUMENT, alone in a
+/// cell, silently produced no output on both backends.
+///
+/// `classify_input` approximated "is this cell pure items?" with a per-line
+/// keyword scan, one clause of which read "a line containing `:` but no `=`
+/// is a struct field or an enum variant". An ordinary statement matches that
+/// whenever a colon appears inside it, so the cell was filed as items,
+/// appended to the accumulated source, and never executed: no output, no
+/// diagnostic. A silent no-op is indistinguishable from a program that
+/// legitimately printed nothing, which is what made this worth a row.
+///
+/// The classifier now asks the parser the question `evaluate_cell`'s own doc
+/// has always stated ("no top-level statements present"), so these shapes are
+/// not a list of patched special cases — they are one rule, and each is here
+/// because it reached the old heuristic by a different route.
+#[test]
+fn a_struct_literal_call_argument_alone_in_a_cell_executes() {
+    let mut s = pinned_session();
+    s.evaluate_cell_captured("struct H { n: i64 }");
+    let r = s.evaluate_cell_captured("println(f\"{H { n: 1 }.n}\")");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "1", "struct literal as a call argument");
+}
+
+#[test]
+fn a_struct_literal_through_a_call_and_a_nested_call_execute() {
+    let mut s = pinned_session();
+    s.evaluate_cell_captured("struct H { n: i64 }");
+    s.evaluate_cell_captured("fn take(h: H) -> i64 { return h.n }");
+    s.evaluate_cell_captured("fn id(h: H) -> H { return h }");
+    let r = s.evaluate_cell_captured("println(f\"{take(H { n: 1 })}\")");
+    assert_eq!(r.stdout.trim(), "1", "literal inside a call");
+    let r = s.evaluate_cell_captured("println(f\"{take(id(H { n: 2 }))}\")");
+    assert_eq!(r.stdout.trim(), "2", "literal inside a nested call");
+}
+
+/// The ENUM STRUCT-VARIANT spelling — a different literal syntax reaching the
+/// same clause.
+#[test]
+fn an_enum_struct_variant_literal_call_argument_executes() {
+    let mut s = pinned_session();
+    s.evaluate_cell_captured("enum E { V { x: i64 } }");
+    s.evaluate_cell_captured("fn take(e: E) -> i64 { match e { E.V { x } => x } }");
+    let r = s.evaluate_cell_captured("println(f\"{take(E.V { x: 1 })}\")");
+    assert_eq!(r.stdout.trim(), "1");
+}
+
+/// A LABELED CALL ARGUMENT — no braces anywhere, so this one shows the trigger
+/// was never "the literal's braces" but the bare colon. It is not in the row's
+/// measured list; it was found by re-deriving which lines the clause actually
+/// matched rather than trusting the row's account of the shape.
+#[test]
+fn a_labeled_call_argument_alone_in_a_cell_executes() {
+    let mut s = pinned_session();
+    s.evaluate_cell_captured("fn take(a: i64, b: i64) -> i64 { return a - b }");
+    let r = s.evaluate_cell_captured("println(f\"{take(a: 10, b: 3)}\")");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "7", "labeled call argument, no braces");
+}
+
+/// The SESSION-POISONING half. A statement filed among the items left its
+/// binding undeclared for every later cell, so the next cell reported
+/// `undefined name 'v'` for something accepted two cells earlier.
+#[test]
+fn a_statement_with_a_colon_does_not_poison_later_cells() {
+    let mut s = pinned_session();
+    s.evaluate_cell_captured("struct H { n: i64 }");
+    s.evaluate_cell_captured("let mut v: Vec[H] = Vec.new();");
+    let r = s.evaluate_cell_captured("v.push(H { n: 1 });");
+    assert!(r.errors.is_empty(), "push cell: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(f\"{v.len()}\");");
+    assert!(
+        r.errors.is_empty(),
+        "the session must survive the push cell: {:?}",
+        r.errors
+    );
+    assert_eq!(r.stdout.trim(), "1");
+}
+
+/// CONTROLS — the classifications the old heuristic got RIGHT, which a
+/// parse-based rule must not trade away.
+///
+/// The malformed-item control is the sharp one. A broken item cell parses to
+/// ZERO items with no top-level statements, so a rule that asked only "are
+/// there items?" would route it through the synthetic `fn main()` wrapper and
+/// report `` `struct` is a reserved keyword … write `r#struct` `` — naming a
+/// construct the author never wrote. It must stay on the items path and keep
+/// its own parse error.
+#[test]
+fn the_classifier_still_routes_items_and_broken_items_to_the_item_path() {
+    let mut s = pinned_session();
+    // Pure items still accumulate.
+    s.evaluate_cell_captured("struct P { a: i64 }");
+    s.evaluate_cell_captured("fn mk() -> P { return P { a: 5 } }");
+    assert!(s.items_source().contains("fn mk"));
+    let r = s.evaluate_cell_captured("println(f\"{mk().a}\")");
+    assert_eq!(r.stdout.trim(), "5");
+
+    // A malformed item keeps the item path's diagnostic.
+    let mut s2 = pinned_session();
+    let r = s2.evaluate_cell_captured("struct Bad { a: }");
+    assert!(
+        r.errors.iter().any(|e| e.contains("Expected type")),
+        "a broken item cell must report the ITEM parse error, got {:?}",
+        r.errors
+    );
+    assert!(
+        !r.errors.iter().any(|e| e.contains("reserved keyword")),
+        "a broken item cell must not be re-read as a statement, got {:?}",
+        r.errors
+    );
+}
+
+/// A blank / comment-only cell is a no-op and must not grow the accumulated
+/// item source.
+#[test]
+fn a_comment_only_cell_is_a_no_op() {
+    let mut s = pinned_session();
+    let before = s.items_source().to_string();
+    let r = s.evaluate_cell_captured("// just a comment");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(s.items_source(), before, "no items should be appended");
+    let r = s.evaluate_cell_captured("println(\"after\")");
+    assert_eq!(r.stdout.trim(), "after");
+}
