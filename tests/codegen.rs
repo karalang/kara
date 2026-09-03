@@ -22497,6 +22497,156 @@ fn main() {
         }
     }
 
+    /// B-2026-09-03-10 — A CONDITIONAL `return <aggregate literal>` MUST NOT
+    /// DISARM THE SOURCE ON THE PATHS THAT DO NOT TAKE IT.
+    ///
+    /// B-2026-08-30-18 gave a returned aggregate literal a static retraction of
+    /// every source's `UserDrop`, and said so in its own comment: "Static and
+    /// flow-insensitive like every sibling: a conditional return disarms on all
+    /// paths, which can only under-fire." Under-firing is a LOST `Drop` body.
+    /// The BARE-`Identifier` arm a few lines below had already been through
+    /// this (B-2026-08-28-65) and prefers a runtime bit when the action lives in
+    /// an ENCLOSING frame; the literal arm now asks the same question through
+    /// the same helper.
+    ///
+    /// `if-not-taken` is the SIMPLEST repro and the one the filing missed — no
+    /// loop at all. `build(14, false)` never reaches the `return W { r: r }`,
+    /// and printed `mid v99 dR99 post` on all three compiled surfaces against
+    /// the interpreter's `mid dR14 v99 dR99 post`.
+    ///
+    /// `loop-*` is where it compounds: the disarm is per-FUNCTION, so THREE
+    /// iterations returning at `i == 2` lose BOTH earlier bodies, not one.
+    /// `loop-tuple` is the same defect through the `Tuple` half of the arm's
+    /// `matches!`, and `loop-two-fields` shows it is per-source rather than
+    /// per-statement.
+    ///
+    /// THE MEMORY IS NOT LEAKED, and that is why this was invisible to every
+    /// leak gate: valgrind reports 0 errors and 0 bytes lost on the PRE-FIX
+    /// binaries for every row here. The buffer's owner was transferred by
+    /// `suppress_source_vec_cleanup_for_arg`, which is a separate hook; what
+    /// went missing is only the observable side effect. A `Drop` that closes a
+    /// handle, releases a lock or decrements an external counter simply did not
+    /// run.
+    ///
+    /// The three `ctl-*` rows are the shapes that were always correct and pin
+    /// the boundary: a BARE identifier return took the runtime-bit path already,
+    /// an UNCONDITIONAL top-level return finds its action in the INNERMOST frame
+    /// so the guard declines and the static removal still stands, and the
+    /// conditional return that IS taken must keep handing the value out exactly
+    /// once.
+    #[test]
+    fn e2e_conditional_aggregate_return_keeps_the_untaken_paths_drop() {
+        const H: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct W { r: R }\n\
+             struct Two { a: R, b: R }\n\
+             fn if_lit(k: i64, flag: bool) -> W {\n\
+             \x20   let r: R = R { id: k, tag: f\"t\" };\n\
+             \x20   println(\"mid\");\n\
+             \x20   if flag { return W { r: r } }\n\
+             \x20   return W { r: R { id: 99, tag: f\"z\" } }\n\
+             }\n\
+             fn loop_lit(k: i64, n: i64) -> W {\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < n {\n\
+             \x20       let r: R = R { id: k + i, tag: f\"t\" };\n\
+             \x20       println(f\"it{i}\");\n\
+             \x20       if i == n - 1 { return W { r: r } }\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   return W { r: R { id: 0, tag: f\"z\" } }\n\
+             }\n\
+             fn loop_tup(k: i64) -> (R, i64) {\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 2 {\n\
+             \x20       let r: R = R { id: k + i, tag: f\"t\" };\n\
+             \x20       println(f\"it{i}\");\n\
+             \x20       if i == 1 { return (r, 3) }\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   return (R { id: 0, tag: f\"z\" }, 0)\n\
+             }\n\
+             fn loop_two(k: i64) -> Two {\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 2 {\n\
+             \x20       let x: R = R { id: k + i, tag: f\"x\" };\n\
+             \x20       let y: R = R { id: k + i + 50, tag: f\"y\" };\n\
+             \x20       println(f\"it{i}\");\n\
+             \x20       if i == 1 { return Two { a: x, b: y } }\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   return Two { a: R { id: 0, tag: f\"z\" }, b: R { id: 1, tag: f\"z\" } }\n\
+             }\n\
+             fn loop_bare(k: i64) -> R {\n\
+             \x20   let mut i: i64 = 0;\n\
+             \x20   while i < 2 {\n\
+             \x20       let r: R = R { id: k + i, tag: f\"t\" };\n\
+             \x20       println(f\"it{i}\");\n\
+             \x20       if i == 1 { return r }\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   return R { id: 0, tag: f\"z\" }\n\
+             }\n\
+             fn top_lit(k: i64) -> W { let r: R = R { id: k, tag: f\"t\" }; println(\"mid\"); return W { r: r } }\n";
+        for (label, body, want) in [
+            // THE SIMPLEST REPRO: no loop, the `return` is simply not reached.
+            (
+                "if-not-taken",
+                "let v: W = if_lit(14, false); println(f\"v{v.r.id}\");\n",
+                "mid\ndR14\nv99\ndR99\npost\n",
+            ),
+            // The same function on the path that DOES return: one body, at the
+            // caller. This is the half the static retraction got right.
+            (
+                "ctl-if-taken",
+                "let v: W = if_lit(14, true); println(f\"v{v.r.id}\");\n",
+                "mid\nv14\ndR14\npost\n",
+            ),
+            // IN A LOOP the disarm is per-FUNCTION, so every non-returning
+            // iteration loses its body, not just one.
+            (
+                "loop-two-iterations",
+                "let v: W = loop_lit(14, 2); println(f\"v{v.r.id}\");\n",
+                "it0\ndR14\nit1\nv15\ndR15\npost\n",
+            ),
+            (
+                "loop-three-iterations",
+                "let v: W = loop_lit(14, 3); println(f\"v{v.r.id}\");\n",
+                "it0\ndR14\nit1\ndR15\nit2\nv16\ndR16\npost\n",
+            ),
+            // The `Tuple` half of the same `matches!` gate.
+            (
+                "loop-tuple",
+                "let v: (R, i64) = loop_tup(14); println(f\"v{v.0.id}\");\n",
+                "it0\ndR14\nit1\nv15\ndR15\npost\n",
+            ),
+            // Per-SOURCE, not per-statement: two consumed locals, both restored.
+            // Fields die in reverse declaration order (design.md § Drop ordering).
+            (
+                "loop-two-fields",
+                "let v: Two = loop_two(1); println(f\"v{v.a.id}-{v.b.id}\");\n",
+                "it0\ndR51\ndR1\nit1\nv2-52\ndR52\ndR2\npost\n",
+            ),
+            // CONTROLS. The bare identifier already took the runtime-bit path;
+            // the unconditional top-level return finds its action in the
+            // INNERMOST frame, so the guard declines and the static removal
+            // stands. Both were correct before this change and must stay so.
+            (
+                "ctl-loop-bare-identifier",
+                "let v: R = loop_bare(14); println(f\"v{v.id}\");\n",
+                "it0\ndR14\nit1\nv15\ndR15\npost\n",
+            ),
+            (
+                "ctl-unconditional-top-level",
+                "let v: W = top_lit(14); println(f\"v{v.r.id}\");\n",
+                "mid\nv14\ndR14\npost\n",
+            ),
+        ] {
+            let src = format!("{H}fn main() {{ {body} println(\"post\") }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "{label}");
+        }
+    }
+
     /// B-2026-08-29-56 — a heap-carrying `Option` BOUND TO A LOCAL and returned
     /// hands its payload to the caller; the callee must not free it on the way
     /// out.

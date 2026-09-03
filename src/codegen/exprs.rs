@@ -1357,14 +1357,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     // bytes. What doubled was the observable side effect — a
                     // `Drop` that closes, releases or logs fired twice.
                     //
-                    // Static and flow-insensitive like every sibling: a
+                    // B-2026-09-03-10 — the retraction was STATIC and
+                    // flow-insensitive, and this comment used to end "a
                     // conditional return disarms on all paths, which can only
-                    // under-fire.
+                    // under-fire." Under-firing is a LOST `Drop` body, and in a
+                    // LOOP it is lost once per iteration:
+                    //
+                    //   while i < 2 {
+                    //       let r: R = R { id: k + i, tag: f"t" };
+                    //       if i == 1 { return W { r: r } }     // <-- here
+                    //       i = i + 1;
+                    //   }
+                    //
+                    // printed `it0 it1 v15 dR15 post` on all three compiled
+                    // surfaces against the interpreter's correct
+                    // `it0 dR14 it1 v15 dR15 post`: iteration 0's `r` is never
+                    // moved anywhere -- the `if` does not fire on that pass --
+                    // yet its body, and everything it owns, went with the
+                    // retraction. Widening to three iterations returning at
+                    // `i == 2` lost BOTH earlier bodies, which is what shows the
+                    // disarm is per-FUNCTION rather than per-iteration.
+                    //
+                    // The BARE-`Identifier` arm below already had the answer and
+                    // has had it since B-2026-08-28-65: prefer the runtime bit
+                    // when the action lives in an ENCLOSING frame, which is the
+                    // test for "this `return` is nested, so it moves only on the
+                    // path that reaches it". `guard_user_drop_for_nested_return`
+                    // mints the `cond_move` flag and stores `false` into it HERE,
+                    // in the taken block, and B-2026-09-02-6's declaration-point
+                    // re-arm makes that per-iteration as well. An unconditional
+                    // top-level `return W { r: r }` finds the action in the
+                    // INNERMOST frame, the guard declines, and the static removal
+                    // stands exactly as before -- so this is the identifier arm's
+                    // rule applied one aggregate deeper, not a new one.
                     if matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)) {
                         let mut sources = Vec::new();
                         Self::collect_aggregate_literal_sources(e, &mut sources);
                         for n in sources {
-                            self.suppress_user_drop_for_var(&n);
+                            if !self.guard_user_drop_for_nested_return(&n) {
+                                self.suppress_user_drop_for_var(&n);
+                            }
                         }
                     }
                     // B-2026-08-06-14 — `return b.v;` handing out a direct
