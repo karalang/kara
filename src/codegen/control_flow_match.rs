@@ -9803,6 +9803,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 .or_default()
                 .extend(v);
         }
+        // B-2026-09-03-8 — the two param-view RECORDS travel with the masks,
+        // and for the same reason one hop later. A mask says the walk skips a
+        // slot; the record says WHY — the value is the caller's — and only the
+        // record can answer whether a later `let x = t2.0;` may register a body
+        // of its own. The masks above were transferred and the records were
+        // not, so the rebind kept its walk correctly masked and then handed the
+        // element to a binding that minted a second owner.
+        //
+        // NOT the whole-binding `param_view_locals` mark the filing row
+        // proposed. That mark is read far more widely, and a MIXED literal is
+        // genuinely not a view: `let t = (r, R { id: 2 });` still owns its
+        // fresh element, whose body `let x = t2.1;` must keep. Per slot is what
+        // the ALL-VIEWS case (already handled by `param_view_locals`) and the
+        // mixed case can share, which is why the mixed struct spelling —
+        // doubling on all four surfaces, and filed as tuple-only — is fixed by
+        // the same two lines rather than needing its own rule.
+        if let Some(v) = self.payload_vars.param_view_struct_fields.get(src).cloned() {
+            self.payload_vars
+                .param_view_struct_fields
+                .entry(dst.to_string())
+                .or_default()
+                .extend(v);
+        }
+        if let Some(v) = self.payload_vars.param_view_tuple_elems.get(src).cloned() {
+            self.payload_vars
+                .param_view_tuple_elems
+                .entry(dst.to_string())
+                .or_default()
+                .extend(v);
+        }
     }
 
     /// The COMPLETE field-skip tree for `var_name`, given this level's

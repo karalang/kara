@@ -1673,6 +1673,31 @@ impl<'a> super::Interpreter<'a> {
         for i in elems {
             self.moved_out_tuple_elem_bodies.insert((dst.clone(), i));
         }
+        // B-2026-09-03-8 — the two param-view RECORDS travel with the masks
+        // above, one hop later and for the same reason. A mask says the walk
+        // skips a slot; the record says WHY — the value is the caller's — and
+        // only the record can answer whether a later `let x = t2.0;` may
+        // register a body of its own. Transferring the masks alone left the
+        // rebind correctly masked and then let the move-out mint a second
+        // owner. Codegen's identically-named twin carries the same two.
+        let vfields: Vec<String> = self
+            .param_view_struct_fields
+            .iter()
+            .filter(|(n, _)| n == &src)
+            .map(|(_, f)| f.clone())
+            .collect();
+        for f in vfields {
+            self.param_view_struct_fields.insert((dst.clone(), f));
+        }
+        let velems: Vec<usize> = self
+            .param_view_tuple_elems
+            .iter()
+            .filter(|(n, _)| n == &src)
+            .map(|(_, i)| *i)
+            .collect();
+        for i in velems {
+            self.param_view_tuple_elems.insert((dst.clone(), i));
+        }
         // The ENUM-CTOR slot mask is DELIBERATELY NOT transferred, and this is
         // the one line of this fix that had to be measured rather than
         // reasoned. Copying it here works — the interpreter prints the due

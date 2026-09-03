@@ -26627,24 +26627,64 @@ fn main() {
             Some("dR1\nv=7\n"),
             "[tuple wrap then element move-out]"
         );
-        // PINNED AT THE DEFECT, one spelling further out. Rebinding the tuple
-        // before reading the element back out still doubles, agreed on all four
-        // surfaces. The record above is keyed by (binding, index) and does not
-        // travel to `t2`. The STRUCT spelling of the same rebind is CORRECT --
-        // asserted as a control in the tuple row's own test -- but by a route this
-        // has no peer for: an all-views struct literal marks its binding a param
-        // view WHOLE, and a tuple literal never reaches that mark. Filed
-        // separately; the fix is that propagation, not a wider record.
-        let tuple_rebind = format!(
-            "{hdr}fn take(r: R) -> i64 {{ let t = (r, 5); let t2 = t; let x = t2.0; return 7; }}\n\
-             fn main() {{ let v = take(mk(1)); println(f\"v={{v}}\"); }}\n"
-        );
-        assert_eq!(
-            run_program(&tuple_rebind).as_deref(),
-            Some("dR1\ndR1\nv=7\n"),
-            "[pinned DEFECT: tuple REBOUND, then element move-out -- awaiting the \
-             all-views propagation the struct literal has]"
-        );
+        // FIXED by B-2026-09-03-8, and the repair was neither thing this comment
+        // predicted. It is not a wider record and not the all-views propagation: the
+        // per-slot record was already right, it simply did not TRAVEL. A whole-value
+        // rebind runs `transfer_move_masks_on_rebind`, which carried every MASK to the
+        // destination and neither param-view RECORD -- so `t2`'s walk stayed correctly
+        // masked and then handed the element to a binding that minted a second owner. Two
+        // lookups added beside the mask transfers, on both backends, and the record
+        // arrives with the mask it explains.
+        //
+        // WHICH ALSO FIXED A SPELLING THE ROW DID NOT MENTION. A MIXED STRUCT literal
+        // rebound and then projected (`let s = S3 { a: r, b: mk(2) }; let s2 = s;
+        // let x = s2.a;`) doubled identically on all four surfaces. The row scoped itself
+        // to tuples because the ALL-VIEWS struct case is correct -- it rides
+        // `param_view_locals`, the propagation this comment pointed at -- and a mixed
+        // struct literal is not a view whole, so it depends on the same per-field record
+        // and lost it at the same rebind. Chasing the proposed propagation would have
+        // fixed the tuple and left this one standing.
+        //
+        // The cells below keep both hops honest: a struct field must not be answered by
+        // the tuple record nor an element by the field one, and the FRESH half of a mixed
+        // literal must keep the body nobody else runs.
+        let rebind_cells: [(&str, &str, &str, &str); 5] = [
+            (
+                "tuple ALL-VIEWS rebound, then element move-out",
+                "fn take(r: R) -> i64 { let t = (r, 5); let t2 = t; let x = t2.0; return 7; }",
+                "take(mk(1))",
+                "dR1\nv=7\n",
+            ),
+            (
+                "tuple MIXED rebound, then the VIEW element out",
+                "fn take(r: R) -> i64 { let t = (r, mk(2)); let t2 = t; let x = t2.0; return 7; }",
+                "take(mk(1))",
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "control: tuple MIXED rebound, then the FRESH element out",
+                "fn take(r: R) -> i64 { let t = (r, mk(2)); let t2 = t; let x = t2.1; return 7; }",
+                "take(mk(1))",
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "struct MIXED rebound, then the VIEW field out",
+                "fn take(r: R) -> i64 { let s = S3 { a: r, b: mk(2) }; let s2 = s; let x = s2.a; return 7; }",
+                "take(mk(1))",
+                "dR2\ndR1\nv=7\n",
+            ),
+            (
+                "control: local source, rebound, then out",
+                "fn take() -> i64 { let t = (mk(1), 5); let t2 = t; let x = t2.0; return 7; }",
+                "take()",
+                "dR1\nv=7\n",
+            ),
+        ];
+        for (label, fns, call, want) in rebind_cells {
+            let src =
+                format!("{hdr}{fns}\nfn main() {{ let v = {call}; println(f\"v={{v}}\"); }}\n");
+            assert_eq!(run_program(&src).as_deref(), Some(want), "[{label}]");
+        }
     }
 
     /// B-2026-09-01-3 -- the TUPLE spelling of the move B-2026-08-29-47 fixed for
