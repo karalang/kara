@@ -34859,6 +34859,120 @@ done
     );
 }
 
+/// B-2026-09-03-14 — THE THREE ARMS B-2026-09-02-43's OWNER MASK DID NOT REACH.
+///
+/// That row taught `finish_place_source_tuple_destructure` to mask the elements whose
+/// leaf took a body out of the owner's `__karac_dropbodies_*` walk, and recorded them
+/// from ONE site: the enum / nested-struct BINDING arm. Three other spellings hand a
+/// body away at the same statement and recorded nothing, so the owner kept running it.
+/// Measured against `--interp` on the commit that fixed -43:
+///
+///   * `wild` / `wildidx` — `let (_, k) = h.pe;`. The wildcard arm runs the discarded
+///     element's body ON THE SPOT and never cap-zeroes (the aggregate keeps the MEMORY,
+///     by design), so this one's defect looks unlike the row's: TWO bodies both reading
+///     a LIVE value, rather than a husk and a live one. `wildidx` is the same shape with
+///     the wildcard at index 1, since the recorded index has to be the element's own.
+///   * `nested` — `let ((r, a), b) = h.pe;`. The recursion cap-zeroes the inner leaf it
+///     takes, but the call site discarded the inner set outright, so nothing recorded
+///     the OUTER element and the owner's walk still descended into the field: `dR4//0`
+///     before the live read. -43's defect exactly, one level down.
+///   * `owndrop` — a parent with its own `impl Drop`. It has NO per-binding bodies
+///     action to replace: it runs its field bodies from inside `karac_drop_<T>`, the
+///     type-level wrapper registered as a separate `OwnWrapper` action
+///     (B-2026-09-01-40), so the disarm's replace/suppress pair found nothing.
+///     `dHd5 dR5//0 b5/t5 dR5/t5/1` against the interpreter's three lines.
+///
+/// `wildopt` IS THE OVER-REACH CONTROL, and it is why the wildcard arm asks a question
+/// rather than masking unconditionally. Over `(i64, Option[R])` the discard helper
+/// DECLINES — its `Option`/`Result` handling is not the parent walk's — so the body it
+/// would silence is the only one there is. The signal is
+/// `run_discarded_leaf_user_drop_bodies`' `ran_bodies`, and the single `bool` it used to
+/// return meant `took_memory`, which is ALWAYS false at a call site passing
+/// `free_memory: false`; gating on that silently disabled the whole `wild` fix instead.
+/// The helper now reports both answers separately.
+///
+/// `plain` and `param` are the unchanged legs: -43's own shape stays at one live body,
+/// and a by-value param source keeps the caller-retained body fired after the callee
+/// returns. Every cell renders `self.tag` and `self.xs.len()`, because on an
+/// `R { id: i64 }` a husk and a live value print the same thing and a count-only
+/// assertion cannot tell them apart.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_destructure_owner_mask_reaches_the_remaining_arms`, pinned to the same string.
+/// All four surfaces agree here, which is the point: three of these cells were compiled-
+/// only defects and this backend was already correct on every one of them.
+#[test]
+fn test_destructure_owner_mask_reaches_the_remaining_arms() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+
+struct H  { pe: (R, i64) }
+struct Hi { pe: (i64, R) }
+struct Hw { pe: (i64, Option[R]) }
+struct Hn { pe: ((R, i64), i64) }
+struct Hd { pe: (R, i64), n: i64 }
+impl Drop for Hd { fn drop(mut ref self) { println(f"dHd{self.n}") } }
+
+fn mk(id: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(id); return R { id: id, tag: f"t{id}", xs: v } }
+
+fn w1() { let h = H  { pe: (mk(1), 0) };            let (_, k) = h.pe;      println("  end") }
+fn w2() { let h = Hi { pe: (0, mk(2)) };            let (k, _) = h.pe;      println("  end") }
+fn w3() { let h = Hw { pe: (0, Option.Some(mk(3))) }; let (k, _) = h.pe;    println("  end") }
+fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+
+fn main() {
+    println("wild");     w1();                      println("wild end")
+    println("wildidx");  w2();                      println("wildidx end")
+    println("wildopt");  w3();                      println("wildopt end")
+    println("nested");   n1();                      println("nested end")
+    println("owndrop");  d1();                      println("owndrop end")
+    println("plain");    c1();                      println("plain end")
+    println("param");    c2(H { pe: (mk(7), 0) });  println("param end")
+    println("done")
+}
+"#),
+        r#"wild
+dR1/t1/1
+  end
+wild end
+wildidx
+dR2/t2/1
+  end
+wildidx end
+wildopt
+dR3/t3/1
+  end
+wildopt end
+nested
+  b4/t4
+dR4/t4/1
+  end
+nested end
+owndrop
+dHd5
+  b5/t5
+dR5/t5/1
+  end
+owndrop end
+plain
+  b6/t6
+dR6/t6/1
+  end
+plain end
+param
+  b7/t7
+  end
+dR7/t7/1
+param end
+done
+"#
+    );
+}
+
 /// B-2026-09-02-40 — a `let`-destructure whose source is a FIELD CHAIN rooted at
 /// an owned param (`let (r, k) = h.pe;`) binds views, exactly as the bare-param
 /// spelling does since B-2026-09-02-25.

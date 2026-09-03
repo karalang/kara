@@ -24,6 +24,33 @@ use super::helpers::{
 };
 use super::state::{B2Role, ReturnSlot, SharedTypeInfo, UserDropKind, VarSlot};
 
+/// What [`Codegen::run_discarded_leaf_user_drop_bodies`] actually did to a
+/// discarded destructure leaf.
+///
+/// B-2026-09-03-14 split this out of a single `bool`. That bool meant
+/// `took_memory` and nothing else — it is `true` only when the caller asked for
+/// `free_memory` AND a memory drop fn existed — so a caller passing
+/// `free_memory: false` read `false` for a leaf whose user `Drop` body had just
+/// been emitted. Reading it as "did anything happen here" is wrong in both
+/// directions, and the wildcard arm's body mask needs the other field:
+/// whether the BODY ran, so the source's own walk can stop running it.
+#[derive(Clone, Copy)]
+struct DiscardedLeaf {
+    /// The user `Drop` body walker was emitted and called for this leaf.
+    ran_bodies: bool,
+    /// The leaf's MEMORY was freed here too (`free_memory` was asked for and a
+    /// drop fn existed). The original single-bool return.
+    took_memory: bool,
+}
+
+impl DiscardedLeaf {
+    /// The helper declined outright: no body, no memory.
+    const NOTHING: Self = Self {
+        ran_bodies: false,
+        took_memory: false,
+    };
+}
+
 /// B-2026-08-08-3 — the `Type.method` keys (as the typechecker spells them in
 /// `method_callee_types`) whose result is unconditionally `i64`. Used to size a
 /// par-block return slot whose branch body is a block expression ending in a
@@ -13214,11 +13241,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // walker here and so no owner either — a pre-existing leak
                     // on this source, unchanged by this fix and filed on its own
                     // row rather than folded in.
-                    discard_took_memory = self.run_discarded_leaf_user_drop_bodies(
-                        &field_te,
-                        elem,
-                        fresh_struct_literal,
-                    );
+                    discard_took_memory =
+                        self.discarded_leaf_took_memory(&field_te, elem, fresh_struct_literal);
                 }
             }
 
@@ -13965,7 +13989,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(lty) = tuple_ty.get_field_type_at_index(idx as u32) {
                             if let Ok(elem) = self.builder.build_load(lty, ptr, "ptup.discard") {
                                 // PLACE source — the aggregate's own drop frees it.
-                                self.run_discarded_leaf_user_drop_bodies(&te, elem, false);
+                                //
+                                // B-2026-09-03-14 — the body ran HERE, so record the
+                                // element and let the caller stop the SOURCE running
+                                // it again at its own death. B-2026-09-02-43 recorded
+                                // only the BINDING arm, so this spelling stayed at two
+                                // bodies — and its defect looks unlike that row's,
+                                // because this arm never cap-zeroes (the aggregate
+                                // keeps the MEMORY, by design): two bodies both reading
+                                // a LIVE value rather than a husk and a live one. Same
+                                // cause, same mask.
+                                //
+                                // GATED ON `ran_bodies`, NOT on the old single bool,
+                                // which meant `took_memory` and is always false here.
+                                // Masking unconditionally would hand a
+                                // `let (_, o) = h.pe;` over `(i64, Option[R])` — a leaf
+                                // this helper DECLINES — to nobody, converting a
+                                // doubled body into a lost one.
+                                if self
+                                    .run_discarded_leaf_user_drop_bodies(&te, elem, false)
+                                    .ran_bodies
+                                {
+                                    took_bodies.insert(idx as u32);
+                                }
                             }
                         }
                     }
@@ -14000,6 +14046,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 // marking on one side alone would split the backends on
                 // `let ((r, a), b) = t; let m = r;`. Filed separately; it is at
                 // two bodies on every surface.
+                let mut inner_took: std::collections::HashSet<u32> =
+                    std::collections::HashSet::new();
                 self.place_source_tuple_leaf_cleanups(
                     inner_pats,
                     inner_tes,
@@ -14007,8 +14055,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     inner_ty,
                     owner_runs_bodies,
                     mark_views,
-                    &mut std::collections::HashSet::new(),
+                    &mut inner_took,
                 );
+                // B-2026-09-03-14 — the recursion cap-zeroes the inner leaves it
+                // takes, but the OUTER element was never recorded (this call site
+                // discarded the inner set outright), so the owner's walk still
+                // descended into the field and ran the inner body against the husk:
+                // `let ((r, a), b) = h.pe;` printed `dR6//0` BEFORE the live read,
+                // exactly B-2026-09-02-43's defect one level down.
+                //
+                // The inner set is kept SEPARATE from the caller's rather than
+                // shared: these are inner indices, and feeding them upward would
+                // mask the wrong top-level elements. The mask is also FLAT one level
+                // down (`emit_tuple_elem_user_drop_bodies_fn_masked` takes a set of
+                // indices, not a tree), so a nested element can only be masked
+                // WHOLESALE -- do it only when the recursion actually claimed every
+                // body-bearing element inside. A partially-taken nested tuple keeps
+                // its source walk, which runs one body twice rather than losing one
+                // outright: the safe side of the two.
+                let inner_bodies: Vec<u32> = inner_tes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ite)| self.elem_te_runs_user_drop(ite))
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                if !inner_bodies.is_empty() && inner_bodies.iter().all(|i| inner_took.contains(i)) {
+                    took_bodies.insert(idx as u32);
+                }
                 continue;
             }
             let PatternKind::Binding(name) = &pat.kind else {
@@ -14385,27 +14458,52 @@ impl<'ctx> super::Codegen<'ctx> {
     /// walker at all" — the latter is the case that leaked: a discarded field
     /// whose type has no user `Drop` gets no walker here, so nothing is
     /// emitted and nothing owns it.
-    fn run_discarded_leaf_user_drop_bodies(
+    /// [`Self::run_discarded_leaf_user_drop_bodies`] for the one caller that
+    /// only ever asked the MEMORY question (B-2026-09-03-14). Keeps that site
+    /// reading as the plain bool it always was, rather than having it reach
+    /// into a field whose sibling it must then be trusted not to confuse.
+    fn discarded_leaf_took_memory(
         &mut self,
         te: &TypeExpr,
         elem: BasicValueEnum<'ctx>,
         free_memory: bool,
     ) -> bool {
+        self.run_discarded_leaf_user_drop_bodies(te, elem, free_memory)
+            .took_memory
+    }
+
+    /// B-2026-09-03-14 — RETURNS BOTH ANSWERS, because they are not the same
+    /// answer and a caller that needed the other one silently got `false`.
+    /// `took_memory` is the original bool: `true` only when `free_memory` was
+    /// asked for AND a memory drop fn existed, so a caller passing
+    /// `free_memory: false` gets `false` no matter what happened.
+    /// `ran_bodies` says whether the user `Drop` body walker was actually
+    /// called, which is what a caller must know before masking this element out
+    /// of the SOURCE's walk — mask on the memory answer and a wildcard whose
+    /// body ran here keeps its second body; mask without asking at all and a
+    /// leaf this helper DECLINED (a `shared` type, or a `Vec[R]` element whose
+    /// head name is neither struct nor enum) loses its only one.
+    fn run_discarded_leaf_user_drop_bodies(
+        &mut self,
+        te: &TypeExpr,
+        elem: BasicValueEnum<'ctx>,
+        free_memory: bool,
+    ) -> DiscardedLeaf {
         let TypeKind::Path(p) = &te.kind else {
-            return false;
+            return DiscardedLeaf::NOTHING;
         };
         let Some(name) = p.segments.last().cloned() else {
-            return false;
+            return DiscardedLeaf::NOTHING;
         };
         // A `shared` leaf drops through the RC machinery against a box with a
         // refcount header, so the plain-struct GEPs in the walker would be off
         // by it; the emitter declines such a type anyway, but bailing here keeps
         // the intent local.
         if self.type_decls.shared_types.contains_key(&name) {
-            return false;
+            return DiscardedLeaf::NOTHING;
         }
         let Some(cur_fn) = self.current_fn else {
-            return false;
+            return DiscardedLeaf::NOTHING;
         };
         // A non-shared user ENUM leaf runs its LIVE VARIANT's payload bodies,
         // through the same emitter the binding-leaf arm of
@@ -14465,7 +14563,7 @@ impl<'ctx> super::Codegen<'ctx> {
             None
         };
         let Some(walker) = walker else {
-            return false;
+            return DiscardedLeaf::NOTHING;
         };
         let synth = format!("__wildcard_discard_{}", self.indexed_elem_counter);
         self.indexed_elem_counter += 1;
@@ -14487,10 +14585,16 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if let Some(mem) = mem {
                 self.builder.build_call(mem, &[slot.into()], "").unwrap();
-                return true;
+                return DiscardedLeaf {
+                    ran_bodies: true,
+                    took_memory: true,
+                };
             }
         }
-        false
+        DiscardedLeaf {
+            ran_bodies: true,
+            took_memory: false,
+        }
     }
 
     /// Queue scope-exit cleanup for a heap-owning destructure leaf, keyed off

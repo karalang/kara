@@ -9563,6 +9563,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
         let skip = self.field_skip_tree_for_var(var_name, here);
+        // B-2026-09-03-14 — A PARENT WITH ITS OWN `impl Drop` HAS NO PER-BINDING
+        // BODIES ACTION TO REPLACE. It runs its field bodies from inside
+        // `karac_drop_<T>`, the type-level wrapper registered as a separate
+        // `OwnWrapper` action (B-2026-09-01-40), so the `replace`/`suppress` pair
+        // below found nothing and the husk body kept firing:
+        // `struct Hd { pe: (R, i64), n: i64 }` with `impl Drop for Hd` measured
+        // `dHd7`, `dR7//0`, `b7/t7`, `dR7/t7/1` against the interpreter's three
+        // lines. The wrapper mask is the surgery that fits that shape, and
+        // `disarm_struct_field_bodies_at` already selects it for the same reason —
+        // doing it here too makes the choice structural rather than each caller's
+        // to remember.
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(&struct_name));
+        if owns_body {
+            if let Some(slot) = self.variables.get(var_name).copied() {
+                self.disarm_user_drop_field_bodies_masked(slot.ptr, &struct_name, &skip);
+            }
+            return;
+        }
         match self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip) {
             Some(bodies) => {
                 let _ = self.replace_user_drop_fn_for_var(

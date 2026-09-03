@@ -598,6 +598,101 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-03-14 — the three arms of B-2026-09-02-43's owner mask under ASAN + LSan.
+    ///
+    /// The transcript is pinned by `e2e_destructure_owner_mask_reaches_the_remaining_arms`;
+    /// what this case pins is the MEMORY, which that test cannot see.
+    ///
+    /// IT CANNOT CATCH THE ORIGINAL DEFECTS, AND SAYING SO IS THE POINT. Two of the three
+    /// were bodies run against a ZEROED husk and the third was a duplicate body over a live
+    /// value, so the pre-fix binary is ASAN- and LSan-clean; valgrind agreed at `-O0` and
+    /// `-O2`. What it guards is the FIX, which deletes bodies from a walk and in the
+    /// `owndrop` case swaps which walker runs at all: masking the type-level `karac_drop_<T>`
+    /// wrapper rather than a per-binding action. Getting the memory half of that wrong
+    /// strands every heap field the element owns, and every `Drop` body here reads both
+    /// `self.tag` and `self.xs.len()`, so freeing too early is a use-after-free rather than
+    /// a silent leak.
+    ///
+    /// `wild` is the arm where body and memory must part company most clearly: the body runs
+    /// at the destructure while the aggregate keeps the memory, so a mask that also moved
+    /// ownership would leak it. `wildopt` is the arm that must not be masked at all.
+    #[test]
+    fn asan_destructure_owner_mask_remaining_arms_keep_the_heap() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+
+struct H  { pe: (R, i64) }
+struct Hi { pe: (i64, R) }
+struct Hw { pe: (i64, Option[R]) }
+struct Hn { pe: ((R, i64), i64) }
+struct Hd { pe: (R, i64), n: i64 }
+impl Drop for Hd { fn drop(mut ref self) { println(f"dHd{self.n}") } }
+
+fn mk(id: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(id); return R { id: id, tag: f"t{id}", xs: v } }
+
+fn w1() { let h = H  { pe: (mk(1), 0) };            let (_, k) = h.pe;      println("  end") }
+fn w2() { let h = Hi { pe: (0, mk(2)) };            let (k, _) = h.pe;      println("  end") }
+fn w3() { let h = Hw { pe: (0, Option.Some(mk(3))) }; let (k, _) = h.pe;    println("  end") }
+fn n1() { let h = Hn { pe: ((mk(4), 0), 1) };       let ((r, a), b) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn d1() { let h = Hd { pe: (mk(5), 0), n: 5 };      let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c1() { let h = H  { pe: (mk(6), 0) };            let (r, k) = h.pe;      println(f"  b{r.id}/{r.tag}"); println("  end") }
+fn c2(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println("  end") }
+
+fn main() {
+    println("wild");     w1();                      println("wild end")
+    println("wildidx");  w2();                      println("wildidx end")
+    println("wildopt");  w3();                      println("wildopt end")
+    println("nested");   n1();                      println("nested end")
+    println("owndrop");  d1();                      println("owndrop end")
+    println("plain");    c1();                      println("plain end")
+    println("param");    c2(H { pe: (mk(7), 0) });  println("param end")
+    println("done")
+}
+"#,
+            &[
+                // The harness trims the run's FIRST line; every later line keeps
+                // its indentation.
+                "wild",
+                "dR1/t1/1",
+                "  end",
+                "wild end",
+                "wildidx",
+                "dR2/t2/1",
+                "  end",
+                "wildidx end",
+                "wildopt",
+                "dR3/t3/1",
+                "  end",
+                "wildopt end",
+                "nested",
+                "  b4/t4",
+                "dR4/t4/1",
+                "  end",
+                "nested end",
+                "owndrop",
+                "dHd5",
+                "  b5/t5",
+                "dR5/t5/1",
+                "  end",
+                "owndrop end",
+                "plain",
+                "  b6/t6",
+                "dR6/t6/1",
+                "  end",
+                "plain end",
+                "param",
+                "  b7/t7",
+                "  end",
+                "dR7/t7/1",
+                "param end",
+                "done",
+            ],
+            "b43-14-owner-mask-remaining-arms",
+        );
+    }
+
     /// B-2026-09-02-38 — the STRUCT-PATTERN sibling of the case above, under
     /// ASAN + LSan.
     ///
