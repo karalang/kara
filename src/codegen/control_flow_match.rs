@@ -8955,13 +8955,32 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.place_chain_type_name(object)?;
-                let st = *self.type_decls.struct_types.get(obj_ty.as_str())?;
                 let idx = self
                     .type_decls
                     .struct_field_names
                     .get(obj_ty.as_str())?
                     .iter()
                     .position(|n| n == field)? as u32;
+                // B-2026-09-03-16 — the OBJECT's own aggregate type first, the
+                // name table second. `struct_types` is keyed by the declaration
+                // name, so for a generic owner it holds the layout of the
+                // UNINSTANTIATED `G` -- where `T` is a placeholder word -- and
+                // not the monomorph the variable actually has. Indexing that
+                // gave a tuple field whose element widths were wrong, and a load
+                // through it read a `struct R { id, tag: String, xs: Vec }`
+                // element back as `dR7//0`: the first word right and everything
+                // past the placeholder zero.
+                //
+                // The sibling `TupleIndex` arm below already recurses on its
+                // object for exactly this reason; this arm was the one that went
+                // through the name table instead. For a NON-generic owner the
+                // two answers are identical, which is what kept the difference
+                // invisible. The name-table lookup stays as the fallback for a
+                // receiver the recursion cannot resolve (a call result, a
+                // temporary) -- unchanged behaviour there.
+                let st = self
+                    .place_chain_aggregate_llvm_type(object)
+                    .or_else(|| self.type_decls.struct_types.get(obj_ty.as_str()).copied())?;
                 match st.get_field_type_at_index(idx)? {
                     BasicTypeEnum::StructType(t) => Some(t),
                     _ => None,
@@ -9006,6 +9025,47 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Resolve a generic struct's declared type parameters out of one of its
+    /// field `TypeExpr`s, using the concrete instantiation recorded for the
+    /// receiver expression (`h: G[R]` + `pe: (T, i64)` -> `(R, i64)`).
+    ///
+    /// `None` -- meaning "use the declared form unchanged" -- for a non-generic
+    /// owner, for a receiver whose instantiation is not recoverable, and for an
+    /// arity mismatch between declared parameters and supplied arguments. A
+    /// caller that cannot substitute is no worse off than before this existed.
+    fn struct_field_te_subst_inst(
+        &self,
+        struct_name: &str,
+        object: &Expr,
+        fte: &TypeExpr,
+    ) -> Option<TypeExpr> {
+        let params = self.type_decls.struct_generic_params.get(struct_name)?;
+        if params.is_empty() {
+            return None;
+        }
+        let inst = self.enum_inst_type_of_expr(object)?;
+        let TypeKind::Path(ip) = &inst.kind else {
+            return None;
+        };
+        let args = ip.generic_args.as_ref()?;
+        if args.len() != params.len() {
+            return None;
+        }
+        let mut subst: std::collections::HashMap<String, TypeExpr> =
+            std::collections::HashMap::new();
+        for (p, a) in params.iter().zip(args.iter()) {
+            if let GenericArg::Type(te) = a {
+                subst.insert(p.clone(), te.clone());
+            }
+        }
+        if subst.is_empty() {
+            return None;
+        }
+        Some(crate::codegen::helpers::subst_type_params_in_type_expr(
+            fte, &subst,
+        ))
+    }
+
     /// The element `TypeExpr`s of a tuple-typed place expression (`<struct>.f`
     /// where `f` is declared a tuple, or a tuple-index thereof). `&self`.
     pub(super) fn place_chain_tuple_tes(&self, expr: &Expr) -> Option<Vec<TypeExpr>> {
@@ -9027,13 +9087,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(obj_ty.as_str())?
                     .iter()
                     .position(|n| n == field)?;
-                match &self
+                let fte = self
                     .type_decls
                     .struct_field_type_exprs
                     .get(obj_ty.as_str())?
-                    .get(idx)?
-                    .kind
-                {
+                    .get(idx)?;
+                // B-2026-09-03-16 — substitute the OWNER's generic arguments
+                // before answering. `struct_field_type_exprs` is keyed by the
+                // DECLARATION name and stores each field exactly as written, so
+                // `struct G[T] { pe: (T, i64) }` reads back as `(T, i64)` for
+                // every instantiation of `G`.
+                //
+                // That bare `T` is not a harmless imprecision here: this is the
+                // element-`TypeExpr` source for a projection destructure, and
+                // `place_source_tuple_leaf_cleanups`' leaf arm tests the element
+                // against `enum_layouts` / `struct_types` by NAME. `T` matches
+                // neither, so the leaf `continue`d, took neither the body nor
+                // the memory, and the SOURCE ran the element's `Drop` at its own
+                // NLL death -- BEFORE the leaf's live read, where the
+                // interpreter runs it after. A one-body PLACEMENT split with no
+                // husk, invisible to a body COUNT and identified only by
+                // extending the source's live range and watching the body follow
+                // it. The non-generic twin was correct throughout, which is what
+                // put the fault on the missing substitution rather than on the
+                // projection source.
+                let substituted;
+                let fte = match self.struct_field_te_subst_inst(&obj_ty, object, fte) {
+                    Some(t) => {
+                        substituted = t;
+                        &substituted
+                    }
+                    None => fte,
+                };
+                match &fte.kind {
                     TypeKind::Tuple(elems) => Some(elems.clone()),
                     _ => None,
                 }

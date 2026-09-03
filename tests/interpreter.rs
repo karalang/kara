@@ -57442,3 +57442,135 @@ fn test_ordinary_lowercase_receivers_are_unaffected() {
                    }");
     assert_eq!(out.trim(), "9\n2");
 }
+
+/// B-2026-09-03-16 — A GENERIC PARENT'S PROJECTION DESTRUCTURE MUST HAND THE
+/// ELEMENT'S `Drop` BODY TO THE LEAF, NOT LEAVE IT WITH THE SOURCE.
+///
+/// `struct G[T] { pe: (T, i64) }; let (r, k) = h.pe;` ran the element's body at
+/// `h`'s NLL death on the three compiled surfaces and at the leaf's under
+/// `--interp`. ONE body on both sides, on a LIVE value on both sides — a
+/// PLACEMENT split with no husk, which is why a body COUNT cannot see it and
+/// `marker` below is the cell that identifies the owner: it extends the SOURCE's
+/// live range past the read (`z{h.z}`), so a body belonging to `h` prints AFTER
+/// `z9` and a body belonging to the leaf prints before it.
+///
+/// `struct_field_type_exprs` is keyed by the DECLARATION name and stores fields
+/// as written, so `G`'s element read back as the bare `T` however `G` was
+/// instantiated; `T` names neither an enum nor a struct, so the leaf arm
+/// declined and took neither body nor memory. The same name-keyed lookup fed the
+/// LLVM layout, where the placeholder width made a load read `dR/​/0`.
+/// `nongeneric` is the twin that was correct throughout and is what put the
+/// fault on the missing substitution rather than on the projection source.
+///
+/// Every `Drop` body renders `tag` and `xs.len()`, so a body running on a
+/// cap-zeroed husk prints `dRnn//0` and is distinguishable from a correct one —
+/// the whole family asserts COUNTS over a payload that cannot render empty, and
+/// this class of defect hides in exactly that gap.
+///
+/// OVER-REACH CONTROLS. `nodrop` instantiates the same generic at a
+/// `Drop`-less type and must stay silent; `bothelems` and `secondpos` place the
+/// parameter in either position; `nested` goes a level down; `wildcard`
+/// discards the leaf; `paramroot` is the non-generic by-value param.
+///
+/// `genericfn` PINS THE ONE SHAPE THIS FIX DECLINES. A by-value param of a
+/// GENERIC function is emitted by `compile_generic_call`, which populates
+/// neither `current_fn_param_names` nor `owned_struct_params`, so the ownership
+/// gate cannot tell it from a local and the leaf would take a body the caller's
+/// copy also runs. The substitution makes that shape reachable for the first
+/// time, so it is guarded rather than answered wrongly; the cell holds it at ONE
+/// body, matching its non-generic twin. Filed separately — when that gap closes,
+/// the guard comes off and this cell must not move.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_generic_parent_projection_destructure_hands_the_body_to_the_leaf`, pinned to the same string.
+#[test]
+fn test_generic_parent_projection_destructure_hands_the_body_to_the_leaf() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct G[T]  { pe: (T, i64), z: i64 }
+struct Gn    { pe: (R, i64), z: i64 }
+struct P2[A, B] { pe: (A, B), z: i64 }
+struct Mix[T] { pe: (i64, T), z: i64 }
+struct Nest[T] { pe: ((T, i64), i64), z: i64 }
+struct Plain { a: i64, b: i64 }
+
+fn n1() { let h = G[R] { pe: (mk(41), 0), z: 9 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}") }
+fn n2() { let h = G[R] { pe: (mk(42), 0), z: 9 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println(f"  z{h.z}") }
+fn n3() { let h = Gn   { pe: (mk(43), 0), z: 9 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n4() { let h = G[R] { pe: (mk(44), 0), z: 9 }; let (r, k) = h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
+fn n5() { let h = P2[R, R] { pe: (mk(45), mk(95)), z: 9 }; let (a, b) = h.pe; println(f"  b{a.id}/{b.id}") }
+fn n6() { let h = Mix[R] { pe: (7, mk(46)), z: 9 }; let (a, r) = h.pe; println(f"  b{a}/{r.id}") }
+fn n7() { let h = G[Plain] { pe: (Plain { a: 1, b: 2 }, 0), z: 9 }; let (p, k) = h.pe; println(f"  b{p.a}/{p.b}") }
+fn n8() { let h = G[R] { pe: (mk(48), 0), z: 9 }; let (_, k) = h.pe; println(f"  b{k}") }
+fn n9() { let h = Nest[R] { pe: ((mk(49), 1), 2), z: 9 }; let ((r, a), b) = h.pe; println(f"  b{r.id}/{a}/{b}") }
+fn n10[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
+fn n11() { let h = G[R] { pe: (mk(51), 5), z: 9 }; let k = n10(h); println(f"  b{k}") }
+fn n12(h: Gn) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+
+fn main() {
+    println("generic");    n1();                             println("generic end")
+    println("marker");     n2();                             println("marker end")
+    println("nongeneric"); n3();                             println("nongeneric end")
+    println("rebind");     n4();                             println("rebind end")
+    println("bothelems");  n5();                             println("bothelems end")
+    println("secondpos");  n6();                             println("secondpos end")
+    println("nodrop");     n7();                             println("nodrop end")
+    println("wildcard");   n8();                             println("wildcard end")
+    println("nested");     n9();                             println("nested end")
+    println("genericfn");  n11();                            println("genericfn end")
+    println("paramroot");  n12(Gn { pe: (mk(52), 0), z: 9 }); println("paramroot end")
+    println("done")
+}
+"#),
+        r#"generic
+  b41/t41/1
+dR41/t41/1
+generic end
+marker
+  b42/t42
+dR42/t42/1
+  z9
+marker end
+nongeneric
+  b43/t43
+dR43/t43/1
+nongeneric end
+rebind
+  b44/t44/1
+dR44/t44/1
+rebind end
+bothelems
+  b45/95
+dR95/t95/1
+dR45/t45/1
+bothelems end
+secondpos
+  b7/46
+dR46/t46/1
+secondpos end
+nodrop
+  b1/2
+nodrop end
+wildcard
+dR48/t48/1
+  b0
+wildcard end
+nested
+  b49/1/2
+dR49/t49/1
+nested end
+genericfn
+  in
+dR51/t51/1
+  b5
+genericfn end
+paramroot
+  b52/t52
+dR52/t52/1
+paramroot end
+done
+"#
+    );
+}
