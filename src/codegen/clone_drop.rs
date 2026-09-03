@@ -2028,6 +2028,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // B-2026-09-03-36 — the SHARED sibling of the two guards above, and the
+        // same trap in the one case they both exclude. Each opens with
+        // `!shared_types.contains_key(..)`, so a `shared struct` / `shared enum`
+        // falls through to the `karac_drop_<T>` module lookup below — which
+        // finds the user-drop WRAPPER, exactly what those guards exist to
+        // prevent. The wrapper runs the body and returns; it never touches the
+        // refcount, so the box is stranded.
+        //
+        // A shared slot holds an 8-byte HANDLE, not a value to walk, so the
+        // memory-side answer for it is an rc-dec. `emit_vec_elem_rc_dec_fn`
+        // loads the pointer, null-checks and decs through the heap layout, which
+        // frees the box and runs `__karac_rc_drop_<T>` at zero — already what
+        // `vec_elem_agg_drop_for_type_expr` reaches for on a shared Vec ELEMENT,
+        // for this same reason. This is that answer, one channel over.
+        //
+        // Measured on `n.s = Sd { m: 9 }` over `struct N { s: Sd }`: the
+        // displaced handle's `Drop` body printed — so the value wrapper HAD run
+        // — and its 16-byte box leaked, one per assignment and unbounded. The
+        // body still runs after the fix, through the rc-drop at zero rather than
+        // the wrapper, so output is unchanged.
+        if let Some(heap_ty) = self.shared_heap_type_for_type_expr(te) {
+            if let TypeKind::Path(p) = &te.kind {
+                if let [single] = p.segments.as_slice() {
+                    let single = single.clone();
+                    if let Some(f) = self.emit_vec_elem_rc_dec_fn(&single, heap_ty) {
+                        return f;
+                    }
+                }
+            }
+        }
         if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return f;
         }

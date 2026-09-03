@@ -3722,7 +3722,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// slot, null-checks, and rc-dec's via `T`'s heap layout (which fires
     /// `__karac_rc_drop_<T>` and frees the box + recurses into its children
     /// when the count reaches 0). Memoized by symbol name.
-    fn emit_vec_elem_rc_dec_fn(
+    pub(super) fn emit_vec_elem_rc_dec_fn(
         &mut self,
         type_name: &str,
         heap_ty: StructType<'ctx>,

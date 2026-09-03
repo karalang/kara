@@ -68843,6 +68843,98 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-36 — the ASSIGNMENT sibling of the row above, and the one
+    /// case both of `emit_drop_fn_for_type_expr`'s existing guards exclude.
+    ///
+    /// Reassigning a `shared` field of a plain struct — `n.s = Sd { m: 9 }` —
+    /// must release the DISPLACED handle. The memory-side resolver every such
+    /// channel funnels through carries two guards for a `Drop`-bearing type,
+    /// each opening with `!shared_types.contains_key(..)`, both written because
+    /// the user-drop WRAPPER is named exactly `karac_drop_<T>` too. A `shared`
+    /// type falls through both and reaches that name — so the displacing
+    /// release ran the wrapper: the `Drop` body PRINTED, which is why the
+    /// defect reads as correct on output alone, while the wrapper never touched
+    /// the refcount and the 16-byte box was stranded. One per assignment,
+    /// unbounded, and independent of whether the owner has `impl Drop`.
+    ///
+    /// The fix routes a shared slot to an rc-dec instead — a shared field holds
+    /// an 8-byte HANDLE, not a value to walk — which is already the answer
+    /// `vec_elem_agg_drop_for_type_expr` reaches for on a shared Vec ELEMENT.
+    ///
+    /// THE FIXTURE IS BUILT TO BITE AT `-O2` for the reason the row above
+    /// records: a constant-seeded payload nobody reads folds away, and the CI
+    /// ASAN leg runs at the default level. Seeding from `env.args().len()` and
+    /// reading `note` from inside each `Drop` body keeps the boxes alive.
+    /// Measured against the pre-fix compiler: 480 B definitely + 348 B
+    /// indirectly lost at BOTH `KARAC_OPT_LEVEL=0` and the default `-O2`; both
+    /// go to zero.
+    ///
+    /// `aliased` IS THE CELL THAT FAILS AN OVER-EAGER FIX, and it also pins the
+    /// half of the defect that output alone does show. One handle is held by
+    /// both `g` and `n.s`, so the displacing release must dec to 1 and free
+    /// NOTHING. Pre-fix the wrapper ran `dSd40` right there, on a box `g` still
+    /// owns and still reads afterwards; post-fix it moves to `g`'s scope exit,
+    /// so the expected order is `dSd41` then `dSd40`. A fix that released
+    /// unconditionally rather than through the rc-dec double-frees here.
+    ///
+    /// The other four cells cover the shapes the displacing release reaches
+    /// through: `plain` (owner has no `impl Drop`), `owner_drop` (owner has
+    /// one, so the wrapper is in play), `nested` (`o.i.s = ..`, two hops), and
+    /// `twice` (two consecutive assignments, so a fix that disarms the field
+    /// after the first shows up as a leak).
+    ///
+    /// `--interp` prints none of these `dSd` lines — that is B-2026-09-03-9,
+    /// the interpreter losing a shared struct's body whenever it is held in an
+    /// aggregate. This harness asserts the compiled side only.
+    #[test]
+    fn asan_reassigning_a_shared_field_releases_the_displaced_rc_box() {
+        assert_clean_asan_run(
+            r#"
+shared struct Sd { m: i64, note: String }
+impl Drop for Sd { fn drop(mut ref self) { println(f"dSd{self.m}-{self.note.len()}") } }
+
+struct N { id: i64, s: Sd, tag: String }
+
+struct H { id: i64, s: Sd, tag: String }
+impl Drop for H { fn drop(mut ref self) { println(f"dH{self.id}-{self.tag.len()}") } }
+
+struct Inner { s: Sd }
+struct Outer { i: Inner, tag: String }
+
+fn mk(n: i64) -> Sd { return Sd { m: n, note: f"note-payloadpayloadpayload-{n}" } }
+fn tg(n: i64) -> String { return f"tag-payloadpayloadpayload-{n}" }
+
+fn plain(k: i64) -> i64 { let mut n: N = N { id: k, s: mk(10 * k), tag: tg(1) }; n.s = mk(11 * k); return n.tag.len() }
+fn owner_drop(k: i64) -> i64 { let mut h: H = H { id: 2 * k, s: mk(20 * k), tag: tg(2) }; h.s = mk(21 * k); return h.tag.len() }
+fn nested(k: i64) -> i64 { let mut o: Outer = Outer { i: Inner { s: mk(30 * k) }, tag: tg(3) }; o.i.s = mk(31 * k); return o.tag.len() }
+fn aliased(k: i64) -> i64 { let g: Sd = mk(40 * k); let mut n: N = N { id: 4 * k, s: g, tag: tg(4) }; n.s = mk(41 * k); return n.tag.len() + g.note.len() }
+fn twice(k: i64) -> i64 { let mut n: N = N { id: 5 * k, s: mk(50 * k), tag: tg(5) }; n.s = mk(51 * k); n.s = mk(52 * k); return n.tag.len() }
+
+fn main() {
+    let k: i64 = env.args().len();
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 2 {
+        acc = acc + plain(k);
+        acc = acc + owner_drop(k);
+        acc = acc + nested(k);
+        acc = acc + aliased(k);
+        acc = acc + twice(k);
+        i = i + 1;
+    }
+    println(f"acc{acc}");
+}
+"#,
+            &[
+                "dSd10-29", "dSd11-29", "dSd20-29", "dH2-27", "dSd21-29", "dSd30-29", "dSd31-29",
+                "dSd41-29", "dSd40-29", "dSd50-29", "dSd51-29", "dSd52-29", "dSd10-29", "dSd11-29",
+                "dSd20-29", "dH2-27", "dSd21-29", "dSd30-29", "dSd31-29", "dSd41-29", "dSd40-29",
+                "dSd50-29", "dSd51-29", "dSd52-29", "acc328",
+            ],
+            "b0903-36-shared-field-reassign-rc",
+        );
+    }
+
     #[test]
     fn asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once() {
         // B-2026-09-02-6 — the heap half of the in-loop drop-flag re-arm.
