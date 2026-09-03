@@ -158,7 +158,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 | B-2026-09-03-8 | 2026-09-03 | interp+codegen | medium | THE REBIND SPELLING OF B-2026-09-01-3 STILL DOUBLES A TUPLE ELEMENT'S `Drop` BODY -- `let t = (r, 5); let t2 = t; let x = t2.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-element param-view record that fix added does not travel across a whole-value rebind and the tuple path has no peer for the struct's all-views propagation | — |
 | B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
-| B-2026-09-03-10 | 2026-09-03 | codegen | high | ALL THREE COMPILED BACKENDS SKIP A LOOP-BODY LOCAL'S `Drop` BODY ON EVERY ITERATION when a conditional `return` inside the loop hands that local out through an AGGREGATE LITERAL -- `it0 it1 v15 dR15 post` against the interpreter's correct `it0 dR14 it1 v15 dR15 post`. The disarm is static, not per-iteration: three iterations returning at `i == 2` lose BOTH earlier bodies. The bare `return r` spelling of the same move is correct everywhere | — |
 
 ### Relocated
 
@@ -2163,6 +2162,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-2 | codegen | high | FORWARDING A GENERIC `Option[T]` PARAM TO A SECOND GENERIC FUNCTION PRINTS A RAW POINTER on all three COMPILED surfaces -- `fn fwd[T](x: Option[T]) {… | cbe86cd |
 | B-2026-09-03-3 | interp | medium | MAIN'S REQUIRED `Test (windows-latest)` CI JOB HAS BEEN RED SINCE B-2026-09-01-48's FIX (094c206a): the anti-vacuity guard that fix added to `test_sc… | 5699c44f |
 | B-2026-09-03-6 | codegen | high | A `Result[Option[String], E]` ARGUMENT PASSED BY VALUE DOUBLE-FREES ITS INNER PAYLOAD -- `karac run` ABORTS with `free(): double free detected in tca… | 27a60a4 |
+| B-2026-09-03-10 | codegen | high | ALL THREE COMPILED BACKENDS SKIP A LOOP-BODY LOCAL'S `Drop` BODY ON EVERY ITERATION when a conditional `return` inside the loop hands that local out… | 6876c5f |
 
 </details>
 
