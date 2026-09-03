@@ -2305,7 +2305,45 @@ impl<'a> super::TypeChecker<'a> {
                 &self.env.const_substitutions,
                 &const_id_to_name,
             );
-            if !matches!(&resolved, Type::TypeParam(n) if n == name) {
+            // B-2026-09-03-2 — the skip above used to be
+            // `!matches!(&resolved, Type::TypeParam(n) if n == name)`, and that
+            // NAME comparison cannot tell two different things apart:
+            //
+            //   * an UNSOLVED metavar, which `resolve_type_vars` hands back as
+            //     `TypeParam(originating_name)` — the self-referential binding
+            //     this skip exists to keep out of the resolution stack; and
+            //   * a metavar genuinely SOLVED to the CALLER's own type param,
+            //     when the caller happens to spell it with the same letter.
+            //
+            // One generic body calling another is the second case and is
+            // extremely common — `fn fwd[T](x: Option[T]) { sink(x) }`, where
+            // both functions call their parameter `T`. Dropping it meant the
+            // inner call recorded NO frame at all, in any of the three
+            // channels, so the inner monomorph resolved `T` to nothing and
+            // lowered the payload at the erased one-word width. For a boxed
+            // payload that word is the box POINTER: measured printing
+            // `s:94482719980304`, a fresh number every run, on all three
+            // compiled surfaces where `--interp` printed `[uv, wx]`. Renaming
+            // the outer param to `U` made the same program correct on all four
+            // — the whole defect was the name collision.
+            //
+            // Ask the SUBSTITUTION instead of the name. Follow the metavar
+            // chain: it ends either at something bound (a real solution, record
+            // it) or at an unsolved metavar (record it only if that metavar is
+            // not this very param). That is the question the old test was
+            // trying to ask, and it is immune to two scopes reusing a letter.
+            let mut cur = id;
+            let terminal_unsolved = loop {
+                match self.env.substitutions.get(&cur) {
+                    Some(Type::TypeVar(next)) => cur = *next,
+                    Some(_) => break None,
+                    None => break Some(cur),
+                }
+            };
+            let self_referential = terminal_unsolved
+                .and_then(|tid| id_to_name.get(&tid))
+                .is_some_and(|n| n == name);
+            if !self_referential {
                 solutions.insert(name.clone(), resolved);
             }
         }

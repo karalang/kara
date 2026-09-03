@@ -14409,6 +14409,96 @@ fn main() { let a: Array[i64, 2] = [1, 2]; show(Some(a)); show(Some(9)) }
         assert_eq!(out, "[1, 2]\n42\n9\n42\n");
     }
 
+    /// B-2026-09-03-2 — a generic body FORWARDING its `Option[T]` param to a
+    /// SECOND generic function, where the type argument is NAMELESS.
+    ///
+    /// The solver binds `sink`'s `T` to `fwd`'s `T` — a `Type::TypeParam` —
+    /// and `record_call_type_subs`'s caller dropped any solution whose
+    /// resolved name equalled the param's own, meaning to skip an UNSOLVED
+    /// metavar. That name test cannot tell an unsolved metavar apart from a
+    /// genuine propagation when both functions spell the param `T`, so the
+    /// inner call recorded NO frame in any of the three channels and `sink`
+    /// lowered the payload at the erased one-word width. For a boxed payload
+    /// that word is the box POINTER: `s:94482719980304`, a fresh number every
+    /// run, on all three compiled surfaces where `--interp` printed
+    /// `[uv, wx]`. Renaming the outer param to `U` made the same program
+    /// correct on all four, which is what pinned the diagnosis.
+    ///
+    /// EVERY LINE IS A DISTINCT CHANNEL:
+    ///   * `fwd` at `Array[String, 2]` — the reported shape, a boxed payload
+    ///     whose one erased word is a pointer.
+    ///   * `fwd` at `i64` — the scalar CONTROL, correct before and after, so a
+    ///     regression that breaks propagation generally fails here too.
+    ///   * `outer` → `mid` → `sink` — THREE hops, where the resolution has to
+    ///     chain rather than fire once.
+    ///   * `h.m` — the same forward with a METHOD as the inner callee.
+    ///   * `fwdU`, whose type param is spelled `U` — the control that
+    ///     ISOLATED the name collision, and the one leg that passed pre-fix.
+    ///   * two different NAMELESS instantiations through ONE `fwd`
+    ///     (`Array[String, 2]` then `(i64, i64)`) — pre-fix these mangled
+    ///     their inner monomorphs identically and shared one body, which
+    ///     SEGFAULTED once the propagated binding started resolving. The
+    ///     structural mangle axis reading `subst_call_te` is what separates
+    ///     them.
+    ///   * `fwd` at `Array[i64, 3]` and then at `Slice[i64]` — the last two
+    ///     lines, and the ones that show the mangle axis had to stop asking
+    ///     `type_expr_is_structural_type_arg` on the propagated arm. That
+    ///     predicate is TUPLES ONLY, so an `Array` fell past it to a probe
+    ///     that only answers for `StructType` and appended NOTHING — exactly
+    ///     as a scalar did. Two arrays therefore still collided after the
+    ///     tuple case was fixed, and measured EMPTY OUTPUT (a crash before
+    ///     the first print); a `Slice[i64]` reached a preceding
+    ///     `Array[i64, 3]`'s body and rendered as `[<ptr>, 2, 0]`. Both are
+    ///     silent-wrong-value shapes, so they need pinning rather than
+    ///     trusting that the earlier lines cover the axis.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_generic_forward_to_a_second_generic_resolves_the_payload`, pinned
+    /// to the same string — the interpreter was correct throughout, so it is
+    /// the oracle here rather than a second subject.
+    #[test]
+    fn codegen_generic_forward_to_a_second_generic_resolves_the_payload() {
+        let Some(out) = run_program(
+            r#"fn sink[T: Display](x: Option[T]) { match x { Some(t) => { println(f"s:{t}") } None => { println("n") } } }
+fn fwd[T: Display](x: Option[T]) { sink(x) }
+fn mid[T: Display](x: Option[T]) { sink(x) }
+fn outer[T: Display](x: Option[T]) { mid(x) }
+fn fwdU[U: Display](x: Option[U]) { sink(x) }
+struct H { }
+impl H {
+    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+}
+fn fwdm[T: Display](h: ref H, x: Option[T]) { h.m(x) }
+fn main() {
+    let a: Array[String, 2] = ["uv", "wx"];
+    fwd(Some(a));
+    fwd(Some(7));
+    let b: Array[String, 2] = ["yz", "ab"];
+    outer(Some(b));
+    let c: Array[String, 2] = ["cd", "ef"];
+    fwdU(Some(c));
+    let h = H { };
+    let d: Array[String, 2] = ["gh", "ij"];
+    fwdm(h, Some(d));
+    let e: Array[String, 2] = ["kl", "mn"];
+    fwd(Some(e));
+    let t: (i64, i64) = (5, 6);
+    fwd(Some(t));
+    let g: Array[i64, 3] = [1, 2, 3];
+    fwd(Some(g));
+    let sl: Slice[i64] = g[0..2];
+    fwd(Some(sl));
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "s:[uv, wx]\ns:7\ns:[yz, ab]\ns:[cd, ef]\nm:[gh, ij]\ns:[kl, mn]\ns:(5, 6)\ns:[1, 2, 3]\ns:[1, 2]\n"
+        );
+    }
+
     #[test]
     fn codegen_generic_option_payload_renders_at_its_instantiation() {
         let Some(out) = run_program(

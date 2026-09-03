@@ -1101,6 +1101,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect();
                 format!("tup_{}", parts.join("_"))
             }
+            // B-2026-09-03-2 — an ARRAY has no head name either, and without
+            // this arm every one of them collapsed to the same `"e"` token, so
+            // `Array[String, 2]` and `Array[i64, 3]` shared a symbol. Element
+            // AND length both participate: the two differ in LLVM layout, so a
+            // shared body reads one at the other's stride. Spelled `arr_<n>_<e>`
+            // to stay distinct from the tuple rendering above.
+            TypeKind::Array { element, size } => {
+                let n = match &size.kind {
+                    ExprKind::Integer(n, _) if *n >= 0 => n.to_string(),
+                    _ => "n".to_string(),
+                };
+                format!(
+                    "arr_{}_{}",
+                    n,
+                    Self::mono_mangle_token_for_type_expr(element)
+                )
+            }
             _ => "e".to_string(),
         }
     }
@@ -1198,6 +1215,7 @@ impl<'ctx> super::Codegen<'ctx> {
         subst: &HashMap<String, BasicTypeEnum<'ctx>>,
         subst_names: &HashMap<String, String>,
         subst_type_exprs: &HashMap<String, TypeExpr>,
+        subst_call_te: &HashMap<String, TypeExpr>,
     ) -> String {
         use std::fmt::Write as _;
         let Some(gp) = &func.generic_params else {
@@ -1207,7 +1225,23 @@ impl<'ctx> super::Codegen<'ctx> {
             if param.is_const {
                 continue;
             }
-            let token = match subst_type_exprs.get(&param.name) {
+            // B-2026-09-03-2 — `subst_call_te` is a SECOND source of the same
+            // thing this axis wants: the type argument's full `TypeExpr`. It
+            // postdates the axis (B-2026-08-31-39 opened it), and on the
+            // PROPAGATED path it is the only channel that has the answer — the
+            // name channel holds a placeholder and the side-table resolvers
+            // hold nothing. Without it, two different NAMELESS instantiations
+            // forwarded through one generic (`fwd(Some(arr)); fwd(Some(tup))`)
+            // mangled their inner monomorphs identically and shared one body:
+            // measured SEGFAULT once the propagated binding started resolving,
+            // because the shared body then reads a real type at the wrong
+            // shape rather than an erased word. Preferring `subst_type_exprs`
+            // keeps every symbol that channel already disambiguates
+            // byte-identical.
+            let te_source = subst_type_exprs
+                .get(&param.name)
+                .or_else(|| subst_call_te.get(&param.name));
+            let token = match te_source {
                 Some(te) if Self::type_expr_is_structural_type_arg(te) => {
                     Self::mono_mangle_token_for_type_expr(te)
                 }
@@ -1227,9 +1261,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(&param.name)
                     .is_none_or(|n| !self.mangle_name_is_resolved(n)) =>
                 {
-                    match subst.get(&param.name) {
-                        Some(BasicTypeEnum::StructType(st)) => self.llvm_struct_shape_token(*st),
-                        _ => continue,
+                    // B-2026-09-03-2 — when the name channel does not resolve,
+                    // a propagated `TypeExpr` is the most precise thing anyone
+                    // holds, so spell it WHATEVER ITS SHAPE. Gating this on
+                    // `type_expr_is_structural_type_arg` (tuples only) is what
+                    // left the second half of the row open: an `Array` and a
+                    // scalar both fell past the gate to the struct probe below,
+                    // both missed it (`ArrayType` / `IntType` are not
+                    // `StructType`), and both appended NOTHING — so
+                    // `fwd(Some(arr2str)); fwd(Some(arr3i64))` mangled one
+                    // symbol for two instantiations and shared a body. Measured
+                    // on the partial fix: empty output (a crash before the
+                    // first print) for two arrays, and a `Slice[i64]` rendered
+                    // at a preceding `Array[i64, 3]`'s shape as
+                    // `[<ptr>, 2, 0]`. The tuple gate is right for
+                    // `subst_type_exprs` — that channel carries entries whose
+                    // named shapes are already disambiguated elsewhere, and
+                    // widening it there would rename existing symbols — but on
+                    // THIS arm nothing else has spoken, so there is no symbol
+                    // to preserve and no reason to be selective.
+                    if let Some(te) = subst_call_te.get(&param.name) {
+                        Self::mono_mangle_token_for_type_expr(te)
+                    } else {
+                        match subst.get(&param.name) {
+                            Some(BasicTypeEnum::StructType(st)) => {
+                                self.llvm_struct_shape_token(*st)
+                            }
+                            _ => continue,
+                        }
                     }
                 }
                 _ => continue,
@@ -2106,7 +2165,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // stored, so a recorded `Vec[T]` inside a monomorph resolves against the
         // outer binding — the same flattening `subst_names` gets above. That
         // must happen HERE, while the caller's maps are still live.
-        let subst_call_te: HashMap<String, TypeExpr> = self
+        let mut subst_call_te: HashMap<String, TypeExpr> = self
             .span_tables
             .call_type_subs_te
             .get(&(call_span.offset, call_span.length))
@@ -2120,6 +2179,73 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect()
             })
             .unwrap_or_default();
+
+        // B-2026-09-03-2 — the PROPAGATED binding, which arrives through the
+        // head-NAME frame rather than this one.
+        //
+        // `record_call_type_subs` deliberately keeps a bare type param out of
+        // the `TypeExpr` frame: it names no type, and an entry reading
+        // `T -> T` would shadow the flattening this map performs. It records
+        // the propagation in the name frame instead
+        // (`type_to_concrete_or_param_name` returns the param's own name), and
+        // the name channel is flattened through the caller's active
+        // substitution precisely so that a propagated binding still resolves.
+        //
+        // That works while the type has a HEAD NAME. It does not when the
+        // caller's own binding is NAMELESS — `Array[String, 2]`, a tuple, a
+        // slice — which is the gap B-2026-08-31-39 opened this channel for.
+        // The name frame then carries a placeholder the head map cannot
+        // resolve, and the inner monomorph lowers the payload at the erased
+        // one-word width; for a boxed payload that word is the box POINTER.
+        //
+        // So do here what the skipped entry would have done: read the
+        // propagation out of the name frame and resolve the named param
+        // through the caller's live substitution.
+        // `subst_monomorph_type_params` is the same resolver the loop above
+        // uses, so a propagated binding and a direct one land on identical
+        // entries.
+        //
+        // GUARDED ON THE RESOLUTION ACTUALLY HAPPENING, which is what keeps
+        // the `T -> T` shadowing concern from reappearing: when the caller has
+        // no binding for the named param the probe comes back unchanged and
+        // nothing is inserted, leaving the head-name channel in sole charge
+        // exactly as before. Entries the `TypeExpr` frame already carries are
+        // never overwritten — a direct binding is more precise than a
+        // propagated one by construction.
+        if let Some(name_frame) = self
+            .span_tables
+            .call_type_subs
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        {
+            for (param, named) in name_frame {
+                if subst_call_te.contains_key(&param)
+                    || Self::type_param_is_a_whole_param_type(&generic_fn, param.as_str())
+                {
+                    continue;
+                }
+                let probe = TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec![named.clone()],
+                        generic_args: None,
+                        span: *call_span,
+                    }),
+                    span: *call_span,
+                };
+                let flat = self.subst_monomorph_type_params(&probe);
+                // Spelled out rather than `flat != probe` because `TypeExpr`
+                // carries spans and derives no `PartialEq`; the question is
+                // only whether the resolver moved off the bare param name.
+                let unresolved = matches!(&flat.kind, TypeKind::Path(fp)
+                    if fp.generic_args.is_none()
+                        && fp.segments.len() == 1
+                        && fp.segments[0] == named);
+                if !unresolved {
+                    subst_call_te.insert(param, flat);
+                }
+            }
+        }
+        let subst_call_te = subst_call_te;
 
         // Per-layout-monomorphization axis — forward layout-flow inference
         // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
@@ -2180,6 +2306,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &subst,
             &subst_names,
             &subst_type_exprs,
+            &subst_call_te,
         );
         // B-2026-08-06-25 — a type argument that is ITSELF a generic
         // instantiation (`Box[Box[i64]]` vs `Box[Box[String]]`) mangles only

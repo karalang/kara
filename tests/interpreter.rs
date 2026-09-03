@@ -322,6 +322,57 @@ fn main() {
 }
 
 /// B-2026-08-31-39 — the ORACLE for
+/// B-2026-09-03-2 — the ORACLE twin of
+/// `codegen_generic_forward_to_a_second_generic_resolves_the_payload`
+/// (tests/codegen.rs), pinned to the same string.
+///
+/// The interpreter was correct throughout: it has no monomorphization, so a
+/// generic body forwarding its `Option[T]` param to a second generic function
+/// simply passes the value along and the arm binding is whatever was there.
+/// Every compiled surface printed the payload BOX's address as an integer
+/// instead — a different number on every run. Pinned here so the compiled fix
+/// cannot later be "restored" by weakening this side to match a regressed
+/// backend.
+#[test]
+fn test_generic_forward_to_a_second_generic_resolves_the_payload() {
+    assert_eq!(
+        run(
+            r#"fn sink[T: Display](x: Option[T]) { match x { Some(t) => { println(f"s:{t}") } None => { println("n") } } }
+fn fwd[T: Display](x: Option[T]) { sink(x) }
+fn mid[T: Display](x: Option[T]) { sink(x) }
+fn outer[T: Display](x: Option[T]) { mid(x) }
+fn fwdU[U: Display](x: Option[U]) { sink(x) }
+struct H { }
+impl H {
+    fn m[T: Display](ref self, x: Option[T]) { match x { Some(t) => { println(f"m:{t}") } None => { println("n") } } }
+}
+fn fwdm[T: Display](h: ref H, x: Option[T]) { h.m(x) }
+fn main() {
+    let a: Array[String, 2] = ["uv", "wx"];
+    fwd(Some(a));
+    fwd(Some(7));
+    let b: Array[String, 2] = ["yz", "ab"];
+    outer(Some(b));
+    let c: Array[String, 2] = ["cd", "ef"];
+    fwdU(Some(c));
+    let h = H { };
+    let d: Array[String, 2] = ["gh", "ij"];
+    fwdm(h, Some(d));
+    let e: Array[String, 2] = ["kl", "mn"];
+    fwd(Some(e));
+    let t: (i64, i64) = (5, 6);
+    fwd(Some(t));
+    let g: Array[i64, 3] = [1, 2, 3];
+    fwd(Some(g));
+    let sl: Slice[i64] = g[0..2];
+    fwd(Some(sl));
+}
+"#
+        ),
+        "s:[uv, wx]\ns:7\ns:[yz, ab]\ns:[cd, ef]\nm:[gh, ij]\ns:[kl, mn]\ns:(5, 6)\ns:[1, 2, 3]\ns:[1, 2]\n"
+    );
+}
+
 /// `codegen_generic_destructured_payload_renders_at_its_instantiation`
 /// (tests/codegen.rs), pinned to the same string.
 ///
