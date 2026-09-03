@@ -1321,7 +1321,17 @@ impl<'a> super::Interpreter<'a> {
             .filter(|(n, _)| n == name)
             .map(|(_, f)| f.clone())
             .collect();
-        if !moved.is_empty() {
+        // B-2026-09-03-11 — the same mask for a field moved out through a
+        // CHAIN (`let (r, k) = g.h.pe;`). The flat set above is keyed
+        // `(name, field)` and cannot express it, so the root's walk descended
+        // into `h` and ran `pe`'s element body a second time.
+        let nested: Vec<Vec<String>> = self
+            .moved_out_nested_field_bodies
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, p)| p.clone())
+            .collect();
+        if !moved.is_empty() || !nested.is_empty() {
             if let Value::Struct {
                 name: sname,
                 mut fields,
@@ -1330,10 +1340,13 @@ impl<'a> super::Interpreter<'a> {
                 for f in &moved {
                     fields.remove(f);
                 }
-                let masked = Value::Struct {
+                let mut masked = Value::Struct {
                     name: sname,
                     fields,
                 };
+                for path in &nested {
+                    Self::remove_field_at_path(&mut masked, path);
+                }
                 self.drop_user_drop_fields_of_value(&masked);
                 return;
             }
@@ -2201,6 +2214,62 @@ impl<'a> super::Interpreter<'a> {
     /// exclusion caused the very divergence it was meant to prevent. The
     /// `ownstr` cell of `e2e_projection_source_tuple_destructure_is_a_view` and
     /// its interpreter twin keep that measurement standing.
+    /// B-2026-09-03-11 — remove the field a `moved_out_nested_field_bodies`
+    /// path names, descending through the structs on the way.
+    ///
+    /// Removing the ENTRY is the whole mask, exactly as it is for the flat set
+    /// one level up: `drop_user_drop_fields_of_value` resolves each declared
+    /// field through a `get` and skips a missing one, so nothing has to be
+    /// threaded through the walker's several other callers. Every field of
+    /// every struct along the path other than the leaf is untouched and keeps
+    /// its body.
+    ///
+    /// Silent on a path that does not resolve — a struct whose shape changed
+    /// under a rebind, say. The mask is an optimisation of ownership, and
+    /// declining to apply one is the pre-fix behaviour rather than a new
+    /// failure mode.
+    fn remove_field_at_path(v: &mut Value, path: &[String]) {
+        let Value::Struct { fields, .. } = v else {
+            return;
+        };
+        match path.split_first() {
+            Some((leaf, [])) => {
+                fields.remove(leaf.as_str());
+            }
+            Some((head, rest)) => {
+                if let Some(inner) = fields.get_mut(head.as_str()) {
+                    Self::remove_field_at_path(inner, rest);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// B-2026-09-03-11 — resolve a pure `FieldAccess` chain into its root
+    /// binding and the field-NAME path from it (`g.h.pe` -> `("g", ["h", "pe"])`).
+    ///
+    /// Name-based where codegen's `projection_field_index_path` is index-based,
+    /// which is the same split every other pair in this family uses: the
+    /// interpreter masks by removing an entry from a `HashMap<String, Value>`,
+    /// codegen by masking a field INDEX in a synthesized walker. `None` for any
+    /// root that is not a plain identifier, so an element or a call result --
+    /// neither of which has an owner this could hand back to -- keeps today's
+    /// behaviour.
+    fn field_chain_name_path(value: &Expr) -> Option<(String, Vec<String>)> {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return None;
+        };
+        match &object.kind {
+            ExprKind::Identifier(root) => Some((root.clone(), vec![field.clone()])),
+            ExprKind::FieldAccess { .. } => {
+                let (root, mut path) = Self::field_chain_name_path(object)?;
+                path.push(field.clone());
+                Some((root, path))
+            }
+            _ => None,
+        }
+    }
+
     fn destructure_source_param_root<'e>(&self, value: &'e Expr) -> Option<&'e str> {
         match &value.kind {
             ExprKind::Identifier(n) => Some(n.as_str()),
@@ -5178,6 +5247,9 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn rearm_container_bodies_for_name(&mut self, name: &str) {
         self.moved_out_container_bodies_bindings.remove(name);
         self.moved_out_tuple_elem_bodies.retain(|(n, _)| n != name);
+        // B-2026-09-03-11 — the deep sibling clears with the flat ones.
+        self.moved_out_nested_field_bodies
+            .retain(|(n, _)| n != name);
         self.moved_out_struct_field_bodies
             .retain(|(n, _)| n != name);
         self.moved_out_struct_field_payload_bodies
@@ -5859,11 +5931,19 @@ impl<'a> super::Interpreter<'a> {
                 }
                 // B-2026-08-03-8 — the struct-FIELD peer: `let x = h.f` moves
                 // one field out, so the source's field walk must skip it.
+                // B-2026-09-03-11 — and a DEEPER chain (`let (r, k) = g.h.pe;`)
+                // records the whole path instead. The identifier-object test
+                // below is what limited this to one hop: `g.h` is a
+                // `FieldAccess`, so nothing was recorded and the root's walk
+                // kept the leaf's body.
                 if let ExprKind::FieldAccess { object, field } = &value.kind {
                     if let ExprKind::Identifier(src) = &object.kind {
                         self.moved_out_struct_field_bodies
                             .insert((src.clone(), field.clone()));
+                    } else if let Some((root, path)) = Self::field_chain_name_path(value) {
+                        self.moved_out_nested_field_bodies.insert((root, path));
                     }
+                    let _ = field;
                 }
                 // B-2026-07-30-11 (discarded-temp leg): `let _ = <owned>;`
                 // throws the value away with no binding, so no Drop slot ever

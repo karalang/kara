@@ -182,8 +182,15 @@ pub(crate) struct TypeDecls<'ctx> {
     /// other body `H` owes; this feeds `FieldSkipTree::nested`, which masks
     /// inside the surviving field's own walker. Accumulates across arms and is
     /// cleared per function alongside its siblings.
+    /// B-2026-09-03-11 — keyed by a PATH of outer field indices, not a single
+    /// one. A one-element path is the original shape (`match q { Q { h: H { r,
+    /// .. } } => … }` and a one-hop tuple-field destructure); a longer one
+    /// records a deeper projection (`let (r, k) = g.h.pe;`), whose mask has to
+    /// land on the walker of the struct that actually owns the field — the same
+    /// re-keying `struct_moved_field_payload_bodies` got in B-2026-08-29-36,
+    /// and `FieldSkipTree::nested` already threads it.
     pub(crate) struct_moved_nested_field_bodies:
-        HashMap<String, std::collections::BTreeMap<usize, std::collections::BTreeSet<usize>>>,
+        HashMap<String, std::collections::BTreeMap<Vec<usize>, std::collections::BTreeSet<usize>>>,
     /// B-2026-08-02-7 / B-2026-08-02-13 — prelude type names a user program
     /// re-declared, shadowing the stdlib type of the same name.
     ///

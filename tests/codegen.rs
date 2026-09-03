@@ -13083,6 +13083,18 @@ done
     /// that a tuple whose elements are BOTH taken masks both. `noDestr` reads the
     /// element without destructuring at all and must keep the owner's single body.
     ///
+    /// WIDENED TO ANY DEPTH by B-2026-09-03-11. The one-hop restriction this test
+    /// originally carried was a KEYING limit on both sides, not an ownership judgement:
+    /// codegen's `struct_moved_nested_field_bodies` was keyed outer-field -> inner
+    /// indices, and the interpreter's flat mask keys `(name, field)` and its writer
+    /// only fired when the projected object was an IDENTIFIER. So `let (r, k) = g.h.pe`
+    /// recorded nothing anywhere, and BOTH backends doubled -- which is why it could
+    /// not be folded in here and had to move with the interpreter's own path-keyed
+    /// mask. `twohop` and `threehop` pin the widening; `outersib` and `midsib` pin that
+    /// it stays scoped, a `Drop` sibling at the OUTER and at the INTERMEDIATE level
+    /// each keeping its body; `deepNoDestr` reads through the whole chain without
+    /// destructuring and must keep the owner's single body.
+    ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_local_struct_tuple_field_destructure_masks_the_owner`, pinned to the same string.
     #[test]
@@ -13094,6 +13106,10 @@ fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
 struct H  { pe: (R, i64) }
 struct H2 { pe: (R, i64), other: R }
 struct H3 { pe: (R, R) }
+struct G  { h: H }
+struct G2 { h: H, outer: R }
+struct G3 { h: H2 }
+struct G4 { g: G }
 
 fn n1() { let h = H { pe: (mk(21), 0) }; let (r, k) = h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
 fn n2() { let h = H { pe: (mk(22), 0) }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
@@ -13102,6 +13118,11 @@ fn n4() { let h = H2 { pe: (mk(24), 0), other: mk(94) }; let (r, k) = h.pe; prin
 fn n5() { let h = H3 { pe: (mk(25), mk(95)) }; let (a, b) = h.pe; println(f"  b{a.id}/{b.id}") }
 fn n6() { let h = H { pe: (mk(26), 0) }; println(f"  b{h.pe.0.id}/{h.pe.0.tag}") }
 fn n7(h: H) { let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n8() { let g = G { h: H { pe: (mk(31), 0) } }; let (r, k) = g.h.pe; let m = r; println(f"  b{m.id}/{m.tag}/{m.xs.len()}") }
+fn n9() { let g = G2 { h: H { pe: (mk(32), 0) }, outer: mk(82) }; let (r, k) = g.h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n10() { let g = G3 { h: H2 { pe: (mk(33), 0), other: mk(83) } }; let (r, k) = g.h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n11() { let g = G4 { g: G { h: H { pe: (mk(34), 0) } } }; let (r, k) = g.g.h.pe; println(f"  b{r.id}/{r.tag}") }
+fn n12() { let g = G { h: H { pe: (mk(35), 0) } }; println(f"  b{g.h.pe.0.id}/{g.h.pe.0.tag}") }
 
 fn main() {
     println("local1hop");   n1();                      println("local1hop end")
@@ -13111,6 +13132,11 @@ fn main() {
     println("bothelems");   n5();                      println("bothelems end")
     println("noDestr");     n6();                      println("noDestr end")
     println("paramroot");   n7(H { pe: (mk(27), 0) }); println("paramroot end")
+    println("twohop");      n8();                      println("twohop end")
+    println("outersib");    n9();                      println("outersib end")
+    println("midsib");      n10();                     println("midsib end")
+    println("threehop");    n11();                     println("threehop end")
+    println("deepNoDestr"); n12();                     println("deepNoDestr end")
     println("done")
 }
 "#,
@@ -13149,6 +13175,28 @@ paramroot
   b27/t27
 dR27/t27/1
 paramroot end
+twohop
+  b31/t31/1
+dR31/t31/1
+twohop end
+outersib
+dR82/t82/1
+  b32/t32
+dR32/t32/1
+outersib end
+midsib
+dR83/t83/1
+  b33/t33
+dR33/t33/1
+midsib end
+threehop
+  b34/t34
+dR34/t34/1
+threehop end
+deepNoDestr
+  b35/t35
+dR35/t35/1
+deepNoDestr end
 done
 "#
         );

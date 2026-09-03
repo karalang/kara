@@ -9451,7 +9451,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .struct_moved_nested_field_bodies
                         .entry(var_name.clone())
                         .or_default()
-                        .entry(idx)
+                        .entry(vec![idx])
                         .or_default()
                         .insert(iidx);
                     masked_any = true;
@@ -9512,12 +9512,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// twice (the husk is zeroed, not freed), so valgrind and LSan are both
     /// clean and only a `Drop` body that RENDERS its fields can observe it.
     ///
-    /// ONE HOP, deliberately. `struct_moved_nested_field_bodies` is keyed
-    /// outer-field → inner indices, which is exactly `<ident>.<field>`; a
-    /// deeper chain (`g.h.pe`) needs a PATH-keyed store like
-    /// `struct_moved_field_payload_bodies`, and it doubles on the INTERPRETER
-    /// too, so it is a different defect rather than this one further out and is
-    /// filed separately.
+    /// ANY DEPTH since B-2026-09-03-11, which re-keyed
+    /// `struct_moved_nested_field_bodies` by a PATH of field indices and taught
+    /// `field_skip_tree_for_var` to descend one `nested` level per hop. The
+    /// one-hop restriction was a keying limit, not an ownership judgement: the
+    /// deeper chain doubled on the INTERPRETER too, so it had to move in the
+    /// same commit as that side's own path-keyed mask rather than be widened
+    /// here alone.
     ///
     /// Masking is scoped to the elements whose leaf actually took a body —
     /// which is why the caller passes them rather than masking the whole field:
@@ -9526,10 +9527,10 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn disarm_struct_field_tuple_elem_bodies_at(
         &mut self,
         var_name: &str,
-        field_idx: usize,
+        field_path: &[usize],
         elem_idxs: &std::collections::HashSet<u32>,
     ) {
-        if elem_idxs.is_empty() {
+        if elem_idxs.is_empty() || field_path.is_empty() {
             return;
         }
         let Some(struct_name) = self.var_types.var_type_names.get(var_name).cloned() else {
@@ -9542,7 +9543,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_moved_nested_field_bodies
             .entry(var_name.to_string())
             .or_default()
-            .entry(field_idx)
+            .entry(field_path.to_vec())
             .or_default()
             .extend(elem_idxs.iter().map(|i| *i as usize));
         let subst = self
@@ -9871,8 +9872,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .struct_moved_nested_field_bodies
                 .entry(dst.to_string())
                 .or_default();
-            for (outer, inner) in v {
-                e.entry(outer).or_default().extend(inner);
+            for (path, inner) in v {
+                e.entry(path).or_default().extend(inner);
             }
         }
         if let Some(v) = self.tuple_moved_elem_bodies.get(src).cloned() {
@@ -9942,12 +9943,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .struct_moved_nested_field_bodies
             .get(var_name)
         {
-            for (outer, inner) in m {
-                skip.nested
-                    .entry(*outer)
-                    .or_default()
-                    .here
-                    .extend(inner.iter().copied());
+            // B-2026-09-03-11 — descend one `nested` level per path hop, so a
+            // two-hop mask lands on the walker of the struct that owns the
+            // field rather than on the root's. A one-element path reproduces
+            // the previous single-level behaviour exactly.
+            for (path, inner) in m {
+                let mut cur = &mut skip;
+                for hop in path {
+                    cur = cur.nested.entry(*hop).or_default();
+                }
+                cur.here.extend(inner.iter().copied());
             }
         }
         skip

@@ -13902,9 +13902,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // cap-zeroing had just emptied. One hop only; see the disarm's doc.
         if !owner_runs_bodies && !took_bodies.is_empty() {
             if let Some((root, path)) = self.projection_field_index_path(value) {
-                if let [field_idx] = path[..] {
-                    self.disarm_struct_field_tuple_elem_bodies_at(&root, field_idx, &took_bodies);
-                }
+                // B-2026-09-03-11 — the whole path, at any depth. This matched
+                // `[field_idx]` while the mask store was keyed one level deep.
+                self.disarm_struct_field_tuple_elem_bodies_at(&root, &path, &took_bodies);
             }
         }
     }

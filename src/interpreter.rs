@@ -542,6 +542,19 @@ pub struct Interpreter<'a> {
     /// deeper projection scrutinee (`match w.s.e`), whose mask has to travel
     /// down the walker's own recursion to the struct that owns the enum.
     pub(crate) moved_out_struct_field_payload_bodies: HashSet<(String, Vec<String>)>,
+    /// B-2026-09-03-11 — the DEEP sibling of `moved_out_struct_field_bodies`:
+    /// `(root binding, field-name PATH)` for a field moved out through a chain
+    /// of two or more hops (`let (r, k) = g.h.pe;`).
+    ///
+    /// The flat set is keyed `(name, field)` and its writer only fires when the
+    /// projected object is an IDENTIFIER, so a deeper chain recorded nothing
+    /// and the root's walk kept running the moved-out leaf's body — twice in
+    /// total, and on the compiled backends the first of them against a
+    /// cap-zeroed husk. Kept SEPARATE from the flat set rather than re-keying
+    /// it: that set is read at eight sites, several of which mean "this
+    /// binding's own field", and a path there would change what they answer.
+    /// Codegen's twin is the path-keyed `struct_moved_nested_field_bodies`.
+    pub(crate) moved_out_nested_field_bodies: HashSet<(String, Vec<String>)>,
     /// B-2026-08-29-33, tuple leg — `(variable, element index)` pairs whose ENUM
     /// element's PAYLOAD bodies such an arm took, with the element's own body
     /// still owed. The tuple sibling of the set above; codegen's twin is
@@ -1050,6 +1063,7 @@ impl<'a> Interpreter<'a> {
             param_view_struct_fields: HashSet::new(),
             param_view_tuple_elems: HashSet::new(),
             moved_out_struct_field_payload_bodies: HashSet::new(),
+            moved_out_nested_field_bodies: HashSet::new(),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
             moved_out_enum_payload_slots: HashSet::new(),
