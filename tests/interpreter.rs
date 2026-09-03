@@ -26025,13 +26025,31 @@ fn test_f16_arithmetic_results_are_representable_in_f16() {
 // because Rust reaches the same symbol.
 //
 // ANTI-VACUITY. Whether a given receiver discriminates the two routes AT ALL
-// is itself platform-dependent, and the four this test shipped with do not
-// discriminate on macOS — measured, all four agree there, so on that host the
-// test could only ever have been checking the frozen digits. Three receivers
-// that DO discriminate on Apple's libm are added below, and the assertion at
-// the end fails the test if none of the samples separates the routes on the
-// host it is running on. Without it a future libm could make every sample
-// agree and this would pass while testing nothing.
+// is itself platform-dependent for the libm methods, and the four this test
+// shipped with do not discriminate on macOS — measured, all four agree there,
+// so on that host the test could only ever have been checking the frozen
+// digits. Three receivers that DO discriminate on Apple's libm are added
+// below. On windows-latest NONE of those seven discriminates — measured from
+// CI, where this assertion took a required job red for a day
+// (B-2026-09-03-3). WHY they all agree there is NOT measured; the leading
+// candidate is that MSVC's `coshf`/`sinhf`/`atanf`/`log10f` are the double
+// routine plus a round, which would make the two routes literally the same
+// code and no receiver able to separate them ever. The repair below does not
+// depend on settling that, which is the point of it.
+//
+// So the guard does not rest on libm at all. `to_degrees` and `to_radians`
+// are a single f32 multiply, which makes "does the f32-width route differ
+// from compute-in-f64-then-round" a fact about IEEE-754 rather than about the
+// host: measured, 562 of the 3999 receivers i/1000 discriminate for
+// `to_degrees` and 368 for `to_radians` (`recip` has none in that range — a
+// reciprocal's double rounding is benign, which is why the receivers this
+// test shipped with, `to_degrees(2.0)` / `to_radians(2.0)` / `recip(3.0)`,
+// all happened to agree and left the guard leaning on libm). `9.0f32` and
+// `0.3f32` are two that discriminate, they are asserted in the program below,
+// and they are what the anti-vacuity assertion now requires. The libm samples
+// keep their exact per-host oracle; their vacuity is REPORTED rather than
+// asserted, because a host with no genuine f32 route makes that half
+// unobservable, not wrong.
 #[test]
 fn test_scalar_float_methods_compute_at_the_declared_width() {
     // The f32 transcendental samples, as (receiver, f32-width answer).
@@ -26061,7 +26079,7 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
     let c1: f32 = std::hint::black_box(1.22);
     let c2: f32 = std::hint::black_box(1.175);
     let c3: f32 = std::hint::black_box(0.057);
-    let samples: [(f32, f32, f32); 7] = [
+    let libm_samples: [(f32, f32, f32); 7] = [
         (a, a.cosh(), (a as f64).cosh() as f32),
         (s, s.sinh(), (s as f64).sinh() as f32),
         (s, s.log10(), (s as f64).log10() as f32),
@@ -26071,6 +26089,19 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
         (c3, c3.atan(), (c3 as f64).atan() as f32),
     ];
 
+    // The width discriminators that do not go through libm. `to_degrees` and
+    // `to_radians` are one f32 multiply each, so whether the f32-width answer
+    // differs from the f64-then-round one is settled by IEEE-754 and is the
+    // same on every host — including one whose `coshf` is the double routine
+    // in disguise. These two receivers separate the routes; `2.0` (which this
+    // test already prints) does not, for either method.
+    let g1: f32 = std::hint::black_box(9.0);
+    let g2: f32 = std::hint::black_box(0.3);
+    let ieee_samples: [(f32, f32); 2] = [
+        (g1.to_degrees(), (g1 as f64).to_degrees() as f32),
+        (g2.to_radians(), (g2 as f64).to_radians() as f32),
+    ];
+
     // Kāra prints a narrow float by widening to f64, so the expected text for
     // an f32 result is that f64's shortest round-tripping form.
     let f32_line = |v: f32| format!("{}\n", v as f64);
@@ -26078,6 +26109,8 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
     let expected = format!(
         "114.59156036376953\n\
          0.03490658476948738\n\
+         {deg_g1}\
+         {rad_g2}\
          {cosh_a}\
          114.5625\n\
          114.5\n\
@@ -26091,13 +26124,15 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
          {atan_c3}\
          114.59155902616465\n\
          {cosh_d}\n",
-        cosh_a = f32_line(samples[0].1),
-        sinh_s = f32_line(samples[1].1),
-        log10_s = f32_line(samples[2].1),
-        atan_s = f32_line(samples[3].1),
-        cosh_c1 = f32_line(samples[4].1),
-        sinh_c2 = f32_line(samples[5].1),
-        atan_c3 = f32_line(samples[6].1),
+        deg_g1 = f32_line(ieee_samples[0].0),
+        rad_g2 = f32_line(ieee_samples[1].0),
+        cosh_a = f32_line(libm_samples[0].1),
+        sinh_s = f32_line(libm_samples[1].1),
+        log10_s = f32_line(libm_samples[2].1),
+        atan_s = f32_line(libm_samples[3].1),
+        cosh_c1 = f32_line(libm_samples[4].1),
+        sinh_c2 = f32_line(libm_samples[5].1),
+        atan_c3 = f32_line(libm_samples[6].1),
         cosh_d = std::hint::black_box(2.0f64).cosh(),
     );
 
@@ -26106,6 +26141,10 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
              \x20   let a: f32 = 2.0f32;\n\
              \x20   println(a.to_degrees());\n\
              \x20   println(a.to_radians());\n\
+             \x20   let g1: f32 = 9.0f32;\n\
+             \x20   println(g1.to_degrees());\n\
+             \x20   let g2: f32 = 0.3f32;\n\
+             \x20   println(g2.to_radians());\n\
              \x20   println(a.cosh());\n\
              \x20   let h: f16 = 2.0f16;\n\
              \x20   println(h.to_degrees());\n\
@@ -26135,17 +26174,41 @@ fn test_scalar_float_methods_compute_at_the_declared_width() {
     // The check that keeps the above honest: at least one receiver must
     // actually separate "computed at f32 width" from "computed at f64 and
     // rounded", or a tree-walk that took the f64 shortcut would satisfy every
-    // line and this test would pass while testing nothing. If this fires,
-    // sweep for a receiver that discriminates on the new host and add it —
-    // do not delete the assertion.
+    // line and this test would pass while testing nothing.
+    //
+    // Drawn over the ARITHMETIC receivers, not the libm ones, because those
+    // discriminate by IEEE-754 rather than by what the host's libm happens to
+    // do — so this holds on every host, which is what B-2026-09-03-3 was: on
+    // windows-latest the guard fired over the libm samples, correctly
+    // reporting that none of the seven it carried discriminates there, and
+    // took a required CI job red for a day. If this fires, `g1` / `g2` were
+    // edited into non-discriminating receivers; sweep i/1000 for a
+    // replacement pair. Do not delete the assertion.
     assert!(
-        samples
+        ieee_samples
             .iter()
-            .any(|(_, at_width, via_f64)| at_width.to_bits() != via_f64.to_bits()),
-        "no sample separates the f32-width route from compute-in-f64-then-round \
-         on this host, so the test cannot observe the regression it exists for; \
-         add a discriminating receiver"
+            .any(|(at_width, via_f64)| at_width.to_bits() != via_f64.to_bits()),
+        "no arithmetic sample separates the f32-width route from \
+         compute-in-f64-then-round; the receivers above must be ones that do, \
+         or the test cannot observe the regression it exists for"
     );
+
+    // The libm half's vacuity is REPORTED, not asserted. If `coshf` and
+    // friends on a host are the double routine plus a round, the two routes
+    // are the same code there and no receiver can separate them — nothing to
+    // fix, and the assertion above already keeps the test from being vacuous.
+    // Reporting rather than failing also means the next host in this position
+    // says so instead of going red. Visible under `--nocapture`.
+    if libm_samples
+        .iter()
+        .all(|(_, at_width, via_f64)| at_width.to_bits() == via_f64.to_bits())
+    {
+        eprintln!(
+            "note: no cosh/sinh/log10/atan receiver here separates the f32-width \
+             route from compute-in-f64-then-round, so those lines are pinned to \
+             this host's libm but do not discriminate width on it"
+        );
+    }
 }
 
 #[test]
