@@ -958,36 +958,45 @@ pub(super) fn snapshot_kind_for_type(
     if by_value.is_by_value(ty, 0) {
         return Some(SnapshotPrimKind::ByValue);
     }
-    // B-2026-08-30-7: a binding whose OWN type is `shared` / `Rc` / `Arc` is
-    // declined, and only at the top level — as a COMPONENT each is fine and is
-    // measured so (`struct W { s: S }` and `Vec[shared S]` both round-trip
-    // correctly through `SlotTransfer`).
+    // B-2026-09-01-36 — a binding whose OWN type is `shared` is ADMITTED here,
+    // and the decline that stood in its place has been removed rather than
+    // narrowed, because the reason it recorded was not the reason.
     //
-    // The transfer argument holds for these: retracting the `RcDec` HOLDS the
-    // reference rather than dropping it, so the global owns one and nothing can
-    // free the object under it — the dangle this tier feared comes from copying
-    // the pointer WITHOUT retracting, which is the opposite move. What does not
-    // hold is REPLAY. A direct `shared` binding's slot is a pointer to the RC
-    // object and its field reads go through the shared dispatch channel;
-    // `register_var_from_type_expr` re-registers the name as an INLINE struct,
-    // so `s.n` GEPs the slot itself and reads the pointer's own bits. Measured:
-    // `shared struct S { n: i64 }; let s = S { n: 3 };` then `println(s.n)` in
-    // two later cells printed `43825771313` and `94568180881400` where
-    // `--interp` printed `3` twice. That is a WORSE failure than the
-    // pass-through divergence it would replace (which prints the initializer —
-    // wrong, but a plausible number), so the shape stays out until the replay
-    // registration it needs exists. Tracked as its own row rather than buried
-    // here; see B-2026-09-01-36.
+    // That decline blamed REPLAY: "`register_var_from_type_expr` re-registers
+    // the name as an INLINE struct, so `s.n` GEPs the slot itself and reads the
+    // pointer's own bits", and declared the OWNERSHIP half fine because
+    // "retracting the `RcDec` HOLDS the reference". Both halves were measured
+    // and both are backwards:
     //
-    // `Rc[T]` / `Arc[T]` ride along because they are the same handshake, and
-    // because neither is reachable as a REPL surface type today (`Rc.new(...)`
-    // is an undefined name), so admitting them would be shipping an unmeasured
-    // claim.
+    //   * replay is FINE. On the failing program `var_type_names["s"] == "S"`
+    //     and `shared_types` contains `S`, so the field read dispatches through
+    //     the shared channel exactly as it does for a fresh `let` — identical
+    //     to the one-cell case that always worked. The snapshot global is
+    //     `ptr`, not an inline struct, and capture stores the slot verbatim.
+    //
+    //   * ownership was NOT fine. The retraction filters cleanup actions by the
+    //     binding's SLOT, and an `RcDec` is keyed by the RC OBJECT
+    //     (`%rc_alloc`, the `malloc` result), so it never matched: the `RcDec`
+    //     survived, ran at end of cell, took the refcount to zero and FREED the
+    //     object while the global kept the pointer. Every later cell was
+    //     reading freed memory — which is why the values were garbage AND
+    //     differed between two reads of the same expression, the detail the
+    //     original row noted without following.
+    //
+    // `retract_all_cleanup_for_slot` now retracts by binding NAME as well, so
+    // the tier's stated contract ("capture holds the reference the cell would
+    // have dropped") is true instead of merely intended. With that, the row's
+    // own program prints `3` / `3` on the JIT, matching `--interp`, and the
+    // mutating spelling prints `7` where it printed the initializer `1`.
+    //
+    // `Rc[T]` / `Arc[T]` STAY DECLINED, and deliberately: they are the same
+    // handshake, but neither is reachable as a REPL surface type today
+    // (`Rc.new(...)` is an undefined name), so admitting them would ship an
+    // unmeasured claim. The moment one becomes constructible, delete this arm
+    // and measure it.
     if matches!(
         ty,
-        crate::typechecker::Type::Shared(_)
-            | crate::typechecker::Type::Rc(_)
-            | crate::typechecker::Type::Arc(_)
+        crate::typechecker::Type::Rc(_) | crate::typechecker::Type::Arc(_)
     ) {
         return None;
     }

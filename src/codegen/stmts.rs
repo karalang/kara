@@ -15868,7 +15868,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 | super::SnapshotPrimKind::SlotTransfer
         ) && slot.ty != self.snapshot_storage_type(name, kind)
         {
+            if std::env::var("KARAC_B36_PROBE").is_ok() {
+                eprintln!(
+                    "B36 CAPTURE SKIPPED `{name}` kind={kind:?} slot.ty={:?} storage={:?}",
+                    slot.ty,
+                    self.snapshot_storage_type(name, kind)
+                );
+            }
             return;
+        }
+        if std::env::var("KARAC_B36_PROBE").is_ok() {
+            eprintln!(
+                "B36 capture OK `{name}` kind={kind:?} slot.ty={:?}",
+                slot.ty
+            );
         }
         let _ = self.builder.build_store(global.as_pointer_value(), stored);
         // Slice c-repl.B.5.2: String capture transfers buffer ownership
@@ -15957,7 +15970,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // tier instead of a variant per container shape. See
         // `SnapshotPrimKind::SlotTransfer`.
         if matches!(kind, super::SnapshotPrimKind::SlotTransfer) {
-            self.retract_all_cleanup_for_slot(slot.ptr);
+            self.retract_all_cleanup_for_slot(name, slot.ptr);
         }
     }
 

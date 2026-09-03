@@ -11524,9 +11524,35 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the binding was tracked, which for a top-level REPL `let` is `main`'s
     /// outermost frame but is not guaranteed to be the frame current at
     /// capture time.
-    pub(super) fn retract_all_cleanup_for_slot(&mut self, slot: PointerValue<'ctx>) {
+    pub(super) fn retract_all_cleanup_for_slot(&mut self, name: &str, slot: PointerValue<'ctx>) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
-            frame.retain(|action| Self::cleanup_action_slot(action) != Some(slot));
+            frame.retain(|action| {
+                if Self::cleanup_action_slot(action) == Some(slot) {
+                    return false;
+                }
+                // B-2026-09-01-36 — an `RcDec` is keyed by the RC OBJECT, not
+                // by the binding's slot, so the slot test above can never
+                // match it. Measured on `shared struct S { n: i64 }`:
+                //
+                //   slot        = %s = alloca ptr
+                //   action_slot = %rc_alloc = call ptr @malloc(...)   match=false
+                //
+                // The consequence was not a missed optimization. The `RcDec`
+                // survived the retraction, ran at end of cell, took the
+                // refcount to zero and FREED the object — while the snapshot
+                // global kept the pointer. The next cell then read freed
+                // memory, which is why `s.n` printed a different garbage value
+                // each time instead of a stable wrong one.
+                //
+                // Retracting by NAME as well is what makes the tier's stated
+                // contract true: capture HOLDS the reference the cell would
+                // have dropped, so the global owns it and nothing can free the
+                // object under it. Matching on the name is the same identity
+                // `drop_rc`'s own `RcDec` searches use (see the
+                // `name == binding_name && *p == ptr` lookup in this file, and
+                // `par_blocks`'s slot-binding retraction).
+                !matches!(action, CleanupAction::RcDec { name: n, .. } if n == name)
+            });
         }
     }
 

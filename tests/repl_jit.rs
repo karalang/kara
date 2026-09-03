@@ -1820,7 +1820,7 @@ fn repl_jit_inline_envelope_initializer_runs_once_across_cells() {
 // `InlineEnvelope` kind was the deepest tier and is FALSE now — the general
 // `SlotTransfer` kind admits both, and they are covered by
 // `repl_jit_slot_transfer_tier_carries_the_remaining_shapes` and
-// `repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding`.
+// `repl_jit_slot_transfer_admits_shared_as_a_binding_and_as_a_component`.
 // Removed rather than retargeted: what it really pinned was an internal
 // choice of KIND, which has no observable outside the tier it was measuring.
 
@@ -2085,21 +2085,29 @@ fn repl_jit_slot_transfer_tier_declines_drop_bearing_and_unlisted_types() {
     }
 }
 
-/// B-2026-08-30-7 — a `shared` binding is declined at the TOP LEVEL ONLY; as a
-/// component it rides the tier correctly.
+/// B-2026-09-01-36 — a `shared` binding rides the tier at the TOP LEVEL too,
+/// not only as a component.
 ///
-/// Worth its own test because the distinction is easy to lose on a later edit,
-/// and losing it in either direction is a regression: widening it back to a
-/// direct `shared` binding reintroduces the garbage reads, and narrowing it to
-/// exclude `shared` as a component would silently drop `struct W { s: S }` and
-/// `Vec[S]` — both measured correct — back to pass-through.
+/// This test previously pinned the OPPOSITE: a direct `shared` binding was
+/// declined, on the reading that admitting it "printed a pointer's bits". The
+/// garbage was real, but the cause recorded for it was not — see
+/// `snapshot_kind_for_type` for what was actually measured. Once the `RcDec`
+/// retraction stopped missing (it is keyed by the RC object, not the slot, so a
+/// slot-keyed retraction never matched it and the object was freed under the
+/// snapshot global), the shape reads correctly and is admitted.
+///
+/// The COMPONENT half is unchanged and still load-bearing in the other
+/// direction: narrowing the tier to exclude `shared` as a component would
+/// silently drop `struct W { s: S }` and `Vec[S]` back to pass-through.
 #[test]
-fn repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding() {
+fn repl_jit_slot_transfer_admits_shared_as_a_binding_and_as_a_component() {
     let items = "shared struct S { n: i64 }\nstruct W { s: S }\nfn mks() -> S { S { n: 6 } }";
-    // Component: admitted.
     for decl in [
+        // Component — was already admitted, must stay so.
         "let mut v: Vec[S] = Vec.new();",
         "let mut vw: Vec[W] = Vec.new();",
+        // Binding — the shape this row admits.
+        "let sv: S = S { n: 3 };",
     ] {
         let mut s = Session::new();
         enable_jit(&mut s);
@@ -2109,13 +2117,14 @@ fn repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding() {
         assert!(r.errors.is_empty(), "{decl}: {:?}", r.errors);
         assert!(
             !r.notes.iter().any(|n| n.contains("repl-jit-no-snapshot")),
-            "`shared` as a COMPONENT must reach the tier for `{decl}`; notes: {:?}",
+            "`{decl}` must reach the snapshot tier; notes: {:?}",
             r.notes,
         );
     }
-    // Binding: declined. Asserted on the VALUE rather than the note, because
-    // an immutable binding with a constructor-shaped initializer deliberately
-    // does not warn — and the value is what the decline is protecting.
+
+    // Reading the binding twice is the shape that used to print two DIFFERENT
+    // garbage values — the tell that it was reading freed memory rather than a
+    // stale copy.
     let mut s = Session::new();
     enable_jit(&mut s);
     let r = s.evaluate_cell_captured("shared struct S { n: i64 }");
@@ -2128,11 +2137,43 @@ fn repl_jit_slot_transfer_admits_shared_as_a_component_not_as_a_binding() {
         assert_eq!(
             r.stdout.trim(),
             "3",
-            "round {round}: a direct `shared` binding must stay on \
-             pass-through, which re-evaluates the initializer and reads `3` — \
-             admitting it to the tier printed a pointer's bits (B-2026-09-01-36); \
-             stdout: {:?}",
-            r.stdout,
+            "round {round}; stdout: {:?}",
+            r.stdout
         );
     }
+}
+
+/// B-2026-09-01-36 — the fixture that actually SEPARATES the tier from
+/// pass-through, and the reason this row is a correctness fix rather than a
+/// tidy-up.
+///
+/// A plain read cannot tell them apart: pass-through re-evaluates the
+/// declaring cell, so it reproduces the initializer and prints `3` either way.
+/// A MUTATION in a later cell can. Measured on the pre-fix binary, with the
+/// shape declined: the JIT printed `3` — the initializer, re-evaluated, with
+/// the mutation lost — where `--interp` printed `7`. So the decline was not
+/// merely conservative; it was preserving a run-vs-interp wrong answer.
+///
+/// (The original row predicted `1` for this spelling on its partially-admitted
+/// tree. Measured here it is `3` declined and `7` admitted, which is why the
+/// number is pinned from a run rather than quoted.)
+#[test]
+fn repl_jit_a_shared_binding_keeps_a_later_cells_mutation() {
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("shared struct S { mut n: i64 }");
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let sv: S = S { n: 3 };");
+    assert!(r.errors.is_empty(), "decl: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("sv.n = 7;");
+    assert!(r.errors.is_empty(), "mutate: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(f\"{sv.n}\");");
+    assert!(r.errors.is_empty(), "read: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "7",
+        "a mutation in a later cell must survive; `3` means the binding fell \
+         back to pass-through and re-ran its initializer. stdout: {:?}",
+        r.stdout,
+    );
 }
