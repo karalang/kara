@@ -8330,6 +8330,53 @@ impl<'ctx> super::Codegen<'ctx> {
     /// payload whose head is a bare generic param resolves to no struct here
     /// and to no `StructDef` in the interpreter, so both sides skip it and
     /// the erased-generic residual is a shared leak — the safe direction.
+    /// B-2026-09-03-33 — does this `Option[P]` / `Result[O, E]` type have a
+    /// payload arm whose user `Drop` body
+    /// [`Self::emit_optres_payload_user_drop_bodies_fn`] would walk?
+    ///
+    /// Answers that emitter's `targets` question WITHOUT emitting the walker,
+    /// for a caller that only needs to know whether some OTHER walker has to be
+    /// masked — calling the emitter to find out would leave a dead function in
+    /// the module on every negative answer. The filter is deliberately the same
+    /// three tests the emitter applies (not shared, a user struct or non-shared
+    /// user enum, and running a user drop), so the two cannot answer differently
+    /// about one type.
+    pub(super) fn optres_payload_runs_user_drop(&self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if !matches!(
+            p.segments.last().map(String::as_str),
+            Some("Option") | Some("Result")
+        ) {
+            return false;
+        }
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        args.iter().any(|a| {
+            let crate::ast::GenericArg::Type(pte) = a else {
+                return false;
+            };
+            let TypeKind::Path(pp) = &pte.kind else {
+                return false;
+            };
+            let Some(sname) = pp.segments.first() else {
+                return false;
+            };
+            let user_enum = sname != "Option"
+                && sname != "Result"
+                && self
+                    .type_decls
+                    .enum_layouts
+                    .get(sname.as_str())
+                    .is_some_and(|l| !l.is_shared);
+            !self.type_decls.shared_types.contains_key(sname.as_str())
+                && (self.type_decls.struct_types.contains_key(sname.as_str()) || user_enum)
+                && self.type_runs_user_drop(sname, &mut Vec::new())
+        })
+    }
+
     pub(super) fn emit_optres_payload_user_drop_bodies_fn(
         &mut self,
         te: &TypeExpr,

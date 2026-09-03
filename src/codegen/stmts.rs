@@ -13522,6 +13522,61 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // B-2026-09-03-33 — the same source-side hand-off for a field
+                // whose head is `Result` rather than a user struct.
+                // `leaf_struct_name` is None there (the head is the wrapper, not
+                // a struct the drop family can name), so the branch above never
+                // masks the field — and the two wrappers then neutralize the
+                // source DIFFERENTLY. `zero_struct_field_move_cap` zeroes an
+                // `Option` field's TAG, to `None`, which the source's walk
+                // then skips; for a `Result` field it can only zero the PAYLOAD
+                // AREA, because `Result` has no empty tag to zero to — both of
+                // its tags name a live variant. So the source's field-bodies
+                // walk still reached the moved-out `Result`, read `tag == Ok`,
+                // and ran the payload's user `Drop` body over the storage the
+                // zero had just emptied:
+                //
+                //     struct R { id: i64, tag: String }
+                //     struct HoRes { a: R, b: Result[R, String] }
+                //     let h = HoRes { a: mk(9), b: Result.Ok(mk(109)) };
+                //     let HoRes { a, b } = h;
+                //       --interp   ->           rd9  dR9/t9
+                //       compiled   ->   dR0/    rd9  dR9/t9
+                //
+                // `dR0/` is `R`'s body over a zeroed object — id 0, empty tag.
+                //
+                // MASKING THE WALK, NOT REMOVING THE ZERO — the same resolution
+                // B-2026-09-03-11 and -14 reached for their husk fires, and here
+                // the reason is measured rather than inherited: the zero is what
+                // keeps the SOURCE's memory free off buffers this leaf now owns,
+                // and the memory half is already correct. valgrind reports
+                // `12 allocs, 12 frees, 0 bytes in use at exit` on this program
+                // both before and after, so there is nothing to repair on that
+                // side and removing the zero could only break it.
+                //
+                // WHAT THIS DOES NOT DO is give the leaf the payload's REAL
+                // body: `dR109` still runs on neither backend. That is the
+                // pre-existing `Result` deferral B-2026-09-03-15 recorded and
+                // B-2026-09-03-24 kept, and it is left alone deliberately —
+                // what this removes is the PHANTOM, which is the half that made
+                // the two backends disagree.
+                //
+                // Restricted to `Result` although `optres_payload_runs_user_drop`
+                // also answers for `Option`: the `Option` field's tag-zero
+                // already suppresses the source's walk at runtime, so a mask
+                // there is redundant, and the `Option` spelling is measured
+                // correct as it stands (B-2026-09-03-24's fixtures).
+                if let Some(src) = &place_body_src {
+                    let is_result = matches!(&field_te.kind,
+                        TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Result"));
+                    if leaf_struct_name.is_none()
+                        && is_result
+                        && self.optres_payload_runs_user_drop(&field_te)
+                    {
+                        let src = src.clone();
+                        self.disarm_struct_field_bodies_at(&src, idx);
+                    }
+                }
                 if wrapper_took_memory || place_leaf_took_memory {
                     leaf_cleanup_registered = true;
                 } else if fresh && self.destructure_field_needs_cleanup(&field_te) {

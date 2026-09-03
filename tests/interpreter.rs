@@ -35143,6 +35143,125 @@ done
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_struct_field_destructure_option_leaf_owns_its_payload_body`, pinned to
 /// the same string.
+/// B-2026-09-03-33 — the INTERPRETER side of the `Result` husk: this backend
+/// was already right, and the test exists to keep it that way while the
+/// compiled backends were brought to it.
+///
+/// `let HoRes { a, b } = h;` over `{ a: R, b: Result[R, String] }` printed
+/// `dR0/` on jit/aot/AUTO_PAR=0 — `R`'s body over a ZEROED object — and nothing
+/// here. The fix is entirely in codegen (mask the source's field-bodies walk
+/// for the moved-out `Result` field, which its `Option` sibling gets for free
+/// from a tag-zero `Result` has no equivalent of), so every line below is
+/// unchanged by it. Pinning the string is what makes a future change to the
+/// remaining `Result` deferral fail LOUDLY on the side that is correct, instead
+/// of quietly re-opening the split from the other direction.
+///
+/// The `param` cell is the one that carries information rather than
+/// confirmation: `dR107` runs here and on all three compiled surfaces, because
+/// the owner's own walk runs it. That is why the missing `dR101` on the `loc`
+/// cell cannot be fixed by registering the leaf unconditionally, and why this
+/// fix removes the phantom without touching the absence.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_struct_field_destructure_result_leaf_leaves_no_husk_body`, pinned to
+/// the same string.
+#[test]
+fn test_struct_field_destructure_result_leaf_leaves_no_husk_body() {
+    assert_eq!(
+        run(r#"struct R  { id: i64, tag: String }
+impl Drop for R  { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct R3 { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R3 { fn drop(mut ref self) { println(f"dQ{self.id}/{self.tag}") } }
+fn mk3(n: i64) -> R3 { return R3 { id: n, tag: f"u{n}", xs: [n] }; }
+
+struct HoRes  { a: R,  b: Result[R, String] }
+struct HoRes3 { a: R3, b: Result[R3, String] }
+
+fn mkho(n: i64) -> HoRes { return HoRes { a: mk(n), b: Result.Ok(mk(n + 100)) }; }
+fn takes(h: HoRes) { let HoRes { a, b } = h; println(f"  p{a.id}") }
+
+fn main() {
+    println("loc")
+    let h1 = HoRes { a: mk(1), b: Result.Ok(mk(101)) };
+    let HoRes { a, b } = h1;
+    println(f"  rd{a.id}")
+
+    println("box")
+    let h2 = HoRes3 { a: mk3(2), b: Result.Ok(mk3(102)) };
+    let HoRes3 { a: a2, b: b2 } = h2;
+    println(f"  rd{a2.id}")
+
+    println("err")
+    let h3 = HoRes { a: mk(3), b: Result.Err(f"e3") };
+    let HoRes { a: a3, b: b3 } = h3;
+    println(f"  rd{a3.id}")
+
+    println("wild")
+    let h4 = HoRes { a: mk(4), b: Result.Ok(mk(104)) };
+    let HoRes { a: a4, b: _ } = h4;
+    println(f"  rd{a4.id}")
+
+    println("awild")
+    let h5 = HoRes { a: mk(5), b: Result.Ok(mk(105)) };
+    let HoRes { a: _, b: b5 } = h5;
+    println("  rb5")
+
+    println("nest")
+    let h6 = HoRes { a: mk(6), b: Result.Ok(mk(106)) };
+    { let HoRes { a: a6, b: b6 } = h6; println(f"  in{a6.id}") }
+    println("  outer")
+
+    println("param")
+    takes(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
+
+    println("call")
+    let HoRes { a: a8, b: b8 } = mkho(8);
+    println(f"  rd{a8.id}")
+
+    println("lit")
+    let HoRes { a: a9, b: b9 } = HoRes { a: mk(9), b: Result.Ok(mk(109)) };
+    println(f"  rd{a9.id}")
+
+    println("done")
+}
+"#),
+        r#"loc
+  rd1
+dR1/t1
+box
+  rd2
+dQ2/u2
+err
+  rd3
+dR3/t3
+wild
+dR104/t104
+  rd4
+dR4/t4
+awild
+dR5/t5
+  rb5
+nest
+  in6
+dR6/t6
+  outer
+param
+  p7
+dR107/t107
+dR7/t7
+call
+  rd8
+dR8/t8
+lit
+  rd9
+dR9/t9
+done
+"#
+    );
+}
+
 #[test]
 fn test_struct_field_destructure_option_leaf_owns_its_payload_body() {
     assert_eq!(

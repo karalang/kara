@@ -2366,6 +2366,92 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-33 — the memory side of the `Result` husk fix. The defect
+    /// was a BODY that should not have run, and the fix masks the source's
+    /// field-bodies walk rather than removing the payload-area zero that walk
+    /// was reading; this pins that the zero is still doing its job.
+    ///
+    /// Getting that backwards is the failure this guards against. The zero is
+    /// what keeps the SOURCE's struct drop off buffers the destructure leaf has
+    /// taken, so "fixing" the husk by deleting it would have traded a phantom
+    /// body for a double free -- which is why the surgery went to the walk. The
+    /// pre-fix program was already memory-clean (`12 allocs, 12 frees, 0 bytes
+    /// in use at exit` under valgrind), so this fixture is a NO-REGRESSION
+    /// gate, not a repair: it must stay clean, and the payload `String`s make a
+    /// dropped free visible as a leak rather than as nothing.
+    ///
+    /// `used` is the one cell whose expected output is NOT what `--interp`
+    /// prints: the interpreter runs `dR5` after `got5` and the compiled
+    /// backends do not. That is the pre-existing `Result` deferral this fix
+    /// deliberately leaves in place, filed separately, and it is kept here
+    /// anyway because a leaf CONSUMED by a match is where a mis-placed mask
+    /// would double-free -- the ASAN half is the point of the cell, and only
+    /// the compiled column is pinned.
+    ///
+    /// `awild` mirrors `loc` with the fields swapped (`a` wildcarded, `b`
+    /// bound), the shape that husked identically before the fix; `errh` is the
+    /// `Err` half, which never husked because it has no payload to walk.
+    /// Three iterations, so a per-iteration imbalance accumulates rather than
+    /// hiding in a single pass.
+    #[test]
+    fn asan_struct_field_destructure_result_leaf_frees_its_payload_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct HoRes { a: R, b: Result[R, String] }
+fn mk(id: i64) -> R { return R { id: id, tag: f"tag-value-{id}" } }
+
+fn loc(k: i64)   { let h = HoRes { a: mk(k + 0), b: Result.Ok(mk(k + 1)) }; let HoRes { a, b } = h; println(f"rd{a.id}") }
+fn awild(k: i64) { let h = HoRes { a: mk(k + 2), b: Result.Ok(mk(k + 3)) }; let HoRes { a: _, b } = h; println(f"rb{k}") }
+fn used(k: i64)  { let h = HoRes { a: mk(k + 4), b: Result.Ok(mk(k + 5)) }; let HoRes { a, b } = h;
+                   match b { Result.Ok(x) => println(f"got{x.id}/{x.tag}"), Result.Err(e) => println(f"err{e}") }
+                   println(f"rd{a.id}") }
+fn errh(k: i64)  { let h = HoRes { a: mk(k + 6), b: Result.Err(f"errstring-{k}") }; let HoRes { a, b } = h; println(f"rd{a.id}") }
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let k = i * 10;
+        loc(k); awild(k); used(k); errh(k);
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "rd0",
+                "dR0/tag-value-0",
+                "dR2/tag-value-2",
+                "rb0",
+                "got5/tag-value-5",
+                "rd4",
+                "dR4/tag-value-4",
+                "rd6",
+                "dR6/tag-value-6",
+                "rd10",
+                "dR10/tag-value-10",
+                "dR12/tag-value-12",
+                "rb10",
+                "got15/tag-value-15",
+                "rd14",
+                "dR14/tag-value-14",
+                "rd16",
+                "dR16/tag-value-16",
+                "rd20",
+                "dR20/tag-value-20",
+                "dR22/tag-value-22",
+                "rb20",
+                "got25/tag-value-25",
+                "rd24",
+                "dR24/tag-value-24",
+                "rd26",
+                "dR26/tag-value-26",
+            ],
+            "b33_result_leaf_husk",
+            30,
+        );
+    }
+
     /// B-2026-09-03-24 — a destructured STRUCT's `Option` FIELD leaf takes its
     /// payload's MEMORY exactly once, alongside the body it now runs.
     ///
