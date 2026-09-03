@@ -134,6 +134,14 @@ impl<'a> super::TypeChecker<'a> {
                 // through `check_expr`, so the generic recording boundary never
                 // sees it and the interpreter left an `Int` in a `Vec[f64]`.
                 self.record_float_coercion(&args[0].value, &elem, &arg_ty);
+                // B-2026-09-03-20 — and the own-`Drop` partial-move sibling,
+                // which escapes for the same structural reason those three do:
+                // this site hand-rolls its slot check instead of routing
+                // through `check_expr`, so every rule that hangs off a value
+                // position has to be re-hung here by hand. `v.push(w.r)`
+                // measured two `R` bodies with the second diverging
+                // run-vs-build.
+                self.warn_partial_move_of_drop_struct(&args[0].value, &elem);
                 // Unify so an unsolved element typevar bound to the
                 // receiver (e.g. `let mut v = Vec.new(); v.push(x);`)
                 // gets pinned to the first push's value type. Otherwise

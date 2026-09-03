@@ -10964,6 +10964,7 @@ fn main() {
              \x20       println(f\"drop {self.id}\")\n\
              \x20   }\n\
              }\n\
+             #[allow(partial_move_of_drop_struct)]\n\
              fn consume(g: G) -> G {\n\
              \x20   G { id: g.id + 10, s: g.s }\n\
              }\n\
@@ -19664,7 +19665,15 @@ fn main() {
             // as on the no-own-Drop leg.
             (
                 "projection-return",
-                "fn take(w: W) -> R { return w.r; }\n\
+                // B-2026-09-03-20 — the `#[allow]` is new, the OUTPUT is not.
+                // `return w.r;` is the same partial move the destructure cell
+                // above spells with a `let`, and it was silent only while the
+                // rule was site-based. The expected output is unchanged, which
+                // is the point: this cell pins B-2026-08-28-21's escape mask,
+                // and the mask still makes the PARAM root emit one body. The
+                // rule rejects the SHAPE, not the misbehaviour.
+                "#[allow(partial_move_of_drop_struct)]\n\
+                 fn take(w: W) -> R { return w.r; }\n\
                  fn main() { let x = take(W { r: R { id: 42 }, n: 2 }); println(f\"{x.id}\"); }\n",
                 "drop W2\n42\ndrop 42\n",
             ),
@@ -19775,6 +19784,7 @@ fn main() {
                 "struct Id { r: R }\n\
                  impl Drop for Id { fn drop(mut ref self) { println(\"drop Id\"); } }\n\
                  struct Wd { inner: Id, n: i64 }\n\
+                 #[allow(partial_move_of_drop_struct)]\n\
                  fn take(w: Wd) -> R { w.inner.r }\n\
                  fn main() { let x = take(Wd { inner: Id { r: R { id: 44 } }, n: 4 });\n\
                  \x20            println(f\"{x.id}\"); }\n",
@@ -100645,6 +100655,7 @@ fn main() {
              impl Drop for A {\n\
                  fn drop(mut ref self) { println(f\"dropA other={self.other}\"); }\n\
              }\n\
+             #[allow(partial_move_of_drop_struct)]\n\
              fn main() {\n\
                  let a = Option.Some(A {\n\
                      c: Option.Some(C { name: \"moved out payload\", zip: 7 }),\n\

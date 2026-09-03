@@ -200,6 +200,7 @@ impl<'a> super::TypeChecker<'a> {
                     for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
                         let at = self.infer_expr(&arg.value);
                         self.check_assignable(param_ty, &at, arg.value.span);
+                        self.warn_partial_move_of_drop_struct(&arg.value, param_ty);
                     }
                     return Some(sig.return_type);
                 }
@@ -472,6 +473,7 @@ impl<'a> super::TypeChecker<'a> {
                     for (arg, param) in args.iter().zip(sig.params.iter()) {
                         let arg_ty = self.infer_expr(&arg.value);
                         self.check_assignable(param, &arg_ty, arg.value.span);
+                        self.warn_partial_move_of_drop_struct(&arg.value, param);
                     }
                     return Some(sig.return_type);
                 }
@@ -837,6 +839,7 @@ impl<'a> super::TypeChecker<'a> {
                     for (arg, param) in args.iter().zip(param_types.iter()) {
                         let arg_ty = self.infer_expr(&arg.value);
                         self.check_assignable(param, &arg_ty, arg.value.span);
+                        self.warn_partial_move_of_drop_struct(&arg.value, param);
                     }
                     return Some(return_ty);
                 }

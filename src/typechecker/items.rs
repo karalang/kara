@@ -2835,7 +2835,14 @@ impl<'a> super::TypeChecker<'a> {
             diverged |= self.check_stmt(stmt) == Type::Never;
         }
         let ty = if let Some(ref expr) = block.final_expr {
-            self.check_expr(expr, expected)
+            let t = self.check_expr(expr, expected);
+            // B-2026-09-03-20 — a block's TAIL is its value, so `fn f() -> R {
+            // w.r }` moves the field out exactly as `return w.r;` does. This
+            // one site also covers every `if`/`match` arm whose tail produces
+            // the construct's value, which is why the arm spellings needed no
+            // hook of their own.
+            self.warn_partial_move_of_drop_struct(expr, expected);
+            t
         } else if diverged {
             // Tail-less but diverging — bottom, not unit (see #12).
             Type::Never
@@ -4088,7 +4095,12 @@ impl<'a> super::TypeChecker<'a> {
             diverged |= self.check_stmt(stmt) == Type::Never;
         }
         let ty = if let Some(ref expr) = block.final_expr {
-            self.infer_expr(expr)
+            let t = self.infer_expr(expr);
+            // The un-annotated twin of the tail above: `let x = { w.r };`
+            // reaches the `let` site as a BLOCK, so the initializer's own
+            // check never sees the projection.
+            self.warn_partial_move_of_drop_struct(expr, &t);
+            t
         } else if diverged {
             // A tail-less block whose body diverges (e.g. `{ return e; }`)
             // never falls through — it is bottom, not unit. See #12.
@@ -4533,6 +4545,15 @@ impl<'a> super::TypeChecker<'a> {
         {
             return None;
         }
+        // B-2026-09-03-20 — a BORROW-typed position takes no ownership, so
+        // nothing leaves the struct and the drop body still finds every field.
+        // The call-argument site already gated on this before it had a rule to
+        // gate; hoisting it into the predicate means every NEW site below
+        // inherits it instead of re-deriving it, and a `fn f(w: W) -> ref R`
+        // returning `w.r` stays legal for the same reason `peek(ref w.r)` does.
+        if matches!(ty, Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }) {
+            return None;
+        }
         // Walk to the chain's root, and report the type of the object the
         // FINAL projection reads out of: that is the struct left half-moved.
         let object = match &value.kind {
@@ -4676,6 +4697,56 @@ impl<'a> super::TypeChecker<'a> {
             "partial_move_of_drop_struct",
             None,
         );
+    }
+
+    /// B-2026-09-03-20 — `Some(w.r)` / `Ok(w.r)` / `Err(w.r)`, both the bare
+    /// and the `Option.Some` / `Result.Ok` path spellings.
+    ///
+    /// A USER enum's `E.A(w.r)` is an ordinary call and rides the argument loop
+    /// in `infer_call`'s non-generic branch. The three prelude constructors do
+    /// not: they are answered by dedicated arms that derive the payload slot
+    /// from the EXPECTED type, so there is no `(arg, param_ty)` pair to hang
+    /// this off. Rather than re-derive the slot here — which would have to
+    /// track every one of those arms — read the type the call already recorded
+    /// for the payload expression. An unrecorded payload is skipped: the rule
+    /// declines rather than guesses, which is the same bargain
+    /// `place_named_type` makes.
+    pub(super) fn check_prelude_ctor_payload_partial_move(
+        &mut self,
+        callee: &Expr,
+        args: &[crate::ast::CallArg],
+    ) {
+        let variant = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } if segments.len() == 2 => segments[1].as_str(),
+            _ => return,
+        };
+        if !matches!(variant, "Some" | "Ok" | "Err") {
+            return;
+        }
+        self.check_prelude_ctor_payload_partial_move_named(variant, args);
+    }
+
+    /// The shared tail of the rule above, reached from the CALL spelling by
+    /// name-matching the callee and from the generic-qualified METHOD spelling
+    /// (`Option[R].Some(x)`) by the method name.
+    pub(super) fn check_prelude_ctor_payload_partial_move_named(
+        &mut self,
+        variant: &str,
+        args: &[crate::ast::CallArg],
+    ) {
+        if !matches!(variant, "Some" | "Ok" | "Err") || args.len() != 1 {
+            return;
+        }
+        let value = &args[0].value;
+        let Some(ty) = self
+            .expr_types
+            .get(&crate::resolver::SpanKey::from_span(&value.span))
+            .cloned()
+        else {
+            return;
+        };
+        self.warn_partial_move_of_drop_struct(value, &ty);
     }
 
     pub(super) fn warn_partial_move_of_drop_struct(&mut self, value: &Expr, ty: &Type) {

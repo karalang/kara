@@ -3112,6 +3112,12 @@ impl Drop for Two { fn drop(mut ref self) { println("drop Two") } }
 
 #[allow(partial_move_of_drop_struct)]
 fn take(w: W) -> R { let W { r, n } = w; r }
+// B-2026-09-03-20 — `return w.r;` is a partial move out of an own-`Drop` `W`
+// exactly as the destructure above is; it went unflagged only while the rule
+// was site-based. B-2026-09-01-43 deliberately left this one WITHOUT an
+// `#[allow]` so it would fail the moment the rule reached `return`, rather
+// than pre-masking the fixture that proves the widening works.
+#[allow(partial_move_of_drop_struct)]
 fn take_field(w: W) -> R { return w.r; }
 #[allow(partial_move_of_drop_struct)]
 fn take_a(t: Two) -> R { let Two { a, b } = t; a }
@@ -20146,6 +20152,9 @@ impl Drop for A {
     }
 }
 
+// B-2026-09-03-20 — the match arm's tail `{ x.c }` moves a field out of an
+// own-`Drop` `A`; the opt-out keeps the memory behaviour this pins reachable.
+#[allow(partial_move_of_drop_struct)]
 fn main() {
     let mut acc: i64 = 0;
     let mut i: i64 = 0;

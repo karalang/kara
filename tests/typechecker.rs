@@ -48210,15 +48210,15 @@ fn partial_move_diagnostics(source: &str) -> usize {
 /// outright), and a `ref`/`mut ref` scrutinee binds borrows, so nothing leaves
 /// the struct at all.
 ///
-/// THE NAME OVERCLAIMS, and B-2026-09-03-20 records by how much. "Every
-/// spelling" means every spelling AT THE TWO EMIT SITES — a `let` initializer
-/// and an assignment RHS — plus the struct-pattern route. The rule is
-/// site-based rather than shape-based, so `return w.r;`, a tail `w.r`, a call
-/// argument `eat(w.r)`, a struct-literal field `Box2 { r: w.r }` and a
-/// tuple-literal element `(w.r, 1)` all move the same field out of the same
-/// own-`Drop` parent and fire nothing. Measured at `Deny`; not fixed here
-/// because adding emit sites to a blocking rule newly rejects programs and
-/// wants its own corpus sweep.
+/// THE NAME USED TO OVERCLAIM, and B-2026-09-03-20 closed the gap it named.
+/// "Every spelling" once meant every spelling AT THE TWO EMIT SITES — a `let`
+/// initializer and an assignment RHS — plus the struct-pattern route, so
+/// `return w.r;`, a tail `w.r`, a call argument, a struct-literal field and a
+/// tuple-literal element all moved the same field out of the same own-`Drop`
+/// parent and fired nothing. The consumption-site set is now complete;
+/// `partial_move_of_drop_struct_fires_at_every_value_position` pins it, and
+/// this test keeps its narrower job of pinning the PATTERN spellings and the
+/// two negatives the spec states.
 #[test]
 fn partial_move_out_of_a_drop_struct_is_rejected_in_every_spelling() {
     const PRELUDE: &str = "struct R { s: String }\n\
@@ -48295,6 +48295,201 @@ fn partial_move_out_of_a_drop_struct_is_rejected_in_every_spelling() {
         0,
         "a `_` sub-pattern binds nothing, so the heap-bearing field never leaves"
     );
+}
+
+/// B-2026-09-03-20 — the rule was SITE-BASED, not shape-based, and this pins
+/// the complete site set.
+///
+/// The predicate `partial_move_of_drop_struct` always asked the right
+/// question — "does this expression move a non-`Copy` field out of an
+/// own-`Drop` place?" — but only three places CALLED it: a `let` initializer,
+/// an assignment RHS, and the struct-pattern route. Every other value position
+/// moved the same field out of the same parent and fired nothing.
+///
+/// A WALK OVER EVERY EXPRESSION IS NOT THE FIX, which is why this stays a list
+/// of consumption sites rather than becoming one predicate over the AST. The
+/// `w.r` inside `println(w.r.s)` moves nothing — it is the base of a further
+/// projection — and the same goes for a method receiver, an index base and a
+/// borrow-typed argument. On a `Deny` rule a missed EXEMPTION is a false
+/// positive that breaks working programs, where a missed SITE is only the
+/// status quo, so the rule enumerates the positions that consume rather than
+/// the positions that do not.
+///
+/// THE HAZARD IS REAL AND WAS MEASURED HERE, which the row could not yet say.
+/// On a LOCAL root, `return w.r;` ran `R`'s drop body TWICE for one value, and
+/// the second run diverged run-vs-build: the interpreter's ran over the LIVE
+/// field (`dR[d]`), both compiled backends' over the ZEROED one (`dR[]`). The
+/// tuple-literal element and `v.push(w.r)` measured the same split. So closing
+/// this deletes three run-vs-build divergence classes, not just a lint gap.
+///
+/// THE PARAM ROOT IS THE EXCEPTION THAT EXPLAINS THE ROW'S CAVEAT. The row
+/// noted `e2e_own_drop_parent_runs_a_returned_fields_body_once`'s
+/// "projection-return" cell asserts `return w.r;` is correct today, and it is —
+/// for a PARAM root reached through a caller temp, where B-2026-08-28-21's
+/// escape mask already suppresses the duplicate body. That fixture keeps
+/// passing and now carries an `#[allow]`, because the shape is still rejected:
+/// design.md § Part 8 `Drop` rejects the SHAPE, and a spelling that a later fix
+/// made accidentally well-behaved is not a licence to keep writing it.
+#[test]
+fn partial_move_of_drop_struct_fires_at_every_value_position() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(self.s); } }\n\
+         struct W { r: R, n: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(\"dW\"); } }\n\
+         struct Box2 { r: R, k: i64 }\n\
+         struct Sink { k: i64 }\n\
+         impl Sink { fn take(mut ref self, x: R) { println(x.s); } }\n\
+         enum E { A(R), B }\n\
+         fn eat(x: R) { println(x.s); }\n\
+         fn mkw() -> W { return W { r: R { s: \"d\" }, n: 4 }; }\n";
+    let fires = |items: &str| -> usize { partial_move_diagnostics(&format!("{PRELUDE}{items}")) };
+
+    // ── every position that CONSUMES the projection ──
+    for (label, items) in [
+        // The three the rule already reached, as controls: if one of these
+        // ever stops firing the widening took the original rule with it.
+        (
+            "let-initializer (control)",
+            "fn f() { let w = mkw(); let x = w.r; println(x.s); }\nfn main() { f(); }\n",
+        ),
+        (
+            "assignment RHS (control)",
+            "fn f() { let w = mkw(); let mut z = R { s: \"z\" }; z = w.r; println(z.s); }\n\
+             fn main() { f(); }\n",
+        ),
+        // The row's own five.
+        (
+            "return",
+            "fn f() -> R { let w = mkw(); return w.r; }\nfn main() { println(f().s); }\n",
+        ),
+        (
+            "block tail",
+            "fn f() -> R { let w = mkw(); w.r }\nfn main() { println(f().s); }\n",
+        ),
+        (
+            "call argument",
+            "fn f() { let w = mkw(); eat(w.r); }\nfn main() { f(); }\n",
+        ),
+        (
+            "struct-literal field",
+            "fn f() { let w = mkw(); let b = Box2 { r: w.r, k: 1 }; println(b.r.s); }\n\
+             fn main() { f(); }\n",
+        ),
+        (
+            "tuple-literal element",
+            "fn f() { let w = mkw(); let t = (w.r, 1); let i = t.0; println(i.s); }\n\
+             fn main() { f(); }\n",
+        ),
+        // Found while completing the set — the row named five, the hole was
+        // thirteen, and these eight are the difference.
+        (
+            "method argument",
+            "fn f() { let w = mkw(); let mut s = Sink { k: 0 }; s.take(w.r); }\n\
+             fn main() { f(); }\n",
+        ),
+        (
+            "array-literal element",
+            "fn f() { let w = mkw(); let a: Array[R, 1] = [w.r]; println(a[0].s); }\n\
+             fn main() { f(); }\n",
+        ),
+        (
+            "Vec.push element",
+            "fn f() { let w = mkw(); let mut v: Vec[R] = Vec.new(); v.push(w.r); \
+             println(v[0].s); }\nfn main() { f(); }\n",
+        ),
+        (
+            "user enum constructor",
+            "fn f() { let w = mkw(); let e = E.A(w.r); \
+             match e { E.A(x) => { println(x.s); } E.B => {} } }\nfn main() { f(); }\n",
+        ),
+        (
+            "if-arm tail",
+            "fn f(c: bool) -> R { let w = mkw(); if c { w.r } else { R { s: \"z\" } } }\n\
+             fn main() { println(f(true).s); }\n",
+        ),
+        (
+            "bare match-arm body",
+            "fn f(c: i64) -> R { let w = mkw(); match c { 0 => w.r, _ => R { s: \"z\" } } }\n\
+             fn main() { println(f(0).s); }\n",
+        ),
+        (
+            "`self` projection",
+            "impl W { fn steal(self) -> R { return self.r; } }\n\
+             fn main() { let w = mkw(); println(w.steal().s); }\n",
+        ),
+        (
+            "param root",
+            "fn f(w: W) -> R { return w.r; }\nfn main() { println(f(mkw()).s); }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 1, "{label} must reject the partial move");
+    }
+
+    // ── the PRELUDE constructors, all four spellings ──
+    // `Some` / `Ok` / `Err` never reach the argument loop that covers the user
+    // enum above: dedicated arms type the payload against a slot derived from
+    // the expectation. The bare and one-segment-path forms are Calls; the
+    // generic-qualified form parses as a MethodCall on a type receiver, which
+    // is a THIRD path again. Each was silent for its own reason, so each is
+    // pinned separately rather than by one representative.
+    for (label, items) in [
+        (
+            "bare Some",
+            "fn f() { let w = mkw(); let o: Option[R] = Some(w.r); \
+             match o { Option.Some(x) => { println(x.s); } Option.None => {} } }\n\
+             fn main() { f(); }\n",
+        ),
+        (
+            "Option.Some path",
+            "fn f() { let w = mkw(); let o = Option.Some(w.r); \
+             match o { Option.Some(x) => { println(x.s); } Option.None => {} } }\n\
+             fn main() { f(); }\n",
+        ),
+        (
+            "generic-qualified Option[R].Some",
+            "fn f() { let w = mkw(); let o = Option[R].Some(w.r); \
+             match o { Option.Some(x) => { println(x.s); } Option.None => {} } }\n\
+             fn main() { f(); }\n",
+        ),
+        (
+            "bare Ok",
+            "fn f() -> Result[R, String] { let w = mkw(); return Ok(w.r); }\n\
+             fn main() { match f() { Result.Ok(x) => { println(x.s); } \
+             Result.Err(e) => { println(e); } } }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 1, "{label} must reject the partial move");
+    }
+
+    // ── the NEGATIVES, which matter more than the positives on a `Deny` rule ──
+    // Each is a shape a naive "flag every projection" walk would break, and
+    // each is a working program that must keep compiling.
+    for (label, items) in [
+        (
+            "read THROUGH the projection moves nothing",
+            "fn f() { let w = mkw(); println(w.r.s); }\nfn main() { f(); }\n",
+        ),
+        (
+            "an interpolation hole is the same read",
+            "fn f() { let w = mkw(); println(f\"{w.r.s}\"); }\nfn main() { f(); }\n",
+        ),
+        (
+            "a `Copy` field is read, not moved",
+            "fn f() { let w = mkw(); let q = w.n; println(f\"{q}\"); }\nfn main() { f(); }\n",
+        ),
+        (
+            "a method receiver borrows its object",
+            "fn f() { let w = mkw(); println(f\"{w.r.s.len()}\"); }\nfn main() { f(); }\n",
+        ),
+        (
+            "a struct with NO `Drop` impl may have fields moved out",
+            "struct P { r: R, n: i64 }\n\
+             fn f() -> R { let p = P { r: R { s: \"d\" }, n: 1 }; return p.r; }\n\
+             fn main() { println(f().s); }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 0, "{label} — must stay accepted");
+    }
 }
 
 /// B-2026-09-01-43 — the rule's LEVEL, which B-2026-09-01-38 deliberately left

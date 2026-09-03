@@ -287,7 +287,15 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              FIXED in it (B-2026-08-28-21's family among them); B-2026-09-01-43 resolved \
              them — one was a TRUE POSITIVE and was rewritten, the other seven now carry \
              `#[allow(partial_move_of_drop_struct)]`, which keeps the drop behaviour they \
-             pin under test because the opt-out leaves it reachable. B-2026-09-01-38.",
+             pin under test because the opt-out leaves it reachable. B-2026-09-01-38. \
+             The rule fires at every position that CONSUMES the projection — `let` and \
+             assignment RHS, `return`, a block/`if`/`match` tail, a bare match-arm body, \
+             a call or method argument, a struct-literal field, a tuple/array-literal \
+             element, `Vec.push`, and the `Some`/`Ok`/`Err` payload in all four \
+             spellings. It deliberately does NOT walk every expression: the `w.r` inside \
+             `println(w.r.s)` is the base of a further projection and moves nothing, and \
+             on a `Deny` rule a missed exemption breaks working programs where a missed \
+             site merely under-reports. B-2026-09-03-20.",
     },
     LintInfo {
         name: "chained_field_receiver",

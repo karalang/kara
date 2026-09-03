@@ -932,6 +932,7 @@ impl<'a> super::TypeChecker<'a> {
             for (arg, param) in args.iter().zip(param_types.iter()) {
                 let arg_ty = self.infer_expr(&arg.value);
                 self.check_assignable(param, &arg_ty, arg.value.span);
+                self.warn_partial_move_of_drop_struct(&arg.value, param);
             }
         }
 

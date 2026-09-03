@@ -239,6 +239,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             let arm_ty = self.check_expr(&arm.body, expected);
+            // B-2026-09-03-20 — a BARE arm body (`0 => w.r`) is the match's
+            // value without ever being a block, so `check_block_against`'s tail
+            // hook never sees it. The braced spelling reaches this same site
+            // with a Block body and is covered there instead; both are the same
+            // value position and must answer alike.
+            self.warn_partial_move_of_drop_struct(&arm.body, expected);
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }
@@ -427,6 +433,8 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             let arm_ty = self.infer_expr(&arm.body);
+            // The synth-mode twin of the check-mode arm hook above.
+            self.warn_partial_move_of_drop_struct(&arm.body, &arm_ty);
             if scrut_borrows_an_element {
                 self.reject_consuming_arm_binding_out_of_index(&dispatch_ty, arm);
             }

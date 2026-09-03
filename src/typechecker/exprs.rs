@@ -1009,6 +1009,9 @@ impl<'a> super::TypeChecker<'a> {
             }
             for elem in elements {
                 self.check_expr(elem, element);
+                // B-2026-09-03-20 — an array-literal element is consumed by
+                // value, the same value position as a tuple element.
+                self.warn_partial_move_of_drop_struct(elem, element);
             }
             self.record_expr_type(&expr.span, expected);
             return expected.clone();
@@ -1933,6 +1936,10 @@ impl<'a> super::TypeChecker<'a> {
                 ) {
                     self.reject_index_move_non_copy(&arg.value, param_ty);
                 }
+                // B-2026-09-03-20 — the same value position for the own-`Drop`
+                // partial-move rule. The borrow gate above is now inside that
+                // rule's predicate, so this call needs no gate of its own.
+                self.warn_partial_move_of_drop_struct(&arg.value, param_ty);
                 if apply_call_site_marker {
                     self.check_call_site_marker(arg, param_ty, &arg_ty);
                 }
@@ -3422,6 +3429,7 @@ impl<'a> super::TypeChecker<'a> {
         for (arg, param_ty) in args.iter().zip(sig.params.iter()) {
             let arg_ty = self.infer_expr(&arg.value);
             self.check_assignable(param_ty, &arg_ty, arg.value.span);
+            self.warn_partial_move_of_drop_struct(&arg.value, param_ty);
         }
         sig.return_type.clone()
     }
@@ -4556,7 +4564,20 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_nil_coalesce(left, right, &expr.span)
             }
 
-            ExprKind::Call { callee, args } => self.infer_call(callee, args, &expr.span),
+            ExprKind::Call { callee, args } => {
+                let t = self.infer_call(callee, args, &expr.span);
+                // B-2026-09-03-20 — the PRELUDE constructors. `Some(x)` /
+                // `Ok(x)` / `Err(e)` consume their payload by value exactly as
+                // a user enum's `E.A(x)` does, but they never reach the
+                // argument loop that covers the user form: they are answered by
+                // dedicated arms that type the payload against a slot derived
+                // from the expectation. Reading the payload's type back out of
+                // `expr_types` keeps this to one site and asks nothing of those
+                // arms; a payload the call did not record is skipped rather
+                // than guessed at.
+                self.check_prelude_ctor_payload_partial_move(callee, args);
+                t
+            }
 
             ExprKind::MethodCall {
                 object,
@@ -4564,7 +4585,18 @@ impl<'a> super::TypeChecker<'a> {
                 args,
                 turbofish: _,
                 args_close_span,
-            } => self.infer_method_call(object, method, args, &expr.span, args_close_span),
+            } => {
+                let t = self.infer_method_call(object, method, args, &expr.span, args_close_span);
+                // The GENERIC-QUALIFIED prelude ctor: `Option[R].Some(w.r)` and
+                // `Result[R, E].Ok(w.r)` parse as a MethodCall on a type
+                // receiver, not as a Call, so the `infer_call` hook above never
+                // sees them. Same helper, same read-back-the-recorded-type
+                // bargain; the method NAME is the discriminator here.
+                if matches!(method.as_str(), "Some" | "Ok" | "Err") {
+                    self.check_prelude_ctor_payload_partial_move_named(method, args);
+                }
+                t
+            }
 
             ExprKind::FieldAccess { object, field } => {
                 self.infer_field_access(object, field, &expr.span)
@@ -5644,11 +5676,20 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Never;
                 }
                 if let Some(ref expr) = inner {
-                    if let Some(ref ret_ty) = self.current_return_type.clone() {
+                    // B-2026-09-03-20 — `return w.r;` is a value position
+                    // exactly as a `let` initializer is, and was one of the
+                    // five that escaped the rule while it was site-based.
+                    // Measured on a LOCAL root: two `R` bodies for one value,
+                    // and the second one diverged run-vs-build (the
+                    // interpreter's ran over the LIVE field, both compiled
+                    // backends' over the ZEROED one).
+                    let ret_ty = if let Some(ref ret_ty) = self.current_return_type.clone() {
                         self.check_expr(expr, ret_ty);
+                        ret_ty.clone()
                     } else {
-                        self.infer_expr(expr);
-                    }
+                        self.infer_expr(expr)
+                    };
+                    self.warn_partial_move_of_drop_struct(expr, &ret_ty);
                 } else if let Some(ref ret_ty) = self.current_return_type.clone() {
                     if *ret_ty != Type::Unit && *ret_ty != Type::Error {
                         self.type_error(
@@ -5726,6 +5767,13 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Unit
                 } else {
                     let types: Vec<Type> = exprs.iter().map(|e| self.infer_expr(e)).collect();
+                    // B-2026-09-03-20 — each element is consumed by value, so
+                    // `(w.r, 1)` moves `r` out of an own-`Drop` `W` exactly as
+                    // `let x = w.r;` does. Measured: two bodies, and the second
+                    // diverged run-vs-build.
+                    for (e, t) in exprs.iter().zip(types.iter()) {
+                        self.warn_partial_move_of_drop_struct(e, t);
+                    }
                     Type::Tuple(types)
                 }
             }

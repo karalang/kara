@@ -1040,6 +1040,11 @@ impl<'a> super::TypeChecker<'a> {
                 // concrete type — so read the value's recorded synthesized type
                 // back for the param-binding unify.
                 self.check_expr(&f.value, &push_ty);
+                // B-2026-09-03-20 — a struct-literal FIELD is a value
+                // position: `Box2 { r: w.r }` moves `r` out of an own-`Drop`
+                // `W` exactly as `let x = w.r;` does. Measured: two `R` bodies,
+                // the second diverging run-vs-build.
+                self.warn_partial_move_of_drop_struct(&f.value, &push_ty);
                 if !param_subs.is_empty() {
                     if let Some(actual) = self
                         .expr_types
@@ -1295,6 +1300,11 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 };
                 self.check_expr(&f.value, &push_ty);
+                // B-2026-09-03-20 — a struct-literal FIELD is a value
+                // position: `Box2 { r: w.r }` moves `r` out of an own-`Drop`
+                // `W` exactly as `let x = w.r;` does. Measured: two `R` bodies,
+                // the second diverging run-vs-build.
+                self.warn_partial_move_of_drop_struct(&f.value, &push_ty);
                 if !param_subs.is_empty() {
                     if let Some(actual) = self
                         .expr_types
