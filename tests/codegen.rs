@@ -13329,6 +13329,169 @@ done
         );
     }
 
+    /// B-2026-09-03-25 — A WILDCARD TUPLE LEAF OVER AN `Option`/`Result`
+    /// ELEMENT OWNS ITS PAYLOAD'S `Drop` BODY.
+    ///
+    /// `run_discarded_leaf_user_drop_bodies` picks its walker by the type's
+    /// NAME, and the built-in `Option`/`Result` carry the payload in a generic
+    /// ARGUMENT instead. `Option` is even present in `enum_layouts`, so the
+    /// helper's `enum_payload_ok` answered true for it and then
+    /// `emit_enum_payload_user_drop_bodies_fn("Option")` found no variant
+    /// payload to walk and returned `None` — the leaf reported NOTHING and the
+    /// body was owned by nobody. Same defect B-2026-09-03-15 fixed one arm
+    /// over, and the same resolution: the walker keyed by the `TypeExpr`.
+    ///
+    /// FOUR SPELLINGS SHARED THE DECLINE and the row recorded two of them.
+    /// `wr` and `wboth` are the row's own cells; `w0` puts the `Option` in slot
+    /// 0; `resw` is the `Result` twin; `nestw` reaches the same helper through
+    /// the nested-pattern recursion. Pre-fix, this exact program loses
+    /// `dR110`, `dR112`, `dR14`, `dR140`, `dR170` and both `dR180`s, and
+    /// nothing else.
+    ///
+    /// `projw` IS THE CELL THAT LOOKS FIXED AND WAS NOT BROKEN. A projection
+    /// source printed the body pre-fix anyway — incidentally, out of the source
+    /// STRUCT's own walk, which is why `dR190` lands BEFORE the live read
+    /// rather than after it. Reading it as a passing cell pre-fix is the trap
+    /// the sibling row's `proj` cell documents; it is here so a fix that
+    /// re-routes it has to move this line deliberately.
+    ///
+    /// `loopw` RUNS THE DESTRUCTURE TWICE, because a body emitted once for a
+    /// loop body is a distinct failure from a body emitted never, and a
+    /// single-iteration cell cannot tell them apart.
+    ///
+    /// THE CONTROLS COVER THE OPPOSITE FAILURE, which in this family is a body
+    /// running TWICE rather than zero times: `bind` (the leaf B-2026-09-03-15
+    /// fixed, through different machinery), `bothst` (two plain struct
+    /// wildcards — proof the source's own walk does not double-fire here),
+    /// `undest`, `marm`, `nonew` (a `None` payload, nothing to run), `optstr`
+    /// (`Option[String]`, an inline payload with no user `Drop`, so nothing is
+    /// owed) and `i64opt` — `let (_, o) = t;` over `(i64, Option[R])`, the leaf
+    /// the wildcard arm's own comment cites as one this helper DECLINES. It
+    /// does not decline it any more, and it was already correct before this
+    /// fix because the `Option` there is BOUND rather than discarded.
+    ///
+    /// Every `Drop` body renders `tag`, so a body run against a cap-zeroed husk
+    /// prints `dR110/` and fails on the transcript instead of passing as a bare
+    /// body count.
+    ///
+    /// TWO SPELLINGS ARE KNOWINGLY ABSENT because they are still LIVE
+    /// run-vs-build splits and this fixture is pinned to ONE string shared with
+    /// its interpreter twin: a FRESH tuple source (`let (r, _) = (mk(31),
+    /// Option.Some(mk(131)));`) whose element has no memory owner, and the
+    /// BINDING leaf of that same fresh source. Both are filed separately.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_wildcard_tuple_leaf_over_optres_owns_its_payload_body`, pinned to
+    /// the same string.
+    #[test]
+    fn e2e_wildcard_tuple_leaf_over_optres_owns_its_payload_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+struct Ho { pe: (R, Option[R]) }
+
+fn mk(id: i64) -> R { return R { id: id, tag: f"t{id}" } }
+
+fn wr()    { let t = (mk(10), Option.Some(mk(110))); let (r, _) = t; println(f"  rd{r.id}") }
+fn wboth() { let t = (mk(12), Option.Some(mk(112))); let (_, _) = t; println("  x") }
+fn w0()    { let t = (Option.Some(mk(14)), 5); let (_, k) = t; println(f"  k{k}") }
+fn resw()  { let t: (R, Result[R, String]) = (mk(40), Result[R, String].Ok(mk(140)));
+             let (r, _) = t; println(f"  rd{r.id}") }
+fn nestw() { let t = ((mk(70), Option.Some(mk(170))), 3); let ((_, _), n) = t; println(f"  n{n}") }
+fn projw() { let h = Ho { pe: (mk(90), Option.Some(mk(190))) }; let (r, _) = h.pe; println(f"  rd{r.id}") }
+fn nonew() { let n: Option[R] = Option.None; let t = (mk(16), n); let (r, _) = t; println(f"  rd{r.id}") }
+fn loopw() { let mut i = 0;
+             while i < 2 { let t = (mk(80), Option.Some(mk(180))); let (_, _) = t; i = i + 1; }
+             println("  x") }
+fn bind()  { let t = (mk(21), Option.Some(mk(221))); let (a, b) = t; println(f"  rd{a.id}") }
+fn bothst(){ let t = (mk(50), mk(150)); let (_, _) = t; println("  x") }
+fn optstr(){ let t = (mk(60), Option.Some(f"x60")); let (r, _) = t; println(f"  rd{r.id}") }
+fn undest(){ let t = (mk(6), Option.Some(mk(66))); println(f"  rd{t.0.id}") }
+fn marm()  { let t = (mk(5), Option.Some(mk(105))); match t { (a, b) => { println("  m") } } }
+fn i64opt(){ let t = (7, Option.Some(mk(77))); let (_, o) = t; println("  z") }
+
+fn main() {
+    println("wr");     wr()
+    println("wboth");  wboth()
+    println("w0");     w0()
+    println("resw");   resw()
+    println("nestw");  nestw()
+    println("projw");  projw()
+    println("nonew");  nonew()
+    println("loopw");  loopw()
+    println("bind");   bind()
+    println("bothst"); bothst()
+    println("optstr"); optstr()
+    println("undest"); undest()
+    println("marm");   marm()
+    println("i64opt"); i64opt()
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"wr
+dR110/t110
+  rd10
+dR10/t10
+wboth
+dR12/t12
+dR112/t112
+  x
+w0
+dR14/t14
+  k5
+resw
+dR140/t140
+  rd40
+dR40/t40
+nestw
+dR70/t70
+dR170/t170
+  n3
+projw
+dR190/t190
+  rd90
+dR90/t90
+nonew
+  rd16
+dR16/t16
+loopw
+dR80/t80
+dR180/t180
+dR80/t80
+dR180/t180
+  x
+bind
+dR221/t221
+  rd21
+dR21/t21
+bothst
+dR50/t50
+dR150/t150
+  x
+optstr
+  rd60
+dR60/t60
+undest
+  rd6
+dR6/t6
+dR66/t66
+marm
+  m
+dR5/t5
+dR105/t105
+i64opt
+dR77/t77
+  z
+done
+"#
+        );
+    }
+
     /// Twin of `tests/interpreter.rs`'s
     /// `test_projection_source_tuple_destructure_is_a_view`, pinned to the same
     /// string.

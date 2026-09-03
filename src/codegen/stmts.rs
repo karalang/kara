@@ -14243,10 +14243,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 //
                                 // GATED ON `ran_bodies`, NOT on the old single bool,
                                 // which meant `took_memory` and is always false here.
-                                // Masking unconditionally would hand a
-                                // `let (_, o) = h.pe;` over `(i64, Option[R])` — a leaf
-                                // this helper DECLINES — to nobody, converting a
-                                // doubled body into a lost one.
+                                // Masking unconditionally would hand a leaf this
+                                // helper DECLINES to nobody, converting a doubled
+                                // body into a lost one.
+                                //
+                                // B-2026-09-03-25 — THE EXAMPLE THIS CITED IS GONE,
+                                // and it was doubly wrong to begin with. It named
+                                // `let (_, o) = h.pe;` over `(i64, Option[R])`, which
+                                // this arm is never asked about: `o` is a BINDING, so
+                                // the leaf goes to the binding arm below, and the only
+                                // leaf reaching HERE is the `i64` wildcard. The
+                                // `Option` half of the claim is now false as well —
+                                // this helper answers for an `Option`/`Result` head
+                                // since -25. The `ran_bodies` gate is unchanged and
+                                // still right; what it protects is a leaf with no
+                                // walker at all, e.g. a `Vec[R]` element, whose head
+                                // name is neither struct nor enum.
                                 if self
                                     .run_discarded_leaf_user_drop_bodies(&te, elem, false)
                                     .ran_bodies
@@ -14855,6 +14867,83 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(cur_fn) = self.current_fn else {
             return DiscardedLeaf::NOTHING;
         };
+        // B-2026-09-03-25 — an `Option[T]` / `Result[O, E]` leaf. Every walker
+        // selected below is keyed by the type's NAME, and the built-in
+        // `Option`/`Result` carry their payload in a GENERIC ARGUMENT instead:
+        // `Option` is in `enum_layouts`, so `enum_payload_ok` even answers true
+        // for it, but `emit_enum_payload_user_drop_bodies_fn("Option")` has no
+        // variant payload to walk and returns `None` — the helper then reported
+        // NOTHING and the leaf's body was owned by nobody. Same shape
+        // B-2026-09-03-15 fixed one arm over, and the same resolution: not a
+        // widened name test, but the walker that is keyed by the `TypeExpr`.
+        //
+        // FOUR SPELLINGS SHARED THE DECLINE, all measured against `--interp` as
+        // the correct side:
+        //
+        //     let t = (mk(10), Option.Some(mk(110))); let (r, _) = t;
+        //     let t = (mk(12), Option.Some(mk(112))); let (_, _) = t;
+        //     let (r, _) = (mk(31), Option.Some(mk(131)));          // FRESH source
+        //     let t = ((mk(70), Option.Some(mk(170))), 3); let ((_, _), n) = t;
+        //
+        // and the `Result` spelling of the first measured identically. The row
+        // recorded only the first two; the fresh source and the nested
+        // recursion reach the same helper through different call sites.
+        //
+        // `Result` IS taken here, where B-2026-09-03-15 deliberately left it —
+        // and the difference is exactly `free_memory`. That row declined it
+        // because the BINDING arm must register a memory owner, and the
+        // `Result` peer of `track_inline_option_agg_payload_var` does not exist
+        // (272 B leaked in 9 allocations when it took the leaf anyway; see
+        // B-2026-09-03-22). This arm asks the memory question separately and
+        // answers it per call site, so on the place source it takes the body
+        // while the source aggregate keeps the memory, and no such peer is
+        // needed. `--interp` runs the `Result` wildcard's body today, which is
+        // what makes the compiled side the wrong one.
+        if name == "Option" || name == "Result" {
+            let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(te) else {
+                return DiscardedLeaf::NOTHING;
+            };
+            // THE MEMORY HALF DECIDES WHETHER THIS LEG RUNS AT ALL on a FRESH
+            // source. A place source passes `free_memory: false` — its
+            // aggregate's own drop frees the element, which is why this arm
+            // never cap-zeroes — so the body can be taken with nothing else to
+            // arrange. A fresh source has no such aggregate, so a body without
+            // a free is a body traded for a leak, which is the trade
+            // B-2026-09-03-15 refused. Rather than assume the resolver covers
+            // the payload, ASK it, and decline unchanged when it does not:
+            // `vec_elem_agg_drop_for_type_expr` is the same `TypeExpr`-keyed
+            // memory resolver every other element channel funnels through.
+            let mem = if free_memory {
+                match self.vec_elem_agg_drop_for_type_expr(te) {
+                    Some(f) => Some(f),
+                    // No owner for this payload shape — keep the pre-fix
+                    // behaviour (no body, no leak) rather than inventing one.
+                    None => return DiscardedLeaf::NOTHING,
+                }
+            } else {
+                None
+            };
+            let synth = format!("__wildcard_discard_optres_{}", self.indexed_elem_counter);
+            self.indexed_elem_counter += 1;
+            let slot = self.create_entry_alloca(cur_fn, &synth, elem.get_type());
+            self.builder.build_store(slot, elem).unwrap();
+            // BODIES BEFORE MEMORY — the body reads the payload it is about to
+            // free. The binding arm states the same ordering rule the other way
+            // round because it registers into a LIFO frame; here the calls are
+            // emitted directly, so the order written is the order run.
+            self.builder.build_call(bodies, &[slot.into()], "").unwrap();
+            if let Some(mem) = mem {
+                self.builder.build_call(mem, &[slot.into()], "").unwrap();
+                return DiscardedLeaf {
+                    ran_bodies: true,
+                    took_memory: true,
+                };
+            }
+            return DiscardedLeaf {
+                ran_bodies: true,
+                took_memory: false,
+            };
+        }
         // A non-shared user ENUM leaf runs its LIVE VARIANT's payload bodies,
         // through the same emitter the binding-leaf arm of
         // `track_destructure_leaf_cleanup` uses. Without this arm the helper

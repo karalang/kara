@@ -253,6 +253,85 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-03-25 — A WILDCARD TUPLE LEAF OVER AN `Option`/`Result`
+    /// ELEMENT TAKES THE PAYLOAD'S `Drop` BODY WITHOUT TAKING ITS MEMORY.
+    ///
+    /// `run_discarded_leaf_user_drop_bodies` selects every walker by the type's
+    /// NAME, and the built-in `Option`/`Result` carry their payload in a
+    /// generic argument, so the leaf found no walker and the payload's body was
+    /// owned by nobody: `let t = (mk(10), Option.Some(mk(110))); let (r, _) = t;`
+    /// ran `dR110` under `--interp` and on no compiled surface.
+    ///
+    /// WHY THIS CASE IS IN THE SANITIZER SUITE AND NOT ONLY IN THE TRANSCRIPT
+    /// PINS. The fix ADDS an owner for the body, and the neighbouring row
+    /// B-2026-09-03-15 measured what that costs when the memory half is missing
+    /// — its `Result` leaf ran the due body and leaked 272 bytes in 9
+    /// allocations. This arm avoids that by construction rather than by luck:
+    /// on a PLACE source it takes the body only, and the source aggregate's own
+    /// drop still frees the element (this arm never cap-zeroes). That is a
+    /// claim about ownership, and LSan is what checks it — a transcript pin
+    /// cannot tell a balanced free from a leaked one, and the `dR` lines are
+    /// identical either way.
+    ///
+    /// THE `resw` CELL IS THE ONE THAT WOULD BREAK FIRST if the arm ever took
+    /// memory too: `Result` has no `track_inline_result_payload_var` peer for a
+    /// boxed payload, which is exactly why B-2026-09-03-15 declined it on the
+    /// BINDING arm. It is safe HERE only because `free_memory` is false.
+    ///
+    /// THE CONTROLS MUST NOT MOVE, and the risk they cover is a DOUBLE free
+    /// rather than a leak — the source's walk reaching an element the leaf also
+    /// took:
+    /// - `bind`  — the binding leaf B-2026-09-03-15 fixed, through different
+    ///   machinery; it must keep its single body and stay balanced.
+    /// - `bothstruct` — two plain struct wildcards, which already worked and
+    ///   proves the source's own walk does not double-fire here.
+    /// - `optstr` — `Option[String]`, an INLINE payload with no user `Drop`.
+    ///   Nothing is owed, and it stayed clean across the fix, which is what
+    ///   isolates the boxed-payload arm rather than the hand-off itself.
+    ///
+    /// Every body renders `s` and `xs.len()`, so a body run against a
+    /// cap-zeroed husk prints `dR110::0` and fails the transcript rather than
+    /// passing as a bare count.
+    #[test]
+    fn asan_wildcard_tuple_leaf_over_optres_takes_body_not_memory() {
+        assert_clean_asan_run(
+            "struct R { id: i64, s: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.s}:{self.xs.len()}\") } }\n\
+             fn mk(n: i64) -> R { return R { id: n, s: f\"s{n}\", xs: [n, n] }; }\n\
+             fn wr() { let t = (mk(10), Option.Some(mk(110))); let (r, _) = t; println(f\"rd{r.id}\") }\n\
+             fn wboth() { let t = (mk(12), Option.Some(mk(112))); let (_, _) = t; println(\"wb\") }\n\
+             fn resw() { let t: (R, Result[R, String]) = (mk(40), Result[R, String].Ok(mk(140))); let (r, _) = t; println(f\"rw{r.id}\") }\n\
+             fn nestw() { let t = ((mk(70), Option.Some(mk(170))), 3); let ((_, _), n) = t; println(f\"nw{n}\") }\n\
+             fn bind() { let t = (mk(21), Option.Some(mk(221))); let (a, b) = t; println(f\"bd{a.id}\") }\n\
+             fn bothstruct() { let t = (mk(50), mk(150)); let (_, _) = t; println(\"bs\") }\n\
+             fn optstr() { let t = (mk(60), Option.Some(f\"x60\")); let (r, _) = t; println(f\"os{r.id}\") }\n\
+             fn main() { wr(); wboth(); resw(); nestw(); bind(); bothstruct(); optstr(); }\n",
+            &[
+                "dR110:s110:2",
+                "rd10",
+                "dR10:s10:2",
+                "dR12:s12:2",
+                "dR112:s112:2",
+                "wb",
+                "dR140:s140:2",
+                "rw40",
+                "dR40:s40:2",
+                "dR70:s70:2",
+                "dR170:s170:2",
+                "nw3",
+                "dR221:s221:2",
+                "bd21",
+                "dR21:s21:2",
+                "dR50:s50:2",
+                "dR150:s150:2",
+                "bs",
+                "os60",
+                "dR60:s60:2",
+            ],
+            "b25-wildcard-optres-leaf",
+        );
+    }
+
     /// B-2026-09-02-23 — A BARE-TUPLE ELEMENT BINDING MUST NOT REGISTER A
     /// SECOND OWNER FOR THE TUPLE'S ELEMENT.
     ///
