@@ -9670,6 +9670,20 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let inst =
                                     self.type_decls.enum_inst_var_types.get(var_name).cloned();
                                 self.track_struct_var_inst(&struct_name, alloca, inst);
+                                // B-2026-09-02-5 — and that sentence is exactly
+                                // the induction step: this binding now carries
+                                // callee-owned memory, so a later `b = a` may
+                                // take the memory half of its drop over. Gated
+                                // on the SOURCE qualifying, so an RC-promoted
+                                // param — where no copy was made and the caller
+                                // still owns the buffers — cannot seed it.
+                                if let ExprKind::Identifier(src) = &value.kind {
+                                    if self.source_carries_callee_owned_param_memory(src) {
+                                        self.drop_rc
+                                            .param_view_callee_owned
+                                            .insert(var_name.to_string());
+                                    }
+                                }
                             } else if has_user_drop
                                 && !self.type_decls.shared_types.contains_key(&struct_name)
                             {
@@ -11667,6 +11681,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             Some(flag) => {
                                 let bool_t = self.context.bool_type();
                                 let _ = self.builder.build_store(flag, bool_t.const_int(0, false));
+                                // B-2026-09-02-5 — the flag withholds the BODY,
+                                // which is the caller's. The MEMORY is not: the
+                                // callee entry-copied the param, so the buffers
+                                // this store moved into `name` are this frame's
+                                // and nothing else frees them — the target's
+                                // `karac_drop_<T>` wrapper is one action doing
+                                // both halves, and the struct-move suppression
+                                // below zeroes the SOURCE's caps on the premise
+                                // of an LHS `StructDrop` a `Drop`-bearing type
+                                // never has. Give the flag-`false` edge the
+                                // field walk alone. Declines wherever the
+                                // callee does not own the param, so a
+                                // caller-retains shape emits what it did.
+                                if let (true, ExprKind::Identifier(src)) =
+                                    (lhs_is_tracked_struct, &value.kind)
+                                {
+                                    if let (Some(tn), Some(slot)) = (
+                                        self.var_types.var_type_names.get(name.as_str()).cloned(),
+                                        self.variables.get(name).copied(),
+                                    ) {
+                                        self.register_param_view_mem_drop(name, src, &tn, slot.ptr);
+                                    }
+                                }
                             }
                             None => self.suppress_user_drop_for_var(name),
                         }

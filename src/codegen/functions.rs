@@ -1502,6 +1502,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // site's escaping-ness is a static property of the source location, so
         // it stays true across monomorphizations of the same body.)
         self.drop_rc.cond_move_drop_flags.clear();
+        // B-2026-09-02-5 — keyed by the same function-scoped allocas.
+        self.drop_rc.param_view_mem_drops.clear();
         self.drop_rc.optres_payload_bodies_flags.clear();
         // B-2026-09-02-6 — same reasoning: these are BasicBlock / InstructionValue
         // handles into the body just compiled, so an entry surviving into the
@@ -1573,6 +1575,8 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.owned_struct_params.clear();
         self.borrow_vars.owned_array_params.clear();
         self.payload_vars.param_view_locals.clear();
+        // B-2026-09-02-5 — its memory-ownership companion, same scope.
+        self.drop_rc.param_view_callee_owned.clear();
         self.payload_vars.bare_tuple_elem_slots.clear();
         self.payload_vars.param_view_struct_fields.clear();
         self.payload_vars.param_view_tuple_elems.clear();

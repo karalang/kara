@@ -68382,6 +68382,102 @@ fn main() {
         );
     }
 
+    /// B-2026-09-02-5 — `h2 = h` over a `Drop`-bearing struct freed the
+    /// moved-in value's heap NOWHERE, because the two suppressions that meet on
+    /// that statement each assumed the other still would.
+    ///
+    /// An owned by-value struct param is ENTRY-COPIED by the callee
+    /// (`make_aggregate_param_callee_owned`), so `h`'s buffers inside `f` are
+    /// the callee's and only the `Drop` BODY is the caller's. B-2026-08-01-16
+    /// withheld that body — now per-path, via B-2026-08-30-53's flag — and for
+    /// a type with an `impl Drop` the body and the field walk are ONE
+    /// registered action (`karac_drop_<T>` calls `__karac_drop_struct_<T>`
+    /// from inside itself, and is mutually exclusive with `StructDrop`), so
+    /// withholding the body withheld the free. B-2026-07-16-18's struct-move
+    /// suppression then zeroed the SOURCE's field caps on the stated premise
+    /// that "the LHS `a`'s own StructDrop stays the unique owner of the buffers
+    /// now in its slot" — which for a `Drop`-bearing type does not exist. The
+    /// fix gives the flag-`false` edge the field walk alone.
+    ///
+    /// THE ROW'S OWN REPRO COULD NOT HAVE GATED THIS, and that is why the
+    /// fixture looks nothing like it. It carries a one-character `String` tag,
+    /// which leaks ONE byte at `-O0` and is clean at the default `-O2` — the
+    /// masking the row itself records, and the level CI's default ASAN leg
+    /// runs at, so a fixture written to it would have passed on the pre-fix
+    /// compiler. The `Vec[String]` payload here defeats that folding: measured
+    /// against the pre-fix compiler, 3,195 B definitely + 2,280 B indirectly
+    /// lost at `KARAC_OPT_LEVEL=0` AND 2,880 + 2,280 at the default `-O2`. Both
+    /// legs go to zero with the fix.
+    ///
+    /// FIVE CELLS, looped so a flag that fails to reset between calls shows up:
+    ///
+    ///   * `basic` — the row's shape.
+    ///   * `rearm` — the target is later given a FRESH value. The DISPLACEMENT
+    ///     fire reads the same flag, so it is the same else edge that owes the
+    ///     view's memory here; without it the entry copy is orphaned by the
+    ///     overwrite rather than at scope exit.
+    ///   * `chain` / `viewlet` — the view reaches a SECOND target, through an
+    ///     assignment and through a `let` rebind. Both make the source a
+    ///     `param_view_locals` entry whose own action is already withheld, so
+    ///     the second target is the only owner left.
+    ///   * `cond` — exercised on BOTH legs. The not-taken leg is what fails if
+    ///     the memory drop is made unconditional instead of an else edge: there
+    ///     the target still holds its own initializer and the full wrapper
+    ///     frees it, so a second free would be a double free rather than a leak.
+    ///
+    /// Output is byte-identical pre- and post-fix on the compiled backends —
+    /// this is memory only. The `rearm` cell is the one place `--interp`
+    /// disagrees (it loses the fresh value's `dR5` after a param-view
+    /// assignment); that divergence predates this fix, is unchanged by it, and
+    /// is filed as B-2026-09-03-30. The compiled side is the correct one, so
+    /// pinning it here is right either way.
+    #[test]
+    fn asan_param_view_assignment_frees_the_moved_in_heap_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[String] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}-{self.xs.len()}") } }
+
+fn mk(n: i64) -> R {
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 8 { v.push(f"payloadpayload-{n}-{i}"); i = i + 1; }
+    return R { id: n, tag: f"tag-payloadpayload-{n}", xs: v }
+}
+
+fn basic(h: R) -> i64 { let mut a: R = mk(1); a = h; return a.id }
+fn rearm(h: R) -> i64 { let mut a: R = mk(2); a = h; a = mk(5); return a.id }
+fn chain(h: R) -> i64 { let mut a: R = mk(3); a = h; let mut b: R = mk(4); b = a; return b.id }
+fn viewlet(h: R) -> i64 { let a = h; let mut b: R = mk(6); b = a; return b.id }
+fn cond(h: R, c: bool) -> i64 { let mut a: R = mk(7); if c { a = h; } return a.id }
+
+fn main() {
+    let mut i: i64 = 0;
+    while i < 3 {
+        println(f"A{basic(mk(40))}");
+        println(f"B{rearm(mk(41))}");
+        println(f"C{chain(mk(42))}");
+        println(f"D{viewlet(mk(43))}");
+        println(f"E{cond(mk(44), true)}");
+        println(f"F{cond(mk(45), false)}");
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dR1-8", "dR40-8", "A40", "dR2-8", "dR5-8", "dR41-8", "B5", "dR3-8", "dR4-8",
+                "dR42-8", "C42", "dR6-8", "dR43-8", "D43", "dR7-8", "dR44-8", "E44", "dR7-8",
+                "dR45-8", "F7", "dR1-8", "dR40-8", "A40", "dR2-8", "dR5-8", "dR41-8", "B5",
+                "dR3-8", "dR4-8", "dR42-8", "C42", "dR6-8", "dR43-8", "D43", "dR7-8", "dR44-8",
+                "E44", "dR7-8", "dR45-8", "F7", "dR1-8", "dR40-8", "A40", "dR2-8", "dR5-8",
+                "dR41-8", "B5", "dR3-8", "dR4-8", "dR42-8", "C42", "dR6-8", "dR43-8", "D43",
+                "dR7-8", "dR44-8", "E44", "dR7-8", "dR45-8", "F7", "done",
+            ],
+            "b0902-5-param-view-assign-heap",
+        );
+    }
+
     #[test]
     fn asan_in_loop_rearmed_drop_flag_frees_each_iteration_exactly_once() {
         // B-2026-09-02-6 — the heap half of the in-loop drop-flag re-arm.

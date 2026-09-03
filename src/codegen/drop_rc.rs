@@ -93,6 +93,52 @@ pub(crate) struct DropRc<'ctx> {
     /// exactly as they did before. That is what keeps this slice off the
     /// predicate question the row warns about.
     pub(crate) cond_move_drop_flags: HashMap<String, PointerValue<'ctx>>,
+    /// B-2026-09-02-5 — for a binding whose `cond_move_drop_flags` bit was
+    /// cleared by a PARAM-VIEW ASSIGNMENT (`h2 = h`), the memory-only
+    /// `__karac_drop_struct_<T>` to run on the flag-`false` path.
+    ///
+    /// The flag says "the BODY of the value in this slot belongs to someone
+    /// else". For the conditional-RETURN use (B-2026-08-28-51's
+    /// `arm_conditional_move_tail_flag`) that someone also owns the MEMORY, so
+    /// `false` correctly means "emit nothing". For a param view it does not: an
+    /// owned by-value struct param is entry-copied by the callee
+    /// (`make_aggregate_param_callee_owned`), so the buffers the assignment
+    /// moved into the target are the CALLEE's — only the Drop observability is
+    /// the caller's, exactly as B-2026-08-01-16's own comment says.
+    ///
+    /// The two suppressions that meet on this path each assume the other side
+    /// still frees. The target's `UserDrop` is its `karac_drop_<T>` wrapper,
+    /// which runs the body AND the field walk — they are ONE action, mutually
+    /// exclusive with `StructDrop` by construction — so disarming the body
+    /// disarmed the memory with it; and B-2026-07-16-18's struct-move
+    /// suppression then zeroed the SOURCE's field caps on the strength of "the
+    /// LHS's own StructDrop stays the unique owner", which for a `Drop`-bearing
+    /// type does not exist. Neither freed: `h2 = h` leaked the moved-in value's
+    /// `String` at `-O0` (clean at `-O2`, which is what hid it).
+    ///
+    /// So the flag gates the BODY and this entry supplies the MEMORY the other
+    /// edge still owes. Keyed by `(binding, slot)`, and registered only where
+    /// the source provably carries callee-owned memory — an INDUCTION, not a
+    /// test on the type; see
+    /// [`Codegen::source_carries_callee_owned_param_memory`] for the two shapes
+    /// that made a type-level test double-free.
+    pub(crate) param_view_mem_drops: HashMap<(String, PointerValue<'ctx>), FunctionValue<'ctx>>,
+    /// B-2026-09-02-5 — the bindings that CARRY callee-owned param memory: an
+    /// owned by-value param's entry copy, and every local a param view has been
+    /// handed to since.
+    ///
+    /// The step half of `register_param_view_mem_drop`'s induction, kept as its
+    /// own name set rather than read off `param_view_locals`, because that set
+    /// answers a different question. It records who runs the BODY, and a source
+    /// whose body is the caller's says nothing about who owns the MEMORY: an
+    /// RC-promoted param is a `param_view_locals` root whose buffers are the
+    /// caller's box, and `let a = p; out = a;` over one double-freed on a
+    /// program the pre-fix compiler ran cleanly. Membership here is granted only
+    /// where a copy provably happened — the prologue's entry copy, or a
+    /// registration this induction already made.
+    ///
+    /// Cleared per function alongside `param_view_locals`.
+    pub(crate) param_view_callee_owned: HashSet<String>,
     /// B-2026-08-30-28 — the parameters whose user `Drop` BODY is owned by a
     /// per-path flag rather than by a static decision, so a later move site
     /// must NOT retract their action.

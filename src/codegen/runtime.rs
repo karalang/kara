@@ -10052,7 +10052,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             return;
         };
+        // B-2026-09-02-5 — the flag gates the BODY; on a param-view target the
+        // MEMORY is still this frame's and needs an else edge. See
+        // `DropRc::param_view_mem_drops` for why the two uses of this flag
+        // differ: a conditionally-RETURNED binding handed body AND memory to
+        // the caller (no entry here, nothing emitted, byte-identical to
+        // before), while a param-view assignment handed over the body alone.
+        let mem_only = self
+            .drop_rc
+            .param_view_mem_drops
+            .get(&(binding_name.to_string(), ptr))
+            .copied();
         let live = self.context.append_basic_block(fn_val, "cmdrop.live");
+        let mem = mem_only.map(|_| self.context.append_basic_block(fn_val, "cmdrop.mem"));
         let cont = self.context.append_basic_block(fn_val, "cmdrop.cont");
         let armed = self
             .builder
@@ -10060,13 +10072,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         self.builder
-            .build_conditional_branch(armed, live, cont)
+            .build_conditional_branch(armed, live, mem.unwrap_or(cont))
             .unwrap();
         self.builder.position_at_end(live);
         self.builder
             .build_call(drop_fn, &[ptr.into()], call_name)
             .unwrap();
         self.builder.build_unconditional_branch(cont).unwrap();
+        if let (Some(mem_bb), Some(mem_fn)) = (mem, mem_only) {
+            self.builder.position_at_end(mem_bb);
+            self.builder
+                .build_call(mem_fn, &[ptr.into()], "cmdrop.mem.call")
+                .unwrap();
+            self.builder.build_unconditional_branch(cont).unwrap();
+        }
         self.builder.position_at_end(cont);
     }
 

@@ -503,6 +503,134 @@ impl<'ctx> super::Codegen<'ctx> {
         self.struct_reaches(struct_name, struct_name, &mut stack)
     }
 
+    /// B-2026-09-02-5 — arrange for the flag-`false` edge of a param-view
+    /// assignment target to still run the MEMORY half of its drop.
+    ///
+    /// `h2 = h` moves an owned by-value struct param's ENTRY COPY into `h2`.
+    /// The copy is the callee's (`make_aggregate_param_callee_owned`), so this
+    /// frame owes its buffers a free; only the `Drop` BODY belongs to the
+    /// caller, which is what B-2026-08-01-16's retraction — now
+    /// B-2026-08-30-53's per-path flag — exists to withhold. For a type with an
+    /// `impl Drop` those two halves are ONE registered action (the
+    /// `karac_drop_<T>` wrapper runs the body and then the field walk, and is
+    /// mutually exclusive with `StructDrop`), so withholding the body withheld
+    /// the free with it. Record the field walk to run instead on that edge.
+    ///
+    /// ADMITTING A SOURCE IS THE WHOLE SAFETY ARGUMENT, and it is INDUCTIVE
+    /// rather than a predicate over the type. "Does the callee own this
+    /// param's buffers" turned out not to be answerable from the type alone —
+    /// measured twice, both times as a double free rather than a leak, which is
+    /// the direction that trades a small bug for a bigger one:
+    ///
+    ///   * an RC-PROMOTED param bypasses
+    ///     [`Self::make_aggregate_param_callee_owned_transfer`] entirely, so the
+    ///     callee holds a HANDLE onto the caller's box and the caller keeps its
+    ///     drop, while every type-level test still says "copy-supported";
+    ///   * and a source reached THROUGH another binding (`let a = p; out = a;`)
+    ///     inherits whatever `p` was, which the type cannot say either.
+    ///
+    /// So the base case is a genuine owned by-value PARAM that is not `ref` and
+    /// not RC-promoted — the shape the prologue entry-copies — and the step is a
+    /// local that THIS function already registered, which by induction carries
+    /// callee-owned memory. Anything else declines, and declining is exactly the
+    /// pre-fix behaviour (the leak), never a new free.
+    ///
+    /// The type-level disjunction is still applied on top of that, for the
+    /// caller-retains shapes the prologue itself declines: a shared-owning or
+    /// self-referential struct gets no entry copy and no callee drop. It also
+    /// declines for a type whose field walk is `None` (nothing to free), which
+    /// keeps every heap-free `Drop` type emitting exactly what it did.
+    pub(super) fn register_param_view_mem_drop(
+        &mut self,
+        binding_name: &str,
+        source_name: &str,
+        type_name: &str,
+        slot: PointerValue<'ctx>,
+    ) {
+        if self.type_decls.shared_types.contains_key(type_name)
+            || !self.type_decls.struct_types.contains_key(type_name)
+        {
+            return;
+        }
+        // THE TARGET's own slot must be a `T` to walk. An RC-promoted binding's
+        // alloca is an 8-byte `ptr` handle instead — the confusion
+        // B-2026-09-02-20/-21 fixed for the cap-zeroing on this same statement.
+        if self
+            .drop_rc
+            .rc_fallback_heap_types
+            .contains_key(binding_name)
+        {
+            return;
+        }
+        // THE SOURCE: see [`Self::source_carries_callee_owned_param_memory`] for
+        // why this is an induction rather than a question about the type.
+        if !self.source_carries_callee_owned_param_memory(source_name) {
+            return;
+        }
+        let callee_owns = self.aggregate_param_copy_supported_struct(type_name, &mut Vec::new())
+            || (!self.struct_owns_shared_field(type_name, &mut Vec::new())
+                && !self.struct_is_self_referential(type_name));
+        if !callee_owns {
+            return;
+        }
+        // Same instantiation threading as the move-suppression on this path
+        // (`suppress_source_vec_cleanup_for_arg`): a generic wrapper's field
+        // walk must be the per-monomorph one, or it resolves the field from the
+        // erased `T` and frees nothing (B-2026-07-15-11).
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(binding_name)
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(type_name, &i))
+            .unwrap_or_default();
+        let Some(mem_fn) = self.emit_struct_drop_synthesis_mono(type_name, &subst) else {
+            return;
+        };
+        self.drop_rc
+            .param_view_mem_drops
+            .insert((binding_name.to_string(), slot), mem_fn);
+        // The induction's step: the target now carries the callee-owned memory,
+        // so a further hand-off out of it (`b = a`) is admissible in turn.
+        self.drop_rc
+            .param_view_callee_owned
+            .insert(binding_name.to_string());
+    }
+
+    /// B-2026-09-02-5 — does `source_name` hold heap this FRAME owns, as opposed
+    /// to a view onto the caller's?
+    ///
+    /// BASE CASE: an owned by-value param, which
+    /// [`Self::make_aggregate_param_callee_owned_transfer`] entry-copies in the
+    /// prologue. `ref` params are excluded (nothing was copied) and so are
+    /// RC-PROMOTED ones, which never reach that prologue at all — the ownership
+    /// pass gives them a heap `{ i64 rc, T }` box and the callee holds a HANDLE
+    /// onto the CALLER's, so the caller keeps its drop. Measured: without that
+    /// exclusion `test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit`
+    /// aborts with `free(): double free detected in tcache 2` on the JIT lane and
+    /// at `KARAC_OPT_LEVEL=0`, and valgrind names the block as one `main`
+    /// allocated and frees again. The shape that causes the promotion is a
+    /// conditional param-view assignment to a LOOP-DECLARED local.
+    ///
+    /// STEP: a local that took a qualifying view and registered its own
+    /// memory ownership — through the assignment path (`a = h`) or through the
+    /// `let` rebind (`let a = h`, whose site registers the memory-only
+    /// `track_struct_var_inst` on the same premise, B-2026-08-01-15).
+    ///
+    /// NOT `param_view_locals`, which is the near-miss worth naming: that set
+    /// records who runs the BODY, and `let a = p; out = a;` over an RC-promoted
+    /// `p` puts `a` in it while nothing was ever copied — admitting it
+    /// double-freed a program the pre-fix compiler ran cleanly.
+    pub(super) fn source_carries_callee_owned_param_memory(&self, source_name: &str) -> bool {
+        let is_entry_copied_param = self.fn_ctx.current_fn_param_names.contains(source_name)
+            && !self.borrow_vars.ref_params.contains_key(source_name)
+            && !self
+                .drop_rc
+                .rc_fallback_heap_types
+                .contains_key(source_name);
+        is_entry_copied_param || self.drop_rc.param_view_callee_owned.contains(source_name)
+    }
+
     /// B-2026-08-25-2 — does unrolling the emitter's per-element struct copy
     /// for `Vec[elem]` have a FINITE emission?
     ///

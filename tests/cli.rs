@@ -4555,6 +4555,121 @@ fn test_rc_promoted_param_move_suppression_is_sound_at_o0_and_on_the_jit() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-09-02-5 — the RC-promoted param reached THROUGH a `let` rebind, which
+/// the fixture above does not cover and which two drafts of that row's fix
+/// double-freed.
+///
+/// That row gives a param-view assignment's flag-`false` edge the memory half of
+/// its drop, on the premise that an owned by-value struct param is ENTRY-COPIED
+/// so the buffers are the callee's. An RC-PROMOTED param breaks the premise: it
+/// never reaches `make_aggregate_param_callee_owned` at all, so the callee holds
+/// a handle onto the CALLER's box and the caller keeps its drop. Freeing there
+/// is a double free, not a fix.
+///
+/// The fixture above catches the DIRECT spelling (`out = p`). This is the
+/// one-hop one:
+///
+///     if i == 0 { let a: R = p; out = a; }
+///
+/// `a` is a `param_view_locals` entry — that set records who runs the BODY — so
+/// a source test written against it admits `a` while nothing was ever copied.
+/// The guard has to be an induction over who owns the MEMORY instead
+/// (`source_carries_callee_owned_param_memory`), and this is the cell that says
+/// so: the second draft, guarded on the direct source alone, ran the fixture
+/// above cleanly and aborted here with `free(): double free detected in tcache 2`
+/// on a program the pre-fix compiler ran correctly.
+///
+/// SAME PLACEMENT RATIONALE as its neighbour, and it is load-bearing: the wild
+/// second free is dead code to LLVM at `-O2`, so this is only observable on the
+/// two lanes where no pass pipeline runs — `karac run` (LLJIT,
+/// `OptimizationLevel::None`) and `KARAC_OPT_LEVEL=0 karac build` — and
+/// `KARAC_OPT_LEVEL` is read in-process, so only a fixture that SHELLS OUT can
+/// set it per-test.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
+    use std::process::Command;
+
+    let tmp = scratch_project("rc-param-view-let-chain");
+    let src = "struct R { id: i64, tag: String, xs: Vec[String] }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(n: i64) -> R {\n\
+               \x20   let mut v: Vec[String] = Vec.new();\n\
+               \x20   v.push(f\"pay-{n}\");\n\
+               \x20   return R { id: n, tag: f\"tag-{n}\", xs: v }\n\
+               }\n\
+               fn f(p: R) -> i64 {\n\
+               \x20   let mut i: i64 = 0;\n\
+               \x20   let mut acc: i64 = 0;\n\
+               \x20   while i < 2 {\n\
+               \x20       let mut out: R = mk(90 + i);\n\
+               \x20       if i == 0 { let a: R = p; out = a; }\n\
+               \x20       acc = acc + out.id;\n\
+               \x20       i = i + 1;\n\
+               \x20   }\n\
+               \x20   return acc\n\
+               }\n\
+               fn main() { println(f\"a{f(mk(5))}\") }\n";
+    write(&tmp.join("rc.kara"), src);
+
+    // The interpreter is the oracle: it has no slot layout to corrupt.
+    let want = {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .args(["run", "--interp", "rc.kara"])
+            .output()
+            .expect("spawn karac run --interp");
+        assert!(
+            out.status.success(),
+            "interpreter run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_eq!(
+        want, "dR90\ndR91\ndR5\na96\n",
+        "oracle drifted — the fixture, not the compiler, needs re-measuring"
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "rc.kara"])
+        .output()
+        .expect("spawn karac run");
+    assert!(
+        out.status.success(),
+        "karac run (JIT) died: status {:?}, stderr {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        want,
+        "JIT lane must match the interpreter"
+    );
+
+    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .env("KARAC_OPT_LEVEL", "0")
+        .args(["build", "rc.kara"])
+        .output();
+    let exe = tmp.join("rc");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let out = Command::new(&exe).output().expect("run -O0 binary");
+        assert!(
+            out.status.success(),
+            "-O0 binary died: status {:?}",
+            out.status.code()
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_OPT_LEVEL=0 build must match the interpreter"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
