@@ -2389,9 +2389,19 @@ impl<'a> super::Interpreter<'a> {
         //    on both backends exactly as the tuple spelling's does. `Tuple` and
         //    `TupleVariant` converge as before. `Slice` is still absent, with
         //    no measurement behind it.
-        //  * A SEEDED PARAM SOURCE, not an inherited view. See
-        //    `owned_param_seed_names_stack` — codegen cannot see through a
-        //    tuple whole-rebind at all.
+        //  * A SEEDED PARAM SOURCE, not an inherited view — LIFTED by
+        //    B-2026-09-02-44. The reason given was that codegen could not see
+        //    through a tuple whole-rebind at all; that had gone stale, and the
+        //    cited spelling (`t2.0.id`) measures one body on all four surfaces
+        //    today. The single site that still declined was codegen's
+        //    `owner_runs_bodies`, which tested `current_fn_param_names` rather
+        //    than the `param_view_locals` union its own `expr_is_param_view`
+        //    reads; widening it there let this propagation read the full
+        //    `owned_param_names_stack`, which the containment test above has
+        //    already required. Withholding it was ALSO not holding the two sides
+        //    together, as the restriction claimed: the retraction above already
+        //    fired for an inherited root, so `let h2 = h; let (r, k) = h2.pe;`
+        //    with no trailing rebind was one body here against two compiled.
         //  * NESTED TUPLE ELEMENTS ARE INCLUDED, but only since B-2026-09-02-39.
         //    They were held back at first because a nested element of a by-value
         //    tuple param resolved to an EMPTY `TypeExpr` on the compiled side,
@@ -2401,18 +2411,15 @@ impl<'a> super::Interpreter<'a> {
         //    param's declared element types, which makes the compiled leaf
         //    reachable, and the two sides move together again.
         //
-        // The shape the seeded-param restriction holds back is at two bodies on
-        // every surface today, and filed.
-        let seeded_param = self
-            .owned_param_seed_names_stack
-            .last()
-            .is_some_and(|seed| seed.contains(n.as_str()));
-        if seeded_param {
-            let mut names: Vec<String> = Vec::new();
-            Self::collect_destructure_binding_names(pattern, &mut names);
-            if let Some(top) = self.owned_param_names_stack.last_mut() {
-                top.extend(names);
-            }
+        // Nothing is held back here now. The propagation runs for any root the
+        // containment test above admitted — a seeded param or a local that
+        // inherited view-ness whole — which is the same set codegen's widened
+        // `owner_runs_bodies` accepts, so the two gates admit one set rather
+        // than agreeing by convention.
+        let mut names: Vec<String> = Vec::new();
+        Self::collect_destructure_binding_names(pattern, &mut names);
+        if let Some(top) = self.owned_param_names_stack.last_mut() {
+            top.extend(names);
         }
         true
     }

@@ -607,21 +607,6 @@ pub struct Interpreter<'a> {
     /// distinction: `let Holder { r } = h;` inside a method now fires once,
     /// matching both compiled backends.
     pub(crate) owned_param_frame_is_method: Vec<bool>,
-    /// B-2026-09-02-25 — parallel to `owned_param_names_stack` as well: the
-    /// frame's set AS SEEDED, before any propagation grew it.
-    ///
-    /// `owned_param_names_stack` deliberately mixes the frame's own by-value
-    /// params with the locals that later inherited view-ness from them
-    /// (`let h2 = h;` and friends), because almost every gate wants exactly
-    /// that union. `let_destructures_owned_param`'s propagation onto the names
-    /// a TUPLE pattern binds is the one that does not: its codegen twin fires
-    /// only for a source naming a real parameter, since a tuple whole-rebind
-    /// registers no element `TypeExpr`s and the compiled side cannot see
-    /// through `t2` at all (`let t2 = t; t2.0.id` still fails to lower). So the
-    /// propagation reads THIS set and the union stays untouched for everyone
-    /// else — `let t2 = t; let (r, k) = t2; let m = r;` keeps its two bodies on
-    /// all four surfaces rather than going to one interpreted and two compiled.
-    pub(crate) owned_param_seed_names_stack: Vec<HashSet<String>>,
     /// Per method frame: the owned params THIS FRAME took ownership of, i.e.
     /// what `method_param_drop_names` admitted. B-2026-08-30-55.
     ///
@@ -1071,7 +1056,6 @@ impl<'a> Interpreter<'a> {
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
-            owned_param_seed_names_stack: Vec::new(),
             owned_param_frame_is_method: Vec::new(),
             method_frame_caller_retains_args: Vec::new(),
             method_frame_sole_owned: Vec::new(),

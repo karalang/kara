@@ -2134,7 +2134,6 @@ impl<'a> super::Interpreter<'a> {
                     &param_patterns,
                     closure_env.is_some(),
                 );
-                self.owned_param_seed_names_stack.push(seed_params.clone());
                 self.owned_param_names_stack.push(seed_params);
                 self.owned_param_frame_is_method.push(false);
                 // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
@@ -2231,7 +2230,6 @@ impl<'a> super::Interpreter<'a> {
                 // program has found it yet.
                 self.cond_store_param_names = saved_cond_store_params;
                 self.owned_param_names_stack.pop();
-                self.owned_param_seed_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();

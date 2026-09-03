@@ -34745,10 +34745,18 @@ done
 ///   reachable, and the two backends were lifted together in that commit — one
 ///   body here now. Kept in this list because the cell is what proved the
 ///   restriction was a REACHABILITY limit rather than an ownership judgement.
-/// - `viewsrc` — `let t2 = t; let (r, k) = t2;`. Codegen cannot see through a
-///   tuple whole-rebind at all (`t2.0.id` still fails to lower), which is why the
-///   propagation here reads `owned_param_seed_names_stack` — the frame's params
-///   AS SEEDED — rather than the union that has grown to include inherited views.
+/// - `viewsrc` — `let t2 = t; let (r, k) = t2;`. FIXED SINCE, by
+///   B-2026-09-02-44, which supplied the missing half rather than lifting a
+///   judgement: codegen's `owner_runs_bodies` tested `current_fn_param_names`
+///   alone, so a root that had INHERITED view-ness (`t2`) answered no and its
+///   leaf took the body. Widening that test to consult `param_view_locals` —
+///   the mark `let t2 = t;` was already writing — let the interpreter's
+///   propagation read the full `owned_param_names_stack` instead of the seeded
+///   subset, and the two moved together. THE REASON RECORDED HERE HAD GONE
+///   STALE: it said codegen could not see through a tuple whole-rebind at all,
+///   citing `t2.0.id`, and that spelling measures one body on all four surfaces
+///   today. The restriction outlived its cause, which is the argument for
+///   re-measuring a pin's stated reason rather than only the cell it guards.
 /// - `proj` — `let (r, k) = h.pe;`. FIXED SINCE, by B-2026-09-02-40. A
 ///   projection source already satisfied codegen's `owner_runs_bodies` (its root
 ///   is a param); only this backend's gate wanted a bare identifier, and
@@ -34841,7 +34849,6 @@ nested end
 viewsrc
   b11
 dR11
-dR11
 viewsrc end
 proj
   b12
@@ -34880,11 +34887,16 @@ done
 /// guard caused the exact divergence it was added to prevent. It was removed.
 /// This cell keeps that refutation standing.
 ///
-/// `rebind` is the pinned-at-two cell, held back by a measurement rather than by
-/// taste: `let h2 = h; let (r, k) = h2.pe;` roots at `h2`, which is not a
-/// parameter, so codegen's `owner_runs_bodies` says no and its leaf takes the
-/// body. Marking it here alone would split the backends. At two on all four
-/// surfaces, filed separately.
+/// `rebind` — `let h2 = h; let (r, k) = h2.pe;` — WAS the pinned-at-two cell
+/// and is FIXED SINCE, by B-2026-09-02-44. It rooted at `h2`, which is not a
+/// parameter, so codegen's `owner_runs_bodies` said no and its leaf took the
+/// body. The interpreter had already retracted its own slots for an inherited
+/// root, so the two were not merely agreed-wrong here: the same shape without
+/// the trailing `let m = r;` was a live run-vs-build split (one body
+/// interpreted, two on all three compiled surfaces) inside a row filed as
+/// agreed. Teaching `owner_runs_bodies` to accept a `param_view_locals` root
+/// closed the split and this cell together, in one commit with the
+/// interpreter's matching widening.
 ///
 /// `norebind` and `refparam` are the over-reach controls, and they fail in
 /// opposite directions: withholding a body too eagerly shows up as `norebind`
@@ -34939,7 +34951,6 @@ norebind end
 rebind
   b5
 dR5
-dR5
 rebind end
 refparam
   b6
@@ -34950,6 +34961,102 @@ done
     );
 }
 
+/// B-2026-09-02-44 — a projection destructure whose root INHERITED view-ness
+/// from an owned param (`let h2 = h; let (r, k) = h2.pe;`) binds views too, exactly
+/// as one rooted at the param itself does since B-2026-09-02-40.
+///
+/// The concept was already on both sides and already transitive: `let h2 = h;`
+/// writes `h2` into codegen's `param_view_locals` and the interpreter's
+/// `owned_param_names_stack`, which is why `let h2 = h; let x = h2.pe;` and
+/// `let t2 = t; let x = t2.0;` were correct before this. The destructure gate was
+/// the ONE place asking the narrower question — "is the root a PARAMETER" —
+/// against `current_fn_param_names` rather than the union its own
+/// `expr_is_param_view` reads.
+///
+/// WHAT THE FILING ROW GOT WRONG, and why these cells are pinned here rather than
+/// only as `rebind` in `test_projection_source_tuple_destructure_is_a_view`. The row described all four surfaces as
+/// agreed-and-wrong at two bodies and read that agreement as both backends
+/// declining for one reason. It held with the trailing `let m = r;` and nowhere
+/// else: `norebind` (the same shape without it) measured ONE body interpreted
+/// against TWO on all three compiled surfaces, and `method` did the same. The
+/// interpreter had been retracting its own slots for an inherited root all along —
+/// only its PROPAGATION onto the bound names was withheld — so the withholding was
+/// not holding the backends together, which was its whole justification. A live
+/// run-vs-build split sat inside a row filed as agreed because one spelling was
+/// measured and the neighbouring one was not.
+///
+/// `local` and `noproj` are the over-reach controls, failing in opposite
+/// directions: a local tuple source owns its element and must keep its single
+/// body, and a rebind with no projection at all must not lose the caller's.
+///
+/// THE LOCAL PROJECTION CONTROL IS DELIBERATELY ABSENT. `let h = H { … };
+/// let h2 = h; let (r, k) = h2.pe;` prints the body BEFORE the binding is read on
+/// all three compiled surfaces — B-2026-09-02-43, an open row about a cap-zeroed
+/// husk, unrelated to view-ness and untouched here. Pinning it would make this
+/// twin fail when that row is fixed, and would claim a cell this change does not
+/// own.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_inherited_param_view_root_destructure_is_a_view`, pinned to the same string.
+#[test]
+fn test_inherited_param_view_root_destructure_is_a_view() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct H    { pe: (R, i64) }
+struct Hold { n: i64 }
+
+fn g1(h: H)         { let h2 = h; let (r, k) = h2.pe; println(f"  b{r.id}") }
+fn g2(h: H)         { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") }
+fn g3(h: H)         { let h2 = h; let h3 = h2; let (r, k) = h3.pe; let m = r; println(f"  b{m.id}") }
+fn g4(t: (R, i64))  { let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
+impl Hold { fn take(ref self, h: H) { let h2 = h; let (r, k) = h2.pe; let m = r; println(f"  b{m.id}") } }
+fn g6()             { let t = (R { id: 26 }, 0); let t2 = t; let (r, k) = t2; let m = r; println(f"  b{m.id}") }
+fn g7(h: H)         { let h2 = h; println("  np") }
+
+fn main() {
+    println("norebind"); g1(H { pe: (R { id: 21 }, 0) });                     println("norebind end")
+    println("rebind");   g2(H { pe: (R { id: 22 }, 0) });                     println("rebind end")
+    println("twohop");   g3(H { pe: (R { id: 23 }, 0) });                     println("twohop end")
+    println("tupreb");   g4((R { id: 24 }, 0));                               println("tupreb end")
+    println("method");   let o = Hold { n: 0 }; o.take(H { pe: (R { id: 25 }, 0) }); println("method end")
+    println("local");    g6();                                                println("local end")
+    println("noproj");   g7(H { pe: (R { id: 27 }, 0) });                     println("noproj end")
+    println("done")
+}
+"#),
+        r#"norebind
+  b21
+dR21
+norebind end
+rebind
+  b22
+dR22
+rebind end
+twohop
+  b23
+dR23
+twohop end
+tupreb
+  b24
+dR24
+tupreb end
+method
+  b25
+dR25
+method end
+local
+  b26
+dR26
+local end
+noproj
+  np
+dR27
+noproj end
+done
+"#
+    );
+}
 /// B-2026-09-02-38 — the STRUCT-PATTERN spelling of B-2026-09-02-25: a
 /// `let S { r, k } = s;` over an owned struct param binds VIEWS of the callee's
 /// entry copy, so a later `let m = r;` must MOVE the body rather than mint a

@@ -13827,9 +13827,32 @@ impl<'ctx> super::Codegen<'ctx> {
         // needs the body there. `owned_struct_params` cannot make this
         // distinction: it is populated for `Path`-typed params only, so a tuple
         // param is absent from it and both sources look identical there.
+        // B-2026-09-02-44 — an INHERITED view root counts too. A whole-value
+        // rebind of an owned param (`let h2 = h;`) already writes `h2` into
+        // `param_view_locals` at its own let-site, and `expr_is_param_view`
+        // consults exactly that union, which is why `let h2 = h; let x = h2.pe;`
+        // and `let t2 = t; let x = t2.0;` were both already correct. This gate
+        // was the one place that asked only "is the root a PARAMETER", so a
+        // projection destructure off the rebind (`let (r, k) = h2.pe;`) answered
+        // no and its leaf took a body the caller also runs.
+        //
+        // That was NOT the agreed-wrong cell the filing row described. With no
+        // second rebind the interpreter had already retracted its own slots for
+        // an inherited root, so `let h2 = h; let (r, k) = h2.pe;` measured ONE
+        // body interpreted against TWO on all three compiled surfaces — a live
+        // run-vs-build split, and the same for the method-frame spelling. The
+        // row read the two backends as declining together because it measured
+        // only the spelling with the trailing `let m = r;`, where the
+        // interpreter's withheld propagation put it back at two. So this is the
+        // side that was behind, and widening it closes the split and the
+        // agreed-wrong cell at once; the interpreter's matching widening (see
+        // `let_destructures_owned_param`) rides in the same commit.
         let owner_runs_bodies = match Self::place_root_ident(value) {
             Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
-            Some(root) => self.fn_ctx.current_fn_param_names.contains(root),
+            Some(root) => {
+                self.fn_ctx.current_fn_param_names.contains(root)
+                    || self.payload_vars.param_view_locals.contains(root)
+            }
             None => return,
         };
         // B-2026-09-02-25, widened by B-2026-09-02-40 — may the leaves of this

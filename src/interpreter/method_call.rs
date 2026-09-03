@@ -559,7 +559,6 @@ impl<'a> super::Interpreter<'a> {
                 // `current_fn_param_names` covers methods, so the interp
                 // stack must too or the gates diverge per-backend.
                 let seed_params = self.method_owned_param_names(&type_name, method);
-                self.owned_param_seed_names_stack.push(seed_params.clone());
                 self.owned_param_names_stack.push(seed_params);
                 // A method frame hands its args to no caller-side fire — see
                 // `owned_param_frame_is_method`.
@@ -705,7 +704,6 @@ impl<'a> super::Interpreter<'a> {
                 // caller's to walk. See `record_method_arg_moves`.
                 self.record_method_arg_moves(&type_name, method, args);
                 self.owned_param_names_stack.pop();
-                self.owned_param_seed_names_stack.pop();
                 self.owned_param_frame_is_method.pop();
                 self.method_frame_caller_retains_args.pop();
                 self.method_frame_sole_owned.pop();
