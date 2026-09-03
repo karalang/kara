@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 359 |
-| run-vs-build | 311 |
+| run-vs-build | 313 |
 | leak | 256 |
 | missing-feature | 193 |
 | double-free | 169 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1395 |
-| interp | 338 |
+| codegen | 1396 |
+| interp | 339 |
 | typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-27 | 2026-09-01 | interp | low | A FRESH-TEMP owned argument DESTRUCTURED inside a method runs the right Drop bodies in the WRONG ORDER -- the payload's body fires before the enum shell's under `--interp` and after it on both compiled backends, so the counts agree and the sequence does not | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
 | B-2026-09-01-43 | 2026-09-01 | typecheck | medium | `partial_move_of_drop_struct` IS REGISTERED AT `Warn` WHERE design.md SAYS "rejected" -- eight `--features llvm` fixtures use the shape, and seven of them are the regression tests for bugs FIXED in it, so `Deny` today would delete that coverage; the corpus is otherwise clean (0 hits across 1171 `.kara` files, 10246/0 on the default suite at `Deny`) | — |
-| B-2026-09-02-2 | 2026-09-02 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that value's `Drop` body TWICE under `--interp` and once on all three compiled surfaces -- `mid dR14 v14 dR14 post` against `mid v14 dR14 post`. The bare tail behaves the same, the named-binding and TUPLE-literal spellings are both correct, and the CONTAINER-field spelling that -18 was about is correct under `--interp` in all five spellings, which is why -18's own control was clean | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
 | B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
@@ -159,6 +158,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-6 | 2026-09-03 | codegen | high | A `Result[Option[String], E]` ARGUMENT PASSED BY VALUE DOUBLE-FREES ITS INNER PAYLOAD -- `karac run` ABORTS with `free(): double free detected in tcache 2` on a single call, and the AOT binary racks up an `Invalid free()` per iteration under valgrind while still printing correctly. The `Result` NESTING is required: `Result[String, E]` is clean | — |
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 | B-2026-09-03-8 | 2026-09-03 | interp+codegen | medium | THE REBIND SPELLING OF B-2026-09-01-3 STILL DOUBLES A TUPLE ELEMENT'S `Drop` BODY -- `let t = (r, 5); let t2 = t; let x = t2.0;` prints `dR1 dR1` where one is due, agreed by all four surfaces, because the per-element param-view record that fix added does not travel across a whole-value rebind and the tuple path has no peer for the struct's all-views propagation | — |
+| B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
+| B-2026-09-03-10 | 2026-09-03 | codegen | high | ALL THREE COMPILED BACKENDS SKIP A LOOP-BODY LOCAL'S `Drop` BODY ON EVERY ITERATION when a conditional `return` inside the loop hands that local out through an AGGREGATE LITERAL -- `it0 it1 v15 dR15 post` against the interpreter's correct `it0 dR14 it1 v15 dR15 post`. The disarm is static, not per-iteration: three iterations returning at `i == 2` lose BOTH earlier bodies. The bare `return r` spelling of the same move is correct everywhere | — |
 
 ### Relocated
 
@@ -2125,6 +2126,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-47 | codegen | medium | COMPILING `e2e_generic_non_let_binding_instantiation_across_sites` OVERFLOWS THE STACK AND ABORTS (SIGABRT) -- the compiler recurses deep enough that… | 9dab75a |
 | B-2026-09-01-48 | interp | low | `test_scalar_float_methods_compute_at_the_declared_width` PINS LINUX'S libm, so it fails on macOS for `cosh` and `sinh` -- and macOS is the one retur… | 094c206a |
 | B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
+| B-2026-09-02-2 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that va… | 1836078 |
 | B-2026-09-02-3 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it --… | 56cb337 |
 | B-2026-09-02-6 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an ass… | c2b8924 |
 | B-2026-09-02-7 | interp | medium | A `while let` ARM THAT BINDS ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE PER PASS UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the com… | 51491e9 |
