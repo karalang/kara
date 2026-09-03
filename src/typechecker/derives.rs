@@ -1098,7 +1098,7 @@ impl<'a> super::TypeChecker<'a> {
     /// `TypeParam` bounds against — so `fn dup[T: Clone](x: T) -> T
     /// { x.clone() }` resolves while an unbounded `[T]` still reports
     /// `no method 'clone'`.
-    fn type_param_has_clone_bound(&self, p: &str) -> bool {
+    pub(super) fn type_param_has_clone_bound(&self, p: &str) -> bool {
         self.enclosing_bounds.get(p).is_some_and(|bounds| {
             bounds.iter().any(|tb| {
                 let trait_name = tb.path.last().cloned().unwrap_or_default();

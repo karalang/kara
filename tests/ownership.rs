@@ -13834,3 +13834,148 @@ fn main() { let s: String = "hi"; let a = s; let b = s; println("x"); }
         "a String rebind must still report a use-after-move; got {errs:?}"
     );
 }
+
+// ── B-2026-09-03-26: the use-after-move clone hint must agree with the
+// compiler about which types actually have a callable `.clone()` ──────
+
+/// The E0500 suggestion text and whether a machine-applicable edit was
+/// offered, for a program with exactly one use-after-move.
+fn uam_clone_hint(source: &str) -> (String, bool) {
+    let errors = ownership_errors(source);
+    let uam = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::UseAfterMove)
+        .unwrap_or_else(|| panic!("expected a UseAfterMove, got {errors:?}"));
+    (
+        uam.suggestion.clone().unwrap_or_default(),
+        uam.replacement.is_some(),
+    )
+}
+
+/// `take`-then-reuse over a value of type `ty`, the minimal move-after-use.
+fn uam_program(prelude: &str, ty: &str, ctor: &str) -> String {
+    format!(
+        "{prelude}\nfn take(x: {ty}) -> i64 {{ return 1; }}\n\n\
+         fn main() {{\n    let q: {ty} = {ctor};\n    let a = take(q);\n\
+         \x20   let b = take(q);\n    println(a + b);\n}}\n"
+    )
+}
+
+const CLONE_PRELUDE: &str = "#[derive(Clone)]\nstruct P { a: i64 }\nstruct Q { a: i64 }\n";
+
+#[test]
+fn uam_hint_offers_clone_for_every_type_that_has_one() {
+    // Each of these has a working, deep-copying `.clone()`. Before
+    // B-2026-09-03-26 the five after `VecDeque` drew the no-clone branch —
+    // the hint named `.clone()` as nonexistent while the compiler accepted
+    // it, and `karac fix` withheld a valid edit on all five.
+    for (ty, ctor) in [
+        ("Vec[i64]", "Vec.new()"),
+        ("Set[i64]", "Set.new()"),
+        ("Map[i64, i64]", "Map.new()"),
+        ("VecDeque[i64]", "VecDeque.new()"),
+        ("Option[String]", "Option.Some(\"hi\")"),
+        ("Result[String, i64]", "Result.Ok(\"hi\")"),
+        ("SortedSet[i64]", "SortedSet.new()"),
+        ("SortedMap[i64, i64]", "SortedMap.new()"),
+        ("P", "P { a: 1 }"),
+    ] {
+        let (hint, has_edit) = uam_clone_hint(&uam_program(CLONE_PRELUDE, ty, ctor));
+        assert!(
+            hint.contains("at the move site"),
+            "{ty}: expected the clone hint, got {hint:?}"
+        );
+        assert!(
+            !hint.contains("has no `.clone()`"),
+            "{ty}: hint denies a clone that exists — {hint:?}"
+        );
+        assert!(has_edit, "{ty}: karac fix withheld a valid `.clone()` edit");
+    }
+}
+
+#[test]
+fn uam_hint_stays_silent_for_types_with_no_clone() {
+    // The predicate is not simply "always true": a type with no callable
+    // `.clone()` must still get the restructure-only advice and no edit.
+    // `PriorityQueue` has no clone at all; `Q` is a user struct without
+    // `#[derive(Clone)]`.
+    for (ty, ctor) in [
+        ("PriorityQueue[i64]", "PriorityQueue.new()"),
+        ("Q", "Q { a: 1 }"),
+    ] {
+        let (hint, has_edit) = uam_clone_hint(&uam_program(CLONE_PRELUDE, ty, ctor));
+        assert!(
+            hint.contains("has no `.clone()`"),
+            "{ty}: expected the no-clone branch, got {hint:?}"
+        );
+        assert!(
+            !has_edit,
+            "{ty}: offered a `.clone()` edit that cannot compile"
+        );
+    }
+}
+
+#[test]
+fn uam_hint_rejects_result_halves_codegen_cannot_deep_copy() {
+    // The reason the hint consults `clone_receiver_self_type` (the
+    // METHOD-side predicate) and not `type_supports_clone` (the BOUND-side
+    // one): these three satisfy the bound-side predicate but `.clone()` is
+    // genuinely rejected on them, because `emit_result_value_clone_fn` has
+    // no in-place deep copy for such a half (B-2026-07-30-10). Consulting
+    // the bound-side twin here would auto-insert code that does not compile.
+    for (ty, ctor) in [
+        ("Result[P, i64]", "Result.Ok(P { a: 1 })"),
+        (
+            "Result[Option[String], i64]",
+            "Result.Ok(Option.Some(\"h\"))",
+        ),
+        ("Result[Map[i64, i64], i64]", "Result.Ok(Map.new())"),
+    ] {
+        let (hint, has_edit) = uam_clone_hint(&uam_program(CLONE_PRELUDE, ty, ctor));
+        assert!(
+            hint.contains("has no `.clone()`"),
+            "{ty}: `.clone()` does not resolve here, hint must not offer it — {hint:?}"
+        );
+        assert!(
+            !has_edit,
+            "{ty}: offered a `.clone()` edit that cannot compile"
+        );
+    }
+}
+
+#[test]
+fn uam_hint_offers_clone_for_vec_of_non_clone_element() {
+    // The other direction of the same choice: `Vec.clone()` resolves even
+    // when the ELEMENT has no `Clone` derive, so the bound-side predicate
+    // (which recurses into type arguments) would wrongly withhold the hint.
+    let (hint, has_edit) = uam_clone_hint(&uam_program(CLONE_PRELUDE, "Vec[Q]", "Vec.new()"));
+    assert!(
+        hint.contains("at the move site") && !hint.contains("has no `.clone()`"),
+        "Vec[Q]: `Vec.clone()` resolves, hint should offer it — {hint:?}"
+    );
+    assert!(
+        has_edit,
+        "Vec[Q]: karac fix withheld a valid `.clone()` edit"
+    );
+}
+
+#[test]
+fn uam_hint_offers_clone_for_clone_bounded_type_param() {
+    // `clone_receiver_self_type`'s `TypeParam` arm discharges against the
+    // enclosing bounds — live scope state, gone by the end-of-check sweep —
+    // so the answer is captured at record time. Without that capture this
+    // regresses to the no-clone branch even though `q.clone()` compiles.
+    let src = "fn take[T: Clone](x: T) -> i64 { return 1; }\n\n\
+               fn dup[T: Clone](q: T) -> i64 {\n    let a = take(q);\n\
+               \x20   let b = take(q);\n    return a + b;\n}\n\n\
+               fn main() { println(dup(\"hi\")); }\n";
+    let (hint, has_edit) = uam_clone_hint(src);
+    assert!(
+        hint.contains("at the move site") && !hint.contains("has no `.clone()`"),
+        "T: Clone: the bound makes `q.clone()` callable — {hint:?}"
+    );
+    assert!(
+        has_edit,
+        "T: Clone: karac fix withheld a valid `.clone()` edit"
+    );
+}

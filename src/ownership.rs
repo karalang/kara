@@ -2754,29 +2754,32 @@ impl<'a> OwnershipChecker<'a> {
         }
     }
 
-    /// Whether the value at `span` has a `.clone()` method — the gate for the
-    /// UAM auto-fix (B-2026-07-19-3). Conservative: `true` only for types where
-    /// `.clone()` is guaranteed to resolve — `String`, the built-in heap
-    /// collections (`Vec`/`Map`/`Set`/`VecDeque`), and RC types (`shared
-    /// struct`/`enum`, `Rc`/`Arc`). A plain move-only user `struct`/`enum` (no
-    /// derived `Clone`) returns `false`, so no invalid `.clone()` insertion is
-    /// offered. An absent type record also returns `false` (no auto-fix, never a
-    /// wrong one).
+    /// Whether the value at `span` has a `.clone()` method — the gate for BOTH
+    /// halves of the UAM diagnostic: the machine-applicable auto-fix
+    /// (B-2026-07-19-3) and the hint sentence that names `.clone()` as a repair
+    /// (B-2026-07-29-36 bound the two together).
+    ///
+    /// The answer is `typecheck_result.clonable_expr_spans`, precomputed by the
+    /// typechecker from `clone_receiver_self_type` — the same predicate method
+    /// RESOLUTION consults — so the hint and the compiler cannot disagree.
+    ///
+    /// B-2026-09-03-26: this used to keep its own `CLONE_COLLECTIONS` list, and
+    /// that list was a fossil. It denied `.clone()` on `Option`, `Result`,
+    /// `SortedSet`, `SortedMap`, every `#[derive(Clone)]` type and every
+    /// `T: Clone`-bounded generic — all of which have a working, deep-copying
+    /// `.clone()` — so the hint named the one repair that works and asserted it
+    /// did not exist, while `karac fix` withheld a valid edit. Its own doc
+    /// comment cited B-2026-07-29-31 as authority for `Option` having no clone;
+    /// that row's FIX is what gave `Option` one. A local list cannot help
+    /// drifting from a predicate that keeps growing arms, so there is no longer
+    /// a local list — the "one list means the two can no longer drift apart"
+    /// rule `impl_head_keeps_type_args` states.
+    ///
+    /// A span with no entry answers `false`: no auto-fix, never a wrong one.
     fn moved_type_supports_clone(&self, span: &Span) -> bool {
-        const CLONE_COLLECTIONS: &[&str] = &["Vec", "Map", "Set", "VecDeque"];
-        match self
-            .typecheck_result
-            .expr_types
-            .get(&SpanKey::from_span(span))
-        {
-            Some(Type::Str) | Some(Type::Rc(_)) | Some(Type::Arc(_)) | Some(Type::Shared(_)) => {
-                true
-            }
-            Some(Type::Named { name, .. }) => {
-                CLONE_COLLECTIONS.contains(&name.as_str()) || self.is_shared_type(name)
-            }
-            _ => false,
-        }
+        self.typecheck_result
+            .clonable_expr_spans
+            .contains(&SpanKey::from_span(span))
     }
 
     fn lower_type_for_ownership(&self, ty: &TypeExpr) -> Type {

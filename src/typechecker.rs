@@ -1367,6 +1367,26 @@ pub struct TypeCheckResult {
     /// reachability pass; future signals belong here too.
     pub warnings: Vec<TypeError>,
     pub expr_types: FxHashMap<SpanKey, Type>,
+    /// Spans in [`Self::expr_types`] whose type has a CALLABLE `.clone()`.
+    ///
+    /// B-2026-09-03-26. The ownership pass's use-after-move hint (E0500) and
+    /// its machine-applicable `.clone()` auto-fix both need to know whether
+    /// the moved value can be cloned. That question is already answered
+    /// authoritatively by `clone_receiver_self_type` — the very predicate
+    /// method RESOLUTION consults — but it is env-aware (derives, `impl
+    /// Clone`, user-declared `clone`) and so unreachable from `ownership.rs`,
+    /// which holds only a `TypeCheckResult`. Rather than let the ownership
+    /// pass carry its own list (it did, and the list was a fossil: it denied
+    /// `.clone()` on `Option`, `Result`, `SortedSet`, `SortedMap` and every
+    /// `#[derive(Clone)]` type), the answer is precomputed here so there is
+    /// exactly ONE predicate and the two cannot drift apart — the same
+    /// "one list" rule `impl_head_keeps_type_args` states.
+    ///
+    /// Note this is deliberately NOT `type_supports_clone`, the bound-side
+    /// twin: that one admits `Result` halves codegen cannot deep-copy and
+    /// rejects a `Vec` whose element lacks `Clone` even though `Vec.clone()`
+    /// resolves. Only the method-side predicate matches what `.clone()` does.
+    pub clonable_expr_spans: FxHashSet<SpanKey>,
     /// Receiver `Vector[T, N]` type for each vector **instance**-method call
     /// (`reduce_*` / `dot` / `cross` / `select`), keyed by the method-call
     /// span, recorded as `(element, lane_count)`. A `MethodCall`'s span equals
@@ -2057,6 +2077,14 @@ pub struct TypeChecker<'a> {
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: FxHashMap<SpanKey, Type>,
+    /// Spans whose recorded type is a `TypeParam` carrying a callable
+    /// `Clone` (B-2026-09-03-26). Populated at record time because
+    /// `clone_receiver_self_type`'s `TypeParam` arm discharges against
+    /// `enclosing_bounds` — live scope state that is gone by the end-of-check
+    /// sweep which builds [`TypeCheckResult::clonable_expr_spans`]. Every
+    /// other arm is a pure function of the type, so only this one needs
+    /// capturing in flight.
+    pub(super) typeparam_clone_bound_spans: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::vector_method_receivers`]. Populated at vector
     /// instance-method inference; moved into the result at the end.
     pub(super) vector_method_receivers: FxHashMap<SpanKey, (Type, usize)>,
@@ -2683,6 +2711,7 @@ impl<'a> TypeChecker<'a> {
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: FxHashMap::default(),
+            typeparam_clone_bound_spans: FxHashSet::default(),
             vector_method_receivers: FxHashMap::default(),
             pointer_method_receiver_pointees: FxHashMap::default(),
             unsafe_depth: 0,
@@ -2990,6 +3019,24 @@ impl<'a> TypeChecker<'a> {
                 self.pattern_binding_types.insert(binding, name);
             }
         }
+        // B-2026-09-03-26: resolve the clone predicate against the FINAL
+        // `expr_types`. It must run here rather than incrementally at record
+        // time, because `record_declared_type_for_polymorphic_rhs` and the
+        // substitution-resolution pass in `patterns.rs` both rewrite spans
+        // after the fact — an incrementally-built set would disagree with the
+        // map the ownership pass actually reads. The one arm that cannot be
+        // resolved late is `TypeParam`, whose bounds are scope state; it was
+        // captured in flight and is consulted here only when the span's FINAL
+        // type is still a type parameter.
+        let clonable_expr_spans: FxHashSet<SpanKey> = self
+            .expr_types
+            .iter()
+            .filter(|(key, ty)| match ty {
+                Type::TypeParam(_) => self.typeparam_clone_bound_spans.contains(*key),
+                _ => self.clone_receiver_self_type(ty).is_some(),
+            })
+            .map(|(key, _)| *key)
+            .collect();
         let distinct_type_traits = self.env.distinct_types.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
@@ -2997,6 +3044,7 @@ impl<'a> TypeChecker<'a> {
             errors: self.errors,
             warnings: self.warnings,
             expr_types: self.expr_types,
+            clonable_expr_spans,
             vector_method_receivers: self.vector_method_receivers,
             pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             struct_info: self.env.structs,
@@ -5283,7 +5331,27 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn record_expr_type(&mut self, span: &Span, ty: &Type) {
-        self.expr_types.insert(SpanKey::from_span(span), ty.clone());
+        let key = SpanKey::from_span(span);
+        // Capture the scope-dependent half of the clone predicate while the
+        // enclosing bounds are still in scope (B-2026-09-03-26). Insert *or
+        // remove* within this arm, mirroring the overwrite semantics of
+        // `expr_types`: a span re-recorded as a DIFFERENT type parameter must
+        // not keep the previous one's answer.
+        //
+        // There is deliberately no `else` clearing the entry when a span is
+        // re-recorded as a concrete type. It would be dead work: the sweep in
+        // `check()` consults this set only for spans whose FINAL type is still
+        // a `TypeParam`, so an entry for a span that ended up concrete is
+        // never read. Since this runs once per recorded expression, the whole
+        // cost on non-generic code is the `matches!` — no hash probe.
+        if let Type::TypeParam(p) = ty {
+            if self.type_param_has_clone_bound(p) {
+                self.typeparam_clone_bound_spans.insert(key);
+            } else {
+                self.typeparam_clone_bound_spans.remove(&key);
+            }
+        }
+        self.expr_types.insert(key, ty.clone());
     }
 
     // ── Check Items (Pass 2) ────────────────────────────────────
