@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 356 |
+| miscompile | 357 |
 | run-vs-build | 310 |
 | leak | 256 |
 | missing-feature | 193 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1390 |
-| interp | 335 |
+| codegen | 1391 |
+| interp | 336 |
 | typecheck | 289 |
 | ownership | 73 |
 | other | 70 |
@@ -158,6 +158,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-43 | 2026-09-02 | codegen | medium | A LOCAL STRUCT'S PROJECTION DESTRUCTURE RUNS THE ELEMENT'S `Drop` BODY ON A CAP-ZEROED HUSK, BEFORE THE LIVE READ, and then again -- `let h = H { pe: (mk(21), 0) }; let (r, k) = h.pe;` prints `dR21//0` (empty String, zero-length Vec) then the read then the real body on all three compiled surfaces, where `--interp` runs one body on the live value. valgrind-clean, so only a `Drop` body that RENDERS its fields can see it | — |
 | B-2026-09-02-44 | 2026-09-02 | interp+codegen | medium | A WHOLE-REBIND OF A STRUCT PARAM BEFORE PROJECTING STILL DOUBLES THE ELEMENT'S `Drop` BODY -- `let h2 = h; let (r, k) = h2.pe; let m = r;` runs TWO bodies on all four surfaces where one is due, while the direct spelling `let (r, k) = h.pe` is correct since B-2026-09-02-40. Same missing widening as B-2026-09-02-25's `viewsrc` cell, one hop further in | — |
 | B-2026-09-02-46 | 2026-09-02 | codegen | medium | A BOXED ENUM PAYLOAD INSIDE A MONOMORPH LEAKS ITS BOX WHENEVER THE ARM BINDS AND READS IT -- 48 bytes per CALL, on `Option` and `Result` alike, for a free fn and a method alike; the non-generic twin is clean, and so is the same monomorph when the arm does NOT read the payload | — |
+| B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
 
 ### Relocated
 
