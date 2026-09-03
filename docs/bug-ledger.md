@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 357 |
+| miscompile | 358 |
 | run-vs-build | 310 |
 | leak | 256 |
 | missing-feature | 193 |
-| double-free | 168 |
+| double-free | 169 |
 | codegen-gap | 160 |
 | diagnostics | 120 |
 | false-positive | 105 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1391 |
+| codegen | 1393 |
 | interp | 336 |
 | typecheck | 289 |
 | ownership | 73 |
@@ -157,6 +157,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-44 | 2026-09-02 | interp+codegen | medium | A WHOLE-REBIND OF A STRUCT PARAM BEFORE PROJECTING STILL DOUBLES THE ELEMENT'S `Drop` BODY -- `let h2 = h; let (r, k) = h2.pe; let m = r;` runs TWO bodies on all four surfaces where one is due, while the direct spelling `let (r, k) = h.pe` is correct since B-2026-09-02-40. Same missing widening as B-2026-09-02-25's `viewsrc` cell, one hop further in | — |
 | B-2026-09-02-46 | 2026-09-02 | codegen | medium | A BOXED ENUM PAYLOAD INSIDE A MONOMORPH LEAKS ITS BOX WHENEVER THE ARM BINDS AND READS IT -- 48 bytes per CALL, on `Option` and `Result` alike, for a free fn and a method alike; the non-generic twin is clean, and so is the same monomorph when the arm does NOT read the payload | — |
 | B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
+| B-2026-09-03-5 | 2026-09-03 | codegen | high | A `ref Option[T]` PARAMETER RENDERS `None` ON ALL THREE COMPILED SURFACES -- `fn show(x: ref Option[String]) { println(f"{x}") }` called with a `Some` prints `None` under jit / build / KARAC_AUTO_PAR=0 where `--interp` prints `Some(payloadpayload0)`. A SILENT WRONG ANSWER on an ordinary signature: no nesting, no generics, payload well within the 3-word boxing limit, and no leak or memory error alongside it | — |
+| B-2026-09-03-6 | 2026-09-03 | codegen | high | A `Result[Option[String], E]` ARGUMENT PASSED BY VALUE DOUBLE-FREES ITS INNER PAYLOAD -- `karac run` ABORTS with `free(): double free detected in tcache 2` on a single call, and the AOT binary racks up an `Invalid free()` per iteration under valgrind while still printing correctly. The `Result` NESTING is required: `Result[String, E]` is clean | — |
 
 ### Relocated
 
