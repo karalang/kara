@@ -99,10 +99,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 170 |
 | codegen-gap | 161 |
 | diagnostics | 123 |
-| false-positive | 105 |
+| false-positive | 106 |
 | soundness | 95 |
 | perf | 89 |
-| other | 73 |
+| other | 74 |
 | crash | 71 |
 | use-after-free | 27 |
 
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | codegen | 1416 |
 | interp | 345 |
-| typecheck | 291 |
+| typecheck | 293 |
 | ownership | 74 |
 | other | 70 |
 | cli | 70 |
@@ -156,13 +156,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-23 | 2026-09-03 | codegen | medium | A GENERIC FUNCTION'S MONOMORPH BODY ANSWERS THE `Drop`-OWNERSHIP QUESTION FROM ITS CALLER'S TABLES -- a LOCAL in `fn inner[T]` whose name matches ANY caller's parameter has its tuple-field element's `Drop` body run on a CAP-ZEROED HUSK (`dR60//0`) before the live read, on all three compiled surfaces against a clean `--interp`. `compile_generic_call` populates neither `current_fn_param_names` nor `owned_struct_params` for the body it emits, and because that body is emitted ONCE and shared, the corruption reaches call sites with no such parameter | — |
 | B-2026-09-03-25 | 2026-09-03 | codegen | medium | A WILDCARD TUPLE LEAF OVER AN `Option[<struct with a Drop body>]` ELEMENT LOSES THE PAYLOAD'S BODY ON THE COMPILED BACKENDS -- `let (r, _) = t;` and `let (_, _) = t;` over `(R, Option[R])` run the payload body under `--interp` and not under run/build/AUTO_PAR=0, while the BINDING spelling `let (a, b) = t;` of the same statement is correct on every surface since d305cad | — |
 | B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
-| B-2026-09-03-29 | 2026-09-03 | typecheck | medium | `E_INDEX_MOVE_NON_COPY` IS SITE-BASED IN THE SAME WAY `partial_move_of_drop_struct` WAS, and it is the same four positions -- `return v[0];`, a tail `v[0]`, a struct-literal field and a tuple-literal element all read a non-`Copy` element out of a container that still owns it and fire nothing, while `let x = v[0];` and a call argument are hard errors; both rules are `Deny` | — |
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
 | B-2026-09-03-33 | 2026-09-03 | codegen | medium | A `Result[O, E]` STRUCT-FIELD DESTRUCTURE LEAF RUNS A HUSK `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h;` over `{ a: R, b: Result[R, String] }` prints `dR0/` (a body reading a zeroed object) on jit/aot/AUTO_PAR=0 and nothing under `--interp`, while the REAL payload body `dR109` runs on neither; fires for a two-field `R` and not a three-field one, which is why B-2026-09-03-15 recorded this gap as silent | — |
 | B-2026-09-03-34 | 2026-09-03 | codegen | medium | A STRUCT DESTRUCTURED OUT OF A MATCH ARM'S PAYLOAD BINDING LOSES A PLAIN FIELD'S `Drop` BODY ON THE COMPILED BACKENDS -- `match w { Wrap.W(h) => { let Ho2 { a, b } = h; .. } }` runs `dR152 dR52` under `--interp` and only `dR152` on jit/aot/AUTO_PAR=0; the payload half was fixed by B-2026-09-03-24 and this is the residue, because the place-source body transfer is gated on the source owning a `StructFieldBodies` action and a match payload does not | — |
 | B-2026-09-03-35 | 2026-09-03 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` IS NEVER LOWERED, so ADDING IT MAKES A CLEAN PROGRAM LEAK EVERY HEAP FIELD -- `Box3[String] { v, tag }` is clean without the impl and loses 16 B in 2 blocks (both `String`s) with it, while `--interp` runs the body; `nm` shows no `S.drop` symbol at all, so the binding gets neither `UserDrop` NOR the `StructDrop` it had before, and the same impl on a NON-generic struct is completely correct | — |
 | B-2026-09-03-36 | 2026-09-03 | codegen | medium | REASSIGNING A `shared` FIELD OF A PLAIN STRUCT STRANDS THE DISPLACED RC BOX -- `n.s = Sd { m: 9 }` prints the old handle's `Drop` body, so the refcount DOES reach zero, and the 16-byte box is still never freed; one per assignment and unbounded, and it happens with NO `impl Drop` on the owner at all, which is what separates it from B-2026-09-03-31's scope-exit half | — |
+| B-2026-09-03-38 | 2026-09-03 | typecheck | medium | 130 OF THE 935 kara-katas FILES DO NOT TYPE-CHECK ON `main` (238 diagnostics, all `E_INDEX_MOVE_NON_COPY`) and have not since the rule landed on 2026-08-26 -- `karac check`, `karac build` and `karac run` all fail, so roughly one kata in seven is contributing no coverage and any claim that the kata corpus is green is false; `runtime/stdlib` and `examples/` are clean | — |
 
 ### Relocated
 
@@ -194,6 +194,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize |
 | B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type -- the last two shapes in the shared family the compiled `Debug` renderers do not cover. MEASURED UNREACHABLE and closed without an implementation: `dbg(x)` hands `x` to a call, which is exactly the escape the headerless purity gate demotes on, so a type can be headerless or `dbg`-able but never both (16 probe programs, both arms, controls green). `has_weak_header` is false for every type today. The guard is KEPT as insurance -- making `dbg` a borrowing intrinsic would stop it demoting and turn the arm into a silent one-word field-offset miscompile -- and the exclusion is now pinned by tests instead of assumed. |
 | B-2026-08-29-62 | 2026-08-29 | codegen | low | Spelling a binary-search midpoint `lo + ((hi - lo) >> 1)` instead of `lo + (hi - lo) / 2` costs 1.67x on current main: LLVM's X86CmovConversion rewrites the branchless loop back into a branch, and only `/ 2`'s signed sign-correction lengthens the dependency chain enough to stop it -- so the "slower" spelling wins by accident. NOT statically decidable: forcing the branchless form is 1.86x FASTER on this kata and 2.02x SLOWER on kata #275, and flipping only the input data from random to a ramp reverses the sign within this one program |
+| B-2026-09-03-29 | 2026-09-03 | typecheck | medium | `E_INDEX_MOVE_NON_COPY`'s FOUR-SITE SET IS DELIBERATE, NOT THE SITE-BASED ACCIDENT `partial_move_of_drop_struct` WAS -- the rule rejects exactly where `ref v[i]` is a spellable remedy (`let`, assignment RHS, call and method argument) and permits-and-deep-copies where an owned value is required and no borrow can be constructed; widening it to the other eleven positions fails 58 tests across four binaries, breaks `PriorityQueue.peek` and `fn first[T](s: Slice[T]) -> T { s[0] }` with no migration available, and this row's premise that it is "mechanically add the second rule at the same lines" is refuted |
 
 </details>
 
@@ -2189,6 +2190,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-26 | ownership | medium | THE USE-AFTER-MOVE HINT DENIES A `.clone()` THAT EXISTS, AND `karac fix` WITHHOLDS THE EDIT, FOR FIVE TYPE CATEGORIES -- `Option[T]`, `Result[T, E]`,… | f77d2cc |
 | B-2026-09-03-27 | runtime | medium | `resolve_pool_workers()` STILL DOES A FULL `std::env::var` SCAN PER PARALLEL-REGION ENTRY after B-2026-09-03-18 cached the tier BELOW it, so an auto-… | 953006d |
 | B-2026-09-03-31 | codegen | medium | A STRUCT WITH ITS OWN `impl Drop` NEVER RELEASES A `shared struct` FIELD'S RC BOX -- 16 B per instance and unbounded in a loop (80 B / 5 instances),… | dc8cfe24 |
+| B-2026-09-03-37 | typecheck | medium | `Vec.push` ASKS `partial_move_of_drop_struct` ABOUT THE UNRESOLVED DESTINATION SLOT, so a `Deny` rule rejects a `Copy` field -- `v.push(w.n)` over an… | 56c8950 |
 
 </details>
 
