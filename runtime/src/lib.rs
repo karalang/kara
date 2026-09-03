@@ -1722,11 +1722,28 @@ static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 ///
 /// Invalid values (0, negative, non-numeric) silently bypass to the
 /// auto-detect default — same permissive parse posture as `KARAC_AUTO_PAR`
-/// and `KARAC_OPT_LEVEL`. Read on each call rather than cached: pool
-/// construction goes through `OnceLock::get_or_init` so it's read once
-/// there anyway, and `karac_par_reduce`'s per-call read is cheap libc
-/// getenv that lets a user override the count for a single command-line
-/// invocation without rebuilding.
+/// and `KARAC_OPT_LEVEL`. The ENV READ stays per-call rather than cached:
+/// pool construction goes through `OnceLock::get_or_init` so it's read
+/// once there anyway, and the per-call read is cheap libc getenv that lets
+/// a user override the count for a single command-line invocation without
+/// rebuilding.
+///
+/// The AUTO-DETECT tier, by contrast, is cached in [`AUTO_POOL_WORKERS`]
+/// (B-2026-09-03-18). `available_parallelism()` is NOT cheap: on Linux it
+/// probes the cgroup CPU quota through the filesystem — measured at 15.2 µs
+/// per call in a 4-core cgroup-v1 container (three `openat`s of
+/// `/proc/self/cgroup`, `cpu.cfs_quota_us` and `cpu.cfs_period_us`, plus the
+/// reads and `statx`es), against 111 ns for the getenv it sits behind. Since
+/// `karac_par_reduce_pooled` calls this once per parallel-region entry, a
+/// program with many fine-grained regions paid that probe tens of thousands
+/// of times: on a 300-element interval DP (45,150 regions per pass) the
+/// default auto-par build ran 123x slower than the sequential one and 45x
+/// slower than the SAME binary with `KARAC_PAR_WORKERS` set to the value
+/// auto-detect would have chosen anyway — the env var's early return was
+/// the only thing skipping the probe. Caching the auto-detect result keeps
+/// every documented behaviour above (the env override is still live per
+/// call) while taking the filesystem off the hot path. The host CPU count
+/// does not change within a process run, so there is nothing to invalidate.
 // On wasm32-wasip1-threads, `available_parallelism()` is
 // `Err(Unsupported)` (no host CPU-count probe in preview1), so the
 // auto-detect path bottoms at the `.unwrap_or(4).max(2)` default — the
@@ -1742,10 +1759,26 @@ fn resolve_pool_workers() -> usize {
             }
         }
     }
-    thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .max(2)
+    auto_pool_workers()
+}
+
+/// Cached auto-detect worker count — see [`resolve_pool_workers`] for why
+/// this tier is cached while the env tier above it is not.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+static AUTO_POOL_WORKERS: OnceLock<usize> = OnceLock::new();
+
+/// The auto-detect tier of [`resolve_pool_workers`], computed once per
+/// process. Split out (rather than inlined into the `OnceLock` closure) so
+/// the unit tests can state the expected value without restating the
+/// `.unwrap_or(4).max(2)` tiering.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+fn auto_pool_workers() -> usize {
+    *AUTO_POOL_WORKERS.get_or_init(|| {
+        thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .max(2)
+    })
 }
 
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
@@ -11532,6 +11565,50 @@ mod tests {
         with_par_workers_env(None, || {
             assert_eq!(super::resolve_pool_workers(), auto);
             assert!(super::resolve_pool_workers() >= 2);
+        });
+    }
+
+    /// B-2026-09-03-18: the AUTO-DETECT tier is computed once per process,
+    /// not once per call. `resolve_pool_workers` runs once per parallel
+    /// region entry, and `available_parallelism()` probes the cgroup CPU
+    /// quota through the filesystem (~15 µs/call in a cgroup-v1 container,
+    /// vs ~111 ns for the getenv guarding it), so an uncached auto tier put
+    /// three `openat`s on the hot path of every dispatch — 123x slower than
+    /// sequential on a fine-grained interval DP.
+    ///
+    /// Asserted STRUCTURALLY rather than by timing: once the `OnceLock` is
+    /// populated, `get_or_init` cannot run the probe again, so a populated
+    /// cell IS the guarantee. A wall-clock ratio would be the more direct
+    /// reading of "fast", but it would also flake under a loaded CI box and
+    /// on hosts where the probe happens to be cheap.
+    #[test]
+    fn test_resolve_pool_workers_caches_auto_detect() {
+        with_par_workers_env(None, || {
+            let first = super::resolve_pool_workers();
+            assert_eq!(
+                super::AUTO_POOL_WORKERS.get(),
+                Some(&first),
+                "auto-detect tier must be memoized after the first resolve"
+            );
+            assert_eq!(super::resolve_pool_workers(), first);
+        });
+    }
+
+    /// The ENV tier stays live per call even once the auto tier is cached
+    /// — the fix memoizes `available_parallelism()`, NOT the resolution.
+    /// This is the property the original doc comment promised (override the
+    /// count for a single invocation without rebuilding), so it is pinned
+    /// here rather than left implied. Ordering is deliberate: warm the cache
+    /// first, then prove the override still wins over the warmed value.
+    #[test]
+    fn test_resolve_pool_workers_env_still_wins_after_cache_warm() {
+        let auto = with_par_workers_env(None, super::resolve_pool_workers);
+        let explicit = if auto == 3 { 5 } else { 3 };
+        with_par_workers_env(Some(&explicit.to_string()), || {
+            assert_eq!(super::resolve_pool_workers(), explicit);
+        });
+        with_par_workers_env(None, || {
+            assert_eq!(super::resolve_pool_workers(), auto);
         });
     }
 
