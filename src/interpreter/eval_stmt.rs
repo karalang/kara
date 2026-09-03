@@ -348,7 +348,13 @@ impl<'a> super::Interpreter<'a> {
             // `push_drops_for_stmt`: once that runs, a slot with this name is
             // ambiguous between the old binding and the new one.
             self.freeze_shadowed_drop_slots(stmt, &mut cleanup, &shadowed_before);
-            if !self.let_destructures_owned_param(stmt) {
+            // B-2026-09-02-17 — and a binding taken out of a container ELEMENT
+            // the container still owns registers no slot either, for the same
+            // caller-retains reason: `v[i]` is a `ref T`, so the container's
+            // own walk runs the body.
+            if !self.let_destructures_owned_param(stmt)
+                && !Self::let_binds_borrowed_container_elem(stmt)
+            {
                 push_drops_for_stmt(stmt, &mut cleanup);
             }
             // NLL placement: fire any Drop slot whose binding's last
@@ -2140,6 +2146,52 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// B-2026-09-02-17 — does this `let` / `let … else` bind out of a CONTAINER
+    /// ELEMENT the container still owns (`let E.A(r) = v[0] else { … }`)?
+    ///
+    /// `v[i]` evaluates to `ref T` (design.md § The index operator), so a
+    /// binding taken out of one is a VIEW of a defensive clone, not an owner:
+    /// the container runs the payload's `Drop` body at its own NLL death and
+    /// the binding owes none. That is B-2026-09-02-11's rule, and it is the
+    /// answer `match v[i]`, `if let v[i]` and `while let v[i]` already give on
+    /// every surface — each of them reaches it through
+    /// `scrutinee_expr_is_consuming`, which has no `Index` arm and so answers
+    /// false, standing the arm stash down.
+    ///
+    /// `let … else` never asked that question. It binds through `bind_pattern`
+    /// directly and `push_drops_for_stmt` then registered a real slot per name,
+    /// so the body ran TWICE: once via the container's still-armed walk
+    /// (`disarm_moved_out_enum_payload_one` has no `Index` arm either, so
+    /// nothing was retracted) and once via the binding's own slot. Measured
+    /// `A dE dR3 got 4 dR3 B` under `--interp` against `A dE dR3 got 4 B` on
+    /// all three compiled surfaces.
+    ///
+    /// THE ROOT TEST IS LOAD-BEARING, not a shape filter. Over a TEMPORARY
+    /// container (`let E.A(r) = mkv()[0] else { … }`) nothing else owns the
+    /// element, both backends already run exactly one body, and that body is
+    /// the binding's — suppressing it there would lose it entirely rather than
+    /// merely mistime it. `place_walk_is_retractable` is the same walk the
+    /// disarm family uses to ask "is there an owner to hand back to": an
+    /// identifier root (`v[0]`) or a one-hop field chain (`h.xs[0]`), and
+    /// nothing else.
+    ///
+    /// Written against the STATEMENT rather than the spelling, so `let` and
+    /// `let … else` answer one question. The plain-`let` spelling cannot reach
+    /// it today — `let W { r, k } = v[0]` is `E_INDEX_MOVE_NON_COPY`
+    /// (B-2026-08-26-21) — which makes the widening inert, and inert is the
+    /// point: a spelling-dependent split is exactly how this family drifted
+    /// apart in the first place.
+    fn let_binds_borrowed_container_elem(stmt: &Stmt) -> bool {
+        let value = match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => value,
+            _ => return false,
+        };
+        match &value.kind {
+            ExprKind::Index { object, .. } => Self::place_walk_is_retractable(object),
+            _ => false,
         }
     }
 

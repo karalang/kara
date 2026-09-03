@@ -12122,15 +12122,222 @@ end
     ///     must stay a no-op there, and its `dR6 dE` is what proves it.
     ///
     /// The `let … else` spelling is fixed by the same call but is NOT in this
-    /// fixture: its interpreter answer carries one extra payload body, which is
-    /// a separate interpreter-side divergence (see the row filed at this fix's
-    /// close). Its memory half is covered by the ASAN twin instead.
+    /// fixture: its interpreter answer carried one extra payload body, a
+    /// separate interpreter-side divergence filed at this fix's close as
+    /// B-2026-09-02-17 and fixed there. Its own fixture is
+    /// `e2e_let_else_over_an_indexed_element_runs_one_payload_body`, below.
     #[test]
     fn e2e_index_element_clone_reaches_the_if_let_family() {
         let Some(out) = run_program(IFLET_INDEX_ELEM_CLONE_SRC) else {
             return;
         };
         assert_eq!(out, IFLET_INDEX_ELEM_CLONE_EXPECTED);
+    }
+
+    /// B-2026-09-02-17 — THE `let … else` SPELLING OVER AN INDEXED ELEMENT RUNS
+    /// EXACTLY ONE PAYLOAD `Drop` BODY, AND IT IS THE CONTAINER'S.
+    ///
+    /// The last member of the `v[i]` family to get a fixture, and the only one that
+    /// diverged. `v[i]` evaluates to `ref T`, so a binding taken out of one is a
+    /// view of a defensive clone (B-2026-09-02-11) and the container runs the body
+    /// at its own NLL death. `match` / `if let` / `while let` all reach that answer
+    /// through `scrutinee_expr_is_consuming`, which has no `Index` arm and so
+    /// answers false. `let … else` never asked: it binds through `bind_pattern`
+    /// directly and `push_drops_for_stmt` registered a real slot per name, so the
+    /// body ran TWICE — once via the container's still-armed walk, once via the
+    /// binding's own slot.
+    ///
+    /// WHICH COUNT IS RIGHT WAS THE ROW'S OPEN QUESTION, and `liveafter` is the leg
+    /// that answers it. The row's second reading was that `let … else` binds into
+    /// the ENCLOSING scope, so `r` outlives the container's death and "a value the
+    /// program observes arguably earns its own body". `liveafter` reads `v` AFTER
+    /// `r`, so the container outlives the binding and no such escape exists — and
+    /// the interpreter doubled there too, pre-fix. The extra body was never the
+    /// escape's consequence, which also retires the row's third reading (reject the
+    /// form, per B-2026-08-31-3): there is nothing to reject in a program whose
+    /// borrow never dangles.
+    ///
+    /// `temp` IS THE CONTROL THAT SHAPED THE GATE. Over a TEMPORARY container
+    /// (`mkv(8)[0]`) nothing else owns the element, every surface already ran one
+    /// body, and that body is the BINDING's — `got 9` then `dR8`. Suppressing there
+    /// would lose it entirely rather than merely mistime it, so the gate reuses
+    /// `place_walk_is_retractable`, the same "is there an owner to hand back to"
+    /// walk the disarm family uses: an identifier root or a one-hop field chain,
+    /// and nothing else.
+    ///
+    /// THE DEFECT IS THE BINDING SLOT, NOT THE ENUM PAYLOAD. `struct` — a bare
+    /// `let W { r, k } = v[0] else { … }` — carries it with no enum anywhere, and
+    /// `opt` carries it on the seeded pair. `field` (`h.xs[0]`) and `two` (`v[1]`
+    /// of two elements, where the container walks BOTH) were not named in the row.
+    ///
+    /// Pre-fix, measured per leg and on `--interp` ONLY: `bare` `dE dR1 got 2 dR1`,
+    /// `liveafter` `got 3 dR2 len 1 dE dR2`, `field` `dE dR3 got 4 dR3`, `two`
+    /// `dE dR4 dE dR5 got 6 dR5`, `opt` `dR6 got 7 dR6`, `struct` `dR7 got 14 dR7`
+    /// — one extra body each. `temp`, `iflet` and `elsetaken` were identical before
+    /// and after, and all three compiled surfaces were correct throughout.
+    ///
+    /// Pinned to the same program and the same string as `tests/interpreter.rs`'s
+    /// `test_let_else_over_an_indexed_element_runs_one_payload_body`. The
+    /// compiled backends were CORRECT throughout; this is the oracle half.
+    #[test]
+    fn e2e_let_else_over_an_indexed_element_runs_one_payload_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, v: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+enum E { A(R), B }
+impl Drop for E { fn drop(mut ref self) { println("dE") } }
+struct H { xs: Vec[E] }
+struct W { r: R, k: i64 }
+
+fn mkr(n: i64) -> R { let mut v: Vec[i64] = Vec.new(); v.push(n); return R { id: n, v: v } }
+fn mk(n: i64) -> E { return E.A(mkr(n)) }
+fn mkw(n: i64) -> W { return W { r: mkr(n), k: n } }
+fn mkv(n: i64) -> Vec[E] { let mut v: Vec[E] = Vec.new(); v.push(mk(n)); return v }
+
+fn leg_bare() {
+    println("bare");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(1));
+    let E.A(r) = v[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("bare end");
+}
+
+fn leg_live_after() {
+    println("liveafter");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(2));
+    let E.A(r) = v[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println(f"len {v.len()}");
+    println("liveafter end");
+}
+
+fn leg_field() {
+    println("field");
+    let mut xs: Vec[E] = Vec.new();
+    xs.push(mk(3));
+    let h = H { xs: xs };
+    let E.A(r) = h.xs[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("field end");
+}
+
+fn leg_two() {
+    println("two");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(4));
+    v.push(mk(5));
+    let E.A(r) = v[1] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("two end");
+}
+
+fn leg_opt() {
+    println("opt");
+    let mut v: Vec[Option[R]] = Vec.new();
+    v.push(Option.Some(mkr(6)));
+    let Option.Some(r) = v[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("opt end");
+}
+
+fn leg_struct() {
+    println("struct");
+    let mut v: Vec[W] = Vec.new();
+    v.push(mkw(7));
+    let W { r, k } = v[0] else { println("no"); return }
+    println(f"got {r.id + k}");
+    println("struct end");
+}
+
+fn leg_temp() {
+    println("temp");
+    let E.A(r) = mkv(8)[0] else { println("no"); return }
+    println(f"got {r.id + r.v.len()}");
+    println("temp end");
+}
+
+fn leg_iflet() {
+    println("iflet");
+    let mut v: Vec[E] = Vec.new();
+    v.push(mk(9));
+    if let E.A(r) = v[0] { println(f"got {r.id + r.v.len()}") }
+    println("iflet end");
+}
+
+fn leg_elsetaken() {
+    println("elsetaken");
+    let mut v: Vec[E] = Vec.new();
+    v.push(E.B);
+    let E.A(r) = v[0] else { println("no"); return }
+    println(f"got {r.id}");
+}
+
+fn main() {
+    leg_bare();
+    leg_live_after();
+    leg_field();
+    leg_two();
+    leg_opt();
+    leg_struct();
+    leg_temp();
+    leg_iflet();
+    leg_elsetaken();
+    println("end");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"bare
+dE
+dR1
+got 2
+bare end
+liveafter
+got 3
+len 1
+dE
+dR2
+liveafter end
+field
+dE
+dR3
+got 4
+field end
+two
+dE
+dR4
+dE
+dR5
+got 6
+two end
+opt
+dR6
+got 7
+opt end
+struct
+dR7
+got 14
+struct end
+temp
+got 9
+dR8
+temp end
+iflet
+got 10
+dE
+dR9
+iflet end
+elsetaken
+no
+dE
+end
+"#
+        );
     }
 
     /// B-2026-08-31-1 — A PAYLOAD BOUND OUT OF A *PROJECTION* OF AN OWNED PARAM IS
