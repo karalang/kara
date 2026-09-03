@@ -159,7 +159,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-44 | 2026-09-02 | interp+codegen | medium | A WHOLE-REBIND OF A STRUCT PARAM BEFORE PROJECTING STILL DOUBLES THE ELEMENT'S `Drop` BODY -- `let h2 = h; let (r, k) = h2.pe; let m = r;` runs TWO bodies on all four surfaces where one is due, while the direct spelling `let (r, k) = h.pe` is correct since B-2026-09-02-40. Same missing widening as B-2026-09-02-25's `viewsrc` cell, one hop further in | — |
 | B-2026-09-02-46 | 2026-09-02 | codegen | medium | A BOXED ENUM PAYLOAD INSIDE A MONOMORPH LEAKS ITS BOX WHENEVER THE ARM BINDS AND READS IT -- 48 bytes per CALL, on `Option` and `Result` alike, for a free fn and a method alike; the non-generic twin is clean, and so is the same monomorph when the arm does NOT read the payload | — |
 | B-2026-09-03-2 | 2026-09-03 | codegen | high | FORWARDING A GENERIC `Option[T]` PARAM TO A SECOND GENERIC FUNCTION PRINTS A RAW POINTER on all three COMPILED surfaces -- `fn fwd[T](x: Option[T]) { sink(x) }` renders `s:94482719980304` where `--interp` renders `s:[uv, wx]`, and the value CHANGES BETWEEN RUNS | — |
-| B-2026-09-03-3 | 2026-09-03 | interp | medium | MAIN'S REQUIRED `Test (windows-latest)` CI JOB HAS BEEN RED SINCE B-2026-09-01-48's FIX (094c206a): the anti-vacuity guard that fix added to `test_scalar_float_methods_compute_at_the_declared_width` fires on Windows, because NONE of its seven receivers separates the f32-width route from compute-in-f64-then-round there. The guard is working as designed -- it is reporting real vacuity -- but its own remedy ("sweep for a receiver that discriminates on the new host and add it") may be unreachable on that host, and meanwhile every commit to main lands with a required check failing. | — |
 
 ### Relocated
 
@@ -2156,6 +2155,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-45 | codegen | high | A FUNCTION PARAMETER'S `Option`/`Result` PAYLOAD TYPE OUTLIVES ITS FUNCTION AND IS INHERITED BY ANY SAME-NAMED BINDING LATER IN THE PROGRAM -- an UNU… | 76fd9e1 |
 | B-2026-09-02-47 | typecheck+codegen | high | AN IMPL-LEVEL BOUND IS NEVER DISCHARGED AT AN ASSOCIATED-FUNCTION CALL SITE -- `impl[T: Copy] Pair[T] { fn twin(v: T) }` accepts `Pair.twin(<non-Copy… | a98f719 |
 | B-2026-09-03-1 | interp | low | `test_narrow_float_assoc_call_namespace_runs` SEEDS FROM `env.args().len()`, SO IT PASSES A FULL RUN AND FAILS THE DOCUMENTED SINGLE-TEST WORKFLOW --… | 565dab1 |
+| B-2026-09-03-3 | interp | medium | MAIN'S REQUIRED `Test (windows-latest)` CI JOB HAS BEEN RED SINCE B-2026-09-01-48's FIX (094c206a): the anti-vacuity guard that fix added to `test_sc… | 5699c44f |
 
 </details>
 
