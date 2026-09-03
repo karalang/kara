@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 364 |
-| run-vs-build | 317 |
-| leak | 257 |
+| run-vs-build | 318 |
+| leak | 258 |
 | missing-feature | 194 |
 | double-free | 170 |
 | codegen-gap | 161 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1410 |
-| interp | 343 |
+| codegen | 1411 |
+| interp | 344 |
 | typecheck | 291 |
 | ownership | 74 |
 | other | 70 |
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-01-27 | 2026-09-01 | interp | low | A FRESH-TEMP owned argument DESTRUCTURED inside a method runs the right Drop bodies in the WRONG ORDER -- the payload's body fires before the enum shell's under `--interp` and after it on both compiled backends, so the counts agree and the sequence does not | — |
 | B-2026-09-01-39 | 2026-09-01 | interp+codegen | medium | A LIVE LOCAL HANDED OUT OF A DISCARDED BRANCH LOSES ITS PAYLOAD'S `Drop` BODY, and the `if` and `match` spellings disagree in OPPOSITE directions on the two backends -- `let _ = if c { E.A(mk(8)) } else { e };` with the `e` arm taken is interp `dE` / compiled `dE dR5`, while the `match` spelling of the same thing is interp `dE dR5` / compiled `dE` | — |
 | B-2026-09-02-4 | 2026-09-02 | interp+codegen | medium | AN ASSOCIATED fn returning an AGGREGATE THAT WRAPS a by-value param diverges in BOTH directions at once -- the compiled lanes run the wrapped param's `Drop` body TWICE and `--interp` loses it when the param dies -- while the FREE-function twin agrees on all four lanes and is wrong on one cell everywhere | — |
-| B-2026-09-02-5 | 2026-09-02 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually runs, and 0 errors at `-O2`, which is exactly the masking B-2026-08-04-19 recorded for the ENUM sibling of the same branch. The struct leg takes no `suppress_source_vec_cleanup_for_arg` call because a code comment asserts `h2 = h` is already clean; the `-O0` leg says otherwise | — |
 | B-2026-09-02-9 | 2026-09-02 | runtime | low | OVER-ALIGNED ALLOCATION IS UNSUPPORTED ON WINDOWS -- `karac_alloc_aligned_or_panic` aborts there rather than honoring an alignment above `malloc`'s 16-byte guarantee, because the MSVC CRT has no `free`-compatible aligned allocator and every release path assumes plain `free`. | — |
 | B-2026-09-02-16 | 2026-09-02 | interp+codegen | low | A NEVER-READ SHADOWED NAME'S TWO GENERATIONS FIRE IN THE WRONG ORDER UNDER AUTO-PAR because each is branch-local and fires inside its own outlined branch at its own `let`, while the interpreter fires both at the single name-keyed endpoint in LIFO order -- `dR3 dR4 mid` vs `dR4 dR3 mid`; the position is now right on every surface and only the order between the two generations differs | — |
 | B-2026-09-02-22 | 2026-09-02 | codegen | low | A DOUBLY-NESTED `Option[Option[String]]` ARGUMENT LEAKS ITS INNER PAYLOAD -- 45 B in 3 blocks over a three-iteration loop, unmoved by all THREE of B-2026-09-01-29's fixes. The payload is 3 words, so `Option[Option[String]]` exceeds the 3-word boxing limit `optres_param_entry_copied_te` gates on: the param is never ADMITTED to the by-value copy convention, so neither the callee's entry copy nor any caller-side ownership predicate applies and no frame is ever offered the temp | — |
@@ -161,6 +160,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-27 | 2026-09-03 | runtime | medium | `resolve_pool_workers()` STILL DOES A FULL `std::env::var` SCAN PER PARALLEL-REGION ENTRY after B-2026-09-03-18 cached the tier BELOW it, so an auto-par program's runtime is a linear function of HOW MANY ENVIRONMENT VARIABLES IT WAS STARTED WITH. Counted with an LD_PRELOAD getenv interposer on kata 313's benchmark: 2,999,970 lookups of `KARAC_PAR_WORKERS` -- exactly 30 passes x 99,999 merge steps, one per step -- against ONE getenv in total for the sequential build of the same program. Cost measured on the same binary by varying only the environment: 0.66 s under `env -i`, 0.95 s with a normal environment, 1.53 s with 300 extra variables (98 ns and 292 ns per call). That is 0.29 s of pure environment scanning, or 66% of the program's entire 0.44 s SEQUENTIAL runtime, spent re-asking a question whose answer cannot change. AND THE DOCUMENTED ESCAPE HATCH NO LONGER ESCAPES: under -18, setting `KARAC_PAR_WORKERS` explicitly was a 45x speedup because it returned before the cgroup probe; now that the probe is cached, both paths pay the lookup -- `KARAC_PAR_WORKERS=4` makes the SAME 2,999,970 calls and is not faster (1.60 s vs 1.53 s under a padded environment). | — |
 | B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
 | B-2026-09-03-29 | 2026-09-03 | typecheck | medium | `E_INDEX_MOVE_NON_COPY` IS SITE-BASED IN THE SAME WAY `partial_move_of_drop_struct` WAS, and it is the same four positions -- `return v[0];`, a tail `v[0]`, a struct-literal field and a tuple-literal element all read a non-`Copy` element out of a container that still owns it and fire nothing, while `let x = v[0];` and a call argument are hard errors; both rules are `Deny` | — |
+| B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
+| B-2026-09-03-31 | 2026-09-03 | codegen | medium | A STRUCT WITH ITS OWN `impl Drop` NEVER RELEASES A `shared struct` FIELD'S RC BOX -- 16 B per instance and unbounded in a loop (80 B / 5 instances), on a plain `let` with no call and no assignment; the SAME struct without the `impl Drop` is clean, which isolates the mutually-exclusive `UserDrop` vs `StructDrop` registration as the cause, and `-O2` masks it | — |
 
 ### Relocated
 
@@ -2130,6 +2131,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-1 | codegen | high | A `Vec`-OF-`Drop` BINDING FOLLOWED BY ANY LATER `let` INITIALIZED FROM A CALL RETURNING A CONTAINER RUNS THE ELEMENT `Drop` BODIES ON FREED MEMORY on… | 6486e68 |
 | B-2026-09-02-2 | interp | medium | THE INTERPRETER MIRROR OF B-2026-08-30-18: a STRUCT literal in RETURN POSITION whose field is a PLAIN `Drop` value moved in from a local runs that va… | 1836078 |
 | B-2026-09-02-3 | codegen | medium | A GENERIC function's conditionally-returned by-value param loses the DYING one's `Drop` body on ALL THREE COMPILED lanes while `--interp` runs it --… | 56cb337 |
+| B-2026-09-02-5 | codegen | low | A PARAM-VIEW ASSIGNMENT `h2 = h` OVER A `Drop`-BEARING STRUCT LEAKS THE MOVED-IN VALUE'S `String` AT `-O0` -- one block per assignment that actually… | b51e5982 |
 | B-2026-09-02-6 | codegen | medium | A `cond_move_drop_flags` PER-PATH DROP FLAG IS INITIALIZED IN THE ENTRY BLOCK, SO IT IS ARMED ONCE PER CALL AND NOT ONCE PER LOOP ITERATION -- an ass… | c2b8924 |
 | B-2026-09-02-7 | interp | medium | A `while let` ARM THAT BINDS ITS PAYLOAD RUNS THE PAYLOAD'S `Drop` BODY TWICE PER PASS UNDER `--interp` AND ONCE ON BOTH COMPILED BACKENDS -- the com… | 51491e9 |
 | B-2026-09-02-8 | interp+codegen | medium | AN `Option`-ENVELOPED STRUCT PATTERN THAT BINDS ONLY THE NON-`Drop` FIELD LOSES THE PAYLOAD'S `Drop` BODY IN THE INTERPRETER on both the `if let` and… | b86bef0 |
