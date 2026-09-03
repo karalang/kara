@@ -3673,6 +3673,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.payload_vars.param_view_locals.remove(&name);
             self.payload_vars.param_view_struct_fields.remove(&name);
+            self.payload_vars.param_view_tuple_elems.remove(&name);
         }
     }
 
@@ -8353,6 +8354,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                     // nothing to inherit and re-armed the walk.
                                     let mut view_elems: std::collections::HashSet<u32> =
                                         self.tuple_literal_param_view_elems(value);
+                                    // B-2026-09-01-3 — record the view
+                                    // elements BEFORE the mask merge below,
+                                    // and only the ones this LITERAL filled
+                                    // from a param view. What the merge adds
+                                    // is `tuple_moved_elem_bodies`, a mask
+                                    // written for several unrelated reasons;
+                                    // folding it in here would tell a later
+                                    // `let x = t.0;` that an element the
+                                    // destination genuinely owns is the
+                                    // caller's, and drop its body entirely.
+                                    if !view_elems.is_empty() {
+                                        self.payload_vars
+                                            .param_view_tuple_elems
+                                            .entry(var_name.clone())
+                                            .or_default()
+                                            .extend(view_elems.iter().copied());
+                                    }
                                     if let ExprKind::Identifier(src) = &value.kind {
                                         let src = src.clone();
                                         self.transfer_move_masks_on_rebind(&src, var_name);

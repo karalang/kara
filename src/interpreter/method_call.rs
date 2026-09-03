@@ -649,6 +649,8 @@ impl<'a> super::Interpreter<'a> {
                     // in place — so it takes the correct scoping from the
                     // start rather than inheriting a hazard it never had.
                     std::mem::take(&mut self.param_view_struct_fields),
+                    // B-2026-09-01-3 — the tuple peer, isolated beside it.
+                    std::mem::take(&mut self.param_view_tuple_elems),
                 );
                 // B-2026-08-29-9 — the callee frame's moved-out sets are
                 // deliberately NOT isolated here, though `eval_call` isolates a
@@ -691,6 +693,7 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_tuple_elem_bodies,
                     self.moved_out_struct_field_bodies,
                     self.param_view_struct_fields,
+                    self.param_view_tuple_elems,
                 ) = saved_moved_out;
                 // B-2026-08-30-33 — restored with the rest of this frame's
                 // move bookkeeping, so a parameter name cannot outlive the

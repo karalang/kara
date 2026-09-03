@@ -1937,6 +1937,14 @@ impl<'a> super::Interpreter<'a> {
         }
         let bname = bname.clone();
         for i in views {
+            // B-2026-09-01-3 — the SAME pair into two sets, the tuple peer
+            // of the struct pair B-2026-08-29-47 writes. The mask says the
+            // walk skips this element; the record says the element belongs
+            // to the caller, which is what a later `let x = t.0;` has to ask
+            // before registering a slot of its own. The mask alone cannot
+            // answer it — an element moved out by an ordinary `let` lands
+            // there too, and that one the destination genuinely owns.
+            self.param_view_tuple_elems.insert((bname.clone(), i));
             self.moved_out_tuple_elem_bodies.insert((bname.clone(), i));
         }
     }
@@ -2081,6 +2089,7 @@ impl<'a> super::Interpreter<'a> {
         }
         for n in &names {
             self.param_view_struct_fields.retain(|(root, _)| root != n);
+            self.param_view_tuple_elems.retain(|(root, _)| root != n);
         }
     }
 
@@ -2423,16 +2432,33 @@ impl<'a> super::Interpreter<'a> {
     ///    struct with its own `impl Drop`, whose body is the binding's own.
     ///    A view field's interior is caller-owned all the way down, so no
     ///    record is needed past the first hop.
+    ///
+    /// B-2026-09-01-3 — a hop is a struct FIELD or a TUPLE INDEX, and the walk
+    /// takes both in one loop, so `o.t.0` and `w.s.r` settle at (1) alike and a
+    /// mixed chain needs no special case. Which record answers (2) is decided by
+    /// the KIND of the first hop, since a field name and an element index are
+    /// held in separate stores: `param_view_struct_fields` and
+    /// `param_view_tuple_elems`.
+    ///
+    /// The name predates the tuple arm and is deliberately kept — several
+    /// ledger rows cite it, and renaming would break that grep trail.
     fn let_reads_param_view_field(&self, value: &Expr) -> bool {
-        if !matches!(&value.kind, ExprKind::FieldAccess { .. }) {
+        if !matches!(
+            &value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
             return false;
         }
         let mut cur = value;
-        let mut first_field: Option<&str> = None;
+        let mut first_hop: Option<FirstHop<'_>> = None;
         let root = loop {
             match &cur.kind {
                 ExprKind::FieldAccess { object, field } => {
-                    first_field = Some(field.as_str());
+                    first_hop = Some(FirstHop::Field(field.as_str()));
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    first_hop = Some(FirstHop::Elem(*index as usize));
                     cur = object;
                 }
                 ExprKind::Identifier(n) => break n.as_str(),
@@ -2446,10 +2472,13 @@ impl<'a> super::Interpreter<'a> {
         {
             return true;
         }
-        first_field.is_some_and(|f| {
-            self.param_view_struct_fields
-                .contains(&(root.to_string(), f.to_string()))
-        })
+        match first_hop {
+            Some(FirstHop::Field(f)) => self
+                .param_view_struct_fields
+                .contains(&(root.to_string(), f.to_string())),
+            Some(FirstHop::Elem(i)) => self.param_view_tuple_elems.contains(&(root.to_string(), i)),
+            None => false,
+        }
     }
 
     /// B-2026-08-29-58 — the ASSIGNMENT spelling of the move
@@ -7057,4 +7086,16 @@ impl<'a> super::Interpreter<'a> {
         }
         None
     }
+}
+
+/// B-2026-09-01-3 — the FIRST hop off a place expression's root, which is what
+/// decides WHICH param-view record answers for it: a struct field consults
+/// `param_view_struct_fields`, a tuple element `param_view_tuple_elems`. The
+/// two are separate stores rather than one keyed by a hop, because they are
+/// written by different constructors and invalidated independently; this type
+/// exists only to carry the answer out of the chain walk in
+/// `let_reads_param_view_field`.
+enum FirstHop<'a> {
+    Field(&'a str),
+    Elem(usize),
 }

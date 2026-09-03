@@ -6189,6 +6189,7 @@ impl<'ctx> Codegen<'ctx> {
                 param_view_locals: HashSet::new(),
                 bare_tuple_elem_slots: HashMap::new(),
                 param_view_struct_fields: HashMap::new(),
+                param_view_tuple_elems: HashMap::new(),
             },
             drop_rc: DropRc {
                 optres_payload_bodies_flags: HashMap::new(),

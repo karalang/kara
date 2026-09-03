@@ -53554,21 +53554,192 @@ fn test_param_view_field_moved_back_out_runs_one_body() {
         let src = format!("{hdr}{fns}\nfn main() {{ {main} }}\n");
         assert_eq!(run(&src), want, "[{label}]");
     }
-    // PINNED AT THE DEFECT. The TUPLE spelling of the same move
-    // (`let t = (r, 5); let x = t.0;`) still doubles, on BOTH backends, so
-    // it stays an agreed gap rather than a divergence. It needs the tuple
-    // peer of the per-field record this fix added — `param_view_locals`
-    // never covers it, since a tuple literal's view elements are masked per
-    // index and the binding is not marked a view. Filed separately.
+    // FIXED by B-2026-09-01-3, which supplied the tuple record this comment
+    // asked for. `param_view_tuple_elems` is written where the literal's view
+    // elements are already computed, and read from a `TupleIndex` arm of the
+    // same chain walk that answers for a field -- so `t.0` and `s.r` reach one
+    // decision by one route, each through its own store. A third store rather
+    // than a wider predicate, because a tuple literal reaches NEITHER answer
+    // the struct path has: it never becomes a `param_view_locals` mark (its
+    // mask is per SLOT, so the all-views propagation does not fire) and it has
+    // no field NAME to key the field record by.
+    //
+    // The cell stays as the guard that the two hops do not overlap -- a struct
+    // field must not be answered by the tuple record, nor an element by the
+    // field one.
     let tuple_moveout = format!(
         "{hdr}fn take(r: R) -> i64 {{ let t = (r, 5); let x = t.0; return 7; }}\n\
          fn main() {{ let v = take(mk(1)); println(f\"v={{v}}\"); }}\n"
     );
     assert_eq!(
         run(&tuple_moveout),
-        "dR1\ndR1\nv=7\n",
-        "[pinned DEFECT: tuple wrap then element move-out — agreed, awaiting a tuple record]"
+        "dR1\nv=7\n",
+        "[tuple wrap then element move-out]"
     );
+    // PINNED AT THE DEFECT, one spelling further out. Rebinding the tuple
+    // before reading the element back out still doubles, agreed on all four
+    // surfaces. The record above is keyed by (binding, index) and does not
+    // travel to `t2`. The STRUCT spelling of the same rebind is CORRECT --
+    // asserted as a control in the tuple row's own test -- but by a route this
+    // has no peer for: an all-views struct literal marks its binding a param
+    // view WHOLE, and a tuple literal never reaches that mark. Filed
+    // separately; the fix is that propagation, not a wider record.
+    let tuple_rebind = format!(
+        "{hdr}fn take(r: R) -> i64 {{ let t = (r, 5); let t2 = t; let x = t2.0; return 7; }}\n\
+         fn main() {{ let v = take(mk(1)); println(f\"v={{v}}\"); }}\n"
+    );
+    assert_eq!(
+        run(&tuple_rebind),
+        "dR1\ndR1\nv=7\n",
+        "[pinned DEFECT: tuple REBOUND, then element move-out -- awaiting the \
+         all-views propagation the struct literal has]"
+    );
+}
+
+/// B-2026-09-01-3 -- the TUPLE spelling of the move B-2026-08-29-47 fixed for
+/// a struct FIELD and pinned here at the defect.
+///
+/// `let t = (r, 5); let x = t.0;` moves a param VIEW into a tuple element and
+/// reads it straight back out. The caller runs that body, so `x` must not
+/// register one; it printed `dR1 dR1` where one was due.
+///
+/// THE REPAIR IS THE TUPLE PEER OF -47's RECORD, NOT A WIDENING OF IT. A tuple
+/// literal reaches neither answer the struct path has: it never becomes a
+/// `param_view_locals` mark, because its mask is per SLOT and the all-views
+/// propagation does not fire, and it has no field NAME for the field record to
+/// be keyed by. So `param_view_tuple_elems` is a third store, written where
+/// the literal's view elements are already computed and read from a
+/// `TupleIndex` arm of the same chain walk that answers for a field.
+///
+/// MEASURED before and after, every cell on all four surfaces:
+///
+/// | cell                                  | before          | after     |
+/// |---------------------------------------|-----------------|-----------|
+/// | the row                               | `dR1 dR1`       | `dR1`     |
+/// | mixed, move the VIEW out              | `dR1 dR2 dR1`   | `dR2 dR1` |
+/// | both views, move ONE out              | `dR1 dR2 dR1`   | `dR2 dR1` |
+/// | both views, move BOTH out             | `dR1 dR2 dR2 dR1` | `dR2 dR1` |
+/// | move out, then rebind the destination | `dR1 dR1`       | `dR1`     |
+/// | move out, then read the destination   | `dR1 dR1`       | `dR1`     |
+/// | `o.t.0` -- root is the by-value param | `dR1 dR1`       | `dR1`     |
+/// | method frame                          | SPLIT (below)   | `dR1`     |
+///
+/// THE METHOD FRAME WAS NOT AN AGREED GAP. Measured pre-fix, the interpreter
+/// printed ONE body there and all three compiled surfaces printed two, so that
+/// spelling was a run-vs-build DIVERGENCE while the headline shape was an
+/// agreed one. Same split -47 found at its own method-frame cell, and the same
+/// resolution: fixing codegen converges it, and the interpreter's
+/// method-frame bail is what keeps its single body from going to zero.
+///
+/// The four CONTROLS are unchanged in both columns, which is what shows the
+/// fix is not a blunt instrument -- moving the FRESH element out of a mixed
+/// literal still registers a body, because nobody else runs it; a LOCAL source
+/// was already correct and must stay so; and the STRUCT rebind is correct by a
+/// route the tuple has no peer for, which is the shape the sentinel in
+/// `test_param_view_field_moved_back_out_runs_one_body` still pins.
+#[test]
+fn test_param_view_tuple_elem_moved_back_out_runs_one_body() {
+    let hdr = "struct R { id: i64, name: String }\n\
+               impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+               fn mk(i: i64) -> R { return R { id: i, name: f\"heap-{i}\" }; }\n\
+               struct S1 { r: R }\n\
+               struct Ot { t: (R, i64) }\n\
+               struct H { n: i64 }\n";
+    for (label, fns, main, want) in [
+        // THE ROW.
+        (
+            "tuple wrap, then move the element back out",
+            "fn take(r: R) -> i64 { let t = (r, 5); let x = t.0; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // MIXED literal: the view's element is masked, the fresh one is not,
+        // so only the view's body moves to the caller.
+        (
+            "mixed literal, move the VIEW element out",
+            "fn take(r: R) -> i64 { let t = (r, mk(2)); let x = t.0; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        // BOTH elements views: the record is per index, so one entry per
+        // element and moving either out leaves both bodies to the caller.
+        (
+            "both elements views, move ONE out",
+            "fn take(p: R, q: R) -> i64 { let t = (p, q); let x = t.0; return 7; }",
+            "let v = take(mk(1), mk(2)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "both elements views, move BOTH out",
+            "fn take(p: R, q: R) -> i64 { let t = (p, q); let x = t.0; let y = t.1; return 7; }",
+            "let v = take(mk(1), mk(2)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        // The destination inherits view-ness, so a later whole-value rebind
+        // of it does not re-arm what this withheld.
+        (
+            "move out, then rebind the destination",
+            "fn take(r: R) -> i64 { let t = (r, 5); let x = t.0; let y = x; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // READING the destination does not change who owns it.
+        (
+            "move out, then read the destination",
+            "fn take(r: R) -> i64 { let t = (r, 5); let x = t.0; return x.id; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=1\n",
+        ),
+        // MIXED HOPS. The chain walk is one loop over both hop kinds, so a
+        // tuple index under a struct field settles at the ROOT test and needs
+        // no record at all -- the half that was unreachable before only
+        // because the walk refused to start on a `TupleIndex`.
+        (
+            "root is a by-value param: struct field then tuple index",
+            "fn take(o: Ot) -> i64 { let x = o.t.0; return 7; }",
+            "let v = take(Ot { t: (mk(1), 5) }); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // METHOD FRAME -- the cell that was a run-vs-build SPLIT before this
+        // fix, not an agreed gap. See the doc comment.
+        (
+            "method frame, tuple wrap then move out",
+            "impl H { fn take(ref self, r: R) -> i64 { let t = (r, 5); let x = t.0; return 7; } }",
+            "let h = H { n: 0 }; let v = h.take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // CONTROLS. Each was already correct and must stay so; together they
+        // are what keeps the record from becoming a blanket suppression.
+        (
+            "control: mixed literal, move the FRESH element out",
+            "fn take(r: R) -> i64 { let t = (mk(2), r); let x = t.0; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR2\ndR1\nv=7\n",
+        ),
+        (
+            "control: local source, move out",
+            "fn take() -> i64 { let t = (mk(1), 5); let x = t.0; return 7; }",
+            "let v = take(); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        (
+            "control: tuple wrap, NO move out",
+            "fn take(r: R) -> i64 { let t = (r, 5); return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+        // CONTROL, and the contrast that explains the sentinel: the STRUCT
+        // rebind is correct, by the all-views propagation the tuple lacks.
+        (
+            "control: the STRUCT rebind spelling, which is correct",
+            "fn take(r: R) -> i64 { let s = S1 { r: r }; let s2 = s; let x = s2.r; return 7; }",
+            "let v = take(mk(1)); println(f\"v={v}\");",
+            "dR1\nv=7\n",
+        ),
+    ] {
+        let src = format!("{hdr}{fns}\nfn main() {{ {main} }}\n");
+        assert_eq!(run(&src), want, "[{label}]");
+    }
 }
 
 #[test]

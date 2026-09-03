@@ -297,6 +297,20 @@ pub(crate) struct PayloadVars<'ctx> {
     /// the let-site `FieldAccess` has in hand); cleared per function alongside
     /// `param_view_locals`.
     pub(crate) param_view_struct_fields: HashMap<String, HashSet<String>>,
+    /// B-2026-09-01-3 — the TUPLE peer of the record above: for a binding
+    /// built by a tuple literal, which of its ELEMENTS were filled from a
+    /// param VIEW. The interpreter's twin is `param_view_tuple_elems`.
+    ///
+    /// A tuple literal reaches neither answer the struct path has. It never
+    /// becomes a `param_view_locals` mark, because the mask that covers it
+    /// (`tuple_moved_elem_bodies`) is per SLOT and the all-views propagation
+    /// the struct path uses does not fire; and it has no field NAME for
+    /// `param_view_struct_fields` to be keyed by. So a later `let x = t.0;`
+    /// had nothing to consult and armed a body of its own over a value the
+    /// caller already runs. Keyed by binding name and element index (the
+    /// shape the let-site `TupleIndex` has in hand); cleared per function
+    /// alongside `param_view_struct_fields`.
+    pub(crate) param_view_tuple_elems: HashMap<String, HashSet<u32>>,
     /// B-2026-09-02-27 — for a bare-tuple element binding, a pointer to the
     /// element's slot INSIDE the scrutinee tuple's alloca.
     ///

@@ -7090,16 +7090,33 @@ impl<'ctx> super::Codegen<'ctx> {
     ///    recorded in `param_view_struct_fields`. Only the FIRST hop is
     ///    consulted: a view field's interior is caller-owned all the way down,
     ///    so a deeper chain through it needs no further record.
+    ///
+    /// B-2026-09-01-3 — a hop is a struct FIELD or a TUPLE INDEX, and the walk
+    /// takes both in one loop, so `o.t.0` and `w.s.r` settle at (1) alike and a
+    /// mixed chain needs no special case. Which record answers (2) is decided by
+    /// the KIND of the first hop, since a field name and an element index are
+    /// held in separate stores: `param_view_struct_fields` and
+    /// `param_view_tuple_elems`.
+    ///
+    /// The name predates the tuple arm and is deliberately kept — several
+    /// ledger rows cite it, and renaming would break that grep trail.
     pub(super) fn field_move_out_source_is_param_view(&self, value: &Expr) -> bool {
-        let ExprKind::FieldAccess { .. } = &value.kind else {
+        if !matches!(
+            &value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
             return false;
-        };
+        }
         let mut cur = value;
-        let mut first_field: Option<&str> = None;
+        let mut first_hop: Option<FirstHop<'_>> = None;
         let root = loop {
             match &cur.kind {
                 ExprKind::FieldAccess { object, field } => {
-                    first_field = Some(field.as_str());
+                    first_hop = Some(FirstHop::Field(field.as_str()));
+                    cur = object;
+                }
+                ExprKind::TupleIndex { object, index } => {
+                    first_hop = Some(FirstHop::Elem(*index as u32));
                     cur = object;
                 }
                 ExprKind::Identifier(n) => break n.as_str(),
@@ -7109,13 +7126,19 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.expr_is_param_view(cur) {
             return true;
         }
-        let Some(field) = first_field else {
-            return false;
-        };
-        self.payload_vars
-            .param_view_struct_fields
-            .get(root)
-            .is_some_and(|fs| fs.contains(field))
+        match first_hop {
+            Some(FirstHop::Field(field)) => self
+                .payload_vars
+                .param_view_struct_fields
+                .get(root)
+                .is_some_and(|fs| fs.contains(field)),
+            Some(FirstHop::Elem(idx)) => self
+                .payload_vars
+                .param_view_tuple_elems
+                .get(root)
+                .is_some_and(|es| es.contains(&idx)),
+            None => false,
+        }
     }
 
     /// B-2026-08-29-24 — does `value` construct an `Option` / `Result` whose
@@ -16161,4 +16184,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         (buf_ptr, len)
     }
+}
+
+/// B-2026-09-01-3 — the FIRST hop off a place expression's root, which is what
+/// decides WHICH param-view record answers for it: a struct field consults
+/// `param_view_struct_fields`, a tuple element `param_view_tuple_elems`. Local
+/// to this backend and duplicated in the interpreter's `eval_stmt`, following
+/// the rule the rest of this pair follows — each side asks the question with
+/// the store its own walker reads, so the two agree by construction rather
+/// than by a shared type they would both have to be kept in step with.
+enum FirstHop<'a> {
+    Field(&'a str),
+    Elem(u32),
 }

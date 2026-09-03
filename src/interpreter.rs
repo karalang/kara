@@ -517,6 +517,19 @@ pub struct Interpreter<'a> {
     /// `let x = s.a;` may register a body of its own. Rides the per-frame
     /// save/restore with the masks, being name-keyed like them.
     pub(crate) param_view_struct_fields: HashSet<(String, String)>,
+    /// B-2026-09-01-3 — the TUPLE peer of the record above: `(binding,
+    /// element index)` pairs a tuple literal filled from a param VIEW.
+    /// Codegen's twin is `param_view_tuple_elems`.
+    ///
+    /// Held apart from `moved_out_tuple_elem_bodies` for exactly the reason
+    /// the struct pair is held apart from ITS mask, and the distinction is
+    /// the whole content of this row: the mask says the walk skips this
+    /// element, and is written for several unrelated reasons (a move-out, a
+    /// destructure, a rebind), while this says WHY — the value is the
+    /// CALLER's. Only the second answers whether a later `let x = t.0;` may
+    /// register a body of its own. Rides the per-frame save/restore beside
+    /// `param_view_struct_fields`, being name-keyed like it.
+    pub(crate) param_view_tuple_elems: HashSet<(String, usize)>,
     /// B-2026-08-29-33 — `(variable, field name)` pairs whose ENUM field's
     /// PAYLOAD bodies a consuming `match` / `if let` arm over `<var>.<field>`
     /// took. Held apart from `moved_out_struct_field_bodies` because the mask is
@@ -1050,6 +1063,7 @@ impl<'a> Interpreter<'a> {
             moved_out_tuple_elem_bodies: HashSet::new(),
             moved_out_struct_field_bodies: HashSet::new(),
             param_view_struct_fields: HashSet::new(),
+            param_view_tuple_elems: HashSet::new(),
             moved_out_struct_field_payload_bodies: HashSet::new(),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
