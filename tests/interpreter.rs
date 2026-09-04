@@ -35539,6 +35539,143 @@ done
     );
 }
 
+/// B-2026-09-04-8 — a tuple destructure's `Result` element keeps its payload's
+/// `Drop` body at EVERY projection depth, not just one.
+///
+/// `let (a, b) = g.h.inner;` ran no `dR103` under `--interp` while all three
+/// compiled surfaces ran it. `eval_place_type_name` resolved only a ROOT
+/// (`Identifier` / `SelfValue`), so asked about `g.h` it answered `None`,
+/// `destructure_source_elem_tes` bailed before naming a single leaf, and
+/// `optres_payload_bodies_tes` never learned the element's type. The one-hop
+/// `w.inner` spelling was correct, which is what made the gap read as a
+/// projection question rather than a DEPTH one.
+///
+/// DEPTH-INVARIANCE IS THE ORACLE: `named` (no projection), `one`, `two` and
+/// `three` are one program at four depths and must print one body sequence
+/// modulo ids. `nodest` and `live` keep the root alive past the destructure.
+///
+/// EVERY CELL BINDS ITS OWN LEAF NAMES (`a1`/`b1`, `a2`/`b2`, …) AND THAT IS
+/// LOAD-BEARING, not style. `optres_payload_bodies_tes` is keyed by leaf NAME
+/// with no function qualification, so a leaf registered in one function is still
+/// registered for a same-named leaf in the next. A first version of this fixture
+/// gave every cell `a`/`b`; `c_named` ran first, registered `b`, and `c_two`'s
+/// own `b` inherited it — the interpreter then ran the payload body for the
+/// wrong reason and the whole fixture PASSED WITHOUT THE FIX. Renaming the
+/// leaves, or moving `c_two` first, makes it fail again. Verified both ways.
+/// That cross-function inheritance is filed separately; here it is why a
+/// regression fixture in this family must not share leaf names across cells.
+///
+/// The one-hop cell also guards someone else's fix: `6ab46d5` (B-2026-09-03-22,
+/// a `Result` destructure leaf's boxed-payload memory owner) is what made `one`
+/// agree, verified by bisect over `84cf064`, `ebe5821`, `5f3c3be` and `6ab46d5`.
+#[test]
+fn test_tuple_destructure_result_payload_survives_every_depth() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct WrapR { inner: (R, Result[R, String]) }
+struct OuterR { h: WrapR }
+struct DeepR { g: OuterR }
+
+fn c_named()  { let t: (R, Result[R, String]) = (mk(1), Result.Ok(mk(101))); let (a1, b1) = t; println(f"  rd{a1.id}") }
+fn c_one()    { let w = WrapR { inner: (mk(2), Result.Ok(mk(102))) }; let (a2, b2) = w.inner; println(f"  rd{a2.id}") }
+fn c_two()    { let g = OuterR { h: WrapR { inner: (mk(3), Result.Ok(mk(103))) } }; let (a3, b3) = g.h.inner; println(f"  rd{a3.id}") }
+fn c_three()  { let d = DeepR { g: OuterR { h: WrapR { inner: (mk(4), Result.Ok(mk(104))) } } }; let (a4, b4) = d.g.h.inner; println(f"  rd{a4.id}") }
+fn c_nodest() { let w = WrapR { inner: (mk(5), Result.Ok(mk(105))) }; println(f"  rd{w.inner.0.id}") }
+fn c_live()   { let g = OuterR { h: WrapR { inner: (mk(6), Result.Ok(mk(106))) } }; let (a6, b6) = g.h.inner; println(f"  rd{a6.id}"); println(f"  g{g.h.inner.0.id}") }
+
+fn main() {
+    println("named"); c_named(); println("named end")
+    println("one");   c_one();   println("one end")
+    println("two");   c_two();   println("two end")
+    println("three"); c_three(); println("three end")
+    println("nodest");c_nodest();println("nodest end")
+    println("live");  c_live();  println("live end")
+    println("done")
+}
+"#),
+        r#"named
+dR101/t101
+  rd1
+dR1/t1
+named end
+one
+dR102/t102
+  rd2
+dR2/t2
+one end
+two
+dR103/t103
+  rd3
+dR3/t3
+two end
+three
+dR104/t104
+  rd4
+dR4/t4
+three end
+nodest
+  rd5
+dR5/t5
+dR105/t105
+nodest end
+live
+dR106/t106
+  rd6
+dR6/t6
+  g6
+live end
+done
+"#
+    );
+}
+
+/// B-2026-09-04-8, `Option` half — the same depth defect on the other built-in
+/// payload. Distinct leaf names per cell, for the reason the `Result` twin
+/// spells out.
+#[test]
+fn test_tuple_destructure_option_payload_survives_every_depth() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct WrapO { inner: (R, Option[R]) }
+struct OuterO { h: WrapO }
+
+fn c_named() { let t: (R, Option[R]) = (mk(1), Option.Some(mk(101))); let (a1, b1) = t; println(f"  rd{a1.id}") }
+fn c_one()   { let w = WrapO { inner: (mk(2), Option.Some(mk(102))) }; let (a2, b2) = w.inner; println(f"  rd{a2.id}") }
+fn c_two()   { let g = OuterO { h: WrapO { inner: (mk(3), Option.Some(mk(103))) } }; let (a3, b3) = g.h.inner; println(f"  rd{a3.id}") }
+
+fn main() {
+    println("named"); c_named(); println("named end")
+    println("one");   c_one();   println("one end")
+    println("two");   c_two();   println("two end")
+    println("done")
+}
+"#),
+        r#"named
+dR101/t101
+  rd1
+dR1/t1
+named end
+one
+dR102/t102
+  rd2
+dR2/t2
+one end
+two
+dR103/t103
+  rd3
+dR3/t3
+two end
+done
+"#
+    );
+}
+
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_projection_source_tuple_destructure_is_a_view`, pinned to the same
 /// string.

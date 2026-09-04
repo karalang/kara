@@ -5503,6 +5503,32 @@ impl<'a> super::Interpreter<'a> {
     /// B-2026-09-03-15 — the struct NAME a place expression's current value
     /// carries, for [`Self::destructure_source_elem_tes`]'s field-chain arm.
     fn eval_place_type_name(&self, e: &Expr) -> Option<String> {
+        // B-2026-09-04-8 — resolve a CHAIN, not just a root. One hop was all
+        // this answered, so `let (a, b) = g.h.inner;` asked it about `g.h`,
+        // got `None`, and `destructure_source_elem_tes` bailed before naming a
+        // single leaf — leaving the tuple's `Option`/`Result` element
+        // unregistered and its payload body unrun, against all three compiled
+        // surfaces which run it. `g.inner` was correct, which is what made the
+        // gap look like a projection/local question rather than a DEPTH one.
+        //
+        // The root is resolved from the VALUE (a binding's runtime struct
+        // name); each further hop from the DECLARATION, because that is what
+        // the caller does with the answer anyway — it looks the name up in
+        // `program.items` to read the field's tuple type. An unresolvable hop
+        // still answers `None`, so an unnameable chain declines exactly as
+        // before rather than guessing.
+        if let ExprKind::FieldAccess { object, field } = &e.kind {
+            let owner = self.eval_place_type_name(object)?;
+            let fields = self.program.items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == owner => Some(&s.fields),
+                _ => None,
+            })?;
+            let fte = fields.iter().find(|f| &f.name == field).map(|f| &f.ty)?;
+            return match &fte.kind {
+                TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            };
+        }
         let name = match &e.kind {
             ExprKind::Identifier(n) => n.as_str(),
             ExprKind::SelfValue => "self",
