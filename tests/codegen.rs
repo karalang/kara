@@ -15938,6 +15938,107 @@ done
         );
     }
 
+    /// B-2026-09-03-21 — AN `Option` ELEMENT OF A TUPLE **TEMP-LITERAL ARGUMENT**
+    /// MUST NOT LOSE ITS PAYLOAD'S `Drop` BODY (OR ITS HEAP).
+    ///
+    /// `takes((mk(1), Option.Some(mk(11))))` ran `dR11` under `--interp` and nothing
+    /// on jit / build / AUTO_PAR=0, and leaked the payload's heap besides — 22 B over
+    /// the filing row's probe, which reported only the lost body.
+    ///
+    /// THE CAUSE IS AN ERASED ELEMENT TYPE, not the by-value tuple param the row
+    /// blamed. `infer_arg_elem_te` resolved a variant-ctor element through the
+    /// namers, which yield the bare head `Option` with `generic_args: None`, and
+    /// every optres consumer — `emit_optres_payload_user_drop_bodies_fn` for the
+    /// body, `tuple_elem_optres_drop_ok` for the memory — reads `generic_args` and
+    /// declines outright without them. `enumtemp` is the control that isolates it:
+    /// a USER-ENUM element in the identical position was always correct, because its
+    /// walkers key on the NAME, which survives the erasure.
+    ///
+    /// `localarg` and `localonly` are the controls that put the fault on the
+    /// ARGUMENT FORM rather than on the param: the same callee reached from a NAMED
+    /// LOCAL, and the same tuple never passed at all, were both correct throughout.
+    /// That is why the two fixes the filing row records — one in the param prologue,
+    /// one in the shared `emit_tuple_elem_drops` optres leg — could not work: the
+    /// owner is the caller's temp registration.
+    ///
+    /// `nonetemp` pins `Option.None` (nothing to run), `destr` the destructured
+    /// spelling of the same call, `errtemp` a `Result` whose payload is a scalar.
+    ///
+    /// A `Result.Ok` element carrying a Drop payload is NOT covered here and is
+    /// filed separately: enriching its type the same way makes the body run but
+    /// LEAKS the boxed payload's 56-byte envelope, measured — a straight trade of a
+    /// lost body for a leak, where the `Option` side is a pure win. Every cell in
+    /// this fixture is valgrind-clean ("All heap blocks were freed").
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_optres_ctor_tuple_temp_arg_keeps_its_payload_drop_body`, pinned to the
+    /// same string.
+    #[test]
+    fn e2e_optres_ctor_tuple_temp_arg_keeps_its_payload_drop_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+enum W { A(R), N }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+
+fn optArg(t: (R, Option[R]))       -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn resArg(t: (R, Result[R, i64]))  -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn enumArg(t: (R, W))              -> i64 { println(f"  rd{t.0.id}"); return 0; }
+fn destr(t: (R, Option[R]))        -> i64 { let (r, o) = t; println(f"  rd{r.id}"); return 0; }
+
+fn main() {
+    println("opttemp");  let _ = optArg((mk(1), Option.Some(mk(11))));  println("opttemp end")
+    println("errtemp");  let _ = resArg((mk(3), Result.Err(7)));        println("errtemp end")
+    println("enumtemp"); let _ = enumArg((mk(4), W.A(mk(44))));         println("enumtemp end")
+    println("destr");    let _ = destr((mk(5), Option.Some(mk(55))));   println("destr end")
+    println("nonetemp"); let _ = optArg((mk(6), Option.None));          println("nonetemp end")
+    println("localarg"); let a = (mk(7), Option.Some(mk(77))); let _ = optArg(a); println("localarg end")
+    println("localonly"); let b = (mk(8), Option.Some(mk(88))); println(f"  rd{b.0.id}"); println("localonly end")
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"opttemp
+  rd1
+dR1/t1/1
+dR11/t11/1
+opttemp end
+errtemp
+  rd3
+dR3/t3/1
+errtemp end
+enumtemp
+  rd4
+dR4/t4/1
+dR44/t44/1
+enumtemp end
+destr
+  rd5
+dR5/t5/1
+dR55/t55/1
+destr end
+nonetemp
+  rd6
+nonetemp end
+localarg
+  rd7
+dR7/t7/1
+dR77/t77/1
+localarg end
+localonly
+  rd8
+dR8/t8/1
+dR88/t88/1
+localonly end
+done
+"#
+        );
+    }
+
     /// B-2026-09-03-12 — a tuple bound out of a PLACE (`let x = h.pe;`) records its
     /// element types, so the binding runs the element's `Drop` body and can be
     /// projected.

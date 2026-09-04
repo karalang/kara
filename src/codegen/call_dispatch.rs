@@ -5701,6 +5701,78 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
             }
         }
+        // B-2026-09-03-21 — an `Option`/`Result` VARIANT-CTOR element
+        // (`takes((mk(1), Option.Some(mk(11))))`). The namers below resolve it to
+        // the bare head `Option`, and EVERY consumer of an optres element type
+        // needs the PAYLOAD: `emit_optres_payload_user_drop_bodies_fn` and
+        // `tuple_elem_optres_drop_ok` both read `generic_args` and decline
+        // outright without them. So the erasure cost BOTH halves at once — the
+        // payload's `Drop` body never ran on any compiled surface AND its heap
+        // was never freed (22 B over the row's probe, which reported only the
+        // body). The USER-ENUM element in the same position was always correct
+        // because its walkers are keyed by NAME, which survives the erasure;
+        // that asymmetry is the whole bug.
+        //
+        // Same erasure the struct-literal arm above fixes for `Box2[R] { .. }`,
+        // one expression form further along, and the payload type is recovered
+        // the same way: from the ctor's ARGUMENT, through this derivation, so a
+        // `mk(11)` element resolves via the fn-return arm below.
+        //
+        // The arm NOT constructed stays an EMPTY path. It is genuinely unknown
+        // from the expression — `Result.Ok(x)` says nothing about `E` — and
+        // leaving it empty is fail-closed in the same way as every arm here: it
+        // mangles to the empty string, so the walker's own payload filter drops
+        // it and no body or free is emitted for a type nothing here knows. It
+        // also rides in the emitted symbol name, so a `Result[R, ]` walker can
+        // never alias the `Result[R, i64]` one a fully-known spelling produces.
+        if let ExprKind::Call { callee, args } = &e.kind {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 {
+                    let unknown = || TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![String::new()],
+                            generic_args: None,
+                            span: e.span,
+                        }),
+                        span: e.span,
+                    };
+                    let payload = || {
+                        args.first()
+                            .map(|a| self.infer_arg_elem_te(&a.value))
+                            .unwrap_or_else(unknown)
+                    };
+                    // OPTION ONLY, and the restriction is MEASURED rather than
+                    // cautious. Filling `Result` in the same way makes its
+                    // payload body run — and LEAKS 56 B, the boxed payload's
+                    // envelope, on `resArg((mk(2), Result.Ok(mk(22))))`. The
+                    // two heads are not symmetric here: pre-fix the `Result`
+                    // element was memory-CLEAN (0 bytes at exit) and lost only
+                    // the body, so some other owner already frees its box,
+                    // whereas the `Option` element leaked its payload heap as
+                    // well. Enriching the type hands the element to this leg's
+                    // `vec_elem_agg_drop_for_type_expr`, which frees payload
+                    // CONTENTS but not the envelope — a straight trade of a lost
+                    // body for a leak on the `Result` side, and a pure win on
+                    // the `Option` side. Filed as its own row rather than
+                    // shipped: closing it needs the box-aware drop, not a wider
+                    // predicate here.
+                    let filled = match (segments[0].as_str(), segments[1].as_str()) {
+                        ("Option", "Some") => Some(vec![crate::ast::GenericArg::Type(payload())]),
+                        _ => None,
+                    };
+                    if let Some(generic_args) = filled {
+                        return TypeExpr {
+                            kind: TypeKind::Path(crate::ast::PathExpr {
+                                segments: vec![segments[0].clone()],
+                                generic_args: Some(generic_args),
+                                span: e.span,
+                            }),
+                            span: e.span,
+                        };
+                    }
+                }
+            }
+        }
         // B-2026-09-02-35 — a CALL element (`take((mkv(), 0))`). None of the
         // namers below resolves a call's RESULT, so such an element came back an
         // empty path, which reads as no-drop everywhere downstream. The tuple
