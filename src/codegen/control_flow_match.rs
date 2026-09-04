@@ -1031,6 +1031,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         arm.guard.as_ref(),
                     ) {
                         self.suppress_inline_option_agg_payload_cleanup(scrutinee, &arm.pattern);
+                        // B-2026-09-03-22 — the `Result` peer.
+                        self.suppress_inline_result_agg_payload_cleanup(scrutinee, &arm.pattern);
                     }
                     // B-2026-08-29-2 — retract this binding's LEAF interior
                     // drop when the arm binds the value that drop frees.
@@ -2923,6 +2925,11 @@ impl<'ctx> super::Codegen<'ctx> {
             || self
                 .payload_vars
                 .inline_option_agg_payload_vars
+                .contains(name)
+            // B-2026-09-03-22 — the `Result` peer of the set above.
+            || self
+                .payload_vars
+                .inline_result_agg_payload_vars
                 .contains(name)
     }
 
@@ -11801,10 +11808,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // The zeroing below is shape-blind, so admitting the set is the whole
         // fix: tag 0 is `None`, and the `EnumDrop`'s own guard then skips.
         let in_agg = agg
-            && self
+            && (self
                 .payload_vars
                 .inline_option_agg_payload_vars
-                .contains(name.as_str());
+                .contains(name.as_str())
+                // B-2026-09-03-22 — the `Result` peer, on the same terms: the
+                // destination owns the box after a transfer, so the source's
+                // `EnumDrop` must go. The zeroing below neutralizes it the same
+                // way — the emitted `karac_drop_Result_*` guards on a null box
+                // word, and a zeroed slot has one.
+                || self
+                    .payload_vars
+                    .inline_result_agg_payload_vars
+                    .contains(name.as_str()));
         if !in_option && !in_result && !in_boxed && !in_agg {
             return;
         }
@@ -12412,6 +12428,67 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = self
                 .builder
                 .build_store(tag_ptr, i64_t.const_int(none_tag, false));
+        }
+    }
+
+    /// B-2026-09-03-22 — the `Result` peer of
+    /// [`Self::suppress_inline_option_agg_payload_cleanup`]: an arm that binds
+    /// the payload OUT of a `Result` leaf takes ownership of it, so the leaf's
+    /// scope-exit `EnumDrop` must stop freeing the same box.
+    ///
+    /// NEUTRALIZES DIFFERENTLY FROM THE `Option` TWIN, and that is why the two
+    /// membership sets are kept apart. `Option` stores its empty tag (`None`)
+    /// and the drop switch skips; `Result` has no empty tag — `Ok` and `Err`
+    /// both name a live variant — so this zeroes the PAYLOAD area instead and
+    /// relies on `emit_result_drop_fn`'s own null-box guard, which is the same
+    /// mechanism `zero_tuple_elem_cap_at`'s `Result` arm has used since
+    /// B-2026-08-03-3. An INLINE payload is neutralized by the same store,
+    /// since its `cap` word goes to zero with everything else.
+    ///
+    /// STATIC, like every compile-time retraction here: one consuming arm
+    /// disarms every path. A non-taken arm's residual is a leak rather than a
+    /// double free — the safe side, and the convention the `Option` twin and
+    /// the `match`-payload retractions already follow.
+    pub(super) fn suppress_inline_result_agg_payload_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self
+            .payload_vars
+            .inline_result_agg_payload_vars
+            .contains(name.as_str())
+        {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if !matches!(path.last().map(|s| s.as_str()), Some("Ok") | Some("Err")) {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
+            return;
+        };
+        let Some(payload_ty) = layout.llvm_type.get_field_type_at_index(1) else {
+            return;
+        };
+        if let Ok(payload_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 1, "resagg.suppress.payload")
+        {
+            let _ = self
+                .builder
+                .build_store(payload_ptr, payload_ty.const_zero());
         }
     }
 

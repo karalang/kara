@@ -7454,6 +7454,83 @@ impl<'ctx> super::Codegen<'ctx> {
             .insert(var_name.to_string());
     }
 
+    /// B-2026-09-03-22 — the `Result[O, E]` peer of
+    /// [`Self::track_inline_option_agg_payload_var`], and the piece whose
+    /// absence made that row's leaf undecidable: the body half generalized
+    /// (`emit_optres_payload_user_drop_bodies_fn` has a `Result` arm) and the
+    /// cap-zero half generalized (B-2026-08-03-3), but nothing owned the
+    /// MEMORY, so taking the leaf ran the due body and leaked 272 bytes.
+    ///
+    /// Queues the tag-dispatching `karac_drop_Result_<ok>_<err>` — which
+    /// `emit_result_drop_fn` already emits, including the null-box guard on a
+    /// heap-boxed side — as an `EnumDrop` against the slot.
+    ///
+    /// ADMITS THE TYPE IF EITHER SIDE CARRIES A DROP-BEARING PAYLOAD, not both:
+    /// `Result[R, String]` has a boxed struct on `Ok` and an inline buffer on
+    /// `Err`, and the emitted drop dispatches on the live tag, so gating on
+    /// both would decline exactly the common shape. The `Err`-side spelling
+    /// (`Result[String, R]`) is the mirror and reaches the same emitter.
+    ///
+    /// Recorded in `inline_result_agg_payload_vars` rather than the `Option`
+    /// set — see that field's doc for why the two neutralizations cannot share
+    /// one membership test.
+    pub(super) fn track_inline_result_agg_payload_var(
+        &mut self,
+        var_name: &str,
+        result_slot: PointerValue<'ctx>,
+        result_te: &TypeExpr,
+    ) {
+        let TypeKind::Path(p) = &result_te.kind else {
+            return;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return;
+        }
+        let args = p.generic_args.as_ref();
+        let mut it = args.into_iter().flatten();
+        let (Some(GenericArg::Type(ok_te)), Some(GenericArg::Type(err_te))) =
+            (it.next(), it.next())
+        else {
+            return;
+        };
+        if !self.option_payload_struct_or_enum_drop_ok(ok_te)
+            && !self.option_payload_struct_or_enum_drop_ok(err_te)
+        {
+            return;
+        }
+        let (ok_te, err_te) = (ok_te.clone(), err_te.clone());
+        let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
+            return;
+        };
+        let result_ty = layout.llvm_type;
+        // Nested-block let: an untaken path leaves the tag `undef`, which could
+        // spuriously match a live variant; zero the slot in the entry block
+        // (mirrors the `Option` tracker). `Result` has no empty tag, so the
+        // zero lands on `Ok` — harmless, because the payload words are zeroed
+        // with it and the emitted drop's null-box guard then skips.
+        let is_nested = self
+            .current_fn
+            .and_then(|f| f.get_first_basic_block())
+            .zip(self.builder.get_insert_block())
+            .map(|(entry, cur)| entry != cur)
+            .unwrap_or(false);
+        if is_nested {
+            self.zero_init_option_slot_in_entry_block(result_slot, result_ty);
+        }
+        let Some(drop_fn) = self.emit_result_drop_fn(&ok_te, &err_te) else {
+            return;
+        };
+        if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::EnumDrop {
+                enum_alloca: result_slot,
+                drop_fn,
+            });
+        }
+        self.payload_vars
+            .inline_result_agg_payload_vars
+            .insert(var_name.to_string());
+    }
+
     /// Free a discarded inline-heap `Option` temporary in statement position
     /// (`v.pop();`, `make_opt();`). Materializes the value into a slot and
     /// queues a `FreeInlineOptionPayload` keyed on the instantiated type from

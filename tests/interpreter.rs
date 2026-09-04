@@ -35034,9 +35034,10 @@ done
 /// `PatternKind::Binding` alone, so a destructure's leaves never reached a
 /// registration moment and their payload bodies ran nowhere.
 ///
-/// `annres` pins the KNOWN GAP rather than a fix: a `Result` leaf still runs no
-/// payload body, on every surface, because a boxed `Result` payload has no
-/// memory owner to hand it to. Filed as its own row.
+/// `annres` NO LONGER PINS A GAP — B-2026-09-03-22 closed it. The cell used to
+/// assert that a `Result` leaf ran no payload body on any surface, because a
+/// boxed `Result` payload had no memory owner to hand it to; it has one now, so
+/// both backends run the body and `dR77/t77` is the line that changed.
 ///
 /// THIS BUG COULD HIDE ITSELF, which is why `stale` is a cell. The table is
 /// keyed by variable NAME and never cleared per function, so an earlier
@@ -35108,6 +35109,7 @@ none
   rd6
 dR6/t6
 annres
+dR77/t77
   rd7
 dR7/t7
 stale
@@ -58491,6 +58493,131 @@ wildcd
 dR31:s31:2
 dR131:s131:2
   w
+done
+"#
+    );
+}
+
+/// B-2026-09-03-22 — the INTERPRETER half of
+/// `e2e_result_agg_destructure_leaf_owns_its_payload_body`, pinned to the same
+/// string.
+///
+/// NOT A NO-OP HERE. Eight of these lines were missing on this side too: the
+/// defect was agreed-wrong rather than a split, because
+/// `record_destructure_optres_payload_tes` filtered its leaves to `Option` for
+/// exactly as long as the compiled side declined `Result` — deliberately, since
+/// running the body here alone would have been the divergence the family's
+/// rules forbid. Both filters moved together, so this file is half the
+/// regression rather than the invariant it usually is.
+///
+/// The two cells this side was ALREADY right about — `consok` and `conserr`,
+/// where an arm binds the payload out — are the ones the compiled backends lost
+/// separately.
+#[test]
+fn test_result_agg_destructure_leaf_owns_its_payload_body() {
+    let out = run(r#"struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct W { p: Result[R, String] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn eat(xa: Result[R, String]) -> i64 { match xa { Result.Ok(ra) => { ra.id }, Result.Err(sa) => { 0 } } }
+fn give() -> Result[R, String] { let (_, ob) = (mk(20), Result[R, String].Ok(mk(120))); return ob }
+
+fn annres()  { let tc: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77)));
+               let (rc, oc) = tc; println(f"  a{rc.id}") }
+fn unann()   { let td = (mk(1), Result[R, String].Ok(mk(11))); let (rd, od) = td; println(f"  u{rd.id}") }
+fn fresh()   { let (re, oe) = (mk(3), Result[R, String].Ok(mk(33))); println(f"  h{re.id}") }
+fn errside() { let tf: (R, Result[String, R]) = (mk(5), Result[String, R].Err(mk(55)));
+               let (rf, of) = tf; println(f"  r{rf.id}") }
+fn consok()  { let (_, og) = (mk(22), Result[R, String].Ok(mk(122)));
+               match og { Result.Ok(rg) => { println(f"  k{rg.id}") }, Result.Err(sg) => { println("  e") } } }
+fn conserr() { let (_, oh) = (mk(24), Result[String, R].Err(mk(124)));
+               match oh { Result.Ok(sh) => { println("  o") }, Result.Err(rh) => { println(f"  c{rh.id}") } } }
+fn moved()   { let (_, oi) = (mk(26), Result[R, String].Ok(mk(126))); let qi = oi; println("  m") }
+fn ret()     { let zj = give(); println("  t") }
+fn arg()     { let (_, ok2) = (mk(28), Result[R, String].Ok(mk(128))); println(f"  g{eat(ok2)}") }
+fn field()   { let (_, ol) = (mk(30), Result[R, String].Ok(mk(130))); let wl = W { p: ol }; println("  f") }
+fn loopr()   { let mut i = 0; while i < 2 { let (_, om) = (mk(32), Result[R, String].Ok(mk(132))); i = i + 1; } println("  l") }
+fn nested()  { let ((_, on), nn) = ((mk(36), Result[R, String].Ok(mk(136))), 4); println(f"  n{nn}") }
+fn wildres() { let (ro, _) = (mk(15), Result[R, String].Ok(mk(115))); println(f"  w{ro.id}") }
+fn strres()  { let (rp, op) = (mk(17), Result[String, String].Ok(f"p17")); println(f"  s{rp.id}") }
+
+fn main() {
+  println("annres");  annres()
+  println("unann");   unann()
+  println("fresh");   fresh()
+  println("errside"); errside()
+  println("consok");  consok()
+  println("conserr"); conserr()
+  println("moved");   moved()
+  println("ret");     ret()
+  println("arg");     arg()
+  println("field");   field()
+  println("loopr");   loopr()
+  println("nested");  nested()
+  println("wildres"); wildres()
+  println("strres");  strres()
+  println("done")
+}
+"#);
+    assert_eq!(
+        out,
+        r#"annres
+dR77:s77:2
+  a7
+dR7:s7:2
+unann
+dR11:s11:2
+  u1
+dR1:s1:2
+fresh
+dR33:s33:2
+  h3
+dR3:s3:2
+errside
+dR55:s55:2
+  r5
+dR5:s5:2
+consok
+dR22:s22:2
+  k122
+dR122:s122:2
+conserr
+dR24:s24:2
+  c124
+dR124:s124:2
+moved
+dR26:s26:2
+dR126:s126:2
+  m
+ret
+dR20:s20:2
+dR120:s120:2
+  t
+arg
+dR28:s28:2
+  g128
+dR128:s128:2
+field
+dR30:s30:2
+dR130:s130:2
+  f
+loopr
+dR32:s32:2
+dR132:s132:2
+dR32:s32:2
+dR132:s132:2
+  l
+nested
+dR36:s36:2
+dR136:s136:2
+  n4
+wildres
+dR115:s115:2
+  w15
+dR15:s15:2
+strres
+  s17
+dR17:s17:2
 done
 "#
     );

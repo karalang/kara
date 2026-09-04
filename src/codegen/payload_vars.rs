@@ -79,6 +79,21 @@ pub(crate) struct PayloadVars<'ctx> {
     /// sets the source tag to `None` (like the `Option[Map]` case — no `cap`
     /// word) so the scope-exit drop skips and the bound payload frees it once.
     pub(crate) inline_option_agg_payload_vars: std::collections::HashSet<String>,
+    /// B-2026-09-03-22 — the `Result[O, E]` peer of
+    /// [`Self::inline_option_agg_payload_vars`]. Names of `Result` bindings
+    /// whose `Ok`/`Err` payload is a NON-shared user struct/enum (or a
+    /// heap-carrying tuple) the recursive drop family frees; registration
+    /// queues a `CleanupAction::EnumDrop` running the tag-dispatching
+    /// `karac_drop_Result_<ok>_<err>` on the slot.
+    ///
+    /// KEPT SEPARATE from the `Option` set rather than merged into it, because
+    /// the two neutralize DIFFERENTLY when an arm consumes the payload:
+    /// `Option` has an empty tag to store (`None`), and `Result` does not —
+    /// `Ok` and `Err` both name a live variant — so its suppressor zeroes the
+    /// payload WORDS and relies on the drop fn's own null-box guard. Merging
+    /// the sets would make one membership test answer for two neutralizations,
+    /// which is exactly the confusion B-2026-09-03-33 measured one type over.
+    pub(crate) inline_result_agg_payload_vars: std::collections::HashSet<String>,
     /// Names of `Option`/`Result` bindings whose wide payload was heap-BOXED
     /// (`track_boxed_enum_var` registered a `CleanupAction::BoxedEnumDrop` —
     /// `Option[Block]` and other `Option[Wide]` / `Result[Wide,_]`). The

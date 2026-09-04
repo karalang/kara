@@ -5563,7 +5563,14 @@ impl<'a> super::Interpreter<'a> {
         // `struct_field_type_exprs`, which is why the pattern's own path is the
         // first place looked and the runtime value's struct name only the
         // fallback for a pathless pattern.
-        let leaf_tes: Vec<(String, TypeExpr)> = match &pattern.kind {
+        // B-2026-09-03-22 — the third element says whether a `Result` head is
+        // admissible for this arm, and it differs by arm because CODEGEN differs
+        // by arm. The TUPLE leaf takes `Result` since that row; the STRUCT-FIELD
+        // leaf still declines it (B-2026-09-03-33's deferral, and B-2026-09-04-1
+        // measured against this fix and still split), so admitting it here would
+        // run a body the compiled backends do not — the divergence this family's
+        // rules forbid, and the one two existing fixtures pin as agreed-absent.
+        let leaf_tes: Vec<(String, TypeExpr, bool)> = match &pattern.kind {
             PatternKind::Tuple(pats) => {
                 let Some(elem_tes) = self.destructure_source_elem_tes(ty, value) else {
                     return;
@@ -5587,14 +5594,16 @@ impl<'a> super::Interpreter<'a> {
                 fn collect_leaves(
                     pats: &[Pattern],
                     tes: &[Option<TypeExpr>],
-                    out: &mut Vec<(String, TypeExpr)>,
+                    out: &mut Vec<(String, TypeExpr, bool)>,
                 ) {
                     for (idx, pat) in pats.iter().enumerate() {
                         let Some(Some(te)) = tes.get(idx) else {
                             continue;
                         };
                         match &pat.kind {
-                            PatternKind::Binding(leaf) => out.push((leaf.clone(), te.clone())),
+                            PatternKind::Binding(leaf) => {
+                                out.push((leaf.clone(), te.clone(), true))
+                            }
                             PatternKind::Tuple(inner) => {
                                 if let TypeKind::Tuple(inner_tes) = &te.kind {
                                     let inner_tes: Vec<Option<TypeExpr>> =
@@ -5641,24 +5650,25 @@ impl<'a> super::Interpreter<'a> {
                             .iter()
                             .find(|f| f.name == fp.name)
                             .map(|f| f.ty.clone())?;
-                        Some((leaf, fte))
+                        Some((leaf, fte, false))
                     })
                     .collect()
             }
             _ => return,
         };
-        for (leaf, te) in leaf_tes {
+        for (leaf, te, allow_result) in leaf_tes {
             let TypeKind::Path(p) = &te.kind else {
                 continue;
             };
-            // `Option` ONLY — codegen takes the `Option` leaf and leaves the
-            // `Result` one alone, because a boxed `Result` payload has no
-            // memory owner to hand it to (see the leaf arm in
-            // `place_source_tuple_leaf_cleanups` for the ASAN measurement).
-            // Registering `Result` here alone would run a body the compiled
-            // backends do not, which is the divergence this family's rules
-            // forbid; the `Result` spelling is filed as its own row.
-            if p.segments.last().map(String::as_str) != Some("Option") {
+            // B-2026-09-03-22 — `Result` joins `Option` here, in lockstep with
+            // codegen's leaf arm. This filter was `Option`-only for exactly as
+            // long as the compiled side was: a boxed `Result` payload had no
+            // memory owner, so taking the leaf there ran the due body and
+            // leaked, and running it HERE alone would have been the divergence
+            // this family's rules forbid. `track_inline_result_agg_payload_var`
+            // gives the compiled side its owner, so both sides move together.
+            let head = p.segments.last().map(String::as_str);
+            if !(head == Some("Option") || (allow_result && head == Some("Result"))) {
                 continue;
             }
             let runs = p.generic_args.as_ref().is_some_and(|args| {

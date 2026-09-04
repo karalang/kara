@@ -13177,14 +13177,16 @@ done
     /// lost the body on the compiled side, because an unregistered leaf has
     /// nothing for the arm to consume.
     ///
-    /// `annres` pins the KNOWN GAP rather than a fix: a `Result` leaf still runs
-    /// no payload body, on every surface. The body half generalizes, but the
-    /// memory half does not — `track_inline_option_agg_payload_var` has no
-    /// `Result` peer and `track_inline_result_payload_var` self-skips a boxed
-    /// payload — so taking the leaf gave it the body and leaked 272 bytes in 9
-    /// allocations (ASAN-clean before). The cell is here so that gap is pinned
-    /// and a future fix has to change it deliberately; it is filed as its own
-    /// row.
+    /// `annres` NO LONGER PINS A GAP — B-2026-09-03-22 closed it, and this line
+    /// records the deliberate change the old pin demanded. The cell used to
+    /// assert that a `Result` leaf ran NO payload body on any surface, because
+    /// the body half generalized while the memory half did not: taking the leaf
+    /// gave it the body and leaked 272 bytes in 9 allocations.
+    /// `track_inline_result_agg_payload_var` is the missing owner, and with it
+    /// the leaf takes the body on every surface — `dR77/t77` is the line that
+    /// changed here. The consuming-arm and whole-move interactions it needs are
+    /// pinned in `e2e_result_agg_destructure_leaf_owns_its_payload_body` and its
+    /// ASAN sibling rather than in this fixture.
     ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_tuple_destructure_optres_leaf_owns_its_payload_body`, pinned to the
@@ -13250,6 +13252,7 @@ none
   rd6
 dR6/t6
 annres
+dR77/t77
   rd7
 dR7/t7
 done
@@ -13471,6 +13474,162 @@ retained
 dR4:s4
   g104
 dR104:s104
+done
+"#
+            )
+        );
+    }
+
+    /// B-2026-09-03-22 — A `Result[O, E]` DESTRUCTURE LEAF OWNS ITS PAYLOAD'S
+    /// `Drop` BODY.
+    ///
+    /// The row split out of B-2026-09-03-15 when its `Option` half landed: the
+    /// BODY half already generalized
+    /// (`emit_optres_payload_user_drop_bodies_fn` has a `Result` arm) and the
+    /// cap-zero half already did (B-2026-08-03-3), but the MEMORY half had no
+    /// peer — `track_inline_option_agg_payload_var` is `Option`-only and
+    /// `track_inline_result_payload_var` self-skips a heap-boxed payload — so
+    /// taking the leaf ran the due body and leaked 272 bytes in 9 allocations.
+    /// `track_inline_result_agg_payload_var` is that peer.
+    ///
+    /// IT WAS AGREED-WRONG, NOT SPLIT, on four of these cells, which is why no
+    /// A/B gate saw it and why `annres` was pinned at the wrong output in
+    /// `e2e_tuple_destructure_optres_leaf_owns_its_payload_body` for a fix to
+    /// change deliberately. That line is changed there; this fixture is the
+    /// positive pin.
+    ///
+    /// TEN LINES WERE LOST ON THE COMPILED BACKENDS and eight on the
+    /// interpreter, against the one cell the row recorded. `annres` is the
+    /// row's own; `unann` drops the binding annotation, `fresh` destructures
+    /// the literal in place, `errside` puts the payload on `Err`, `loopr` runs
+    /// it twice and `nested` reaches the leaf through a nested pattern — all
+    /// eight shared by both backends. `consok` and `conserr` are the extra two
+    /// the compiled side lost: an arm that BINDS the payload out, where the
+    /// interpreter was already right.
+    ///
+    /// THE CONSUMING AND MOVING CELLS ARE THE POINT OF THE MEMORY HALF, not
+    /// decoration. `Result` has no empty tag to store — `Ok` and `Err` both
+    /// name a live variant — so its consume suppressor zeroes the PAYLOAD area
+    /// and leans on the emitted drop's null-box guard, where the `Option` twin
+    /// stores `None`. `moved`, `ret` and `field` exercise the transfer disarm
+    /// on the same set, and `arg` is the counter-case that must NOT be
+    /// disarmed. Balance for all of them is asserted in
+    /// `asan_result_agg_destructure_leaf_is_balanced`; the transcript here
+    /// cannot tell a handed-off box from a leaked one.
+    ///
+    /// `wildres` (the wildcard leaf B-2026-09-03-39 fixed) and `strres`
+    /// (`Result[String, String]`, no user `Drop`, nothing owed) are the
+    /// controls for a body starting where none is due.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_result_agg_destructure_leaf_owns_its_payload_body`, pinned to the
+    /// same string.
+    #[test]
+    fn e2e_result_agg_destructure_leaf_owns_its_payload_body() {
+        let src = r#"struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct W { p: Result[R, String] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn eat(xa: Result[R, String]) -> i64 { match xa { Result.Ok(ra) => { ra.id }, Result.Err(sa) => { 0 } } }
+fn give() -> Result[R, String] { let (_, ob) = (mk(20), Result[R, String].Ok(mk(120))); return ob }
+
+fn annres()  { let tc: (R, Result[R, String]) = (mk(7), Result[R, String].Ok(mk(77)));
+               let (rc, oc) = tc; println(f"  a{rc.id}") }
+fn unann()   { let td = (mk(1), Result[R, String].Ok(mk(11))); let (rd, od) = td; println(f"  u{rd.id}") }
+fn fresh()   { let (re, oe) = (mk(3), Result[R, String].Ok(mk(33))); println(f"  h{re.id}") }
+fn errside() { let tf: (R, Result[String, R]) = (mk(5), Result[String, R].Err(mk(55)));
+               let (rf, of) = tf; println(f"  r{rf.id}") }
+fn consok()  { let (_, og) = (mk(22), Result[R, String].Ok(mk(122)));
+               match og { Result.Ok(rg) => { println(f"  k{rg.id}") }, Result.Err(sg) => { println("  e") } } }
+fn conserr() { let (_, oh) = (mk(24), Result[String, R].Err(mk(124)));
+               match oh { Result.Ok(sh) => { println("  o") }, Result.Err(rh) => { println(f"  c{rh.id}") } } }
+fn moved()   { let (_, oi) = (mk(26), Result[R, String].Ok(mk(126))); let qi = oi; println("  m") }
+fn ret()     { let zj = give(); println("  t") }
+fn arg()     { let (_, ok2) = (mk(28), Result[R, String].Ok(mk(128))); println(f"  g{eat(ok2)}") }
+fn field()   { let (_, ol) = (mk(30), Result[R, String].Ok(mk(130))); let wl = W { p: ol }; println("  f") }
+fn loopr()   { let mut i = 0; while i < 2 { let (_, om) = (mk(32), Result[R, String].Ok(mk(132))); i = i + 1; } println("  l") }
+fn nested()  { let ((_, on), nn) = ((mk(36), Result[R, String].Ok(mk(136))), 4); println(f"  n{nn}") }
+fn wildres() { let (ro, _) = (mk(15), Result[R, String].Ok(mk(115))); println(f"  w{ro.id}") }
+fn strres()  { let (rp, op) = (mk(17), Result[String, String].Ok(f"p17")); println(f"  s{rp.id}") }
+
+fn main() {
+  println("annres");  annres()
+  println("unann");   unann()
+  println("fresh");   fresh()
+  println("errside"); errside()
+  println("consok");  consok()
+  println("conserr"); conserr()
+  println("moved");   moved()
+  println("ret");     ret()
+  println("arg");     arg()
+  println("field");   field()
+  println("loopr");   loopr()
+  println("nested");  nested()
+  println("wildres"); wildres()
+  println("strres");  strres()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"annres
+dR77:s77:2
+  a7
+dR7:s7:2
+unann
+dR11:s11:2
+  u1
+dR1:s1:2
+fresh
+dR33:s33:2
+  h3
+dR3:s3:2
+errside
+dR55:s55:2
+  r5
+dR5:s5:2
+consok
+dR22:s22:2
+  k122
+dR122:s122:2
+conserr
+dR24:s24:2
+  c124
+dR124:s124:2
+moved
+dR26:s26:2
+dR126:s126:2
+  m
+ret
+dR20:s20:2
+dR120:s120:2
+  t
+arg
+dR28:s28:2
+  g128
+dR128:s128:2
+field
+dR30:s30:2
+dR130:s130:2
+  f
+loopr
+dR32:s32:2
+dR132:s132:2
+dR32:s32:2
+dR132:s132:2
+  l
+nested
+dR36:s36:2
+dR136:s136:2
+  n4
+wildres
+dR115:s115:2
+  w15
+dR15:s15:2
+strres
+  s17
+dR17:s17:2
 done
 "#
             )

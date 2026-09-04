@@ -80,6 +80,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     inline_result_payload_vars: bool,
     inline_option_map_payload_vars: bool,
     inline_option_agg_payload_vars: bool,
+    inline_result_agg_payload_vars: bool,
     boxed_enum_payload_vars: bool,
     /// B-2026-08-04-2 — the boxed-payload VIEW record, snapshotted with the
     /// rest of the per-arm var environment so one arm's view cannot leak into
@@ -128,6 +129,10 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_option_agg_payload_vars: self
                 .payload_vars
                 .inline_option_agg_payload_vars
+                .remove(name),
+            inline_result_agg_payload_vars: self
+                .payload_vars
+                .inline_result_agg_payload_vars
                 .remove(name),
             boxed_enum_payload_vars: self.payload_vars.boxed_enum_payload_vars.remove(name),
             boxed_optres_payload_view_vars: self
@@ -245,6 +250,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .inline_option_agg_payload_vars
                 .insert(key.clone());
         }
+        if snap.inline_result_agg_payload_vars {
+            self.payload_vars
+                .inline_result_agg_payload_vars
+                .insert(key.clone());
+        }
         if let Some(v) = snap.boxed_optres_payload_view_vars {
             self.payload_vars
                 .boxed_optres_payload_view_vars
@@ -331,6 +341,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     inline_result_payload_vars: HashSet<String>,
     inline_option_map_payload_vars: HashSet<String>,
     inline_option_agg_payload_vars: HashSet<String>,
+    inline_result_agg_payload_vars: HashSet<String>,
     boxed_enum_payload_vars: HashSet<String>,
     boxed_optres_payload_view_vars: HashMap<String, inkwell::values::PointerValue<'ctx>>,
     rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
@@ -381,6 +392,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 .payload_vars
                 .inline_option_agg_payload_vars
                 .clone(),
+            inline_result_agg_payload_vars: self
+                .payload_vars
+                .inline_result_agg_payload_vars
+                .clone(),
             boxed_enum_payload_vars: self.payload_vars.boxed_enum_payload_vars.clone(),
             boxed_optres_payload_view_vars: self
                 .payload_vars
@@ -428,6 +443,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.inline_result_payload_vars = snap.inline_result_payload_vars;
         self.payload_vars.inline_option_map_payload_vars = snap.inline_option_map_payload_vars;
         self.payload_vars.inline_option_agg_payload_vars = snap.inline_option_agg_payload_vars;
+        self.payload_vars.inline_result_agg_payload_vars = snap.inline_result_agg_payload_vars;
         self.payload_vars.boxed_enum_payload_vars = snap.boxed_enum_payload_vars;
         self.payload_vars.boxed_optres_payload_view_vars = snap.boxed_optres_payload_view_vars;
         self.drop_rc.rc_fallback_heap_types = snap.rc_fallback_heap_types;

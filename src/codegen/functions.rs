@@ -1540,6 +1540,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();
         self.payload_vars.inline_option_agg_payload_vars.clear();
+        self.payload_vars.inline_result_agg_payload_vars.clear();
         // B-2026-09-04-14 — the RETAINED-SOURCE veto is per-function state too,
         // and it was the one table of this shape that outlived its body. A
         // read-only `match` arm publishes its scrutinee's NAME here

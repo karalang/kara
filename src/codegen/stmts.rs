@@ -14849,7 +14849,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // traded for a leak is not a fix, so the `Result` spelling keeps its
             // pre-existing behaviour — no body, no leak, agreed on all four
             // surfaces — and is filed as its own row.
-            if leaf_name == "Option" {
+            // B-2026-09-03-22 — `Result` joins `Option` here. That row split
+            // out of B-2026-09-03-15 because the body half already generalized
+            // (`emit_optres_payload_user_drop_bodies_fn` has a `Result` arm) and
+            // the cap-zero half already did (B-2026-08-03-3), while the MEMORY
+            // half had no peer: taking the leaf ran the due body and leaked 272
+            // bytes in 9 allocations. `track_inline_result_agg_payload_var` is
+            // that peer, and the consuming-arm and whole-move interactions it
+            // needs are wired beside the `Option` ones rather than left implicit
+            // — which is what the row asked for before this could land.
+            if leaf_name == "Option" || leaf_name == "Result" {
                 if !owner_runs_bodies {
                     self.register_var_from_type_expr(name, &te);
                     if let Some(slot) = self.variables.get(name.as_str()).copied() {
@@ -14879,10 +14888,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         // this shape (`option_payload_struct_or_enum_drop_ok` →
                         // the same tracker), so the leaf ends up with the same
                         // tag-guarded `EnumDrop` a field leaf gets.
-                        let boxed_payload = Self::option_payload_te(&te)
-                            .is_some_and(|pt| self.option_payload_struct_or_enum_drop_ok(&pt));
+                        //
+                        // B-2026-09-03-22 — the `Result` leg picks the same way
+                        // and through the same predicate, asked of EITHER side:
+                        // `Result[R, String]` boxes its `Ok` payload and keeps
+                        // an inline buffer on `Err`, and the emitted drop
+                        // dispatches on the live tag, so a both-sides gate would
+                        // decline the common shape.
+                        let boxed_payload = if leaf_name == "Result" {
+                            Self::result_payload_tes(&te).is_some_and(|(ok, err)| {
+                                self.option_payload_struct_or_enum_drop_ok(&ok)
+                                    || self.option_payload_struct_or_enum_drop_ok(&err)
+                            })
+                        } else {
+                            Self::option_payload_te(&te)
+                                .is_some_and(|pt| self.option_payload_struct_or_enum_drop_ok(&pt))
+                        };
                         if boxed_payload {
-                            self.track_inline_option_agg_payload_var(name, slot.ptr, &te);
+                            if leaf_name == "Result" {
+                                self.track_inline_result_agg_payload_var(name, slot.ptr, &te);
+                            } else {
+                                self.track_inline_option_agg_payload_var(name, slot.ptr, &te);
+                            }
                         } else {
                             self.track_owned_destructure_field_cleanup(name, slot.ptr, &te);
                         }
@@ -15082,17 +15109,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // tracker's set. -10 taught it, so the owner is safe to
                     // register here now.
                     //
-                    // `Option` only. `Result` has no
-                    // `track_inline_option_agg_payload_var` peer, so admitting
-                    // it would hand the leaf a body with no owner and leak —
-                    // the trade -15 refused on its own arm. That spelling is
-                    // agreed-wrong on all four surfaces today (B-2026-09-03-22)
-                    // rather than split, so it loses nothing by waiting.
+                    // B-2026-09-03-22 — `Result` joins `Option` here, now that
+                    // `track_inline_result_agg_payload_var` exists to own its
+                    // boxed payload. Until it did, admitting `Result` would have
+                    // handed the leaf a body with no owner and leaked, which is
+                    // the trade B-2026-09-03-15 refused on its own arm.
                     let optres_te = elem_tes
                         .and_then(|tes| tes.get(idx))
                         .filter(|te| {
                             matches!(&te.kind, TypeKind::Path(p)
-                                if p.segments.last().map(String::as_str) == Some("Option"))
+                            if matches!(
+                                p.segments.last().map(String::as_str),
+                                Some("Option") | Some("Result")
+                            ))
                         })
                         .cloned();
                     if let Some(slot) = self.variables.get(name.as_str()).copied() {
@@ -15106,7 +15135,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // LIFO, so registering memory first is what
                                 // makes the body run BEFORE the payload it
                                 // reads is freed.
-                                if Self::option_payload_te(&te).is_some_and(|pt| {
+                                let is_result = matches!(&te.kind, TypeKind::Path(p)
+                                    if p.segments.last().map(String::as_str) == Some("Result"));
+                                if is_result {
+                                    if Self::result_payload_tes(&te).is_some_and(|(ok, err)| {
+                                        self.option_payload_struct_or_enum_drop_ok(&ok)
+                                            || self.option_payload_struct_or_enum_drop_ok(&err)
+                                    }) {
+                                        self.track_inline_result_agg_payload_var(
+                                            name, slot.ptr, &te,
+                                        );
+                                    }
+                                } else if Self::option_payload_te(&te).is_some_and(|pt| {
                                     self.option_payload_struct_or_enum_drop_ok(&pt)
                                 }) {
                                     self.track_inline_option_agg_payload_var(name, slot.ptr, &te);
