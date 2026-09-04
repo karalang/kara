@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 365 |
-| run-vs-build | 331 |
+| run-vs-build | 332 |
 | leak | 262 |
 | missing-feature | 194 |
 | double-free | 176 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1442 |
+| codegen | 1443 |
 | interp | 349 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -155,7 +155,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
 | B-2026-09-03-34 | 2026-09-03 | codegen | medium | A STRUCT DESTRUCTURED OUT OF A MATCH ARM'S PAYLOAD BINDING LOSES A PLAIN FIELD'S `Drop` BODY ON THE COMPILED BACKENDS -- `match w { Wrap.W(h) => { let Ho2 { a, b } = h; .. } }` runs `dR152 dR52` under `--interp` and only `dR152` on jit/aot/AUTO_PAR=0; the payload half was fixed by B-2026-09-03-24 and this is the residue, because the place-source body transfer is gated on the source owning a `StructFieldBodies` action and a match payload does not | — |
 | B-2026-09-04-3 | 2026-09-04 | codegen | medium | A `shared struct` HELD IN A TUPLE ELEMENT RUNS NO `Drop` BODY ON ANY OF THE THREE BACKENDS, and MEMORY IS BALANCED -- the box and its `String` are both freed, so there is no leak and no A/B tell, only the missing side effect. One cell isolates it: a PLAIN `Drop` struct in the same tuple position is correct, and the same `shared` type is correct in a struct field, a Vec, an Option and as a bare binding. It is exactly the intersection, and it CORRECTS the compiled-side tuple sub-measurement in B-2026-09-03-9 | — |
-| B-2026-09-04-4 | 2026-09-04 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` STILL RUNS NO BODY ON THE COMPILED BACKENDS -- `--interp` prints `dB`, `karac build` prints nothing, and the non-generic control is correct on both. `drop` is the ONE impl method with no source call site, so the mono pipeline it is deferred to never instantiates it and no `<T>.drop` symbol is ever emitted. The leak half is fixed (B-2026-09-03-35); this needs per-monomorph `<T>.drop$<concrete>` emission, and the erased shortcut is MEASURED to break compilation on three of six probes | — |
 | B-2026-09-04-6 | 2026-09-04 | other | low | design.md CONTRADICTS ITSELF ON `#[derive(Copy)]` WITHOUT `Clone`, and the half that is wrong is the one a reader looking up `Copy` will find -- § Derive says "`Copy` without `Clone` is never a compile error, because the compiler fills in the missing dependency" (line 2970, and this is what karac implements) while § Copy says "Writing `#[derive(Copy)]` without `Clone` is an error" (line 9146) | — |
 | B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
@@ -165,6 +164,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-24 | 2026-09-04 | codegen | medium | A GENERIC FUNCTION'S BY-VALUE STRUCT PARAM LOSES THE TUPLE ELEMENT'S `Drop` BODY WHEN THE ARGUMENT IS A TEMP LITERAL -- `gfn(G[R] { pe: (mk(81), 5), z: 9 })` runs NO body on all three compiled surfaces against a clean `--interp`, while the same callee handed a NAMED LOCAL is correct, and the non-generic twin is correct with either argument form. Memory is balanced (valgrind clean), so only the user body is lost | — |
 | B-2026-09-04-25 | 2026-09-04 | codegen | high | A STRUCT DESTRUCTURED OUT OF A PROJECTION OF A BY-VALUE PARAM RUNS THE `Result` LEAF'S PAYLOAD BODY TWICE ON AOT AND DOUBLE-FREES ON JIT -- `fn takew(w: WrapR) { let HoRes { a, b } = w.inner; match b { Result.Ok(r) => println(r.tag), .. } }` prints `dR101` twice under `karac build` (once due) and dies with glibc's `free(): double free detected in tcache 2` under `karac run`; with the param read again after the match both compiled backends print the body twice around the read. The local-root twin is B-2026-09-04-21, fixed; this root is excluded from that fix because its own walk already runs the field bodies | — |
 | B-2026-09-04-26 | 2026-09-04 | codegen | medium | A `Result.Ok` CTOR ELEMENT OF A TUPLE TEMP ARGUMENT LOSES ITS PAYLOAD'S `Drop` BODY, and the B-2026-09-03-21 fix cannot simply be widened to it -- filling the erased element type makes the body run and LEAKS the boxed payload's 56 B envelope, because the `Result` cell is memory-CLEAN pre-fix where the `Option` cell leaks 11 B, so something already owns that box | — |
+| B-2026-09-04-27 | 2026-09-04 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop` RUNS NO BODY WHEN THE VALUE IS A `Vec` ELEMENT -- `let v: Vec[Box3[String]] = [Box3 { .. }]` prints `dB4` under `--interp` and nothing on any of the three compiled backends. B-2026-09-04-4 fixed both BINDING sites (the `let` and the callee's by-value param) by resolving the binding's instantiation to a per-monomorph `karac_drop_S$<concrete>` wrapper; a container element is reached instead by the per-element drain, which selects an element drop BY TYPE and deliberately routes a `Drop`-bearing struct past the wrapper, so there is no per-monomorph body for it to run. The non-generic control is correct on all four surfaces | — |
 
 ### Relocated
 
@@ -2206,6 +2206,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-40 | codegen+runtime | high | THE AUTO-PAR COST GATE IS DEFEATED BY AN IMPLAUSIBLE `per_iter_cost` ESTIMATE, so the DEFAULT build fans out a region entered ~1M times and runs 7x s… | 5641972 |
 | B-2026-09-04-1 | codegen | medium | A `Result` DESTRUCTURE LEAF CONSUMED BY A MATCH LOSES THE PAYLOAD'S `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h; match b { Result… | bfa5876 |
 | B-2026-09-04-2 | codegen | medium | A STRUCT DESTRUCTURE WHOSE SOURCE IS A PROJECTION RUNS BOTH FIELD BODIES AT THE DESTRUCTURE ON THE COMPILED BACKENDS, ONE OF THEM BEFORE ITS BINDING'… | 2bdffd1 |
+| B-2026-09-04-4 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` STILL RUNS NO BODY ON THE COMPILED BACKENDS -- `--interp` prints `dB`, `karac build` prints nothing, and t… | a036937 |
 | B-2026-09-04-5 | codegen | medium | A `Vec[Option[shared]]` ELEMENT CLONED IN ARGUMENT POSITION MAKES CODEGEN FALL THROUGH TO A STDLIB METHOD IT NEVER NEEDED -- `work[i] = merge_two_lis… | e28c468 |
 | B-2026-09-04-7 | interp+codegen | high | A SCALAR READ THROUGH A `Drop`-BEARING STRUCT FIELD CRASHES THE INTERPRETER AND LOSES BOTH `Drop` BODIES ON THE COMPILED BACKENDS -- `let z = h.a.id;… | 8500074 |
 | B-2026-09-04-8 | interp | medium | THE TUPLE PROJECTION DESTRUCTURE DIVERGES FOR A LOCAL ROOT -- `struct W { inner: (R, Result[R, String]) }; let (a, b) = w.inner;` runs `rd9 dR9` unde… | fb04b87 |
