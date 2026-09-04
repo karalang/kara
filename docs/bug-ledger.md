@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 366 |
-| run-vs-build | 333 |
+| run-vs-build | 334 |
 | leak | 263 |
 | missing-feature | 194 |
 | double-free | 178 |
@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 90 |
 | other | 76 |
 | crash | 73 |
-| use-after-free | 30 |
+| use-after-free | 31 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1451 |
-| interp | 351 |
+| codegen | 1453 |
+| interp | 352 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 72 |
@@ -159,8 +159,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-23 | 2026-09-04 | codegen | low | A DISCARDED FIELD AND AN UNUSED LEAF DROPPED AT THE SAME DESTRUCTURE RUN THEIR BODIES IN OPPOSITE ORDER ON THE TWO BACKENDS -- `let HoRes { a: _, b: b5 } = h5;` with `b5` never read runs `a`'s body then `b5`'s payload body under `--interp` and `b5`'s then `a`'s on jit/aot/AUTO_PAR=0; both at the statement, sequence only | — |
 | B-2026-09-04-24 | 2026-09-04 | codegen | medium | A GENERIC FUNCTION'S BY-VALUE STRUCT PARAM LOSES THE TUPLE ELEMENT'S `Drop` BODY WHEN THE ARGUMENT IS A TEMP LITERAL -- `gfn(G[R] { pe: (mk(81), 5), z: 9 })` runs NO body on all three compiled surfaces against a clean `--interp`, while the same callee handed a NAMED LOCAL is correct, and the non-generic twin is correct with either argument form. Memory is balanced (valgrind clean), so only the user body is lost | — |
 | B-2026-09-04-26 | 2026-09-04 | codegen | medium | A `Result.Ok` CTOR ELEMENT OF A TUPLE TEMP ARGUMENT LOSES ITS PAYLOAD'S `Drop` BODY, and the B-2026-09-03-21 fix cannot simply be widened to it -- filling the erased element type makes the body run and LEAKS the boxed payload's 56 B envelope, because the `Result` cell is memory-CLEAN pre-fix where the `Option` cell leaks 11 B, so something already owns that box | — |
-| B-2026-09-04-30 | 2026-09-04 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self) { println(self.a.id) }` prints `rd1` and no `dR` line under --interp, jit and aot alike; `mk(3).m()` loses `R`'s own body the same way. A LOCAL receiver (`let h = ..; h.m()`) runs them from the caller after the call, and there the interpreter runs a destructured receiver's leaf bodies as well -- twice. Codegen treats `self` as caller-retained like a by-value param; a temp has no caller walk, so nobody owns the bodies | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
+| B-2026-09-04-36 | 2026-09-04 | interp+codegen | low | A RECEIVER TEMP NESTED IN A LARGER EXPRESSION DRAINS AT THE STATEMENT'S `;` ON THE COMPILED BACKENDS AND AT THE CALL RETURN IN THE INTERPRETER -- `println(f"  {mk(1).peek()}")` prints `dR1/t1` BEFORE the value under `--interp` and AFTER it on jit/aot. Statement position agrees, which is why it hides: `let v = mk(1).peek()` is byte-identical on all four. This is B-2026-08-29-55's drain-point question one row over -- that row moved the three ARGUMENT registrars to a per-call window and deliberately left the fresh-temp RECEIVER (`__urecv_drop_tmp`) on the statement drain, on the grounds that a receiver has its own position-table row with a different end | — |
 | B-2026-09-05-1 | 2026-09-05 | codegen | high | AN OWNED STRUCT LITERAL WHOSE `shared` FIELD IS INITIALISED FROM ANOTHER STRUCT'S FIELD CRASHES BEFORE ITS FIRST READ on all three compiled surfaces -- `let h: H = H { s: w.s }; println(h.s.id, w.s.id)` prints NOTHING (valgrind: `Invalid read of size 8`) against `v1919 post dS19` under `--interp`; no tuple involved, reproduces on the clean tree | — |
 
 ### Relocated
@@ -2225,9 +2225,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-27 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop` RUNS NO BODY WHEN THE VALUE IS A `Vec` ELEMENT -- `let v: Vec[Box3[String]] = [Box3 { . | dab1e71 |
 | B-2026-09-04-28 | codegen | medium | AN `Array[T, N]` READ OUT OF A STRUCT FIELD LOSES ITS ELEMENT TYPE FOR CODEGEN, so a field access through one of its elements fails to lower -- `let… | 54103c9 |
 | B-2026-09-04-29 | codegen | high | A BY-VALUE PARAM DESTRUCTURE'S `Result` LEAF IS WRONG THREE WAYS ON THE PARAM SOURCE ITSELF -- `fn f(h: HoRes) { let HoRes { a, b } = h; . | 481a5b0 |
+| B-2026-09-04-30 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self)… | 66c59f6 |
 | B-2026-09-04-31 | codegen | high | A TUPLE-HELD `shared` ELEMENT IS RELEASED BEFORE THE TUPLE'S FIRST READ on all three compiled surfaces -- `let a = (S{id:14, tag:"alpha"}, 3); printl… | f82a99b |
 | B-2026-09-04-33 | codegen | medium | AN `Option` TUPLE ELEMENT WHOSE PAYLOAD IS A LITERAL IS UNTYPED, so `tuple_elem_optres_drop_ok` declines the element, the tuple `let` falls to the en… | bb2b7b8 |
 | B-2026-09-04-34 | codegen | high | A MOVED-OUT `Array[E, N]` FIELD DISARMS NOTHING, so the source struct's drop keeps freeing element buffers the binding now owns -- `struct Ha { a: Ar… | 54103c9 |
+| B-2026-09-04-35 | codegen | high | A FRESH-TEMP RECEIVER'S FIELD-BODIES WALK RUNS OVER FREED STORAGE -- `NoOwn { a: mk(1) }.br()` on a struct that carries `Drop` FIELDS but has no `imp… | 66c59f6 |
 | B-2026-09-05-2 | interp | medium | A `shared struct` REACHED THROUGH A `Vec` ELEMENT RAN NO `Drop` BODY UNDER `--interp` -- bare `Vec[S]`, `Vec[(S, i64)]` and `Vec[Holder { s: S }]` al… | f82a99b |
 
 </details>
