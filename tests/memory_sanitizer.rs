@@ -69787,4 +69787,127 @@ fn main() {
             assert_clean_asan_run(src, want, &format!("b6-nested-optres-param-{label}"));
         }
     }
+
+    /// B-2026-09-02-46 — a fresh-temp `Option`/`Result` argument to a GENERIC
+    /// callee, whose payload THIS INSTANTIATION heap-boxes, must have an owner.
+    ///
+    /// The box is malloc'd by `coerce_to_payload_words`' oversize arm at the
+    /// call site and, before the fix, was owned by nobody: `compile_generic_call`
+    /// registers no caller-side optres arg ownership, and the mono param
+    /// prologue registers only `user_enum_boxed_payload_variants`, which returns
+    /// nothing for the seeded `Option`/`Result` pair by design. 48 bytes per
+    /// call — one box, six i64 words — with the payload's own Strings freed by
+    /// the arm that binds them, so `indirectly lost` was 0 and only the envelope
+    /// was stranded.
+    ///
+    /// EVERY NON-GENERIC TWIN IS CLEAN, which is what makes this a monomorph
+    /// defect rather than a boxed-payload one: `compile_function`'s owned-param
+    /// arms give the CALLEE the box, and `compile_call` disarms a binding
+    /// argument's let-site drop at the move so the two never collide. The
+    /// generic path runs neither half.
+    ///
+    /// The four leaking cells are the shapes the row measured — an `Array`
+    /// payload, a two-`String` TUPLE payload, `Result` rather than `Option`, and
+    /// a generic METHOD — each 48 B, all four at every opt level from `-O0` to
+    /// `-O3` (measured; this is NOT an `-O0`-only defect, so the fixture asserts
+    /// something on the `-O2` build CI runs).
+    ///
+    /// THE LAST TWO CELLS ARE THE OTHER DIRECTION and are the reason the fix
+    /// carries an escape gate. `passthru` RETURNS its param, so the box leaves
+    /// with the result and the caller's `back` binding owns it; owning it at the
+    /// arg site too was measured as a valgrind `Invalid free` on a program clean
+    /// both before the fix and after it. `bound` hands over a NAMED binding,
+    /// whose let-site box drop the generic path never disarms — so it is
+    /// already the sole owner and must stay that way. A double free in either
+    /// cell means the gate has been widened.
+    ///
+    /// The alloc floor guards the whole fixture against folding away; a version
+    /// LLVM elided entirely would assert nothing while reporting green.
+    #[test]
+    fn asan_generic_callee_boxed_optres_temp_arg_frees_its_box() {
+        let src = r#"
+struct H { id: i64 }
+
+impl H {
+    fn show[T: Display](ref self, x: Option[T]) -> i64 {
+        match x {
+            Some(t) => { println(f"m{self.id}:{t}"); return 1; }
+            None => { return 0; }
+        }
+    }
+}
+
+fn takesOpt[T: Display](x: Option[T]) -> i64 {
+    match x {
+        Some(t) => { println(f"o:{t}"); return 1; }
+        None => { return 0; }
+    }
+}
+
+fn takesRes[T: Display](x: Result[T, i64]) -> i64 {
+    match x {
+        Ok(t) => { println(f"r:{t}"); return 1; }
+        Err(e) => { return e; }
+    }
+}
+
+fn passthru[T](x: Option[T]) -> Option[T] { return x; }
+
+fn main() {
+    let n = env.args().len();
+
+    // Cell 1 — an `Array[String, 2]` payload: 6 words, past `Option`'s
+    // 3-word area, so the monomorph boxes it.
+    let a: Array[String, 2] = [f"uv{n}", f"wx{n}"];
+    let c1 = takesOpt(Some(a));
+
+    // Cell 2 — a TUPLE payload, proving the array is only the shape that
+    // made this reachable and not the cause. Four scalar words, past the
+    // 3-word area, so it boxes with no heap of its own INSIDE the box —
+    // deliberately, because a two-`String` tuple additionally loses its
+    // interior in a monomorph (6 B here, measured) and that is a separate
+    // live defect this fixture must not silently depend on. See
+    // B-2026-09-04-7.
+    let p = (n, n + 1, n + 2, n + 3);
+    let c2 = takesOpt(Some(p));
+
+    // Cell 3 — `Result` rather than `Option`, boxing against the 5-word area.
+    let b: Array[String, 2] = [f"yz{n}", f"za{n}"];
+    let c3 = takesRes(Ok(b));
+
+    // Cell 4 — a generic METHOD, which reaches the same arg site.
+    let h = H { id: 7 };
+    let d: Array[String, 2] = [f"mn{n}", f"op{n}"];
+    let c4 = h.show(Some(d));
+
+    // Cell 5 — the ESCAPE control: the callee hands the box back, so the
+    // result binding is its owner and the arg site must NOT take it.
+    let e: Array[String, 2] = [f"pq{n}", f"rs{n}"];
+    let back = passthru(Some(e));
+    let c5 = takesOpt(back);
+
+    // Cell 6 — the BINDING control: a named binding's let-site box drop is
+    // the sole owner on this path and is never disarmed.
+    let g: Array[String, 2] = [f"tu{n}", f"vw{n}"];
+    let bound: Option[Array[String, 2]] = Some(g);
+    let c6 = takesOpt(bound);
+
+    println(f"acc{c1 + c2 + c3 + c4 + c5 + c6}");
+}
+"#;
+        assert_clean_asan_run_min_allocs(
+            src,
+            &[
+                "o:[uv1, wx1]",
+                "o:(1, 2, 3, 4)",
+                "r:[yz1, za1]",
+                "m7:[mn1, op1]",
+                "o:[pq1, rs1]",
+                "o:[tu1, vw1]",
+                "acc6",
+            ],
+            "b0902-46-generic-boxed-optres-temp-arg",
+            20,
+        );
+    }
 }

@@ -3146,6 +3146,109 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-02-46 — a generic callee's declared param type RESOLVED FOR
+    /// THIS CALL, so a caller-side ownership question about a MONOMORPH is
+    /// asked of the type that monomorph will actually lower.
+    ///
+    /// The boxing decision is a word count, and a bare `T` lowers to ONE word.
+    /// So `fn g[T](x: Option[T])` reads as a 1-word inline payload at every
+    /// erased site, whatever the instantiation heap-boxes.
+    ///
+    /// `span_tables.call_type_subs_te` is the typechecker's own per-call
+    /// solution, keyed by call span, and [`Self::compile_generic_call`] reads
+    /// exactly this table to build the substitution it compiles the body under
+    /// — so resolving through it here asks the same question the body answers.
+    /// Flattened through the caller's active monomorph substitution for the
+    /// reason that site flattens it: a frame recorded inside a monomorph names
+    /// the CALLER's type params.
+    ///
+    /// A span with no recorded frame leaves the type untouched, so a
+    /// non-generic callee is unaffected.
+    pub(super) fn callee_param_te_for_call(
+        &self,
+        param_te: &TypeExpr,
+        call_span: &crate::token::Span,
+    ) -> TypeExpr {
+        let Some(frame) = self
+            .span_tables
+            .call_type_subs_te
+            .get(&(call_span.offset, call_span.length))
+        else {
+            return param_te.clone();
+        };
+        let subst: std::collections::HashMap<String, TypeExpr> = frame
+            .iter()
+            .map(|(k, te)| (k.clone(), self.subst_monomorph_type_params(te)))
+            .collect();
+        super::helpers::subst_type_params_in_type_expr(param_te, &subst)
+    }
+
+    /// B-2026-09-02-46 — own the heap BOX behind a FRESH-TEMP `Option`/`Result`
+    /// argument to a GENERIC callee whose monomorph boxes the payload.
+    ///
+    /// The non-generic twin of every shape this covers is clean, and by a route
+    /// the generic path does not have: `compile_function`'s owned-param arms
+    /// (B-2026-08-05-7 / B-2026-08-06-9 leg A) give the CALLEE the box, and
+    /// `compile_call` disarms a binding argument's let-site drop at the move so
+    /// the two never collide. `compile_generic_call` runs neither half — its
+    /// mono prologue registers only `user_enum_boxed_payload_variants`, which
+    /// returns nothing for the seeded `Option`/`Result` pair, and it calls no
+    /// suppressor at all.
+    ///
+    /// So on this path a BINDING argument is already correct and already has
+    /// exactly one owner (its let site, never disarmed), and the hole is the
+    /// FRESH TEMP, which has no binding anywhere to hang a drop on. Owning it
+    /// here rather than porting the callee-side arms is what keeps that
+    /// distinction: `optres_arg_is_unowned_temp` fires only where no binding
+    /// exists, so this cannot become a second owner of one the caller already
+    /// registered.
+    ///
+    /// BOX-ONLY, exactly as all three `compile_function` siblings are: the
+    /// payload interior belongs to whichever arm binds it out.
+    pub(super) fn track_boxed_optres_arg_temp(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        inst_te: &TypeExpr,
+    ) {
+        let variants = self.boxed_enum_payload_variants(inst_te);
+        if variants.is_empty() {
+            return;
+        }
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__boxed_optres_arg_tmp", agg_ty.into());
+        if self.builder.build_store(slot, val).is_err() {
+            return;
+        }
+        // The box may hold a further chain of ENVELOPES
+        // (`Option[Option[Wide]]`), the same shape leg A walks; freeing only
+        // the outermost strands the rest.
+        for (enum_lit, variant, inner_struct) in variants {
+            if inner_struct.is_some() {
+                // A user struct / enum interior reaches the box through its own
+                // machinery (`boxed_struct_payload_vars` and B-2026-08-06-10's
+                // move-out mirror), which is why leg A excludes it too. Taking
+                // it here would be the second owner that gate exists to avoid.
+                continue;
+            }
+            let deeper = Self::option_generic_arg_type_expr(inst_te)
+                .map(|inner| self.nested_box_deeper_tag_chain(&inner))
+                .unwrap_or_default();
+            self.track_boxed_enum_var_with_chain(
+                "__boxed_optres_arg_tmp",
+                slot,
+                enum_lit,
+                variant,
+                None,
+                deeper,
+            );
+        }
+    }
+
     pub(super) fn callee_optres_param_entry_copied(
         &self,
         callee_name: &str,

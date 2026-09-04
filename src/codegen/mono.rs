@@ -1844,6 +1844,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // and only when a bare-`T` param the return-type test rejected actually
         // turns up — most generic calls never touch it.
         let mut unused_generic_params: Option<std::collections::HashSet<String>> = None;
+        // B-2026-09-02-46's escape gate, computed at most once per call and
+        // only when a boxed-payload `Option`/`Result` temp argument turns up.
+        let mut nonescaping_generic_params: Option<std::collections::HashSet<String>> = None;
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             // B-2026-07-14-12: a fresh-heap `String` TEMP arg to a generic fn
@@ -1951,6 +1954,51 @@ impl<'ctx> super::Codegen<'ctx> {
                     || param_cannot_reach_return);
             if is_fresh_string_temp || is_fresh_vec_temp_for_owned_param {
                 self.materialize_owned_temp(val, arg_key);
+            }
+            // B-2026-09-02-46 — a fresh-temp `Option`/`Result` argument whose
+            // payload THIS INSTANTIATION heap-boxes. The box is malloc'd by
+            // `coerce_to_payload_words`' oversize arm at this call site and,
+            // before this, was owned by nobody: the mono prologue registers
+            // only `user_enum_boxed_payload_variants` (which returns nothing
+            // for the seeded pair, by design) and no binding exists to carry a
+            // let-site drop. Measured 48 B per call — one box — on `Option` and
+            // `Result` alike, for a free fn and a method alike, while every
+            // non-generic twin was clean.
+            //
+            // Resolved through the call's own type solution: the declared
+            // `Option[T]` is the erasure that CAUSES the boxing, so the
+            // predicate must see `Option[Array[String, 2]]` to report one at
+            // all — the same resolution the mono prologue's sibling arms do
+            // with `subst_monomorph_type_params`, done here from the caller's
+            // side where the frame is keyed by span.
+            //
+            // NON-ESCAPING params only, and that gate is load-bearing rather
+            // than cautious — it is the same one `compile_function`'s leg A
+            // applies to the non-generic twin, and without it a passthrough
+            // callee double-frees. `fn idOpt[T](x: Option[T]) -> Option[T] {
+            // return x; }` hands the box out, so the caller's RESULT binding
+            // owns it; registering here as well produced a valgrind
+            // `Invalid free` on `let back = idOpt(Some(a))` — measured, on a
+            // program that is clean both before this arm and after it.
+            let param_nonescaping = generic_fn
+                .params
+                .get(i)
+                .and_then(|p| match &p.pattern.kind {
+                    crate::ast::PatternKind::Binding(n) => Some(n.as_str()),
+                    _ => None,
+                })
+                .is_some_and(|n| {
+                    nonescaping_generic_params
+                        .get_or_insert_with(|| {
+                            crate::result_escape::nonescaping_param_names(&generic_fn)
+                        })
+                        .contains(n)
+                });
+            if param_nonescaping && self.optres_arg_is_unowned_temp(&a.value) {
+                if let Some(p) = generic_fn.params.get(i) {
+                    let inst = self.callee_param_te_for_call(&p.ty, call_span);
+                    self.track_boxed_optres_arg_temp(val, &inst);
+                }
             }
         }
 
