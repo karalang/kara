@@ -49736,3 +49736,102 @@ fn shared_field_move_rejected_and_borrow_and_copy_shapes_permitted() {
         assert_eq!(fires(items), 0, "expected NO rejection for {label}");
     }
 }
+
+/// B-2026-09-04-17 — the TUPLE and `Option` field shapes B-2026-09-04-15 left
+/// out, measured and now rejected too.
+///
+/// That row covered a plain STRUCT field (moved — a use-after-free) and the
+/// `String`/`Vec`/`Map`/`Set` set (deep-copied — safe), and excluded tuple,
+/// `Array` and `Option` by an explicit head-name test because neither half had
+/// been measured for them. Measured here, both tuple and `Option` are in the
+/// MOVED half, and worse than the shape the rule was built for:
+///
+///   shared struct ShT { t: (R, i64) }   valgrind `Invalid read of size 2`; the
+///                                       alias prints garbage where `--interp`
+///                                       prints the live value
+///   shared struct ShO { o: Option[R] }  the compiled binary SEGFAULTS
+///
+/// THE HAZARD IS INVISIBLE UNLESS THE MOVED-OUT BINDING IS DEAD. With the alias
+/// read taken while it is still live — which is how the filing row's suggested
+/// probe is written — both shapes come back clean on all four surfaces. That
+/// near-miss is why the cells below put the read inside an inner scope.
+///
+/// `Array` stays permitted, and that is a measurement rather than an omission:
+/// a field read off an `Array[T, N]` element does not compile on any backend
+/// ("cannot resolve field on this receiver"), and the same gap hits a PLAIN
+/// struct, so it is not shared-specific and there is no reachable hole to
+/// reject. Filed as the codegen gap it is.
+///
+/// The SCALAR-payload cells are the over-reach controls, in the opposite
+/// direction: `(i64, i64)` and `Option[i64]` read, alias and free correctly on
+/// both backends with valgrind clean, so rejecting them would be a straight
+/// regression on valid code.
+#[test]
+fn shared_field_move_covers_tuple_and_option_but_not_scalar_payloads() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         shared struct ShT { t: (R, i64) }\n\
+         shared struct ShO { o: Option[R] }\n\
+         shared struct ShA { a: Array[R, 2] }\n\
+         shared struct ShT2 { t: (i64, i64) }\n\
+         shared struct ShO2 { o: Option[i64] }\n\
+         shared struct ShNest { t: (Option[R], i64) }\n";
+    const MAIN: &str = "fn main() { println(\"ok\"); }\n";
+
+    fn hits(src: &str) -> usize {
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolved.errors
+        );
+        typecheck(&parsed.program, &resolved)
+            .errors
+            .iter()
+            .filter(|e| e.message.contains("E_SHARED_FIELD_MOVE"))
+            .count()
+    }
+    let fires = |items: &str| -> usize { hits(&format!("{PRELUDE}{items}{MAIN}")) };
+
+    // ── REJECTED: the field leaves the box and an alias sees the hole ──
+    for (label, items) in [
+        (
+            "tuple field with a non-Copy element — valgrind invalid read",
+            "fn f(h: ShT) -> i64 { let x = h.t; return x.1; }\n",
+        ),
+        (
+            "Option field with a non-Copy payload — segfault on the compiled binary",
+            "fn f(h: ShO) -> i64 { let x = h.o; return 1; }\n",
+        ),
+        (
+            "nested: an Option[R] inside a tuple answers through the same recursion",
+            "fn f(h: ShNest) -> i64 { let x = h.t; return x.1; }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 1, "expected a rejection for {label}");
+    }
+
+    // ── PERMITTED: a scalar payload is copied, and rejecting it would be a
+    //    regression on valid code; `Array` does not compile either way ──
+    for (label, items) in [
+        (
+            "tuple of scalars",
+            "fn f(h: ShT2) -> i64 { let x = h.t; return x.0 + x.1; }\n",
+        ),
+        (
+            "Option of a scalar",
+            "fn f(h: ShO2) -> i64 { let x = h.o; return 1; }\n",
+        ),
+        (
+            "Array field — excluded by measurement, not by omission",
+            "fn f(h: ShA) -> i64 { let x = h.a; return 1; }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 0, "expected NO rejection for {label}");
+    }
+}

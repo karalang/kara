@@ -4401,6 +4401,44 @@ impl<'a> super::TypeChecker<'a> {
     /// walk a half-populated value); this one asks whether the struct is
     /// refcounted, because then the hole is visible to every OTHER handle and
     /// outlives the move entirely.
+    /// B-2026-09-04-17 — is a field of this type MOVED out of the refcounted
+    /// box on a read (leaving a hole every other handle can see), or COPIED?
+    ///
+    /// The copied set is measured and pinned elsewhere: `String` / `Vec` /
+    /// `Map` / `Set` are deep-copied by codegen (B-2026-08-28-14 / -20 / -49,
+    /// and `test_e2e_shared_struct_heap_field_read_is_a_copy`), so they are not
+    /// holes and must not be rejected — without that exclusion this rule fails
+    /// five tests whose whole subject is that the read IS a copy.
+    ///
+    /// The moved set is a plain non-RC-backed STRUCT (B-2026-09-04-15), and —
+    /// measured by this row — a TUPLE with such an element, or an
+    /// `Option`/`Result` with such a payload. Recursive so that nesting
+    /// (`(Option[R], i64)`) answers through the same rule as its parts, and so
+    /// that a scalar payload answers NO.
+    fn shared_field_move_shape_is_moved(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Tuple(elems) => elems
+                .iter()
+                .any(|e| self.shared_field_move_shape_is_moved(e)),
+            Type::Named { name, args } => {
+                if matches!(name.as_str(), "Option" | "Result") {
+                    return args
+                        .iter()
+                        .any(|a| self.shared_field_move_shape_is_moved(a));
+                }
+                // The copied set, plus `Array` (excluded — see the call site).
+                if matches!(
+                    name.as_str(),
+                    "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet" | "Array"
+                ) {
+                    return false;
+                }
+                self.env.structs.contains_key(name.as_str()) && !self.name_is_rc_backed_decl(name)
+            }
+            _ => false,
+        }
+    }
+
     fn shared_field_move_owner(&self, value: &Expr, ty: &Type) -> Option<String> {
         if !matches!(
             value.kind,
@@ -4432,22 +4470,35 @@ impl<'a> super::TypeChecker<'a> {
         // `Array` or `Option` field behaves like the copied set or the moved
         // set is NOT measured here, so they are left alone rather than guessed
         // into the rule — recorded as the remainder on B-2026-09-04-15.
-        let Type::Named {
-            name: field_ty_name,
-            ..
-        } = ty
-        else {
-            return None;
-        };
-        if matches!(
-            field_ty_name.as_str(),
-            "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet" | "Array"
-        ) {
-            return None;
-        }
-        if !self.env.structs.contains_key(field_ty_name.as_str())
-            || self.name_is_rc_backed_decl(field_ty_name)
-        {
+        // B-2026-09-04-17 — the TUPLE and `Option`/`Result` shapes, measured and
+        // now covered. That row split them out as unmeasured; both are in the
+        // MOVED half, and the hole is worse than the plain-struct one this rule
+        // was built for:
+        //
+        //   shared struct ShT { t: (R, i64) }   alias read after the moved-out
+        //                                       value dies -> valgrind `Invalid
+        //                                       read of size 2`, and the alias
+        //                                       prints garbage (`alias 1/alia`)
+        //                                       where `--interp` prints `1/tag1`
+        //   shared struct ShO { o: Option[R] }  the compiled binary SEGFAULTS;
+        //                                       4 invalid reads under valgrind
+        //
+        // The hazard is only visible once the moved-out binding is DEAD: with
+        // the alias read while it is still live, both shapes come back clean on
+        // every surface. That is the false negative this rule's own filing row
+        // was one probe away from recording.
+        //
+        // `Array` stays excluded, also measured: a field read off an
+        // `Array[R, N]` element does not COMPILE at all — "cannot resolve field
+        // on this receiver" — and the same gap hits a PLAIN struct, so it is not
+        // shared-specific and there is no reachable use-after-free to reject.
+        // Filed separately as the codegen gap it is.
+        //
+        // Both new arms recurse through `shared_field_move_shape_is_moved` so a
+        // SCALAR payload stays accepted: `(i64, i64)` and `Option[i64]` read,
+        // alias and free correctly on both backends (measured, valgrind clean),
+        // and rejecting them would be a straight regression for valid code.
+        if !self.shared_field_move_shape_is_moved(ty) {
             return None;
         }
         let object = match &value.kind {
