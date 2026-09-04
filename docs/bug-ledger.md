@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 365 |
-| run-vs-build | 325 |
+| run-vs-build | 326 |
 | leak | 260 |
 | missing-feature | 194 |
-| double-free | 170 |
+| double-free | 171 |
 | codegen-gap | 163 |
 | diagnostics | 123 |
 | false-positive | 106 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1425 |
+| codegen | 1427 |
 | interp | 347 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -158,7 +158,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
 | B-2026-09-03-34 | 2026-09-03 | codegen | medium | A STRUCT DESTRUCTURED OUT OF A MATCH ARM'S PAYLOAD BINDING LOSES A PLAIN FIELD'S `Drop` BODY ON THE COMPILED BACKENDS -- `match w { Wrap.W(h) => { let Ho2 { a, b } = h; .. } }` runs `dR152 dR52` under `--interp` and only `dR152` on jit/aot/AUTO_PAR=0; the payload half was fixed by B-2026-09-03-24 and this is the residue, because the place-source body transfer is gated on the source owning a `StructFieldBodies` action and a match payload does not | — |
-| B-2026-09-03-39 | 2026-09-03 | codegen | medium | A FRESH TUPLE SOURCE LOSES AN `Option`/`Result` ELEMENT'S PAYLOAD `Drop` BODY ON BOTH LEAF KINDS -- `let (r, _) = (mk(31), Option.Some(mk(131)));` and its binding sibling run the body under `--interp` and on no compiled surface, because `infer_arg_elem_te` ERASES an enum-constructor element's generic argument, so the leaf's type reaches the payload walker as a bare `Option`. Third time that fallback has erased a type (cf. B-2026-08-28-11, B-2026-09-02-35) | — |
 | B-2026-09-03-40 | 2026-09-03 | codegen+runtime | high | THE AUTO-PAR COST GATE IS DEFEATED BY AN IMPLAUSIBLE `per_iter_cost` ESTIMATE, so the DEFAULT build fans out a region entered ~1M times and runs 7x slower than the sequential one on a natural kata, and 398x slower on a larger program in the same repo. `KARAC_COST_DEBUG=1` reports `per_iter_cost=3578073120 floor=64 substantial=true` for the benchmark and `3597957307` / `3597955192` for the differential. Those numbers cannot be per-ITERATION costs: the whole benchmark executes on the order of 3e8 operations (0.29 s sequential), so a single iteration cannot cost 3.6e9 units. Whatever the estimator is measuring, it clears the floor of 64 by EIGHT ORDERS OF MAGNITUDE, so the gate that exists to decline unprofitable fan-outs cannot fire. MEASURED, AOT, same binary pair, checksum identical in every mode: kata 306's bench.kara is 0.29 s sequential vs 2.05 s under the default auto-par build (7.1x), system time 0.00 s -> 1.42 s; kata 306's differential.kara is 0.069 s vs 27.5 s (398x), 32.7 s of it system. `strace -c` attributes 100% of syscall time to futex: 1,843,996 calls at 4 workers and 1,963,832 at ONE worker -- the volume is driven by DISPATCH COUNT, not by contention between workers, i.e. the region is entered on the order of a million times and each entry pays a pool round trip. Worker count then adds contention on top: 1: 0.68 s, 2: 1.69 s, 4: 1.99 s on the bench, and 2.32 / 9.27 / 27.5 s on the differential -- ADDING WORKERS MAKES IT WORSE, monotonically. | — |
 | B-2026-09-04-1 | 2026-09-04 | codegen | medium | A `Result` DESTRUCTURE LEAF CONSUMED BY A MATCH LOSES THE PAYLOAD'S `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h; match b { Result.Ok(r) => .. }` over `{ a: R, b: Result[R, String] }` runs `dR109` under `--interp` and on none of jit/aot/AUTO_PAR=0, where the arm BINDS and READS the payload as an ordinary owned binding; distinct from the `Result` deferral B-2026-09-03-33 left in place, which is about the unconsumed leaf and is agreed-and-absent on both backends | — |
 | B-2026-09-04-3 | 2026-09-04 | codegen | medium | A `shared struct` HELD IN A TUPLE ELEMENT RUNS NO `Drop` BODY ON ANY OF THE THREE BACKENDS, and MEMORY IS BALANCED -- the box and its `String` are both freed, so there is no leak and no A/B tell, only the missing side effect. One cell isolates it: a PLAIN `Drop` struct in the same tuple position is correct, and the same `shared` type is correct in a struct field, a Vec, an Option and as a bare binding. It is exactly the intersection, and it CORRECTS the compiled-side tuple sub-measurement in B-2026-09-03-9 | — |
@@ -167,6 +166,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-6 | 2026-09-04 | other | low | design.md CONTRADICTS ITSELF ON `#[derive(Copy)]` WITHOUT `Clone`, and the half that is wrong is the one a reader looking up `Copy` will find -- § Derive says "`Copy` without `Clone` is never a compile error, because the compiler fills in the missing dependency" (line 2970, and this is what karac implements) while § Copy says "Writing `#[derive(Copy)]` without `Clone` is an error" (line 9146) | — |
 | B-2026-09-04-7 | 2026-09-04 | interp+codegen | high | A SCALAR READ THROUGH A `Drop`-BEARING STRUCT FIELD CRASHES THE INTERPRETER AND LOSES BOTH `Drop` BODIES ON THE COMPILED BACKENDS -- `let z = h.a.id;` over `struct H { a: R, b: R }` panics `--interp` with the internal error "field 'id' not found on struct 'R'" (an ICE, not a diagnostic) while jit/build/AUTO_PAR=0 print the value and run NEITHER user body; the whole-field spelling `let r = h.a;` and the scalar-of-a-non-Drop-field spelling `let z = h.n;` are both correct and agreed on all four surfaces | — |
 | B-2026-09-04-8 | 2026-09-04 | interp+codegen | medium | THE TUPLE PROJECTION DESTRUCTURE DIVERGES FOR A LOCAL ROOT -- `struct W { inner: (R, Result[R, String]) }; let (a, b) = w.inner;` runs `rd9 dR9` under `--interp` against `dR109 rd9 dR9` on jit/build/AUTO_PAR=0, and `e2e_projection_source_tuple_destructure_is_a_view` cannot catch it because all six of its cells are PARAM-rooted | — |
+| B-2026-09-04-9 | 2026-09-04 | codegen | medium | A FRESH TUPLE SOURCE'S `Option` BINDING LEAF STILL LOSES ITS PAYLOAD'S `Drop` BODY -- `let (_, o) = (mk(32), Option.Some(mk(132)));` and `let (a, b) = ...` run the body under `--interp` and on no compiled surface, while the WILDCARD spelling of the same literal is correct on all four since B-2026-09-03-39. The element is typed correctly now; what the leaf lacks is a memory owner it can hang the walker on, and the owner that fits DOUBLE-FREES a moved leaf (B-2026-09-04-10) | — |
+| B-2026-09-04-10 | 2026-09-04 | codegen | high | AN `Option[<struct>]` DESTRUCTURE LEAF OFF A PLACE SOURCE FREES ITS PAYLOAD TWICE WHEN THE LEAF IS MOVED WHOLE -- `let (_, o) = t; let q = o;` double-frees and `return o` corrupts the allocation header, on an UNMODIFIED `main`. B-2026-09-03-15 gave the leaf sole ownership of the boxed payload and a consuming `match` retracts it; a whole-value MOVE has no retraction. A plain struct element moved the same two ways is clean | — |
 
 ### Relocated
 
@@ -2200,6 +2201,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-36 | codegen | medium | REASSIGNING A `shared` FIELD OF A PLAIN STRUCT STRANDS THE DISPLACED RC BOX -- `n.s = Sd { m: 9 }` prints the old handle's `Drop` body, so the refcou… | ee2e697d |
 | B-2026-09-03-37 | typecheck | medium | `Vec.push` ASKS `partial_move_of_drop_struct` ABOUT THE UNRESOLVED DESTINATION SLOT, so a `Deny` rule rejects a `Copy` field -- `v.push(w.n)` over an… | 56c8950 |
 | B-2026-09-03-38 | typecheck | medium | 130 OF THE 935 kara-katas FILES DO NOT TYPE-CHECK ON `main` (238 diagnostics, all `E_INDEX_MOVE_NON_COPY`) and have not since the rule landed on 2026… | 6f9e012 |
+| B-2026-09-03-39 | codegen | medium | A FRESH TUPLE SOURCE LOSES AN `Option`/`Result` ELEMENT'S PAYLOAD `Drop` BODY -- `let (r, _) = (mk(31), Option.Some(mk(131)));` runs the body under `… | ebe5821 |
 | B-2026-09-04-2 | codegen | medium | A STRUCT DESTRUCTURE WHOSE SOURCE IS A PROJECTION RUNS BOTH FIELD BODIES AT THE DESTRUCTURE ON THE COMPILED BACKENDS, ONE OF THEM BEFORE ITS BINDING'… | 2bdffd1 |
 
 </details>
