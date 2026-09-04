@@ -13436,11 +13436,47 @@ done
     /// prints `dR110/` and fails on the transcript instead of passing as a bare
     /// body count.
     ///
-    /// TWO SPELLINGS ARE KNOWINGLY ABSENT because they are still LIVE
-    /// run-vs-build splits and this fixture is pinned to ONE string shared with
-    /// its interpreter twin: a FRESH tuple source (`let (r, _) = (mk(31),
-    /// Option.Some(mk(131)));`) whose element has no memory owner, and the
-    /// BINDING leaf of that same fresh source. Both are filed separately.
+    /// B-2026-09-03-39 — THE FRESH TUPLE SOURCE, half of the pair this fixture
+    /// originally recorded as knowingly absent. The WILDCARD leaf agrees on all
+    /// four surfaces now and is pinned here — the nine `fr*` cells. The BINDING
+    /// leaf of the same fresh literal is still split and is deliberately still
+    /// absent, for the reason that kept both out to begin with: the twins share
+    /// ONE string, so a cell whose backends disagree cannot live in them. Its
+    /// remedy is measured and rejected rather than merely unattempted — see
+    /// `tests/memory_sanitizer.rs`'s
+    /// `asan_fresh_tuple_source_optres_leaf_owns_its_payload_body`.
+    ///
+    /// A DIFFERENT SITE FROM THE `w*` CELLS ABOVE, despite the identical
+    /// symptom. There the walker declined; here the walker was never given a
+    /// type to work from. `infer_arg_elem_te` types a tuple-literal element by
+    /// resolving its EXPRESSION, and an enum-constructor call falls through
+    /// every arm to a fallback that rebuilds a `Path` from the NAME alone —
+    /// `generic_args: None` — so the element reached both leaf walkers as a
+    /// bare `Option`, which is exactly the argument they key the payload off.
+    /// `refined_tuple_literal_elem_te` already rebuilt `Option[P]` for the
+    /// `let`-BINDING spelling of the same literal (B-2026-08-03-1); the
+    /// DESTRUCTURE spelling simply never asked it.
+    ///
+    /// SIX CELLS WERE RED, and the row that filed this recorded two of them.
+    /// `frw` and `frres` are the row's own; `frw0` puts the `Option` in slot 0,
+    /// `frboth` discards both, `frnest` reaches the nested-pattern recursion,
+    /// and `frloop` runs it twice. Pre-fix, this exact program loses `dR131`,
+    /// `dR135`, `dR41`, `dR142`, `dR143` and both `dR144`s, and nothing else —
+    /// measured against a build of the parent commit.
+    ///
+    /// `frres` NEEDS ITS ANNOTATION AND THAT IS THE POINT. `Result[R,
+    /// String].Ok(..)` parses as a METHOD CALL on a type path rather than as a
+    /// `Call`, and it is the only constructor spelling that names both type
+    /// arguments — `Ok(x)` alone says nothing about `E`, while the payload
+    /// walker's `Result` leg reads both. So the annotation is load-bearing
+    /// here, not decoration.
+    ///
+    /// `frstr`, `frplain` and `frnone` ARE THE FRESH-SOURCE CONTROLS, and all
+    /// three were already correct: an inline `Option[String]` payload with no
+    /// user `Drop` (nothing owed), a plain struct element (proof the leaf arm
+    /// itself was always reached), and a `None` (nothing to run). They pin the
+    /// opposite failure — a body that starts running where none is due, or one
+    /// running twice.
     ///
     /// Twin of `tests/interpreter.rs`'s
     /// `test_wildcard_tuple_leaf_over_optres_owns_its_payload_body`, pinned to
@@ -13472,6 +13508,18 @@ fn undest(){ let t = (mk(6), Option.Some(mk(66))); println(f"  rd{t.0.id}") }
 fn marm()  { let t = (mk(5), Option.Some(mk(105))); match t { (a, b) => { println("  m") } } }
 fn i64opt(){ let t = (7, Option.Some(mk(77))); let (_, o) = t; println("  z") }
 
+fn frw()   { let (r, _) = (mk(31), Option.Some(mk(131))); println(f"  rd{r.id}") }
+fn frres() { let (r, _) = (mk(35), Result[R, String].Ok(mk(135))); println(f"  rd{r.id}") }
+fn frw0()  { let (_, r) = (Option.Some(mk(41)), mk(141)); println(f"  rd{r.id}") }
+fn frboth(){ let (_, _) = (mk(42), Option.Some(mk(142))); println("  x") }
+fn frnest(){ let ((_, _), n) = ((mk(43), Option.Some(mk(143))), 4); println(f"  n{n}") }
+fn frloop(){ let mut i = 0;
+             while i < 2 { let (_, _) = (mk(44), Option.Some(mk(144))); i = i + 1; }
+             println("  x") }
+fn frstr() { let (r, _) = (mk(45), Option.Some(f"x45")); println(f"  rd{r.id}") }
+fn frplain(){ let (r, _) = (mk(46), mk(146)); println(f"  rd{r.id}") }
+fn frnone(){ let n: Option[R] = Option.None; let (r, _) = (mk(47), n); println(f"  rd{r.id}") }
+
 fn main() {
     println("wr");     wr()
     println("wboth");  wboth()
@@ -13487,6 +13535,15 @@ fn main() {
     println("undest"); undest()
     println("marm");   marm()
     println("i64opt"); i64opt()
+    println("frw");     frw()
+    println("frres");   frres()
+    println("frw0");    frw0()
+    println("frboth");  frboth()
+    println("frnest");  frnest()
+    println("frloop");  frloop()
+    println("frstr");   frstr()
+    println("frplain"); frplain()
+    println("frnone");  frnone()
     println("done")
 }
 "#,
@@ -13549,6 +13606,42 @@ dR105/t105
 i64opt
 dR77/t77
   z
+frw
+dR131/t131
+  rd31
+dR31/t31
+frres
+dR135/t135
+  rd35
+dR35/t35
+frw0
+dR41/t41
+  rd141
+dR141/t141
+frboth
+dR42/t42
+dR142/t142
+  x
+frnest
+dR43/t43
+dR143/t143
+  n4
+frloop
+dR44/t44
+dR144/t144
+dR44/t44
+dR144/t144
+  x
+frstr
+  rd45
+dR45/t45
+frplain
+dR146/t146
+  rd46
+dR46/t46
+frnone
+  rd47
+dR47/t47
 done
 "#
         );

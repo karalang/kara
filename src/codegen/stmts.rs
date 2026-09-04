@@ -14215,7 +14215,65 @@ impl<'ctx> super::Codegen<'ctx> {
         // for both fresh spellings this path admits: a tuple LITERAL and a CALL
         // returning a tuple. `None` (any other fresh temp) leaves the wildcard
         // exactly as it behaved before — memory only.
-        let elem_tes = self.tuple_arg_elem_type_exprs(value);
+        //
+        // B-2026-09-03-39 — REFINE the LITERAL's elements first. The general
+        // `infer_arg_elem_te` types an element by resolving its EXPRESSION, and
+        // an enum-constructor call (`Option.Some(mk(131))`) falls through every
+        // one of its arms to the fallback, which rebuilds a `Path` from
+        // `enum_name_of_expr` alone — `generic_args: None`. So the element
+        // arrived here as a bare `Option`, and both leaf walkers key the payload
+        // off exactly that generic argument
+        // (`emit_optres_payload_user_drop_bodies_fn` needs `p.generic_args` to
+        // name what to walk). The payload's user `Drop` body was therefore
+        // silent on all three compiled surfaces against one run under
+        // `--interp`, on both leaf kinds and in either slot, for `Option` and
+        // `Result` alike.
+        //
+        // THE WILDCARD LEAF IS WHAT THIS FIXES, and the BINDING leaf is filed
+        // rather than fixed with it. Typing the element is necessary for both —
+        // neither walker can name a payload without it — but sufficient only
+        // for the wildcard, which reaches
+        // `run_discarded_leaf_user_drop_bodies` with `free_memory: true` and so
+        // takes the element whole. The binding leaf's memory stays where
+        // `track_destructure_leaf_cleanup` put it, and registering the payload
+        // walk beside it leaks 76 bytes per occurrence (measured under LSan):
+        // arming a `ContainerElemBodies` action for the leaf stops whoever was
+        // freeing the boxed payload. Adding
+        // `track_inline_option_agg_payload_var` — B-2026-09-03-15's own memory
+        // half — balances every leaf that stays put and then DOUBLE-FREES the
+        // one that moves (`let q = o;`, `return o`), because nothing retracts
+        // that owner on a move. The place-source spelling of those same two
+        // moves is already unbalanced on `main` for exactly that reason, which
+        // is why the remedy is a separate row and not a bigger patch here.
+        //
+        // `refined_tuple_literal_elem_te` already rebuilds `Option[P]` /
+        // `Result[P]` from the constructor's own argument — B-2026-08-03-1 added
+        // that arm for the `let`-BINDING spelling of this same literal
+        // (`let t = (mk(1), Option.Some(mk(2)));`) and this DESTRUCTURE spelling
+        // simply never asked. Same fallback discipline as
+        // `tuple_binding_elem_tes`: refine where the shape is recoverable, keep
+        // the head-name inference everywhere else.
+        //
+        // Deliberately NOT fixed inside `infer_arg_elem_te`, which is where the
+        // erasure happens and where the row that filed this proposed fixing it.
+        // That function also feeds `field_copy_supported` and the entry-copy
+        // lockstep predicates (`arg_is_entry_copied_heap_tuple` and its
+        // siblings), where an element that starts naming its generic argument
+        // can change which side owns a callee's copy — a blast radius nothing
+        // here measures. This call site is the one that wants the refinement,
+        // so it is the one that asks for it.
+        let elem_tes = match &value.kind {
+            ExprKind::Tuple(elems) => Some(
+                elems
+                    .iter()
+                    .map(|e| {
+                        self.refined_tuple_literal_elem_te(e)
+                            .unwrap_or_else(|| self.infer_arg_elem_te(e))
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => self.tuple_arg_elem_type_exprs(value),
+        };
         self.track_tuple_destructure_leaf_cleanups(pats, sv, elem_tes.as_deref(), value);
         Ok(())
     }
@@ -15679,6 +15737,57 @@ impl<'ctx> super::Codegen<'ctx> {
                     })
                 }
             },
+            // B-2026-09-03-39 — the ANNOTATED constructor spelling
+            // (`Result[R, String].Ok(mk(135))`). It does NOT parse as a `Call`
+            // like its unannotated sibling: the type arguments make the head a
+            // `Path` expression and the variant a METHOD on it, so the whole
+            // element is an `ExprKind::MethodCall` and never reached the arm
+            // above at all — the element fell through to `infer_arg_elem_te`,
+            // whose `enum_name_of_expr` has no `MethodCall` arm either, and
+            // came back as the EMPTY path (measured: `Path([""])`).
+            //
+            // This is also the only spelling that can answer for `Result`.
+            // A constructor names ONE of the two type arguments — `Ok(x)` says
+            // nothing about `E` — while
+            // `emit_optres_payload_user_drop_bodies_fn`'s `Result` leg reads
+            // BOTH (`it.next()?` twice), so the argument-derived `Result[P]`
+            // the arm above would build is rejected there and the payload's
+            // user `Drop` body stays silent. The annotation spells both, so
+            // take the path's own arguments VERBATIM — B-2026-08-28-11's rule
+            // one arm up: prefer what the source says over what a name implies.
+            //
+            // Gated on the method actually being a VARIANT of the named enum,
+            // so an ordinary method call on a type path (`Foo[T].make(..)`) is
+            // never mistaken for a constructor.
+            ExprKind::MethodCall { object, method, .. } => {
+                let ExprKind::Path {
+                    segments,
+                    generic_args: Some(ga),
+                } = &object.kind
+                else {
+                    return None;
+                };
+                let head = segments.first()?;
+                if (head != "Option" && head != "Result") || ga.is_empty() {
+                    return None;
+                }
+                if !self
+                    .type_decls
+                    .enum_layouts
+                    .get(head.as_str())
+                    .is_some_and(|l| l.tags.contains_key(method.as_str()))
+                {
+                    return None;
+                }
+                Some(TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: vec![head.clone()],
+                        generic_args: Some(ga.clone()),
+                        span: e.span,
+                    }),
+                    span: e.span,
+                })
+            }
             // B-2026-08-03-3 — a NESTED tuple literal element
             // (`((Option.Some(r), 6), 7)`). `infer_arg_elem_te` renders it as
             // an opaque head, losing the inner element types, so the outer

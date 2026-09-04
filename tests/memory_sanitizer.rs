@@ -332,6 +332,102 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-03-39 — THE FRESH-SOURCE TWIN OF THE ARM ABOVE MUST STAY
+    /// BALANCED WHILE IT GAINS OWNERS.
+    ///
+    /// A tuple LITERAL destructured in place (`let (r, _) = (mk(31),
+    /// Option.Some(mk(131)));`) lost the payload's `Drop` body on all three
+    /// compiled surfaces, on BOTH leaf kinds and for `Option` and `Result`
+    /// alike, because `infer_arg_elem_te` rebuilds an enum-constructor
+    /// element's type from its NAME and drops the generic argument — so the
+    /// leaf walkers, which key the payload off exactly that argument, were
+    /// handed a bare `Option`.
+    ///
+    /// WHY IT IS HERE AND NOT ONLY IN THE TRANSCRIPT PINS, and why it is a
+    /// SEPARATE case from `b25-wildcard-optres-leaf` rather than more cells in
+    /// it: the two halves of the fix take DIFFERENT ownership positions, and
+    /// each has its own way to be wrong.
+    /// - The WILDCARD leaf reaches `run_discarded_leaf_user_drop_bodies` with
+    ///   `free_memory: true`, so once the element is typed it takes the MEMORY
+    ///   as well — the opposite of the place-source arm above, which takes the
+    ///   body only. A fresh literal has no source aggregate to fall back on, so
+    ///   this is the leaf becoming the sole owner where previously there was
+    ///   none. LSan is what says whether "none" meant a leak or an owner
+    ///   elsewhere that now double-frees.
+    /// - The BINDING leaf is NOT fixed and NOT pinned here, and this suite is
+    ///   why. Registering the payload walk beside the memory owner
+    ///   `track_destructure_leaf_cleanup` installed leaks 76 bytes per
+    ///   occurrence — arming a `ContainerElemBodies` action stops whoever was
+    ///   freeing the boxed payload — and adding
+    ///   `track_inline_option_agg_payload_var` to compensate balances every
+    ///   leaf that stays put while DOUBLE-FREEING the one that moves. Both
+    ///   measurements are on the follow-up row; the transcript pins alone said
+    ///   the fix worked.
+    ///
+    /// `frres` IS THE CELL B-2026-09-03-15 WOULD PREDICT TO LEAK. It declined
+    /// the `Result` leaf on its own arm precisely because
+    /// `track_inline_option_agg_payload_var` has no `Result` peer, and taking
+    /// it there leaked 272 bytes. It is safe here for the same reason `resw` is
+    /// safe above — the memory question is answered by a different owner — but
+    /// it is the first cell to check if this ever regresses.
+    ///
+    /// `frloop` RUNS THREE ITERATIONS, so a per-iteration leak shows as a
+    /// multiple rather than as one block that could be mistaken for a fixture
+    /// artifact.
+    ///
+    /// `frstr` and `frplain` ARE THE CONTROLS: an inline `Option[String]`
+    /// payload with no user `Drop` (nothing owed, and it was clean before the
+    /// fix — which is what isolates the boxed payload rather than the typing
+    /// change itself), and a plain struct element, which proves the leaf arm
+    /// was always reached and that the refinement did not disturb it.
+    ///
+    /// Every body renders `s` and `xs.len()`, so a body run against a
+    /// cap-zeroed husk prints `dR131::0` and fails the transcript instead of
+    /// passing as a bare count.
+    #[test]
+    fn asan_fresh_tuple_source_optres_leaf_owns_its_payload_body() {
+        assert_clean_asan_run(
+            "struct R { id: i64, s: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}:{self.s}:{self.xs.len()}\") } }\n\
+             fn mk(n: i64) -> R { return R { id: n, s: f\"s{n}\", xs: [n, n] }; }\n\
+             fn frw() { let (r, _) = (mk(31), Option.Some(mk(131))); println(f\"rd{r.id}\") }\n\
+             fn frres() { let (r, _) = (mk(35), Result[R, String].Ok(mk(135))); println(f\"rr{r.id}\") }\n\
+             fn frw0() { let (_, r) = (Option.Some(mk(41)), mk(141)); println(f\"w0{r.id}\") }\n\
+             fn frnest() { let ((_, _), n) = ((mk(43), Option.Some(mk(143))), 4); println(f\"nn{n}\") }\n\
+             fn frloop() { let mut i = 0; while i < 3 { let (_, _) = (mk(44), Option.Some(mk(144))); i = i + 1; } println(\"fl\") }\n\
+             fn frstr() { let (r, _) = (mk(45), Option.Some(f\"x45\")); println(f\"fs{r.id}\") }\n\
+             fn frplain() { let (r, _) = (mk(46), mk(146)); println(f\"fp{r.id}\") }\n\
+             fn main() { frw(); frres(); frw0(); frnest(); frloop(); frstr(); frplain(); }\n",
+            &[
+                "dR131:s131:2",
+                "rd31",
+                "dR31:s31:2",
+                "dR135:s135:2",
+                "rr35",
+                "dR35:s35:2",
+                "dR41:s41:2",
+                "w0141",
+                "dR141:s141:2",
+                "dR43:s43:2",
+                "dR143:s143:2",
+                "nn4",
+                "dR44:s44:2",
+                "dR144:s144:2",
+                "dR44:s44:2",
+                "dR144:s144:2",
+                "dR44:s44:2",
+                "dR144:s144:2",
+                "fl",
+                "fs45",
+                "dR45:s45:2",
+                "dR146:s146:2",
+                "fp46",
+                "dR46:s46:2",
+            ],
+            "b39-fresh-optres-leaf",
+        );
+    }
+
     /// B-2026-09-02-23 — A BARE-TUPLE ELEMENT BINDING MUST NOT REGISTER A
     /// SECOND OWNER FOR THE TUPLE'S ELEMENT.
     ///

@@ -57924,11 +57924,20 @@ done
 /// prints `dR110/` and fails on the transcript instead of passing as a bare
 /// body count.
 ///
-/// TWO SPELLINGS ARE KNOWINGLY ABSENT because they are still LIVE
-/// run-vs-build splits and this fixture is pinned to ONE string shared with
-/// its interpreter twin: a FRESH tuple source (`let (r, _) = (mk(31),
-/// Option.Some(mk(131)));`) whose element has no memory owner, and the
-/// BINDING leaf of that same fresh source. Both are filed separately.
+/// B-2026-09-03-39 — THE FRESH TUPLE SOURCE, the WILDCARD half of the pair
+/// this fixture recorded as knowingly absent. The nine `fr*` cells are pinned;
+/// six of them were red on the compiled backends and none ever moved on this
+/// side. The BINDING leaf of the same literal is still split and still absent
+/// — the twins share ONE string, so it cannot live here until it agrees.
+///
+/// THIS HALF IS THE INVARIANT, and that is why it is worth its own file. The
+/// defect was codegen-only at a different site from the `w*` cells' —
+/// `infer_arg_elem_te` erased an enum-constructor element's generic argument,
+/// so the leaf walkers got a bare `Option` where they needed `Option[R]` —
+/// and the interpreter, which walks VALUES rather than reconstructed types,
+/// printed the same transcript before and after. Pinning it here is what
+/// makes the codegen twin's expected string an assertion about the compiled
+/// backends rather than about the program.
 ///
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_wildcard_tuple_leaf_over_optres_owns_its_payload_body`, pinned to the
@@ -57959,6 +57968,18 @@ fn undest(){ let t = (mk(6), Option.Some(mk(66))); println(f"  rd{t.0.id}") }
 fn marm()  { let t = (mk(5), Option.Some(mk(105))); match t { (a, b) => { println("  m") } } }
 fn i64opt(){ let t = (7, Option.Some(mk(77))); let (_, o) = t; println("  z") }
 
+fn frw()   { let (r, _) = (mk(31), Option.Some(mk(131))); println(f"  rd{r.id}") }
+fn frres() { let (r, _) = (mk(35), Result[R, String].Ok(mk(135))); println(f"  rd{r.id}") }
+fn frw0()  { let (_, r) = (Option.Some(mk(41)), mk(141)); println(f"  rd{r.id}") }
+fn frboth(){ let (_, _) = (mk(42), Option.Some(mk(142))); println("  x") }
+fn frnest(){ let ((_, _), n) = ((mk(43), Option.Some(mk(143))), 4); println(f"  n{n}") }
+fn frloop(){ let mut i = 0;
+             while i < 2 { let (_, _) = (mk(44), Option.Some(mk(144))); i = i + 1; }
+             println("  x") }
+fn frstr() { let (r, _) = (mk(45), Option.Some(f"x45")); println(f"  rd{r.id}") }
+fn frplain(){ let (r, _) = (mk(46), mk(146)); println(f"  rd{r.id}") }
+fn frnone(){ let n: Option[R] = Option.None; let (r, _) = (mk(47), n); println(f"  rd{r.id}") }
+
 fn main() {
     println("wr");     wr()
     println("wboth");  wboth()
@@ -57974,6 +57995,15 @@ fn main() {
     println("undest"); undest()
     println("marm");   marm()
     println("i64opt"); i64opt()
+    println("frw");     frw()
+    println("frres");   frres()
+    println("frw0");    frw0()
+    println("frboth");  frboth()
+    println("frnest");  frnest()
+    println("frloop");  frloop()
+    println("frstr");   frstr()
+    println("frplain"); frplain()
+    println("frnone");  frnone()
     println("done")
 }
 "#);
@@ -58033,6 +58063,42 @@ dR105/t105
 i64opt
 dR77/t77
   z
+frw
+dR131/t131
+  rd31
+dR31/t31
+frres
+dR135/t135
+  rd35
+dR35/t35
+frw0
+dR41/t41
+  rd141
+dR141/t141
+frboth
+dR42/t42
+dR142/t142
+  x
+frnest
+dR43/t43
+dR143/t143
+  n4
+frloop
+dR44/t44
+dR144/t144
+dR44/t44
+dR144/t144
+  x
+frstr
+  rd45
+dR45/t45
+frplain
+dR146/t146
+  rd46
+dR46/t46
+frnone
+  rd47
+dR47/t47
 done
 "#
     );
