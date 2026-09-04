@@ -5677,17 +5677,11 @@ impl<'a> super::Interpreter<'a> {
                             .find(|f| f.name == fp.name)
                             .map(|f| f.ty.clone())?;
                         // B-2026-09-04-1 — `Result` joins `Option` for a
-                        // struct-field leaf whose SOURCE codegen now owns: an
-                        // owned local, a fresh call or literal, or a by-value
-                        // param. A PROJECTION source (`let HoRes { a, b } =
-                        // w.inner;`) stays declined on both backends — the
-                        // compiled leaf there is a view the source's drop still
-                        // owns, and that family has its own row.
-                        Some((
-                            leaf,
-                            fte,
-                            !matches!(value.kind, ExprKind::FieldAccess { .. }),
-                        ))
+                        // struct-field leaf: an owned local, a fresh call or
+                        // literal, a by-value param, and (B-2026-09-04-21) a
+                        // projection of an owned local, which codegen now
+                        // transfers or copies into the leaf.
+                        Some((leaf, fte, true))
                     })
                     .collect()
             }

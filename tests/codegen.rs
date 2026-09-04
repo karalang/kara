@@ -13901,6 +13901,188 @@ done
         );
     }
 
+    /// B-2026-09-04-21 — a struct destructured out of a PROJECTION of an owned local
+    /// (`let HoRes { a, b } = w.inner;`) hands its `Option` / `Result` leaf the
+    /// field, on every surface.
+    ///
+    /// On the parent the leaf was a bit-copy VIEW registered in no set while the
+    /// root kept the memory, so `rmatch` (a consuming arm on a `Result[R, String]`
+    /// leaf) freed the payload's String from the arm binding and again from the
+    /// root's drop — glibc's `free(): double free detected in tcache 2` on an
+    /// ordinary build — and `rcall` / `resc` / `rrebind` / `two` / `awild` aborted
+    /// the same way; `unused` lost the body on every backend; `omatch` / `ocall` /
+    /// `oesc` ran the `Option` payload's body at the ROOT's last use (before the
+    /// leaf was read, or a second time) and `orebind` crashed silently. The leaf
+    /// now TRANSFERS the field out of the root (cap-zero in place, the same move the
+    /// by-value-param destructure makes) when the read is a move, and owns its own
+    /// defensive copy when the root is read again (`rlive`, `olive`, `livecall`);
+    /// the root's walk is masked for the field either way, so the body fires at
+    /// the leaf's last use. `wild` / `errs` are the no-payload controls; `nest`
+    /// moves the destructure into a block. A by-value-PARAM root is deliberately
+    /// not on this path (its own walk runs the bodies) and keeps its own row.
+    ///
+    /// Interpreter twin `test_projection_source_optres_leaf_owns_its_field`; ASAN twin `asan_projection_source_optres_leaf_is_balanced`.
+    #[test]
+    fn e2e_projection_source_optres_leaf_owns_its_field() {
+        let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct Outer { h: WrapR }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn unused()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn rmatch()  { let w = WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rlive()   { let w = WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
+               println(f"  w{w.inner.a.id}") }
+fn ounused() { let w = WrapO { inner: HoOpt { a: mk(4), b: Option.Some(mk(104)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn omatch()  { let w = WrapO { inner: HoOpt { a: mk(5), b: Option.Some(mk(105)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn olive()   { let w = WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
+               println(f"  w{w.inner.a.id}") }
+fn two()     { let g = Outer { h: WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}")
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rcall()   { let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn resc()    { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let HoRes { a, b } = w.inner;
+               let g = match b { Result.Ok(r) => r, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn rrebind() { let w = WrapR { inner: HoRes { a: mk(10), b: Result.Ok(mk(110)) } }; let HoRes { a, b } = w.inner; let c = b;
+               match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn ocall()   { let w = WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } }; let HoOpt { a, b } = w.inner;
+               match b { Option.Some(r) => eat(r), Option.None => println("  none") } }
+fn oesc()    { let w = WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } }; let HoOpt { a, b } = w.inner;
+               let g = match b { Option.Some(r) => r, Option.None => mk(0) }; println(f"  got{g.id}") }
+fn orebind() { let w = WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } }; let HoOpt { a, b } = w.inner; let c = b;
+               match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn wild()    { let w = WrapR { inner: HoRes { a: mk(14), b: Result.Ok(mk(114)) } }; let HoRes { a, b: _ } = w.inner; println(f"  rd{a.id}") }
+fn awild()   { let w = WrapR { inner: HoRes { a: mk(15), b: Result.Ok(mk(115)) } }; let HoRes { a: _, b } = w.inner;
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn nest()    { let w = WrapR { inner: HoRes { a: mk(16), b: Result.Ok(mk(116)) } };
+               { let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+               println("  outer") }
+fn errs()    { let w = WrapR { inner: HoRes { a: mk(17), b: Result.Err("e17") } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn livecall(){ let w = WrapR { inner: HoRes { a: mk(18), b: Result.Ok(mk(118)) } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
+               println(f"  w{w.inner.a.id}") }
+
+fn main() {
+  println("unused");   unused()
+  println("rmatch");   rmatch()
+  println("rlive");    rlive()
+  println("ounused");  ounused()
+  println("omatch");   omatch()
+  println("olive");    olive()
+  println("two");      two()
+  println("rcall");    rcall()
+  println("resc");     resc()
+  println("rrebind");  rrebind()
+  println("ocall");    ocall()
+  println("oesc");     oesc()
+  println("orebind");  orebind()
+  println("wild");     wild()
+  println("awild");    awild()
+  println("nest");     nest()
+  println("errs");     errs()
+  println("livecall"); livecall()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"unused
+dR101/t101
+  rd1
+dR1/t1
+rmatch
+  rd2
+dR2/t2
+  okt102
+dR102/t102
+rlive
+  rd3
+dR3/t3
+  okt103
+dR103/t103
+  w3
+ounused
+dR104/t104
+  rd4
+dR4/t4
+omatch
+  rd5
+dR5/t5
+  okt105
+dR105/t105
+olive
+  rd6
+dR6/t6
+  okt106
+dR106/t106
+  w6
+two
+  rd7
+dR7/t7
+  okt107
+dR107/t107
+rcall
+dR8/t8
+  eat108
+dR108/t108
+resc
+dR9/t9
+  got109
+dR109/t109
+rrebind
+dR10/t10
+  okt110
+dR110/t110
+ocall
+dR11/t11
+  eat111
+dR111/t111
+oesc
+dR12/t12
+  got112
+dR112/t112
+orebind
+dR13/t13
+  okt113
+dR113/t113
+wild
+dR114/t114
+  rd14
+dR14/t14
+awild
+dR15/t15
+  okt115
+dR115/t115
+nest
+dR116/t116
+  rd16
+dR16/t16
+  outer
+errs
+dR17/t17
+  ere17
+livecall
+dR18/t18
+  eat118
+dR118/t118
+  w18
+done
+"#
+            )
+        );
+    }
+
     /// B-2026-09-03-22 — A `Result[O, E]` DESTRUCTURE LEAF OWNS ITS PAYLOAD'S
     /// `Drop` BODY.
     ///
@@ -14835,9 +15017,10 @@ done
     /// is a backend split closing rather than a body being lost.
     ///
     /// B-2026-09-04-1 — `local` (the owned-local source) now runs the leaf's body,
-    /// `dR102`, at the destructure. The PROJECTION cells (`res`, `two`, `live`) are
-    /// unchanged and still agreed-absent: the compiled leaf there is a view the
-    /// source's drop owns, and that family keeps its own row.
+    /// `dR102`, at the destructure. The PROJECTION cells (`res`, `two`, `live`)
+    /// followed with B-2026-09-04-21: the leaf now owns the field there too
+    /// (transferred on a move, copied when the root is read again), so each
+    /// runs the unused leaf's body at the destructure.
     #[test]
     fn e2e_projection_source_struct_destructure_hands_each_leaf_its_body() {
         let Some(out) = run_program(
@@ -14884,6 +15067,7 @@ fn main() {
         assert_eq!(
             out,
             r#"res
+dR101/t101
   rd1
 dR1/t1
 local
@@ -14902,9 +15086,11 @@ str
   rd5
 dR5/t5
 two
+dR106/t106
   rd6
 dR6/t6
 live
+dR107/t107
   rd7
 dR7/t7
   w7

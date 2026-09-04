@@ -815,6 +815,188 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-21 — a struct destructured out of a PROJECTION of an owned local
+    /// (`let HoRes { a, b } = w.inner;`) hands its `Option` / `Result` leaf the
+    /// field, on every surface.
+    ///
+    /// On the parent the leaf was a bit-copy VIEW registered in no set while the
+    /// root kept the memory, so `rmatch` (a consuming arm on a `Result[R, String]`
+    /// leaf) freed the payload's String from the arm binding and again from the
+    /// root's drop — glibc's `free(): double free detected in tcache 2` on an
+    /// ordinary build — and `rcall` / `resc` / `rrebind` / `two` / `awild` aborted
+    /// the same way; `unused` lost the body on every backend; `omatch` / `ocall` /
+    /// `oesc` ran the `Option` payload's body at the ROOT's last use (before the
+    /// leaf was read, or a second time) and `orebind` crashed silently. The leaf
+    /// now TRANSFERS the field out of the root (cap-zero in place, the same move the
+    /// by-value-param destructure makes) when the read is a move, and owns its own
+    /// defensive copy when the root is read again (`rlive`, `olive`, `livecall`);
+    /// the root's walk is masked for the field either way, so the body fires at
+    /// the leaf's last use. `wild` / `errs` are the no-payload controls; `nest`
+    /// moves the destructure into a block. A by-value-PARAM root is deliberately
+    /// not on this path (its own walk runs the bodies) and keeps its own row.
+    ///
+    /// ASAN twin of `e2e_projection_source_optres_leaf_owns_its_field` (tests/codegen.rs): six of these cells aborted on
+    /// a double free and one crashed silently, so the balance is the pin.
+    #[test]
+    fn asan_projection_source_optres_leaf_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct Outer { h: WrapR }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn unused()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn rmatch()  { let w = WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rlive()   { let w = WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
+               println(f"  w{w.inner.a.id}") }
+fn ounused() { let w = WrapO { inner: HoOpt { a: mk(4), b: Option.Some(mk(104)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn omatch()  { let w = WrapO { inner: HoOpt { a: mk(5), b: Option.Some(mk(105)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn olive()   { let w = WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+               match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
+               println(f"  w{w.inner.a.id}") }
+fn two()     { let g = Outer { h: WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}")
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rcall()   { let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn resc()    { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let HoRes { a, b } = w.inner;
+               let g = match b { Result.Ok(r) => r, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn rrebind() { let w = WrapR { inner: HoRes { a: mk(10), b: Result.Ok(mk(110)) } }; let HoRes { a, b } = w.inner; let c = b;
+               match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn ocall()   { let w = WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } }; let HoOpt { a, b } = w.inner;
+               match b { Option.Some(r) => eat(r), Option.None => println("  none") } }
+fn oesc()    { let w = WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } }; let HoOpt { a, b } = w.inner;
+               let g = match b { Option.Some(r) => r, Option.None => mk(0) }; println(f"  got{g.id}") }
+fn orebind() { let w = WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } }; let HoOpt { a, b } = w.inner; let c = b;
+               match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn wild()    { let w = WrapR { inner: HoRes { a: mk(14), b: Result.Ok(mk(114)) } }; let HoRes { a, b: _ } = w.inner; println(f"  rd{a.id}") }
+fn awild()   { let w = WrapR { inner: HoRes { a: mk(15), b: Result.Ok(mk(115)) } }; let HoRes { a: _, b } = w.inner;
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn nest()    { let w = WrapR { inner: HoRes { a: mk(16), b: Result.Ok(mk(116)) } };
+               { let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+               println("  outer") }
+fn errs()    { let w = WrapR { inner: HoRes { a: mk(17), b: Result.Err("e17") } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn livecall(){ let w = WrapR { inner: HoRes { a: mk(18), b: Result.Ok(mk(118)) } }; let HoRes { a, b } = w.inner;
+               match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
+               println(f"  w{w.inner.a.id}") }
+
+fn main() {
+  println("unused");   unused()
+  println("rmatch");   rmatch()
+  println("rlive");    rlive()
+  println("ounused");  ounused()
+  println("omatch");   omatch()
+  println("olive");    olive()
+  println("two");      two()
+  println("rcall");    rcall()
+  println("resc");     resc()
+  println("rrebind");  rrebind()
+  println("ocall");    ocall()
+  println("oesc");     oesc()
+  println("orebind");  orebind()
+  println("wild");     wild()
+  println("awild");    awild()
+  println("nest");     nest()
+  println("errs");     errs()
+  println("livecall"); livecall()
+  println("done")
+}
+"#,
+            &[
+                "unused",
+                "dR101/t101",
+                "  rd1",
+                "dR1/t1",
+                "rmatch",
+                "  rd2",
+                "dR2/t2",
+                "  okt102",
+                "dR102/t102",
+                "rlive",
+                "  rd3",
+                "dR3/t3",
+                "  okt103",
+                "dR103/t103",
+                "  w3",
+                "ounused",
+                "dR104/t104",
+                "  rd4",
+                "dR4/t4",
+                "omatch",
+                "  rd5",
+                "dR5/t5",
+                "  okt105",
+                "dR105/t105",
+                "olive",
+                "  rd6",
+                "dR6/t6",
+                "  okt106",
+                "dR106/t106",
+                "  w6",
+                "two",
+                "  rd7",
+                "dR7/t7",
+                "  okt107",
+                "dR107/t107",
+                "rcall",
+                "dR8/t8",
+                "  eat108",
+                "dR108/t108",
+                "resc",
+                "dR9/t9",
+                "  got109",
+                "dR109/t109",
+                "rrebind",
+                "dR10/t10",
+                "  okt110",
+                "dR110/t110",
+                "ocall",
+                "dR11/t11",
+                "  eat111",
+                "dR111/t111",
+                "oesc",
+                "dR12/t12",
+                "  got112",
+                "dR112/t112",
+                "orebind",
+                "dR13/t13",
+                "  okt113",
+                "dR113/t113",
+                "wild",
+                "dR114/t114",
+                "  rd14",
+                "dR14/t14",
+                "awild",
+                "dR15/t15",
+                "  okt115",
+                "dR115/t115",
+                "nest",
+                "dR116/t116",
+                "  rd16",
+                "dR16/t16",
+                "  outer",
+                "errs",
+                "dR17/t17",
+                "  ere17",
+                "livecall",
+                "dR18/t18",
+                "  eat118",
+                "dR118/t118",
+                "  w18",
+                "done",
+            ],
+            "asan_projection_source_optres_leaf_is_balanced",
+        );
+    }
+
     /// B-2026-09-03-22 — the BALANCE half of
     /// `e2e_result_agg_destructure_leaf_owns_its_payload_body`, and the
     /// assertion the row was actually blocked on.
@@ -3506,6 +3688,16 @@ fn main() {
     /// A regression that reached for the wrapper would show up here as a double
     /// free rather than as a changed line of output.
     ///
+    /// B-2026-09-04-21 — that holds for the STRUCT leaf (`pln`) and still does.
+    /// The `Option`/`Result` leaf is the exception this row made: a view there
+    /// left a consuming arm freeing the root's buffer (`free(): double free`),
+    /// so those leaves now TRANSFER the field out of the root (cap-zeroed in
+    /// place, as the by-value-param destructure does) or own their defensive
+    /// copy when the root is read again. `res`, `two` and `live` therefore
+    /// gain the unused `Result` leaf's body at the destructure (`dR101`,
+    /// `dR104`, `dR105`), matching `opt`, and the heap stays balanced — which
+    /// is exactly what this fixture is here to say.
+    ///
     /// The `String` `tag` on every `R` is what makes a mis-masked field visible:
     /// mask one field too many and its payload leaks; mask one too few and the
     /// leaf and the root both free it. Five cells — `Result`, `Option[R]`, plain
@@ -3557,6 +3749,7 @@ fn main() {
             // in a single pass.
             &[
                 "res",
+                "dR101/t101",
                 "  rd1",
                 "dR1/t1",
                 "opt",
@@ -3568,13 +3761,16 @@ fn main() {
                 "  rd3",
                 "dR3/t3",
                 "two",
+                "dR104/t104",
                 "  rd4",
                 "dR4/t4",
                 "live",
+                "dR105/t105",
                 "  rd5",
                 "dR5/t5",
                 "  w5",
                 "res",
+                "dR101/t101",
                 "  rd1",
                 "dR1/t1",
                 "opt",
@@ -3586,13 +3782,16 @@ fn main() {
                 "  rd3",
                 "dR3/t3",
                 "two",
+                "dR104/t104",
                 "  rd4",
                 "dR4/t4",
                 "live",
+                "dR105/t105",
                 "  rd5",
                 "dR5/t5",
                 "  w5",
                 "res",
+                "dR101/t101",
                 "  rd1",
                 "dR1/t1",
                 "opt",
@@ -3604,9 +3803,11 @@ fn main() {
                 "  rd3",
                 "dR3/t3",
                 "two",
+                "dR104/t104",
                 "  rd4",
                 "dR4/t4",
                 "live",
+                "dR105/t105",
                 "  rd5",
                 "dR5/t5",
                 "  w5",

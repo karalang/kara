@@ -13395,6 +13395,39 @@ impl<'ctx> super::Codegen<'ctx> {
             && matches!(&value.kind, ExprKind::Identifier(root)
                 if !self.borrow_vars.ref_params.contains_key(root.as_str())
                     && self.fn_ctx.current_fn_param_names.contains(root.as_str()));
+        // B-2026-09-04-21 — a PROJECTION source whose root is an owned local
+        // and whose field read was MOVED rather than defensively copied
+        // (`uam_defensive_copy_field` copies only at a flagged use-after-move
+        // site, i.e. when the root is read again). On the move the root kept
+        // the field's memory — its struct drop at scope exit — and an
+        // `Option`/`Result` leaf was a bit-copy view registered in no set, so
+        // `match b { Ok(r) => .. }` gave `r` a full struct drop and the root
+        // freed the same String at exit: `free(): double free detected in
+        // tcache 2` on an ordinary build. Keep the root live past the match
+        // and the read is copied, which is why the `live` spelling was clean.
+        //
+        // The by-value-param destructure is the precedent for the shape: it
+        // TRANSFERS — zeroes the param's field (`sfld.move.res.*`) and hands
+        // the leaf the memory — rather than viewing. This is the address the
+        // same transfer needs for a projection: the inner struct inside the
+        // root, so `zero_struct_field_move_cap` can cap-zero the moved field
+        // in place. `None` for a copied projection (the copy is the leaf's).
+        // A by-value-PARAM root is excluded (`owner_runs_bodies`): the param's
+        // own walk already runs every field body, so a leaf owner there is a
+        // second one — measured as the body twice on aot and a double free
+        // on jit when tried. That root keeps its pre-existing handling.
+        let projection_root_runs_bodies = matches!(&place_body_path, Some((root, _))
+            if self.fn_ctx.current_fn_param_names.contains(root.as_str())
+                || self.payload_vars.param_view_locals.contains(root.as_str()));
+        let moved_projection_src: Option<PointerValue<'ctx>> = match &place_body_path {
+            Some((root, path))
+                if !projection_root_runs_bodies && !self.uam_consume_site_at_root(value) =>
+            {
+                self.projection_place_ptr(root, path)
+            }
+            _ => None,
+        };
+        let projection_leaf_owns = place_body_path.is_some() && !projection_root_runs_bodies;
 
         // B-2026-09-03-24 — does the SOURCE's own owner already run this
         // struct's field bodies, so a leaf registration below would fire them a
@@ -13697,6 +13730,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 //     Registering it here instead drains it after the free and
                 //     prints from a freed buffer, measured.
                 let mut pending_place_bodies: Option<(String, PointerValue<'ctx>)> = None;
+                // B-2026-09-04-21 — is this leaf an `Option`/`Result`? The
+                // moved-projection transfer below applies to those leaves
+                // only; a struct leaf keeps B-2026-08-28-10's view hand-off.
+                let leaf_is_optres = matches!(&field_te.kind, TypeKind::Path(p)
+                    if matches!(p.segments.last().map(String::as_str), Some("Option") | Some("Result")));
+                let optres_owned_src: Option<PointerValue<'ctx>> =
+                    callee_owned_src.or(if leaf_is_optres {
+                        moved_projection_src
+                    } else {
+                        None
+                    });
                 if let (Some(src), Some(tn)) = (&place_body_src, &leaf_struct_name) {
                     let (src, tn) = (src.clone(), tn.clone());
                     let src_ptr = self.variables.get(src.as_str()).map(|v| v.ptr);
@@ -13843,10 +13887,40 @@ impl<'ctx> super::Codegen<'ctx> {
                             pending_place_bodies = Some((tn, slot.ptr));
                         }
                     }
+                    // B-2026-09-04-21 — an `Option` / `Result` leaf over a
+                    // MOVED projection (see `moved_projection_src`) takes the
+                    // field's memory below exactly as a callee-owned source's
+                    // leaf does, and its body through the same blocks; what
+                    // stays here is the root's side: mask the field in the
+                    // root's own bodies walk, which otherwise ran the
+                    // `Option` payload's body at the ROOT's last use — the
+                    // destructure itself, before the leaf was read — and, for
+                    // `Result`, a phantom over the zeroed payload (the
+                    // B-2026-09-03-33 husk, one construct over).
+                    if leaf_struct_name.is_none()
+                        && leaf_is_optres
+                        && projection_leaf_owns
+                        && self.optres_payload_runs_user_drop(&field_te)
+                    {
+                        if let Some((root, path)) = &place_body_path {
+                            let (root, path) = (root.clone(), path.clone());
+                            let mut only: std::collections::HashSet<u32> =
+                                std::collections::HashSet::new();
+                            only.insert(idx as u32);
+                            self.disarm_struct_field_tuple_elem_bodies_at(&root, &path, &only);
+                        }
+                    }
                 }
                 if wrapper_took_memory || place_leaf_took_memory {
                     leaf_cleanup_registered = true;
-                } else if fresh
+                } else if (fresh
+                    // B-2026-09-04-21 — a COPIED projection's `Option`/`Result`
+                    // leaf is a fresh value too: the defensive copy is the
+                    // leaf's own, nothing else frees it, and unread it leaked
+                    // (masked by the dead-chain deletion, exactly as the
+                    // fresh-source case below was). The moved projection takes
+                    // the callee-owned branch instead, with the cap-zero.
+                    || (leaf_is_optres && projection_leaf_owns && moved_projection_src.is_none()))
                     && (self.destructure_field_needs_cleanup(&field_te)
                         // B-2026-09-04-1's probe — the `Result` field of a FRESH
                         // source (a call or a struct literal) had no owner at
@@ -13890,7 +13964,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(box_ptr) = boxed_view_box_ptr {
                         self.zero_struct_field_move_cap(box_ptr, &struct_name, fname);
                     }
-                } else if let Some(src_ptr) = callee_owned_src {
+                } else if let Some(src_ptr) = optres_owned_src {
                     // Callee-owned place source (see `callee_owned_src` above):
                     // transfer Vec/String/non-shared-struct fields — the kinds
                     // `zero_struct_field_move_cap` zeroes — to the leaf binding,
@@ -13994,7 +14068,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let source_owned = fresh
                         || matches!(&value.kind, ExprKind::Identifier(n)
-                            if !self.borrow_vars.ref_params.contains_key(n.as_str()));
+                            if !self.borrow_vars.ref_params.contains_key(n.as_str()))
+                        // B-2026-09-04-21 — a projection's leaf owns the field
+                        // too: transferred out of the root on a move, or its
+                        // own defensive copy on a copy. Not for a param root.
+                        || projection_leaf_owns;
                     if source_owned {
                         if let Some(slot) = self.variables.get(&name).copied() {
                             // B-2026-08-05-7 (leak B): if this field's payload is
@@ -14100,7 +14178,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // moved-out payload — else it double-frees against this
                         // leaf's own `Option` drop (B-27/B-31 exit-133). A fresh-temp
                         // source has no lingering struct-drop, so nothing to disarm.
-                        if let Some(src_ptr) = callee_owned_src {
+                        if let Some(src_ptr) = optres_owned_src {
                             self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
                         }
                     }
@@ -15623,6 +15701,33 @@ impl<'ctx> super::Codegen<'ctx> {
     /// source passes `false` and gets the BODIES-ONLY walker instead, which is
     /// the same per-site `free_memory` split B-2026-08-28-12 established by
     /// measurement and B-2026-08-28-36 and -40 re-measured.
+    /// B-2026-09-04-21 — the address of the struct a projection names, inside
+    /// its root local: `w.inner` is `gep(w, [idx(inner)])`, `g.h.inner` one
+    /// level deeper. Walks `struct_types` / `struct_field_type_exprs` along
+    /// the index path `projection_field_index_path` produced. `None` when any
+    /// level is not a plain user struct.
+    fn projection_place_ptr(&self, root: &str, path: &[usize]) -> Option<PointerValue<'ctx>> {
+        let mut ptr = self.variables.get(root)?.ptr;
+        let mut sname = self.var_types.var_type_names.get(root)?.clone();
+        for &idx in path {
+            let st = *self.type_decls.struct_types.get(sname.as_str())?;
+            ptr = self
+                .builder
+                .build_struct_gep(st, ptr, idx as u32, "proj.place")
+                .ok()?;
+            let fte = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(sname.as_str())?
+                .get(idx)?;
+            let TypeKind::Path(p) = &fte.kind else {
+                return None;
+            };
+            sname = p.segments.last()?.clone();
+        }
+        Some(ptr)
+    }
+
     fn track_destructure_struct_leaf_user_drop(
         &mut self,
         tn: &str,
