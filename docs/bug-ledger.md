@@ -104,13 +104,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 90 |
 | other | 75 |
 | crash | 72 |
-| use-after-free | 28 |
+| use-after-free | 29 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1432 |
+| codegen | 1433 |
 | interp | 349 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -163,8 +163,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
 | B-2026-09-04-13 | 2026-09-04 | interp+codegen | medium | A `shared struct` HOLDER RUNS NO FIELD `Drop` BODY ON ANY OF THE FOUR SURFACES -- `shared struct Sh { a: R, b: R }` with a Drop-bearing `R` prints NEITHER body where the identical NON-shared struct prints both, with no projection, destructure or move anywhere in the program; the whole-field read `let r = h.a;` recovers the MOVED field's body alone and the sibling's stays lost | — |
-| B-2026-09-04-15 | 2026-09-04 | interp+codegen | high | MOVING A FIELD OUT OF A `shared struct` LEAVES NO DISARM, SO AN ALIAS READS THE MOVED-FROM FIELD AFTER ITS `Drop` HAS RUN AND ITS BUFFER IS FREED -- `let h2 = h; let r = h.a;` then `h2.a.tag` prints garbage and valgrind reports `Invalid read of size 2 ... inside a block of size 66 free'd`, identically on both compiled backends and under `--interp`. This is the missing disarm that ALSO produces B-2026-09-04-13's lost field bodies and its 134 B leak, so it is the row that has to be settled first | — |
 | B-2026-09-04-16 | 2026-09-04 | codegen | medium | CODEGEN'S `Map[i64, Vec[i64]].keys()` ITERATES SORTED AND SEED-INDEPENDENT -- diverging from the interpreter's correct random order -- WHENEVER A STRUCTURALLY IDENTICAL `SortedMap` FUNCTION IS PRESENT IN THE MODULE and the map crosses a rehash boundary; a run-vs-build divergence that defeats KARAC_HASH_SEED and silently masks order-dependence bugs | — |
+| B-2026-09-04-17 | 2026-09-04 | codegen | medium | WHETHER A TUPLE, `Array` OR `Option` FIELD OF A `shared struct` IS COPIED OR MOVED ON READ IS UNMEASURED, so B-2026-09-04-15's rejection deliberately does not cover them -- a `String`/`Vec`/`Map`/`Set` field is deep-copied (safe) and a plain STRUCT field is moved (a use-after-free), and these three sit between the two known halves with no measurement either way | — |
 
 ### Relocated
 
@@ -2209,6 +2209,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-9 | codegen | medium | A FRESH TUPLE SOURCE'S `Option` BINDING LEAF STILL LOSES ITS PAYLOAD'S `Drop` BODY -- `let (_, o) = (mk(32), Option.Some(mk(132)));` and `let (a, b)… | 5f3c3be |
 | B-2026-09-04-10 | codegen | high | AN `Option[<struct>]` DESTRUCTURE LEAF OFF A PLACE SOURCE FREES ITS PAYLOAD TWICE WHEN THE LEAF IS MOVED WHOLE -- `let (_, o) = t; let q = o;` double… | 35d0ec0 |
 | B-2026-09-04-14 | codegen | high | A BINDING NAME CARRIES OWNERSHIP STATE OUT OF ITS FUNCTION, so an `Option` local moved in one function is double-freed because an UNCALLED function e… | 9e70222 |
+| B-2026-09-04-15 | interp+codegen | high | MOVING A FIELD OUT OF A `shared struct` LEAVES NO DISARM, SO AN ALIAS READS THE MOVED-FROM FIELD AFTER ITS `Drop` HAS RUN AND ITS BUFFER IS FREED --… | ad2f1b3 |
 
 </details>
 
