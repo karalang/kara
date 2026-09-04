@@ -59695,6 +59695,98 @@ done
     );
 }
 
+/// B-2026-09-04-29 — a by-value param destructure leaf REBOUND (`let c = b;`)
+/// runs the payload's body exactly once.
+///
+/// The caller retains a by-value param's field bodies (it runs them on its temp
+/// after the call), which is why the callee's own leaves are param views taking
+/// memory-only drops. The let-site rebind gave `c` a bodies walker of its own,
+/// so the body ran in the callee and again in the caller — on both compiled
+/// backends, for the identifier source (`rebind`, `rebindu`, `rebindcall`,
+/// `twice`) and its projection (`prebind`). `orebind` / `porebind` are the
+/// `Option` twins (always correct — the boxed path — kept as controls), `direct`
+/// the un-rebound leaf.
+///
+/// Interpreter twin of `e2e_param_destructure_leaf_rebind_runs_body_once` (tests/codegen.rs) — same program string, same
+/// pin.
+#[test]
+fn test_param_destructure_leaf_rebind_runs_body_once() {
+    let out = run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn rebind(h: HoRes)    { let HoRes { a, b } = h; let c = b;
+                         match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rebindu(h: HoRes)   { let HoRes { a, b } = h; let c = b; println("  m") }
+fn rebindcall(h: HoRes){ let HoRes { a, b } = h; let c = b;
+                         match c { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn orebind(h: HoOpt)   { let HoOpt { a, b } = h; let c = b;
+                         match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn prebind(w: WrapR)   { let HoRes { a, b } = w.inner; let c = b;
+                         match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn porebind(w: WrapO)  { let HoOpt { a, b } = w.inner; let c = b;
+                         match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn direct(h: HoRes)    { let HoRes { a, b } = h;
+                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn twice(h: HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
+                         match d { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+
+fn main() {
+  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) })
+  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) })
+  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) })
+  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) })
+  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
+  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } })
+  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
+  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) })
+  println("done")
+}
+"#);
+    assert_eq!(
+        out,
+        r#"rebind
+  okt101
+dR101/t101
+dR1/t1
+rebindu
+  m
+dR102/t102
+dR2/t2
+rebindcall
+  eat103
+dR103/t103
+dR3/t3
+orebind
+  okt104
+dR104/t104
+dR4/t4
+prebind
+  okt105
+dR105/t105
+dR5/t5
+porebind
+  okt106
+dR106/t106
+dR6/t6
+direct
+  okt107
+dR107/t107
+dR7/t7
+twice
+  okt108
+dR108/t108
+dR8/t8
+done
+"#
+    );
+}
+
 /// B-2026-09-03-22 — the INTERPRETER half of
 /// `e2e_result_agg_destructure_leaf_owns_its_payload_body`, pinned to the same
 /// string.

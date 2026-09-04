@@ -9140,8 +9140,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         // turned an agreed defect into a run-vs-build split and
                         // was backed out. This is that codegen leg, so the
                         // interpreter's exclusion comes off in the same commit.
-                        let optres_is_param_view =
-                            self.optres_ctor_payloads_are_all_param_views(value);
+                        // B-2026-09-04-29 — a REBIND of a param-view leaf is a
+                        // view too. `fn f(h: HoRes) { let HoRes { a, b } = h;
+                        // let c = b; match c { Ok(r) => .. } }`: the caller
+                        // retains a by-value param's field bodies (it runs
+                        // them on its temp after the call — which is why the
+                        // callee's own leaves are marked views and take
+                        // memory-only drops), and the let-site below gave `c`
+                        // a bodies walker of its own, so the payload's body
+                        // ran in the callee and again in the caller. The
+                        // memory half is unchanged: `c` owns the words `b`
+                        // transferred, and `b` is zeroed by the transfer
+                        // disarm.
+                        let optres_is_param_view = self
+                            .optres_ctor_payloads_are_all_param_views(value)
+                            || matches!(&value.kind, ExprKind::Identifier(n)
+                                if self.payload_vars.param_view_locals.contains(n.as_str()));
                         if optres_is_param_view {
                             self.payload_vars.param_view_locals.insert(var_name.clone());
                         }
@@ -13510,14 +13524,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // fields stay on their existing paths (RC / handle / payload-overlay).
         let callee_owned_src: Option<PointerValue<'ctx>> = if fresh {
             None
-        } else if let ExprKind::Identifier(root) = &value.kind {
+        } else if let Some(root) = match &value.kind {
+            ExprKind::Identifier(root) => Some(root.as_str()),
+            // B-2026-09-04-29 — a by-value `self` RECEIVER is the same
+            // callee-owned source under another node: its slot carries the
+            // registered `StructDrop`, and `let HoRes { a, b } = self;` was
+            // reaching none of this transfer, so a consuming arm's binding
+            // freed the payload the receiver's drop freed again — glibc's
+            // `free(): double free detected in tcache 2` under the JIT.
+            ExprKind::SelfValue => Some("self"),
+            _ => None,
+        } {
             self.variables
-                .get(root.as_str())
+                .get(root)
                 .copied()
                 .filter(|slot| self.ptr_has_registered_struct_drop(slot.ptr))
                 .map(|slot| slot.ptr)
         } else if let Some((root, path)) = self
             .projection_field_index_path(value)
+            // B-2026-09-04-29 — a `self`-rooted projection (`self.inner`)
+            // is the receiver's field; the shared path builder knows only
+            // an `Identifier` root, and the receiver is `SelfValue`.
+            .or_else(|| self.self_projection_field_index_path(value))
             .filter(|(_, path)| !path.is_empty())
         {
             // Computed here rather than read off `place_body_path`, whose
@@ -13537,7 +13565,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // struct's address and the same `sfld.move` transfer follows:
             // each leaf owns its field, cap-zeroed in the param in place, and
             // the param's walk skips it exactly as it skips `take(h: HoRes)`'s.
-            if self.fn_ctx.current_fn_param_names.contains(root.as_str())
+            if (self.fn_ctx.current_fn_param_names.contains(root.as_str()) || root == "self")
                 && self
                     .variables
                     .get(root.as_str())
@@ -15781,6 +15809,38 @@ impl<'ctx> super::Codegen<'ctx> {
     /// level deeper. Walks `struct_types` / `struct_field_type_exprs` along
     /// the index path `projection_field_index_path` produced. `None` when any
     /// level is not a plain user struct.
+    /// B-2026-09-04-29 — `projection_field_index_path` for a `SelfValue` root
+    /// (`self.inner`, `self.h.inner`): the same index walk with `"self"` as
+    /// the root name. Kept beside the transfer that needs it rather than
+    /// widened into the shared builder, whose other callers classify
+    /// `self`-rooted places on their own terms (B-2026-08-31-43).
+    fn self_projection_field_index_path(&self, expr: &Expr) -> Option<(String, Vec<usize>)> {
+        let ExprKind::FieldAccess { object, field } = &expr.kind else {
+            return None;
+        };
+        let (root, mut path, obj_ty) = match &object.kind {
+            ExprKind::SelfValue => (
+                "self".to_string(),
+                Vec::new(),
+                self.var_types.var_type_names.get("self")?.clone(),
+            ),
+            ExprKind::FieldAccess { .. } => {
+                let (root, path) = self.self_projection_field_index_path(object)?;
+                let obj_ty = self.place_chain_type_name(object)?;
+                (root, path, obj_ty)
+            }
+            _ => return None,
+        };
+        let idx = self
+            .type_decls
+            .struct_field_names
+            .get(obj_ty.as_str())?
+            .iter()
+            .position(|n| n == field)?;
+        path.push(idx);
+        Some((root, path))
+    }
+
     fn projection_place_ptr(&self, root: &str, path: &[usize]) -> Option<PointerValue<'ctx>> {
         let mut ptr = self.variables.get(root)?.ptr;
         let mut sname = self.var_types.var_type_names.get(root)?.clone();

@@ -1146,6 +1146,181 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-29 — a by-value param destructure leaf REBOUND (`let c = b;`)
+    /// runs the payload's body exactly once.
+    ///
+    /// The caller retains a by-value param's field bodies (it runs them on its temp
+    /// after the call), which is why the callee's own leaves are param views taking
+    /// memory-only drops. The let-site rebind gave `c` a bodies walker of its own,
+    /// so the body ran in the callee and again in the caller — on both compiled
+    /// backends, for the identifier source (`rebind`, `rebindu`, `rebindcall`,
+    /// `twice`) and its projection (`prebind`). `orebind` / `porebind` are the
+    /// `Option` twins (always correct — the boxed path — kept as controls), `direct`
+    /// the un-rebound leaf.
+    ///
+    /// ASAN twin of `e2e_param_destructure_leaf_rebind_runs_body_once` (tests/codegen.rs).
+    #[test]
+    fn asan_param_destructure_leaf_rebind_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn rebind(h: HoRes)    { let HoRes { a, b } = h; let c = b;
+                         match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rebindu(h: HoRes)   { let HoRes { a, b } = h; let c = b; println("  m") }
+fn rebindcall(h: HoRes){ let HoRes { a, b } = h; let c = b;
+                         match c { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn orebind(h: HoOpt)   { let HoOpt { a, b } = h; let c = b;
+                         match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn prebind(w: WrapR)   { let HoRes { a, b } = w.inner; let c = b;
+                         match c { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn porebind(w: WrapO)  { let HoOpt { a, b } = w.inner; let c = b;
+                         match c { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn direct(h: HoRes)    { let HoRes { a, b } = h;
+                         match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn twice(h: HoRes)     { let HoRes { a, b } = h; let c = b; let d = c;
+                         match d { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+
+fn main() {
+  println("rebind");     rebind(HoRes { a: mk(1), b: Result.Ok(mk(101)) })
+  println("rebindu");    rebindu(HoRes { a: mk(2), b: Result.Ok(mk(102)) })
+  println("rebindcall"); rebindcall(HoRes { a: mk(3), b: Result.Ok(mk(103)) })
+  println("orebind");    orebind(HoOpt { a: mk(4), b: Option.Some(mk(104)) })
+  println("prebind");    prebind(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
+  println("porebind");   porebind(WrapO { inner: HoOpt { a: mk(6), b: Option.Some(mk(106)) } })
+  println("direct");     direct(HoRes { a: mk(7), b: Result.Ok(mk(107)) })
+  println("twice");      twice(HoRes { a: mk(8), b: Result.Ok(mk(108)) })
+  println("done")
+}
+"#,
+            &[
+                "rebind",
+                "  okt101",
+                "dR101/t101",
+                "dR1/t1",
+                "rebindu",
+                "  m",
+                "dR102/t102",
+                "dR2/t2",
+                "rebindcall",
+                "  eat103",
+                "dR103/t103",
+                "dR3/t3",
+                "orebind",
+                "  okt104",
+                "dR104/t104",
+                "dR4/t4",
+                "prebind",
+                "  okt105",
+                "dR105/t105",
+                "dR5/t5",
+                "porebind",
+                "  okt106",
+                "dR106/t106",
+                "dR6/t6",
+                "direct",
+                "  okt107",
+                "dR107/t107",
+                "dR7/t7",
+                "twice",
+                "  okt108",
+                "dR108/t108",
+                "dR8/t8",
+                "done",
+            ],
+            "asan_param_destructure_leaf_rebind_is_balanced",
+        );
+    }
+
+    /// B-2026-09-04-29 — a by-value `self` RECEIVER destructured (`let HoRes { a, b }
+    /// = self;`, and `= self.inner` through a projection) frees each field exactly
+    /// once.
+    ///
+    /// The `SelfValue` source reached none of the callee-owned transfer an
+    /// `Identifier` param takes, so a consuming arm's binding freed the payload the
+    /// receiver's drop freed again: glibc's `free(): double free detected in tcache
+    /// 2` under the JIT, and the same double free on aot (valgrind clean only
+    /// because of how the optimizer folded it). Balance across three iterations is
+    /// the pin. The STDOUT here is the compiled column and is NOT what `--interp`
+    /// prints: a temp receiver's field bodies are lost on the compiled backends
+    /// (`s_match` loses `a`'s and `b`'s, `s_call` keeps `b`'s through the arm
+    /// binding) because codegen treats `self` as caller-retained and a temp
+    /// receiver has no caller walk — a family that is agreed-wrong at its root
+    /// (`fn m(self) { .. }` on a temp runs no body on ANY surface) and has its own
+    /// row, B-2026-09-04-30. Pinned so a change there shows up as a changed line,
+    /// never as a silent double free.
+    #[test]
+    fn asan_self_receiver_destructure_frees_each_field_once() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct WrapR { inner: HoRes }
+fn eat(x: R) { println(f"  eat{x.id}") }
+impl HoRes {
+    fn s_match(self)  { let HoRes { a, b } = self; println(f"  rd{a.id}")
+                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+    fn s_unused(self) { let HoRes { a, b } = self; println(f"  rd{a.id}") }
+    fn s_call(self)   { let HoRes { a, b } = self;
+                        match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+}
+impl WrapR {
+    fn p_match(self)  { let HoRes { a, b } = self.inner; println(f"  rd{a.id}")
+                        match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+    fn p_unused(self) { let HoRes { a, b } = self.inner; println(f"  rd{a.id}") }
+}
+fn main() {
+    println("start")
+    let mut i = 0;
+    while i < 3 {
+        let k = i * 10;
+        HoRes { a: mk(k + 1), b: Result.Ok(mk(k + 101)) }.s_match()
+        HoRes { a: mk(k + 2), b: Result.Ok(mk(k + 102)) }.s_unused()
+        HoRes { a: mk(k + 3), b: Result.Ok(mk(k + 103)) }.s_call()
+        WrapR { inner: HoRes { a: mk(k + 4), b: Result.Ok(mk(k + 104)) } }.p_match()
+        WrapR { inner: HoRes { a: mk(k + 5), b: Result.Ok(mk(k + 105)) } }.p_unused()
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "start",
+                "  rd1",
+                "  okt101",
+                "  rd2",
+                "  eat103",
+                "dR103/t103",
+                "  rd4",
+                "  okt104",
+                "  rd5",
+                "  rd11",
+                "  okt111",
+                "  rd12",
+                "  eat113",
+                "dR113/t113",
+                "  rd14",
+                "  okt114",
+                "  rd15",
+                "  rd21",
+                "  okt121",
+                "  rd22",
+                "  eat123",
+                "dR123/t123",
+                "  rd24",
+                "  okt124",
+                "  rd25",
+            ],
+            "asan_self_receiver_destructure_frees_each_field_once",
+        );
+    }
+
     /// B-2026-09-03-22 — the BALANCE half of
     /// `e2e_result_agg_destructure_leaf_owns_its_payload_body`, and the
     /// assertion the row was actually blocked on.
