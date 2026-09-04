@@ -32,6 +32,30 @@ use super::state;
 use super::state::LayoutId;
 use crate::ast::{Function, TypeExpr};
 
+/// The four TYPE-substitution axes of one monomorphization, bundled so an
+/// entry point can hand them to [`Codegen::ensure_mono_generated`] as a unit.
+///
+/// They are exactly the four `MonoState` fields a mono body reads to resolve a
+/// bare `T` — `type_subst` (the LLVM type), `type_subst_names` (the head name),
+/// `type_subst_type_exprs` (the element-aware `TypeExpr`) and
+/// `type_subst_call_te` (the typechecker's exact per-arg `TypeExpr`). Grouping
+/// them keeps the entry point's signature honest: a caller that populates one
+/// axis and forgets another gets a body that resolves `T` inconsistently
+/// depending on which channel a given lowering site asks.
+///
+/// `default()` is the empty substitution, which is what a per-LAYOUT monomorph
+/// of a non-generic function wants — it has no type params at all, and every
+/// axis must be CLEARED so a stale outer substitution cannot leak in.
+///
+/// [`Codegen::ensure_mono_generated`]: super::Codegen::ensure_mono_generated
+#[derive(Default)]
+pub(crate) struct MonoTypeAxes<'ctx> {
+    pub(crate) subst: HashMap<String, BasicTypeEnum<'ctx>>,
+    pub(crate) subst_names: HashMap<String, String>,
+    pub(crate) subst_type_exprs: HashMap<String, TypeExpr>,
+    pub(crate) subst_call_te: HashMap<String, TypeExpr>,
+}
+
 /// Generic-instantiation state and the active substitution.
 pub(crate) struct MonoState<'ctx> {
     // ── Generic monomorphization ──────────────────────────────────

@@ -59671,3 +59671,139 @@ done
 "#
     );
 }
+
+/// B-2026-09-04-4's ORACLE. The interpreter has always run a generic
+/// `impl[T] Drop for S[T]` body; the compiled backends ran none, because
+/// `Drop::drop` is the one impl method with no source call site and the mono
+/// pipeline instantiates from call sites. This pins the side of the divergence
+/// that was already right, so a future change to the compiled half has a fixed
+/// target rather than a moving one — and so a regression HERE is caught too.
+///
+/// The cells are the codegen twin's, verbatim: `two` for two live monomorphs
+/// (`dB9`/`dB8`, distinct field offsets), `field` for a generic parent whose
+/// own field is Drop-bearing, `vec`/`nest` for a bare-`T` collection and a
+/// nested generic arg, `plain` for the non-generic control, and `str` for
+/// PLACEMENT — `dB7` between `v8` and `after`, the binding's last use.
+#[test]
+fn test_generic_impl_drop_runs_its_body_per_monomorph() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+
+struct G[T] { v: T, r: R }
+impl[T] Drop for G[T] { fn drop(mut ref self) { println("dG") } }
+
+struct H[T] { items: Vec[T] }
+impl[T] Drop for H[T] { fn drop(mut ref self) { println(f"dH{self.items.len()}") } }
+
+struct P { s: String }
+impl Drop for P { fn drop(mut ref self) { println("dP") } }
+
+fn cell_str() {
+    let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"ttttttt" };
+    println(f"  v{b.v.len()}");
+    println("  after");
+}
+fn cell_two() {
+    let a: Box3[String] = Box3 { v: f"aaaaaaaa", tag: f"ttttttttt" };
+    println(f"  a{a.v.len()}");
+    let b: Box3[i64] = Box3 { v: 7, tag: f"uuuuuuuu" };
+    println(f"  b{b.v}");
+}
+fn cell_field() { let g: G[String] = G { v: f"gggggggg", r: R { id: 3 } }; println(f"  g{g.v.len()}"); }
+fn cell_vec()   { let h: H[String] = H { items: [f"aaaaaaaa", f"bbbbbbbb"] }; println(f"  h{h.items.len()}"); }
+fn cell_nest()  { let d: Box3[Vec[String]] = Box3 { v: [f"zzzzzzzz"], tag: f"wwwwww" }; println(f"  d{d.v.len()}"); }
+fn cell_plain() { let p = P { s: f"pppppppp" }; println(f"  p{p.s.len()}"); }
+
+fn main() {
+    println("str");   cell_str();
+    println("two");   cell_two();
+    println("field"); cell_field();
+    println("vec");   cell_vec();
+    println("nest");  cell_nest();
+    println("plain"); cell_plain();
+    println("done");
+}
+"#),
+        r#"str
+  v8
+dB7
+  after
+two
+  a8
+dB9
+  b7
+dB8
+field
+  g8
+dG
+dR3
+vec
+  h2
+dH2
+nest
+  d1
+dB6
+plain
+  p8
+dP
+done
+"#
+    );
+}
+
+/// The interpreter oracle for B-2026-09-04-4's argument half. Unchanged by the
+/// fix — it always ran these bodies, in these frames — and pinned so the
+/// compiled half has a fixed target. See the codegen twin for what each cell
+/// is for and for the double-free this shape produced mid-fix.
+#[test]
+fn test_generic_impl_drop_survives_a_by_value_argument() {
+    assert_eq!(
+        run(r#"struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { v: String, tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+
+fn take(b: Box3[String]) { println(f"  t{b.v.len()}") }
+fn takei(b: Box3[i64]) { println(f"  ti{b.v}") }
+fn takep(b: Pl) { println(f"  tp{b.v.len()}") }
+fn make() -> Box3[String] { return Box3 { v: f"mmmmmmmm", tag: f"rrrrrrr" }; }
+
+fn c_param() { let b: Box3[String] = Box3 { v: f"pppppppp", tag: f"qqqqqq" }; take(b); println("  after") }
+fn c_parami() { let b: Box3[i64] = Box3 { v: 5, tag: f"iiiii" }; takei(b) }
+fn c_ret()   { let r = make(); println(f"  r{r.v.len()}") }
+fn c_temp()  { take(Box3 { v: f"tttttttt", tag: f"sssss" }) }
+fn c_plain() { let b = Pl { v: f"pppppppp", tag: f"qqqqqq" }; takep(b) }
+
+fn main() {
+    println("param");  c_param();
+    println("parami"); c_parami();
+    println("ret");    c_ret();
+    println("temp");   c_temp();
+    println("plain");  c_plain();
+    println("done");
+}
+"#),
+        r#"param
+  t8
+dB6
+  after
+parami
+  ti5
+dB5
+ret
+  r8
+dB7
+temp
+  t8
+dB5
+plain
+  tp8
+dP6
+done
+"#
+    );
+}

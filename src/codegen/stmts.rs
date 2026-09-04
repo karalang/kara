@@ -425,7 +425,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // alloca in the statement loop below, and the loop site requires both
         // to line up before taking the fast path.
         let ascii_const_lets = super::ascii_const_chars::ascii_const_string_lets(block);
-        let user_drop_last_use = if self.drop_rc.user_drop_wrapper_fns.is_empty() {
+        let user_drop_last_use = if self.program_has_no_user_drop() {
             None
         } else {
             Some(crate::interpreter::compute_block_last_use(block))
@@ -1480,7 +1480,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // sequential-statement arm below fires due user drops per statement,
         // mirroring `compile_block` (B-2026-07-21-1). Same guard: free when
         // the program has no user Drop impl.
-        let auto_par_user_drop_last_use = if self.drop_rc.user_drop_wrapper_fns.is_empty() {
+        let auto_par_user_drop_last_use = if self.program_has_no_user_drop() {
             None
         } else {
             Some(crate::interpreter::compute_block_last_use(body))
@@ -9841,7 +9841,26 @@ impl<'ctx> super::Codegen<'ctx> {
                                 } else {
                                     let inst =
                                         self.type_decls.enum_inst_var_types.get(var_name).cloned();
-                                    self.track_struct_var_inst(&struct_name, alloca, inst);
+                                    // B-2026-09-04-4 — the body half the note
+                                    // above deferred. A generic `impl[T] Drop
+                                    // for S[T]` has no bare wrapper (its
+                                    // `S.drop` symbol is never emitted, because
+                                    // nothing calls it), so the branch above
+                                    // always misses; the binding's recorded
+                                    // instantiation is what lets the wrapper be
+                                    // built per monomorph. Registering it here
+                                    // REPLACES the memory drop rather than
+                                    // adding to it — the wrapper's own last
+                                    // step IS that memory drop — which is why
+                                    // the fallback stays in the `else`.
+                                    if !self.track_user_drop_var_inst(
+                                        &struct_name,
+                                        var_name,
+                                        alloca,
+                                        inst.as_ref(),
+                                    ) {
+                                        self.track_struct_var_inst(&struct_name, alloca, inst);
+                                    }
                                 }
                             } else if has_field_user_drop {
                                 // B-2026-07-29-39 — TWO registrations, doing
@@ -20992,4 +21011,33 @@ fn expr_contains_self_value(e: &Expr) -> bool {
         }
     });
     found
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Can this program register a user-`Drop` action at all?
+    ///
+    /// The NLL last-use map (`compute_block_last_use`) is only consulted to
+    /// place `UserDrop` actions, so computing it for a program that has no
+    /// `impl Drop` anywhere is pure cost — hence a gate. That gate used to ask
+    /// `user_drop_wrapper_fns.is_empty()`, which is a proxy for the real
+    /// question and stopped being a faithful one: a GENERIC `impl[T] Drop for
+    /// S[T]` builds no wrapper until a binding site resolves its instantiation
+    /// (B-2026-09-04-4), so a program whose ONLY `Drop` impl is generic reached
+    /// this with an empty cache, took the `None` arm, and then registered
+    /// actions that had no map to fire against — they drained at scope exit
+    /// instead of at the binding's last use, which is a run/build divergence in
+    /// its own right (`--interp` prints the body between the two statements
+    /// that bracket the last use; the compiled backends printed it at the end).
+    ///
+    /// Asking the program directly is both cheaper and exact. A `Drop` impl
+    /// that never yields a wrapper (a `shared` type, say) only costs the
+    /// analysis walk — with no `UserDrop` action registered, a populated map
+    /// fires nothing.
+    pub(super) fn program_has_no_user_drop(&self) -> bool {
+        self.drop_rc.user_drop_wrapper_fns.is_empty()
+            && self
+                .program_snapshot
+                .as_deref()
+                .is_none_or(|p| p.drop_method_keys.is_empty())
+    }
 }

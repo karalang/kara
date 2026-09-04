@@ -24,6 +24,7 @@ use inkwell::IntPredicate;
 use super::helpers::{
     const_value_from_literal_expr, const_value_to_mangle_str, vec_inner_type_expr,
 };
+use super::mono_state::MonoTypeAxes;
 use super::state::{LayoutId, MapMonoMethods, VarSlot};
 
 /// Which LOOKUP probe loop is asking whether to fold the 7-bit hash tag into
@@ -3329,6 +3330,69 @@ impl<'ctx> super::Codegen<'ctx> {
         temp.into()
     }
 
+    /// B-2026-09-04-4 — instantiate a GENERIC IMPL METHOD from a BINDING's
+    /// recorded instantiation rather than from a call site, and return the
+    /// emitted `FunctionValue`.
+    ///
+    /// `subst_te` is the struct's own `param -> concrete arg` map, exactly what
+    /// [`Self::generic_struct_subst_from_inst`] builds from `Box3[String]`. It
+    /// binds the IMPL's params, which is the whole axis for the method this
+    /// exists to reach: `make_generic_impl_method_function` merges the impl's
+    /// `[T]` into the synthesized `Box3.drop`, so a method with no generic
+    /// params of its own is fully determined by the receiver's instantiation.
+    /// A method that ALSO declares its own params is declined (`None`) rather
+    /// than guessed — those axes have no binding-site answer.
+    ///
+    /// The result is a distinct symbol per instantiation, which is not an
+    /// optimization but the correctness requirement: a bare-`T` field WIDENS
+    /// under a monomorph (`T = String` is a 3-word triple), shifting every
+    /// field after it, so one name-shared `Box3.drop` compiled at the all-`i64`
+    /// default reads the wrong offsets even for a body that only touches
+    /// concrete fields. Two live monomorphs in one program (`Box3[String]` and
+    /// `Box3[i64]`) is the cell that makes that unavoidable.
+    pub(super) fn ensure_generic_impl_method_mono(
+        &mut self,
+        qualified: &str,
+        subst_te: &HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        let generic_fn = self.mono_state.generic_fns.get(qualified)?.clone();
+        let gp = generic_fn.generic_params.as_ref()?;
+        // Every formal axis must be answered by the receiver's instantiation.
+        // A const param, an effect param or a method-own type param has no
+        // binding-site answer, so decline rather than emit a body whose `T` is
+        // silently the erased default.
+        if gp.params.iter().any(|p| p.is_const)
+            || !gp.effect_params.is_empty()
+            || !gp.params.iter().all(|p| subst_te.contains_key(&p.name))
+        {
+            return None;
+        }
+        let mut axes = MonoTypeAxes::default();
+        for (param, te) in subst_te {
+            axes.subst
+                .insert(param.clone(), self.llvm_type_for_type_expr(te));
+            axes.subst_names
+                .insert(param.clone(), Self::mangled_type_name(te));
+            axes.subst_type_exprs.insert(param.clone(), te.clone());
+            axes.subst_call_te.insert(param.clone(), te.clone());
+        }
+        let mangled = self.mangle_mono_name(
+            qualified,
+            &generic_fn,
+            &axes.subst,
+            &axes.subst_names,
+            &HashMap::new(),
+            &HashMap::new(),
+            &LayoutId::Aos,
+        );
+        if let Some(f) = self.module.get_function(&mangled) {
+            return Some(f);
+        }
+        self.ensure_mono_generated(&generic_fn, &mangled, axes, HashMap::new(), LayoutId::Aos)
+            .ok()?;
+        self.module.get_function(&mangled)
+    }
+
     /// Generate (declare + compile) a per-layout monomorph of a *non-generic*
     /// function under `mangled`, with `layout_subst` active so its `Vec[E]`
     /// params lower SoA against the caller's argument layout (slice 2) and
@@ -3347,6 +3411,41 @@ impl<'ctx> super::Codegen<'ctx> {
         layout_subst: HashMap<String, LayoutId>,
         return_layout: LayoutId,
     ) -> Result<(), String> {
+        self.ensure_mono_generated(
+            func,
+            mangled,
+            MonoTypeAxes::default(),
+            layout_subst,
+            return_layout,
+        )
+    }
+
+    /// The body of [`Self::ensure_layout_mono_generated`], with the four
+    /// TYPE-substitution axes supplied by the caller rather than cleared.
+    ///
+    /// A `MonoTypeAxes::default()` reproduces the layout-mono behaviour exactly
+    /// — every axis is `replace`d with an empty map, which is what `take` did —
+    /// so the layout path is byte-for-byte unchanged. A populated `axes` makes
+    /// this the third entry into the mono pipeline, alongside
+    /// `compile_generic_call` (driven by a CALL) and the layout path (driven by
+    /// a caller's argument layout): one driven by a BINDING's recorded
+    /// instantiation, for the generic function that has no call site at all.
+    ///
+    /// B-2026-09-04-4 is the reason that third entry exists. `Drop::drop` is
+    /// the one impl method a program never calls: every other method of an
+    /// `impl[T] S[T]` reaches `compile_generic_call` through a call in the
+    /// source, while `drop` is reached only from the synthesized
+    /// `karac_drop_<T>` wrapper. So the declaration pass parks it in
+    /// `generic_fns` and waits for a call that never comes — `Box3[String]`'s
+    /// body simply never got emitted, on any compiled backend.
+    pub(super) fn ensure_mono_generated(
+        &mut self,
+        func: &Function,
+        mangled: &str,
+        axes: MonoTypeAxes<'ctx>,
+        layout_subst: HashMap<String, LayoutId>,
+        return_layout: LayoutId,
+    ) -> Result<(), String> {
         if self.mono_state.generated_monos.contains(mangled) {
             return Ok(());
         }
@@ -3362,14 +3461,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_cleanup = std::mem::take(&mut self.drop_rc.scope_cleanup_actions);
         let saved_cancel_ptr = self.conc.branch_cancel_ptr.take();
         let saved_loop_stack = std::mem::take(&mut self.fn_ctx.loop_stack);
-        let saved_subst = std::mem::take(&mut self.mono_state.type_subst);
+        // The four type axes. A layout mono passes `MonoTypeAxes::default()`, so
+        // each `replace` here is the `take` this used to be; a binding-driven
+        // mono (B-2026-09-04-4) passes the instantiation it resolved.
+        let saved_subst = std::mem::replace(&mut self.mono_state.type_subst, axes.subst);
         // Name-subst twin (B-2026-07-03-11): isolate the layout-mono body from a
         // stale outer name-subst, mirroring `type_subst`.
-        let saved_subst_names = std::mem::take(&mut self.mono_state.type_subst_names);
+        let saved_subst_names =
+            std::mem::replace(&mut self.mono_state.type_subst_names, axes.subst_names);
         // Element-aware twin (B-2026-07-13-2/-3): a layout mono is non-generic,
         // so clear any stale outer type-expr subst too; restored below.
-        let saved_subst_type_exprs = std::mem::take(&mut self.mono_state.type_subst_type_exprs);
-        let saved_subst_call_te = std::mem::take(&mut self.mono_state.type_subst_call_te);
+        let saved_subst_type_exprs = std::mem::replace(
+            &mut self.mono_state.type_subst_type_exprs,
+            axes.subst_type_exprs,
+        );
+        let saved_subst_call_te =
+            std::mem::replace(&mut self.mono_state.type_subst_call_te, axes.subst_call_te);
         let saved_const_subst = std::mem::take(&mut self.mono_state.const_subst);
         let saved_layout_subst = std::mem::replace(&mut self.mono_state.layout_subst, layout_subst);
         let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
@@ -3875,6 +3982,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         &concrete,
                         alloca,
                         param_inst.clone(),
+                        &param_name,
                     ) {
                         self.borrow_vars.owned_struct_params.remove(&param_name);
                     }

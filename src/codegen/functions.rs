@@ -2314,6 +2314,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 alloca,
                                 param_inst,
                                 param_transfer.as_deref(),
+                                &param_name,
                             )
                         {
                             // #17 gap 1 — the param is now a callee-owned local:

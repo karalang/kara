@@ -7916,6 +7916,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let var = var.clone();
         self.suppress_struct_cleanup_for_tail_identifier(&var);
+        // B-2026-09-04-4 — …and the user-`Drop` action with it, for the class
+        // that only now HAS one. This is the same half `move_transferred_struct_arg`
+        // had to add for its own arm, and it fails the same way: the scan above
+        // matches a `StructDrop` and silently skips a `UserDrop`, so the caller
+        // keeps a cleanup the callee has just taken ownership of.
+        //
+        // Measured while building the generic-`Drop` fix: `fn take(b: Box3[String])`
+        // over `let b: Box3[String] = …; take(b)` went from a lost `Drop` body to
+        // `AddressSanitizer: attempting double-free` on the 8-byte `v` buffer,
+        // because the binding's registration had changed from `StructDrop` to the
+        // per-monomorph `UserDrop` wrapper and only the former was retracted.
+        //
+        // Gated on the bare-name wrapper being ABSENT so it reaches exactly that
+        // class. A non-generic `Drop` type has its bare `karac_drop_<T>` and keeps
+        // today's behaviour untouched — narrowing this to the shape it was written
+        // for rather than changing an ownership rule for every type at once.
+        if !self
+            .drop_rc
+            .user_drop_wrapper_fns
+            .contains_key(type_name.as_str())
+        {
+            self.suppress_user_drop_for_var(&var);
+        }
     }
 
     /// Zero the handle word of a `GpuBuffer` binding that has just been MOVED,

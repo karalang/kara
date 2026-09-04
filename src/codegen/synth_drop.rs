@@ -1481,6 +1481,43 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The `$<concrete>` suffix that distinguishes one instantiation's drop
+    /// glue from another's — `$String`, `$i64`, `$Vec_String` — built from the
+    /// struct's declared generic params in DECLARED ORDER so the same
+    /// instantiation always mangles the same way.
+    ///
+    /// `None` for a non-generic struct, or when the subst binds none of its
+    /// params; callers read that as "use the bare, name-shared symbol", which
+    /// is what every non-generic type has always done.
+    ///
+    /// Shared by the memory half (`__karac_drop_struct_S$String`) and, since
+    /// B-2026-09-04-4, the user-`Drop` wrapper half (`karac_drop_S$String`), so
+    /// the two halves of one instantiation's cleanup cannot drift onto
+    /// different keys.
+    pub(super) fn struct_drop_mono_suffix(
+        &self,
+        struct_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<String> {
+        let params = self
+            .type_decls
+            .struct_generic_params
+            .get(struct_name)
+            .cloned()?;
+        let mut suf = String::new();
+        for p in &params {
+            if let Some(te) = subst.get(p) {
+                suf.push('$');
+                suf.push_str(&Self::drop_mono_mangle_component(te));
+            }
+        }
+        if suf.is_empty() {
+            None
+        } else {
+            Some(suf)
+        }
+    }
+
     fn emit_struct_drop_synthesis_impl(
         &mut self,
         struct_name: &str,
@@ -1490,25 +1527,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // non-empty subst, append `$<concrete>` per generic param (in declared
         // order) so `S[String]` / `S[i64]` get distinct cached drop fns and LLVM
         // symbols. Non-generic (or `None`) → bare name, unchanged.
-        let mono_suffix: Option<String> = subst.and_then(|subst| {
-            let params = self
-                .type_decls
-                .struct_generic_params
-                .get(struct_name)
-                .cloned()?;
-            let mut suf = String::new();
-            for p in &params {
-                if let Some(te) = subst.get(p) {
-                    suf.push('$');
-                    suf.push_str(&Self::drop_mono_mangle_component(te));
-                }
-            }
-            if suf.is_empty() {
-                None
-            } else {
-                Some(suf)
-            }
-        });
+        let mono_suffix: Option<String> =
+            subst.and_then(|subst| self.struct_drop_mono_suffix(struct_name, subst));
         let cache_key = match &mono_suffix {
             Some(s) => format!("{struct_name}{s}"),
             None => struct_name.to_string(),
@@ -9529,6 +9549,106 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         self.emit_struct_drop_synthesis(type_name)
+    }
+
+    /// B-2026-09-04-4 — the PER-MONOMORPH `karac_drop_<T>$<concrete>`, for a
+    /// generic struct whose `impl[T] Drop for S[T]` the bare wrapper cannot
+    /// reach.
+    ///
+    /// `emit_user_drop_wrapper` opens with
+    /// `module.get_function("{type_name}.drop")`, and for a generic impl that
+    /// symbol does not exist: the declaration pass parks the method in
+    /// `mono_state.generic_fns` and waits for a call site to instantiate it,
+    /// but `drop` is the ONE impl method a program never calls — it is reached
+    /// only from the wrapper being built here. So the lookup missed, the
+    /// wrapper returned `None`, `user_drop_wrapper_fns` gained no entry, and
+    /// every binding of `S[String]` silently registered the ordinary memory
+    /// drop instead. B-2026-09-03-35 made that fallback deliberate (it stops
+    /// the leak); this closes the other half by instantiating the method from
+    /// the BINDING's recorded instantiation and then building the wrapper
+    /// around it.
+    ///
+    /// Every step is threaded with the same `subst`, so the three halves of one
+    /// instantiation's cleanup agree: the user body compiles at `T = String`,
+    /// the field-body walker resolves a bare-`T` field to `String`, and the
+    /// memory drop is the per-monomorph `__karac_drop_struct_S$String` rather
+    /// than the name-shared one that would read `T` at the erased `i64`
+    /// default. Two live monomorphs in one program is what makes that
+    /// non-negotiable: `S[String]` and `S[i64]` have different field offsets,
+    /// so a single shared symbol cannot serve both.
+    ///
+    /// An empty subst (or a struct whose params it does not bind) falls through
+    /// to the bare wrapper, so every non-generic type is byte-for-byte
+    /// unchanged.
+    pub(super) fn emit_user_drop_wrapper_mono(
+        &mut self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        let Some(suffix) = self.struct_drop_mono_suffix(type_name, subst) else {
+            return self.emit_user_drop_wrapper(type_name);
+        };
+        let cache_key = format!("{type_name}{suffix}");
+        if let Some(f) = self.drop_rc.user_drop_wrapper_fns.get(&cache_key) {
+            return Some(*f);
+        }
+        // Instantiate the user body FIRST — it compiles a whole function
+        // inline, with its own builder/state save-restore, so it must not run
+        // while the builder is positioned inside the half-built wrapper.
+        let user_drop_fn =
+            self.ensure_generic_impl_method_mono(&format!("{type_name}.drop"), subst)?;
+
+        let fn_name = format!("karac_drop_{cache_key}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.drop_rc.user_drop_wrapper_fns.insert(cache_key, f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let saved_bb = self.builder.get_insert_block();
+
+        let wrapper_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let wrapper = self
+            .module
+            .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
+        self.drop_rc
+            .user_drop_wrapper_fns
+            .insert(cache_key, wrapper);
+
+        let entry_bb = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+
+        // (a) the user body, (a½) each Drop-bearing FIELD's body, (b) the
+        // heap-field cleanup — the same three steps, in the same order, as the
+        // bare wrapper. See `emit_user_drop_wrapper` for why the field step
+        // frees nothing and why the memory step is a separate call.
+        self.builder
+            .build_call(user_drop_fn, &[self_ptr.into()], "")
+            .unwrap();
+        if let Some(bodies_fn) = self.emit_user_drop_field_bodies_fn(type_name, subst) {
+            self.builder
+                .build_call(bodies_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
+        let field_drop_fn =
+            if self.struct_owns_shared_field_subst(type_name, &mut Vec::new(), Some(subst)) {
+                self.emit_vec_elem_struct_with_shared_drop_fn_mono(type_name, Some(subst))
+            } else {
+                self.emit_struct_drop_synthesis_mono(type_name, subst)
+            };
+        if let Some(field_drop_fn) = field_drop_fn {
+            self.builder
+                .build_call(field_drop_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
     }
 
     fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {

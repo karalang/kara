@@ -8576,6 +8576,43 @@ impl<'ctx> super::Codegen<'ctx> {
         );
     }
 
+    /// B-2026-09-04-4 — [`Self::track_user_drop_var`] for a binding whose type
+    /// is a GENERIC struct, keyed by the binding's recorded instantiation
+    /// rather than by the bare type name.
+    ///
+    /// `track_user_drop_var` reads `user_drop_wrapper_fns[type_name]`, and for
+    /// a generic `impl[T] Drop for S[T]` that key is never populated — the bare
+    /// wrapper cannot be built at all (see
+    /// [`Self::emit_user_drop_wrapper_mono`]). This resolves the instantiation
+    /// to a subst, emits the per-monomorph wrapper on demand, and registers
+    /// that. Returns whether a wrapper was found and an action pushed, so the
+    /// caller can fall back to the ordinary memory drop when it was not — the
+    /// shape B-2026-09-03-35 established, unchanged for every case this
+    /// declines.
+    pub(super) fn track_user_drop_var_inst(
+        &mut self,
+        type_name: &str,
+        binding_name: &str,
+        binding_ptr: PointerValue<'ctx>,
+        inst: Option<&TypeExpr>,
+    ) -> bool {
+        let subst = match inst {
+            Some(i) => self.generic_struct_subst_from_inst(type_name, i),
+            None => std::collections::HashMap::new(),
+        };
+        let Some(drop_fn) = self.emit_user_drop_wrapper_mono(type_name, &subst) else {
+            return false;
+        };
+        self.track_user_drop_var_with_fn(
+            type_name,
+            binding_name,
+            binding_ptr,
+            drop_fn,
+            UserDropKind::OwnWrapper,
+        );
+        true
+    }
+
     /// [`Self::track_user_drop_var`] with the drop fn supplied by the caller
     /// rather than looked up in `user_drop_wrapper_fns` (B-2026-07-29-39).
     ///

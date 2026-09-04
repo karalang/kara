@@ -3924,6 +3924,207 @@ fn main() { let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"tttttttt" };
         );
     }
 
+    /// B-2026-09-04-4 — the BODY half of B-2026-09-03-35: an `impl[T] Drop for
+    /// S[T]` ran no body at all on the compiled backends.
+    ///
+    /// `drop` is the ONE impl method a program never calls. Every other method
+    /// of a generic impl reaches `compile_generic_call` through a call in the
+    /// source; `Drop::drop` is reached only from the synthesized
+    /// `karac_drop_<T>` wrapper, which is built by looking up
+    /// `module.get_function("S.drop")` — a symbol the mono pipeline only emits
+    /// when a call site asks for it. So the declaration pass parked `S.drop` in
+    /// `generic_fns` and waited for a call that never came. The fix drives the
+    /// instantiation from the BINDING's recorded type instead, emitting
+    /// `S.drop$<concrete>` and a `karac_drop_S$<concrete>` wrapper around it.
+    ///
+    /// MEASURED PRE-FIX, this exact fixture: the compiled backend printed
+    /// SEVEN fewer lines than `--interp` — `dB7`, `dB9`, `dB8`, `dG`, `dR3`,
+    /// `dH2`, `dB6`, i.e. every generic `Drop` body in the program, plus the
+    /// non-generic `dR3` that is a FIELD of one (the wrapper's field-body step
+    /// went with the wrapper). `dP`, the non-generic control, was the only body
+    /// that survived, and still is.
+    ///
+    /// `two` IS THE CELL THAT DECIDES THE DESIGN, not an extra case.
+    /// `Box3[String]` and `Box3[i64]` are live in one function and must print
+    /// `dB9` and `dB8` — two different `tag` reads, at two different field
+    /// offsets, because a bare-`T` field WIDENS under a monomorph (`String` is
+    /// a 3-word triple, `i64` one word) and shifts every field after it. One
+    /// name-shared symbol cannot serve both, which is why the erased shortcut
+    /// this row's predecessor considered was ruled out.
+    ///
+    /// `str` PINS PLACEMENT, not just presence: `dB7` must land between `v8`
+    /// and `after`, the binding's NLL last use — which is where `--interp`
+    /// fires it. That half needed its own fix, because the NLL last-use map was
+    /// gated on `user_drop_wrapper_fns` being non-empty and a program whose
+    /// only `Drop` impl is generic reaches the gate before any wrapper exists.
+    #[test]
+    fn e2e_generic_impl_drop_runs_its_body_per_monomorph() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+
+struct G[T] { v: T, r: R }
+impl[T] Drop for G[T] { fn drop(mut ref self) { println("dG") } }
+
+struct H[T] { items: Vec[T] }
+impl[T] Drop for H[T] { fn drop(mut ref self) { println(f"dH{self.items.len()}") } }
+
+struct P { s: String }
+impl Drop for P { fn drop(mut ref self) { println("dP") } }
+
+fn cell_str() {
+    let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"ttttttt" };
+    println(f"  v{b.v.len()}");
+    println("  after");
+}
+fn cell_two() {
+    let a: Box3[String] = Box3 { v: f"aaaaaaaa", tag: f"ttttttttt" };
+    println(f"  a{a.v.len()}");
+    let b: Box3[i64] = Box3 { v: 7, tag: f"uuuuuuuu" };
+    println(f"  b{b.v}");
+}
+fn cell_field() { let g: G[String] = G { v: f"gggggggg", r: R { id: 3 } }; println(f"  g{g.v.len()}"); }
+fn cell_vec()   { let h: H[String] = H { items: [f"aaaaaaaa", f"bbbbbbbb"] }; println(f"  h{h.items.len()}"); }
+fn cell_nest()  { let d: Box3[Vec[String]] = Box3 { v: [f"zzzzzzzz"], tag: f"wwwwww" }; println(f"  d{d.v.len()}"); }
+fn cell_plain() { let p = P { s: f"pppppppp" }; println(f"  p{p.s.len()}"); }
+
+fn main() {
+    println("str");   cell_str();
+    println("two");   cell_two();
+    println("field"); cell_field();
+    println("vec");   cell_vec();
+    println("nest");  cell_nest();
+    println("plain"); cell_plain();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"str
+  v8
+dB7
+  after
+two
+  a8
+dB9
+  b7
+dB8
+field
+  g8
+dG
+dR3
+vec
+  h2
+dH2
+nest
+  d1
+dB6
+plain
+  p8
+dP
+done
+"#,
+            "a generic `impl[T] Drop for S[T]` lost its body on a compiled \
+             backend — B-2026-09-04-4. `dP` alone surviving is the pre-fix \
+             signature; a missing `dB7`/`after` ORDER is the NLL-placement half."
+        );
+    }
+
+    /// B-2026-09-04-4, ARGUMENT-POSITION half — and the regression the
+    /// binding-site half caused on its way in.
+    ///
+    /// Once a generic binding registers a per-monomorph `karac_drop_S$<c>`
+    /// wrapper, MOVING it into a by-value param double-freed: the caller's
+    /// retraction (`move_declined_copy_struct_arg`) scans for a `StructDrop`
+    /// and silently skips a `UserDrop`, so the caller kept a cleanup the callee
+    /// had just taken ownership of. Measured as `AddressSanitizer: attempting
+    /// double-free` on the 8-byte `v` buffer, with the non-generic control
+    /// (`plain`) and a generic struct with NO `Drop` impl both clean — which is
+    /// what isolated it to the registration this fix introduced rather than to
+    /// the ownership rule itself. It is the same omission
+    /// `move_transferred_struct_arg` documents having to repair for its own
+    /// arm, one arm over.
+    ///
+    /// The repair is the transfer bargain, not a retraction alone: the caller
+    /// gives up its half AND the callee registers the per-monomorph wrapper, so
+    /// the body runs exactly once, in the frame that owns the value. That is
+    /// why `dB6` lands BEFORE `  after` — inside `take`, where `--interp` puts
+    /// it — rather than at the caller's scope exit.
+    ///
+    /// `temp` came along with it: a fresh struct-literal argument reaches the
+    /// same callee-side registration, so it went from losing its body to
+    /// running it. `parami` keeps the two-monomorph question alive on this
+    /// path (`Box3[i64]` through a different callee than `Box3[String]`), and
+    /// `plain` is the non-generic control that must be untouched — every gate
+    /// in this fix keys on the bare-name wrapper being ABSENT, so a
+    /// non-generic `Drop` type cannot reach any of it.
+    ///
+    /// STILL OPEN, deliberately out of this fixture: a generic `Drop` struct
+    /// held as a `Vec` ELEMENT runs no body on the compiled backends. That is
+    /// the container element-walk, a different mechanism from either binding
+    /// site, and it lost the body before this change too.
+    #[test]
+    fn e2e_generic_impl_drop_survives_a_by_value_argument() {
+        let Some(out) = run_program(
+            r#"struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { v: String, tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+
+fn take(b: Box3[String]) { println(f"  t{b.v.len()}") }
+fn takei(b: Box3[i64]) { println(f"  ti{b.v}") }
+fn takep(b: Pl) { println(f"  tp{b.v.len()}") }
+fn make() -> Box3[String] { return Box3 { v: f"mmmmmmmm", tag: f"rrrrrrr" }; }
+
+fn c_param() { let b: Box3[String] = Box3 { v: f"pppppppp", tag: f"qqqqqq" }; take(b); println("  after") }
+fn c_parami() { let b: Box3[i64] = Box3 { v: 5, tag: f"iiiii" }; takei(b) }
+fn c_ret()   { let r = make(); println(f"  r{r.v.len()}") }
+fn c_temp()  { take(Box3 { v: f"tttttttt", tag: f"sssss" }) }
+fn c_plain() { let b = Pl { v: f"pppppppp", tag: f"qqqqqq" }; takep(b) }
+
+fn main() {
+    println("param");  c_param();
+    println("parami"); c_parami();
+    println("ret");    c_ret();
+    println("temp");   c_temp();
+    println("plain");  c_plain();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"param
+  t8
+dB6
+  after
+parami
+  ti5
+dB5
+ret
+  r8
+dB7
+temp
+  t8
+dB5
+plain
+  tp8
+dP6
+done
+"#,
+            "a generic `Drop` value moved into a by-value param lost its body \
+             or ran it in the wrong frame — B-2026-09-04-4 argument half."
+        );
+    }
+
     /// The error text codegen declines a program with. Runs the FULL pipeline
     /// (ownership included) so the span-keyed display tables the diagnostic
     /// reads are populated exactly as `karac build` populates them.

@@ -126,8 +126,9 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         slot: PointerValue<'ctx>,
         inst: Option<TypeExpr>,
+        param_name: &str,
     ) -> bool {
-        self.make_aggregate_param_callee_owned_transfer(type_name, slot, inst, None)
+        self.make_aggregate_param_callee_owned_transfer(type_name, slot, inst, None, param_name)
     }
 
     /// [`Self::make_aggregate_param_callee_owned_inst`] plus the B-2026-08-29-63
@@ -156,6 +157,7 @@ impl<'ctx> super::Codegen<'ctx> {
         slot: PointerValue<'ctx>,
         inst: Option<TypeExpr>,
         transfer_param: Option<&str>,
+        param_name: &str,
     ) -> bool {
         // The prepass's permission is about call-site SHAPES; this is the TYPE
         // half, and both must hold. Keeping them in one predicate is what lets
@@ -240,6 +242,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 if !self.struct_owns_shared_field(type_name, &mut Vec::new())
                     && !self.struct_is_self_referential(type_name)
                 {
+                    // B-2026-09-04-4 — the same split the `transfer_param` arm
+                    // above makes, for the one type class that could not reach
+                    // it: a GENERIC struct with an `impl[T] Drop for S[T]`.
+                    //
+                    // Its bare `karac_drop_<T>` wrapper does not exist and never
+                    // will (the mono pipeline instantiates from call sites and
+                    // `drop` has none), so `user_drop_wrapper_fns` has no
+                    // bare-name key and the arm above cannot fire. The
+                    // PER-MONOMORPH wrapper can be built from the param's
+                    // declared instantiation, and it calls this same field walk
+                    // internally — so it REPLACES the registration below rather
+                    // than adding to it, exactly as the transfer arm says.
+                    //
+                    // Gated on the bare wrapper being ABSENT, which is precisely
+                    // the class this fix created: a non-generic `Drop` type has
+                    // its bare wrapper and is left on whatever path it takes
+                    // today, byte-for-byte.
+                    if !self.drop_rc.user_drop_wrapper_fns.contains_key(type_name)
+                        && self.track_user_drop_var_inst(type_name, param_name, slot, inst.as_ref())
+                    {
+                        return true;
+                    }
                     self.track_struct_var_inst(type_name, slot, inst);
                     return true;
                 }

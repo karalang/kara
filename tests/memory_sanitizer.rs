@@ -3677,6 +3677,134 @@ fn main() {
     }
 
     /// B-2026-09-04-2 — the projection-source struct destructure hands each leaf
+    /// B-2026-09-04-4, ARGUMENT half — the fixture that CAUGHT the regression,
+    /// kept as the gate against its return.
+    ///
+    /// Moving a generic `Drop` binding into a by-value param double-freed the
+    /// moment the binding started registering a per-monomorph `UserDrop`
+    /// wrapper: the caller's retraction matches a `StructDrop` and skips a
+    /// `UserDrop`, so both frames owned the same buffers. Measured as
+    /// `AddressSanitizer: attempting double-free` on the 8-byte `v` region,
+    /// with a non-generic control and a no-`Drop` generic control both clean.
+    /// The stdout twin cannot see this class at all — the printed lines are
+    /// identical whether one frame frees or two — which is the whole reason
+    /// this fixture exists separately.
+    ///
+    /// Three iterations so an imbalance accumulates; `parami` keeps a second
+    /// live monomorph on the same path, `temp` covers the fresh-literal
+    /// argument, and `plain` is the non-generic control. Measured after the
+    /// fix: 64 malloc calls, exit 0, no LeakSanitizer report.
+    #[test]
+    fn asan_generic_impl_drop_by_value_argument_is_balanced() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { v: String, tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+fn take(b: Box3[String]) { println(f"  t{b.v.len()}") }
+fn takei(b: Box3[i64]) { println(f"  ti{b.v}") }
+fn takep(b: Pl) { println(f"  tp{b.v.len()}") }
+fn make() -> Box3[String] { return Box3 { v: f"mmmmmmmm", tag: f"rrrrrrr" }; }
+fn c_param() { let b: Box3[String] = Box3 { v: f"pppppppp", tag: f"qqqqqq" }; take(b); println("  after") }
+fn c_parami() { let b: Box3[i64] = Box3 { v: 5, tag: f"iiiii" }; takei(b) }
+fn c_ret()   { let r = make(); println(f"  r{r.v.len()}") }
+fn c_temp()  { take(Box3 { v: f"tttttttt", tag: f"sssss" }) }
+fn c_plain() { let b = Pl { v: f"pppppppp", tag: f"qqqqqq" }; takep(b) }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("param");  c_param();
+        println("parami"); c_parami();
+        println("ret");    c_ret();
+        println("temp");   c_temp();
+        println("plain");  c_plain();
+        i = i + 1;
+    }
+}
+"#,
+            // The helper compares the WHOLE stdout and `main` loops three
+            // times, so the per-iteration block appears three times.
+            &[
+                "param", "  t8", "dB6", "  after", "parami", "  ti5", "dB5", "ret", "  r8", "dB7",
+                "temp", "  t8", "dB5", "plain", "  tp8", "dP6", "param", "  t8", "dB6", "  after",
+                "parami", "  ti5", "dB5", "ret", "  r8", "dB7", "temp", "  t8", "dB5", "plain",
+                "  tp8", "dP6", "param", "  t8", "dB6", "  after", "parami", "  ti5", "dB5", "ret",
+                "  r8", "dB7", "temp", "  t8", "dB5", "plain", "  tp8", "dP6",
+            ],
+            "generic_impl_drop_by_value_argument",
+            40,
+        );
+    }
+
+    /// B-2026-09-04-4 — the memory half of the generic-`Drop` fix: emitting a
+    /// per-monomorph body must not add a free, and must not lose one.
+    ///
+    /// The wrapper this fix builds REPLACES the memory drop the binding used to
+    /// register (B-2026-09-03-35's fallback) rather than adding to it — the
+    /// wrapper's own last step IS that memory drop. Get that wrong in either
+    /// direction and the failure is silent in the output the E2E twin asserts:
+    /// register both and every `String` field is double-freed; register neither
+    /// and they all leak. So this fixture exists to catch what a stdout
+    /// comparison structurally cannot.
+    ///
+    /// Six cells over three iterations, so a per-iteration imbalance
+    /// accumulates rather than hiding in one pass. `two` is the cell that
+    /// matters most here: `Box3[String]` and `Box3[i64]` reach two DIFFERENT
+    /// per-monomorph memory drops through two different wrappers, and running
+    /// `String`'s drain over the `i64` layout would free an `i64` as a bogus
+    /// `{ptr,len,cap}`. Measured on this fixture: 82 malloc calls, exit 0, no
+    /// LeakSanitizer report. (LSan is Linux-only; a green macOS run of this
+    /// proves no double-free and says nothing about leaks — see CLAUDE.md.)
+    #[test]
+    fn asan_generic_impl_drop_is_balanced_per_monomorph() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct G[T] { v: T, r: R }
+impl[T] Drop for G[T] { fn drop(mut ref self) { println("dG") } }
+struct H[T] { items: Vec[T] }
+impl[T] Drop for H[T] { fn drop(mut ref self) { println(f"dH{self.items.len()}") } }
+struct P { s: String }
+impl Drop for P { fn drop(mut ref self) { println("dP") } }
+fn c_str() { let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"ttttttt" }; println(f"  v{b.v.len()}"); println("  after") }
+fn c_two() { let a: Box3[String] = Box3 { v: f"aaaaaaaa", tag: f"ttttttttt" }; println(f"  a{a.v.len()}"); let b: Box3[i64] = Box3 { v: 7, tag: f"uuuuuuuu" }; println(f"  b{b.v}") }
+fn c_field() { let g: G[String] = G { v: f"gggggggg", r: R { id: 3 } }; println(f"  g{g.v.len()}") }
+fn c_vec() { let h: H[String] = H { items: [f"aaaaaaaa", f"bbbbbbbb"] }; println(f"  h{h.items.len()}") }
+fn c_nest() { let d: Box3[Vec[String]] = Box3 { v: [f"zzzzzzzz"], tag: f"wwwwww" }; println(f"  d{d.v.len()}") }
+fn c_plain() { let p = P { s: f"pppppppp" }; println(f"  p{p.s.len()}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("str"); c_str();
+        println("two"); c_two();
+        println("field"); c_field();
+        println("vec"); c_vec();
+        println("nest"); c_nest();
+        println("plain"); c_plain();
+        i = i + 1;
+    }
+}
+"#,
+            // The helper compares the WHOLE stdout and `main` loops three
+            // times, so the per-iteration block appears three times.
+            &[
+                "str", "  v8", "dB7", "  after", "two", "  a8", "dB9", "  b7", "dB8", "field",
+                "  g8", "dG", "dR3", "vec", "  h2", "dH2", "nest", "  d1", "dB6", "plain", "  p8",
+                "dP", "str", "  v8", "dB7", "  after", "two", "  a8", "dB9", "  b7", "dB8",
+                "field", "  g8", "dG", "dR3", "vec", "  h2", "dH2", "nest", "  d1", "dB6", "plain",
+                "  p8", "dP", "str", "  v8", "dB7", "  after", "two", "  a8", "dB9", "  b7", "dB8",
+                "field", "  g8", "dG", "dR3", "vec", "  h2", "dH2", "nest", "  d1", "dB6", "plain",
+                "  p8", "dP",
+            ],
+            "generic_impl_drop_per_monomorph",
+            60,
+        );
+    }
+
     /// its `Drop` body; this is the memory gate on that hand-off.
     ///
     /// The fix moves BODIES ONLY and deliberately never takes the memory, which
