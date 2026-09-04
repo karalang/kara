@@ -13200,6 +13200,58 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
 
+        // B-2026-09-04-2 — the PROJECTION spelling of the same hand-off
+        // (`let HoRes { a, b } = w.inner;`). `place_body_src` above answers only
+        // for a bare identifier, so a projection source reached NONE of the
+        // ownership branches below and the leaves took nothing. The source's own
+        // field-bodies walk then stayed armed and — because the destructure is
+        // typically the root's LAST USE — fired at the destructure STATEMENT,
+        // ahead of the reads of the very bindings it had just aliased:
+        //
+        //     let w = Wrap { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } };
+        //     let HoRes { a, b } = w.inner;
+        //     println(f"  rd{a.id}")
+        //       --interp   ->           rd9  dR9/t9
+        //       compiled   ->   dR109  dR9   rd9
+        //
+        // The NAMED-LOCAL sibling is the oracle, and it AGREES on all four
+        // surfaces for every second-field type measured (`Result` -> `rd9 dR9`;
+        // `Option[R]` and plain `R` -> `dR109 rd9 dR9`; a non-`Drop` `String` ->
+        // `rd9 dR9`). In every one of those the INTERPRETER's projection output
+        // already equals it — so this is a codegen-only correction, not a
+        // question of which backend is right.
+        //
+        // NOT `Result`-SPECIFIC, which the row filing this suspected. The
+        // `String` second field carries no `Option`/`Result` anywhere and still
+        // printed `a`'s body before the read: any `Drop`-bearing FIRST field
+        // reproduces it, and the second field's type only changes the count.
+        //
+        // BODIES ONLY, NEVER MEMORY — the one way this differs from the
+        // identifier hand-off, and the reason it is safe. That path takes the
+        // whole-value wrapper when the leaf type declares its own `Drop`, which
+        // is right when the source is being CONSUMED. A projection source is
+        // not: `w` still owns the storage, and the leaves are views into it, so
+        // taking the memory here would free a buffer `w`'s own drop frees again.
+        // Routing through `pending_place_bodies` moves the BODY to the leaf's
+        // NLL point and leaves every free exactly where it was — valgrind
+        // reports the same `12 allocs, 12 frees, 0 bytes in use at exit` before
+        // and after.
+        let place_body_path: Option<(String, Vec<usize>)> = if fresh {
+            None
+        } else {
+            match &value.kind {
+                ExprKind::FieldAccess { .. } => {
+                    self.projection_field_index_path(value)
+                        .filter(|(root, path)| {
+                            !path.is_empty()
+                                && !self.borrow_vars.ref_params.contains_key(root.as_str())
+                                && self.var_owns_struct_field_bodies(root)
+                        })
+                }
+                _ => None,
+            }
+        };
+
         // B-2026-09-02-38 — may this destructure's leaves be recorded as param
         // VIEWS, so a later `let m = r;` moves the body rather than minting a
         // second owner? The struct spelling of what B-2026-09-02-25 did for
@@ -13615,6 +13667,66 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         let src = src.clone();
                         self.disarm_struct_field_bodies_at(&src, idx);
+                    }
+                }
+                // B-2026-09-04-2 — the PROJECTION twin of the mask above.
+                // Same field, same reason, one level of path deeper: with the
+                // root's walk left armed at a moved-out `Result` field it ran
+                // the payload's body from the ROOT's drop point, which for a
+                // projection source is the destructure statement. That put
+                // `dR109` ahead of the read on `let HoRes { a, b } = w.inner;`
+                // where the named-local sibling `let HoRes { a, b } = h;`
+                // — agreed on all four surfaces — runs it nowhere at all.
+                //
+                // Unlike the identifier case this is NOT masking a husk: the
+                // root still owns live storage, so the body it ran read real
+                // data. It is masked anyway because the named-local oracle runs
+                // no such body; what stays deferred is giving the LEAF the
+                // payload's real body, which is B-2026-09-03-15's `Result`
+                // deferral, left exactly where it sits on every other spelling.
+                if place_body_src.is_none() {
+                    if let Some((root, path)) = &place_body_path {
+                        let is_result = matches!(&field_te.kind,
+                            TypeKind::Path(p) if p.segments.last().map(String::as_str) == Some("Result"));
+                        if leaf_struct_name.is_none()
+                            && is_result
+                            && self.optres_payload_runs_user_drop(&field_te)
+                        {
+                            let (root, path) = (root.clone(), path.clone());
+                            let mut only: std::collections::HashSet<u32> =
+                                std::collections::HashSet::new();
+                            only.insert(idx as u32);
+                            self.disarm_struct_field_tuple_elem_bodies_at(&root, &path, &only);
+                        }
+                    }
+                }
+                // B-2026-09-04-2 — the projection source's per-leaf half.
+                // Mask the ROOT's walk at `path + this field` and hand the leaf
+                // the body alone, so it drains at the leaf's own NLL point
+                // instead of at the root's.
+                //
+                // `disarm_struct_field_tuple_elem_bodies_at` is reused verbatim
+                // rather than copied: its name says "tuple elem" but its body
+                // writes `struct_moved_nested_field_bodies[root][path] = {idx}`,
+                // and `field_skip_tree_for_var` reads that as "skip these
+                // indices at the node this path reaches" — which is the same
+                // statement for a struct field as for a tuple element. It also
+                // already carries the two hard-won cases a fresh copy would
+                // lose: it re-reads every mask from its map so this COMPOSES
+                // with the whole-field and payload kinds (B-2026-09-03-11), and
+                // it selects the wrapper mask when the root declares its own
+                // `impl Drop`, which has no per-binding action to replace
+                // (B-2026-09-03-14).
+                if pending_place_bodies.is_none() && place_body_src.is_none() {
+                    if let (Some((root, path)), Some(tn)) = (&place_body_path, &leaf_struct_name) {
+                        if let Some(slot) = self.variables.get(&name).copied() {
+                            let (root, path, tn) = (root.clone(), path.clone(), tn.clone());
+                            let mut only: std::collections::HashSet<u32> =
+                                std::collections::HashSet::new();
+                            only.insert(idx as u32);
+                            self.disarm_struct_field_tuple_elem_bodies_at(&root, &path, &only);
+                            pending_place_bodies = Some((tn, slot.ptr));
+                        }
                     }
                 }
                 if wrapper_took_memory || place_leaf_took_memory {

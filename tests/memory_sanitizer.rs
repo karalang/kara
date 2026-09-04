@@ -2366,6 +2366,128 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-2 — the projection-source struct destructure hands each leaf
+    /// its `Drop` body; this is the memory gate on that hand-off.
+    ///
+    /// The fix moves BODIES ONLY and deliberately never takes the memory, which
+    /// is the whole reason it is safe: the identifier-source hand-off takes the
+    /// leaf type's whole-value wrapper when that type declares its own `Drop`,
+    /// correct when the source is being CONSUMED, but a projection source is
+    /// not — `w` still owns the storage and the leaves are views into it, so
+    /// taking the memory here would free a buffer `w`'s own drop frees again.
+    /// A regression that reached for the wrapper would show up here as a double
+    /// free rather than as a changed line of output.
+    ///
+    /// The `String` `tag` on every `R` is what makes a mis-masked field visible:
+    /// mask one field too many and its payload leaks; mask one too few and the
+    /// leaf and the root both free it. Five cells — `Result`, `Option[R]`, plain
+    /// `R`, a two-hop root, and a root read again AFTER the destructure — over
+    /// three iterations, so a per-iteration imbalance accumulates instead of
+    /// hiding in a single pass. Measured under valgrind on the compiled binary:
+    /// 68 allocs, 68 frees, 0 bytes in use at exit, 0 errors.
+    ///
+    /// `live` emits an ownership WARNING ("value 'w' moved here, used again
+    /// here") — pre-existing, from the ownership phase rather than this fix, and
+    /// recorded here so a future reader does not mistake it for fallout. It is a
+    /// warning: the program compiles and runs, and the cell is kept because a
+    /// root that outlives the destructure is exactly where a mask that ran too
+    /// early would be caught.
+    #[test]
+    fn asan_projection_source_struct_destructure_leaves_memory_alone() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct HoPln { a: R, b: R }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct WrapP { inner: HoPln }
+struct Outer { h: WrapR }
+fn c_res()  { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn c_opt()  { let w = WrapO { inner: HoOpt { a: mk(2), b: Option.Some(mk(102)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn c_pln()  { let w = WrapP { inner: HoPln { a: mk(3), b: mk(103) } };            let HoPln { a, b } = w.inner; println(f"  rd{a.id}") }
+fn c_two()  { let g = Outer { h: WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}") }
+fn c_live() { let w = WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}"); println(f"  w{w.inner.a.id}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("res"); c_res();
+        println("opt"); c_opt();
+        println("pln"); c_pln();
+        println("two"); c_two();
+        println("live"); c_live();
+        i = i + 1;
+    }
+}
+"#,
+            // The helper compares the WHOLE stdout and `main` loops three times,
+            // so the per-iteration block appears three times. Three iterations is
+            // the point: a per-iteration imbalance accumulates rather than hiding
+            // in a single pass.
+            &[
+                "res",
+                "  rd1",
+                "dR1/t1",
+                "opt",
+                "dR102/t102",
+                "  rd2",
+                "dR2/t2",
+                "pln",
+                "dR103/t103",
+                "  rd3",
+                "dR3/t3",
+                "two",
+                "  rd4",
+                "dR4/t4",
+                "live",
+                "  rd5",
+                "dR5/t5",
+                "  w5",
+                "res",
+                "  rd1",
+                "dR1/t1",
+                "opt",
+                "dR102/t102",
+                "  rd2",
+                "dR2/t2",
+                "pln",
+                "dR103/t103",
+                "  rd3",
+                "dR3/t3",
+                "two",
+                "  rd4",
+                "dR4/t4",
+                "live",
+                "  rd5",
+                "dR5/t5",
+                "  w5",
+                "res",
+                "  rd1",
+                "dR1/t1",
+                "opt",
+                "dR102/t102",
+                "  rd2",
+                "dR2/t2",
+                "pln",
+                "dR103/t103",
+                "  rd3",
+                "dR3/t3",
+                "two",
+                "  rd4",
+                "dR4/t4",
+                "live",
+                "  rd5",
+                "dR5/t5",
+                "  w5",
+            ],
+            "projection_source_struct_destructure_leaves_memory_alone",
+            40,
+        );
+    }
+
     /// B-2026-09-03-33 — the memory side of the `Result` husk fix. The defect
     /// was a BODY that should not have run, and the fix masks the source's
     /// field-bodies walk rather than removing the payload-area zero that walk

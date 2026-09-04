@@ -35337,6 +35337,91 @@ done
 "#
     );
 }
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_projection_source_struct_destructure_hands_each_leaf_its_body`, pinned
+/// to the same string.
+///
+/// This side was ALREADY correct on every cell — the measurement that made
+/// B-2026-09-04-2 a codegen-only fix rather than a which-backend-is-right
+/// question. It is pinned here so a later change cannot move the interpreter
+/// onto codegen's old placement and call the pair "agreed".
+#[test]
+fn test_projection_source_struct_destructure_hands_each_leaf_its_body() {
+    let out = run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+
+struct HoRes { a: R, b: Result[R, String] }
+struct HoOpt { a: R, b: Option[R] }
+struct HoPln { a: R, b: R }
+struct HoStr { a: R, b: String }
+struct WrapR { inner: HoRes }
+struct WrapO { inner: HoOpt }
+struct WrapP { inner: HoPln }
+struct WrapS { inner: HoStr }
+struct Outer { h: WrapR }
+
+fn cell_res()   { let w = WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_local() { let h = HoRes { a: mk(2), b: Result.Ok(mk(102)) };                  let HoRes { a, b } = h;       println(f"  rd{a.id}") }
+fn cell_opt()   { let w = WrapO { inner: HoOpt { a: mk(3), b: Option.Some(mk(103)) } }; let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_pln()   { let w = WrapP { inner: HoPln { a: mk(4), b: mk(104) } };            let HoPln { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_str()   { let w = WrapS { inner: HoStr { a: mk(5), b: "plain" } };            let HoStr { a, b } = w.inner; println(f"  rd{a.id}") }
+fn cell_two()   { let g = Outer { h: WrapR { inner: HoRes { a: mk(6), b: Result.Ok(mk(106)) } } }; let HoRes { a, b } = g.h.inner; println(f"  rd{a.id}") }
+fn cell_live()  { let w = WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } }; let HoRes { a, b } = w.inner; println(f"  rd{a.id}"); println(f"  w{w.inner.a.id}") }
+fn cell_nodest(){ let w = WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } }; println(f"  rd{w.inner.a.id}") }
+fn cell_move()  { let w = WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } }; let h = w.inner; println(f"  rd{h.a.id}") }
+
+fn main() {
+    println("res");    cell_res()
+    println("local");  cell_local()
+    println("opt");    cell_opt()
+    println("pln");    cell_pln()
+    println("str");    cell_str()
+    println("two");    cell_two()
+    println("live");   cell_live()
+    println("nodest"); cell_nodest()
+    println("move");   cell_move()
+    println("done")
+}
+"#);
+    assert_eq!(
+        out,
+        r#"res
+  rd1
+dR1/t1
+local
+  rd2
+dR2/t2
+opt
+dR103/t103
+  rd3
+dR3/t3
+pln
+dR104/t104
+  rd4
+dR4/t4
+str
+  rd5
+dR5/t5
+two
+  rd6
+dR6/t6
+live
+  rd7
+dR7/t7
+  w7
+nodest
+  rd8
+dR108/t108
+dR8/t8
+move
+  rd9
+dR109/t109
+dR9/t9
+done
+"#
+    );
+}
 
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_projection_source_tuple_destructure_is_a_view`, pinned to the same
