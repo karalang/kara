@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 365 |
-| run-vs-build | 321 |
+| run-vs-build | 323 |
 | leak | 260 |
 | missing-feature | 194 |
 | double-free | 170 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1418 |
-| interp | 345 |
+| codegen | 1420 |
+| interp | 346 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 70 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 2026-09-04). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open
 
@@ -157,13 +157,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
-| B-2026-09-03-33 | 2026-09-03 | codegen | medium | A `Result[O, E]` STRUCT-FIELD DESTRUCTURE LEAF RUNS A HUSK `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h;` over `{ a: R, b: Result[R, String] }` prints `dR0/` (a body reading a zeroed object) on jit/aot/AUTO_PAR=0 and nothing under `--interp`, while the REAL payload body `dR109` runs on neither; fires for a two-field `R` and not a three-field one, which is why B-2026-09-03-15 recorded this gap as silent | — |
 | B-2026-09-03-34 | 2026-09-03 | codegen | medium | A STRUCT DESTRUCTURED OUT OF A MATCH ARM'S PAYLOAD BINDING LOSES A PLAIN FIELD'S `Drop` BODY ON THE COMPILED BACKENDS -- `match w { Wrap.W(h) => { let Ho2 { a, b } = h; .. } }` runs `dR152 dR52` under `--interp` and only `dR152` on jit/aot/AUTO_PAR=0; the payload half was fixed by B-2026-09-03-24 and this is the residue, because the place-source body transfer is gated on the source owning a `StructFieldBodies` action and a match payload does not | — |
 | B-2026-09-03-35 | 2026-09-03 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` IS NEVER LOWERED, so ADDING IT MAKES A CLEAN PROGRAM LEAK EVERY HEAP FIELD -- `Box3[String] { v, tag }` is clean without the impl and loses 16 B in 2 blocks (both `String`s) with it, while `--interp` runs the body; `nm` shows no `S.drop` symbol at all, so the binding gets neither `UserDrop` NOR the `StructDrop` it had before, and the same impl on a NON-generic struct is completely correct | — |
 | B-2026-09-03-36 | 2026-09-03 | codegen | medium | REASSIGNING A `shared` FIELD OF A PLAIN STRUCT STRANDS THE DISPLACED RC BOX -- `n.s = Sd { m: 9 }` prints the old handle's `Drop` body, so the refcount DOES reach zero, and the 16-byte box is still never freed; one per assignment and unbounded, and it happens with NO `impl Drop` on the owner at all, which is what separates it from B-2026-09-03-31's scope-exit half | — |
 | B-2026-09-03-38 | 2026-09-03 | typecheck | medium | 130 OF THE 935 kara-katas FILES DO NOT TYPE-CHECK ON `main` (238 diagnostics, all `E_INDEX_MOVE_NON_COPY`) and have not since the rule landed on 2026-08-26 -- `karac check`, `karac build` and `karac run` all fail, so roughly one kata in seven is contributing no coverage and any claim that the kata corpus is green is false; `runtime/stdlib` and `examples/` are clean | — |
 | B-2026-09-03-39 | 2026-09-03 | codegen | medium | A FRESH TUPLE SOURCE LOSES AN `Option`/`Result` ELEMENT'S PAYLOAD `Drop` BODY ON BOTH LEAF KINDS -- `let (r, _) = (mk(31), Option.Some(mk(131)));` and its binding sibling run the body under `--interp` and on no compiled surface, because `infer_arg_elem_te` ERASES an enum-constructor element's generic argument, so the leaf's type reaches the payload walker as a bare `Option`. Third time that fallback has erased a type (cf. B-2026-08-28-11, B-2026-09-02-35) | — |
 | B-2026-09-03-40 | 2026-09-03 | codegen+runtime | high | THE AUTO-PAR COST GATE IS DEFEATED BY AN IMPLAUSIBLE `per_iter_cost` ESTIMATE, so the DEFAULT build fans out a region entered ~1M times and runs 7x slower than the sequential one on a natural kata, and 398x slower on a larger program in the same repo. `KARAC_COST_DEBUG=1` reports `per_iter_cost=3578073120 floor=64 substantial=true` for the benchmark and `3597957307` / `3597955192` for the differential. Those numbers cannot be per-ITERATION costs: the whole benchmark executes on the order of 3e8 operations (0.29 s sequential), so a single iteration cannot cost 3.6e9 units. Whatever the estimator is measuring, it clears the floor of 64 by EIGHT ORDERS OF MAGNITUDE, so the gate that exists to decline unprofitable fan-outs cannot fire. MEASURED, AOT, same binary pair, checksum identical in every mode: kata 306's bench.kara is 0.29 s sequential vs 2.05 s under the default auto-par build (7.1x), system time 0.00 s -> 1.42 s; kata 306's differential.kara is 0.069 s vs 27.5 s (398x), 32.7 s of it system. `strace -c` attributes 100% of syscall time to futex: 1,843,996 calls at 4 workers and 1,963,832 at ONE worker -- the volume is driven by DISPATCH COUNT, not by contention between workers, i.e. the region is entered on the order of a million times and each entry pays a pool round trip. Worker count then adds contention on top: 1: 0.68 s, 2: 1.69 s, 4: 1.99 s on the bench, and 2.32 / 9.27 / 27.5 s on the differential -- ADDING WORKERS MAKES IT WORSE, monotonically. | — |
+| B-2026-09-04-1 | 2026-09-04 | codegen | medium | A `Result` DESTRUCTURE LEAF CONSUMED BY A MATCH LOSES THE PAYLOAD'S `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h; match b { Result.Ok(r) => .. }` over `{ a: R, b: Result[R, String] }` runs `dR109` under `--interp` and on none of jit/aot/AUTO_PAR=0, where the arm BINDS and READS the payload as an ordinary owned binding; distinct from the `Result` deferral B-2026-09-03-33 left in place, which is about the unconsumed leaf and is agreed-and-absent on both backends | — |
+| B-2026-09-04-2 | 2026-09-04 | interp+codegen | medium | A STRUCT DESTRUCTURE WHOSE SOURCE IS A PROJECTION RUNS BOTH FIELD BODIES AT THE DESTRUCTURE ON THE COMPILED BACKENDS, ONE OF THEM BEFORE ITS BINDING'S LAST READ -- `let HoRes { a, b } = w.inner;` prints `dR109 dR9` then `rd9` on jit/aot/AUTO_PAR=0 against `rd9 dR9` under `--interp`, so the backends disagree on the COUNT and the compiled side runs `a`'s `Drop` body while `a` is still live; the named-local source of the same shape runs one body on all four surfaces, and the TUPLE spelling of the same projection source agrees everywhere | — |
 
 ### Relocated
 
@@ -2192,6 +2193,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-26 | ownership | medium | THE USE-AFTER-MOVE HINT DENIES A `.clone()` THAT EXISTS, AND `karac fix` WITHHOLDS THE EDIT, FOR FIVE TYPE CATEGORIES -- `Option[T]`, `Result[T, E]`,… | f77d2cc |
 | B-2026-09-03-27 | runtime | medium | `resolve_pool_workers()` STILL DOES A FULL `std::env::var` SCAN PER PARALLEL-REGION ENTRY after B-2026-09-03-18 cached the tier BELOW it, so an auto-… | 953006d |
 | B-2026-09-03-31 | codegen | medium | A STRUCT WITH ITS OWN `impl Drop` NEVER RELEASES A `shared struct` FIELD'S RC BOX -- 16 B per instance and unbounded in a loop (80 B / 5 instances),… | dc8cfe24 |
+| B-2026-09-03-33 | codegen | medium | A `Result[O, E]` STRUCT-FIELD DESTRUCTURE LEAF RUNS A HUSK `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h;` over `{ a: R, b: Result[… | 85d34ce |
 | B-2026-09-03-37 | typecheck | medium | `Vec.push` ASKS `partial_move_of_drop_struct` ABOUT THE UNRESOLVED DESTINATION SLOT, so a `Deny` rule rejects a `Copy` field -- `v.push(w.n)` over an… | 56c8950 |
 
 </details>
