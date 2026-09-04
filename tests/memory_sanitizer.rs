@@ -332,6 +332,59 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-04-13 — the BALANCE half of
+    /// `e2e_retained_source_veto_does_not_escape_its_function`.
+    ///
+    /// The fix CLEARS a veto set per function, and a veto exists precisely to
+    /// stop a disarm that would leak: a source a read-only arm left owning its
+    /// payload has no other owner to hand off to. So the failure mode this
+    /// change could introduce is the opposite of the crash it fixes — a
+    /// function's OWN arm's veto going missing, and the payload leaking rather
+    /// than being freed twice. A transcript cannot see that; the `dR` lines are
+    /// identical either way.
+    ///
+    /// `retained` is the cell that carries the risk: its arm publishes the veto
+    /// and its own body must still honour it. `mover` and `moverstr` collide
+    /// with it on the name `o`, and `unshared` uses names nothing else does.
+    #[test]
+    fn asan_retained_source_veto_does_not_escape_its_function() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}" }; }
+
+fn retained() { let t = (mk(4), Option.Some(mk(104))); let (_, o) = t; match o { Option.Some(r) => { println(f"  g{r.id}") }, Option.None => { println("  n") } } }
+fn mover()    { let o = Option.Some(mk(11)); let q = o; println(f"  m{q.is_some()}") }
+fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some()}") }
+fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
+
+fn main() {
+  println("mover");    mover()
+  println("moverstr"); moverstr()
+  println("unshared"); unshared()
+  println("retained"); retained()
+  println("done")
+}
+"#,
+            &[
+                "mover",
+                "  mtrue",
+                "dR11:s11",
+                "moverstr",
+                "  strue",
+                "unshared",
+                "  dtrue",
+                "dR13:s13",
+                "retained",
+                "dR4:s4",
+                "  g104",
+                "dR104:s104",
+                "done",
+            ],
+            "b12-retained-veto-scope",
+        );
+    }
+
     /// B-2026-09-04-10 — the BALANCE assertion for the disarm that
     /// `e2e_option_agg_destructure_leaf_move_disarms_its_source` pins as a
     /// transcript.
@@ -70139,7 +70192,7 @@ fn main() {
     // deliberately, because a two-`String` tuple additionally loses its
     // interior in a monomorph (6 B here, measured) and that is a separate
     // live defect this fixture must not silently depend on. See
-    // B-2026-09-04-12.
+    // B-2026-09-04-13.
     let p = (n, n + 1, n + 2, n + 3);
     let c2 = takesOpt(Some(p));
 

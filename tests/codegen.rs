@@ -13397,6 +13397,86 @@ done
         );
     }
 
+    /// B-2026-09-04-13 — A BINDING NAME MUST NOT CARRY OWNERSHIP STATE OUT OF
+    /// ITS FUNCTION.
+    ///
+    /// `drop_rc.inline_optres_retained_sources` is a `HashSet<String>` keyed by
+    /// bare binding name. A read-only `match` arm publishes its scrutinee's
+    /// name into it so a following combinator knows the arm left the payload
+    /// where it was, and
+    /// `suppress_inline_option_result_binding_move_impl` reads it as a veto:
+    /// a source a borrowing arm still OWNS must not be disarmed on a move, or
+    /// its payload leaks. The set was the one table of its shape missing from
+    /// the per-function reset in `functions.rs`, so the veto outlived the body
+    /// that published it.
+    ///
+    /// `retained` AND `mover` SHARE NOTHING BUT THE NAME `o`, and `retained` is
+    /// NEVER CALLED. Its arm's veto still reached `mover`'s move, which was
+    /// therefore not disarmed, so both slots freed one box: `free(): double
+    /// free detected in tcache 2` on the two-function reduction and a SIGSEGV
+    /// here, with stdout still buffered so nothing prints. Renaming EITHER
+    /// binding made the same program correct — which is what identified the
+    /// table rather than the logic.
+    ///
+    /// ASSERTED STRICTLY for the reason `e2e_boxed_enum_param_escape_no_double_free`
+    /// states: the pre-fix program produces no output at all, and `run_program`
+    /// returns `None` for a crash, which the tolerant
+    /// `let Some(out) = .. else { return }` form would swallow as a skip.
+    ///
+    /// `moverstr` COLLIDES ON THE SAME NAME with an inline `Option[String]`
+    /// payload, and `unshared` is the control that moves an `Option[R]` under
+    /// names nothing else uses. Both were correct before; they are here so a
+    /// fix that over-clears — dropping a veto a function's OWN arm published,
+    /// which is a leak rather than a crash — fails the sibling ASAN case.
+    ///
+    /// SINGLE-FUNCTION PROGRAMS CANNOT EXPRESS THIS, which is why no existing
+    /// fixture caught it: it needs a same-named binding in two bodies, one a
+    /// retained Option/Result source and the other moved. It was found because
+    /// it silently crashes any multi-cell fixture written in this area.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_retained_source_veto_does_not_escape_its_function`, pinned to the
+    /// same string.
+    #[test]
+    fn e2e_retained_source_veto_does_not_escape_its_function() {
+        let src = r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}" }; }
+
+fn retained() { let t = (mk(4), Option.Some(mk(104))); let (_, o) = t; match o { Option.Some(r) => { println(f"  g{r.id}") }, Option.None => { println("  n") } } }
+fn mover()    { let o = Option.Some(mk(11)); let q = o; println(f"  m{q.is_some()}") }
+fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some()}") }
+fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
+
+fn main() {
+  println("mover");    mover()
+  println("moverstr"); moverstr()
+  println("unshared"); unshared()
+  println("retained"); retained()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"mover
+  mtrue
+dR11:s11
+moverstr
+  strue
+unshared
+  dtrue
+dR13:s13
+retained
+dR4:s4
+  g104
+dR104:s104
+done
+"#
+            )
+        );
+    }
+
     /// B-2026-09-04-10 — AN `Option[<struct>]` DESTRUCTURE LEAF THAT IS MOVED
     /// WHOLE MUST DISARM ITS SOURCE.
     ///

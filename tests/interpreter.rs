@@ -58323,3 +58323,51 @@ done
 "#
     );
 }
+
+/// B-2026-09-04-13 — the INTERPRETER half of
+/// `e2e_retained_source_veto_does_not_escape_its_function`, pinned to the same
+/// string.
+///
+/// This side never moved. The defect was a compiled-backend double free caused
+/// by a codegen side table keyed by bare binding name outliving the function
+/// body that filled it; the interpreter has no such roster, so it printed this
+/// transcript before and after. Pinning it is what makes the codegen twin's
+/// expected string an assertion about the compiled backends rather than about
+/// the program.
+#[test]
+fn test_retained_source_veto_does_not_escape_its_function() {
+    let out = run(r#"struct R { id: i64, s: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}") } }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}" }; }
+
+fn retained() { let t = (mk(4), Option.Some(mk(104))); let (_, o) = t; match o { Option.Some(r) => { println(f"  g{r.id}") }, Option.None => { println("  n") } } }
+fn mover()    { let o = Option.Some(mk(11)); let q = o; println(f"  m{q.is_some()}") }
+fn moverstr() { let o = Option.Some(f"z12"); let q = o; println(f"  s{q.is_some()}") }
+fn unshared() { let d = Option.Some(mk(13)); let e = d; println(f"  d{e.is_some()}") }
+
+fn main() {
+  println("mover");    mover()
+  println("moverstr"); moverstr()
+  println("unshared"); unshared()
+  println("retained"); retained()
+  println("done")
+}
+"#);
+    assert_eq!(
+        out,
+        r#"mover
+  mtrue
+dR11:s11
+moverstr
+  strue
+unshared
+  dtrue
+dR13:s13
+retained
+dR4:s4
+  g104
+dR104:s104
+done
+"#
+    );
+}

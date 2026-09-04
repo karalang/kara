@@ -1540,6 +1540,28 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.inline_result_payload_vars.clear();
         self.payload_vars.inline_option_map_payload_vars.clear();
         self.payload_vars.inline_option_agg_payload_vars.clear();
+        // B-2026-09-04-13 — the RETAINED-SOURCE veto is per-function state too,
+        // and it was the one table of this shape that outlived its body. A
+        // read-only `match` arm publishes its scrutinee's NAME here
+        // (`control_flow_match.rs`, "publish the classification for the rest of
+        // the CHAIN") so a following combinator knows the arm left the payload
+        // where it was; `suppress_inline_option_result_binding_move_impl` then
+        // reads it as a veto and declines to disarm a moved source.
+        //
+        // Keyed by bare binding name, exactly like `deque_head_slots` a few
+        // lines below, whose comment states the rule this broke: a `queue` in
+        // one function must not hand its head alloca to a `queue` in the next.
+        // Here an `o` in one function handed its veto to an `o` in the next, so
+        // the second function's move was not disarmed and both slots freed one
+        // box — `free(): double free detected in tcache 2` on an ordinary
+        // build, in a program whose two functions share nothing but that name,
+        // and with the function that published the veto NEVER CALLED. Renaming
+        // either binding made it correct, which is what identified the table.
+        //
+        // Single-function test programs cannot express it, which is why no
+        // fixture caught it: it needs a same-named binding in two bodies, one a
+        // retained Option/Result source and the other moved.
+        self.drop_rc.inline_optres_retained_sources.clear();
         self.borrow_vars.var_option_shared_heap.clear();
         self.borrow_vars.ref_option_shared_heap.clear();
         // B-2026-08-27-43: the branch-leaf retain record is per-function state
