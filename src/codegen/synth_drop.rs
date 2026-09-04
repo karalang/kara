@@ -7936,12 +7936,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // shared one body. `agg_ty` is the layout the GEPs are emitted against,
         // so keying on it makes the symbol and the offsets agree by
         // construction rather than by the element types happening to be known.
-        let shape: String = agg_ty
-            .print_to_string()
-            .to_string()
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '.' })
-            .collect();
+        //
+        // B-2026-09-03-28 shared this rendering with the MEMORY walker
+        // (`synthesize_tuple_drop_fn_te`), which had the identical defect and
+        // now takes the identical key. One helper, so the two cannot drift.
+        let shape: String = Self::llvm_agg_shape_sig(agg_ty);
         let fn_name = format!(
             "__karac_dropelems_tuple_{}{payload_sig}$in{shape}",
             key.join("_")

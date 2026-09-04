@@ -980,7 +980,36 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return None;
         }
-        let fn_name = format!("__karac_drop_tuple_te_{}", Self::tuple_te_sig(elem_tes));
+        // B-2026-09-03-28 — THE LLVM AGGREGATE TYPE IS PART OF THE KEY, because
+        // it is what the body's GEPs are emitted against. The memory twin of
+        // B-2026-09-03-13, whose fix this repeats one table over, and whose doc
+        // comment predicted this shape exactly: "the element `TypeExpr`s
+        // reaching here are unresolved for exactly the elements that matter".
+        //
+        // `tuple_te_sig` names the ELEMENTS, and `infer_arg_elem_te` resolves
+        // neither an integer literal nor an f-string to a named type — both come
+        // back an EMPTY path. So `let t = (0, Option.Some(mkD(8)))` and
+        // `let t = (f"s{5}", Option.Some(mkD(5)))` both signed as
+        // `_Option_gDg` and shared ONE walker:
+        //
+        //   __karac_drop_tuple_te__Option_gDg  agg={ {ptr,i64,i64}, {i64 x4} }
+        //   __karac_drop_tuple_te__Option_gDg  agg={ i64,           {i64 x4} }
+        //
+        // The `Option` sits at byte 24 in the first and byte 8 in the second;
+        // the second reused the first's offsets, read its tag out of the
+        // String's length word, saw no `Some` and freed NOTHING — a whole
+        // 56-byte `D` plus 34 indirect, leaked with every `Drop` body still
+        // firing exactly once, so the program's output says nothing is wrong.
+        //
+        // Keying on the layout makes the symbol and its offsets agree by
+        // construction rather than by the element types happening to be
+        // nameable. Two genuinely identical tuples still share, since equal
+        // layouts print equal.
+        let fn_name = format!(
+            "__karac_drop_tuple_te_{}$in{}",
+            Self::tuple_te_sig(elem_tes),
+            Self::llvm_agg_shape_sig(agg_ty)
+        );
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
@@ -1081,6 +1110,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(Self::type_expr_sig)
             .collect::<Vec<_>>()
             .join("_")
+    }
+
+    /// An LLVM-name-safe rendering of an aggregate's LAYOUT, keying the memos
+    /// of the drop walkers whose bodies GEP against it
+    /// ([`Self::synthesize_tuple_drop_fn_te`] and its bodies-only sibling
+    /// `emit_tuple_elem_user_drop_bodies_fn_masked`).
+    ///
+    /// The source-level element types are NOT a sufficient key on their own —
+    /// they are unresolved for exactly the elements that decide where the
+    /// visited ones sit (B-2026-09-03-13 for the bodies walk, B-2026-09-03-28
+    /// for the memory one). Printing the LLVM type is what makes equal keys mean
+    /// equal offsets: two tuples with the same layout print the same, and two
+    /// with different layouts cannot collide however their elements mangle.
+    pub(super) fn llvm_agg_shape_sig(agg_ty: StructType<'ctx>) -> String {
+        agg_ty
+            .print_to_string()
+            .to_string()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '.' })
+            .collect()
     }
 
     fn type_expr_sig(te: &crate::ast::TypeExpr) -> String {
