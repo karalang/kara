@@ -13397,6 +13397,154 @@ done
         );
     }
 
+    /// B-2026-09-04-10 — AN `Option[<struct>]` DESTRUCTURE LEAF THAT IS MOVED
+    /// WHOLE MUST DISARM ITS SOURCE.
+    ///
+    /// B-2026-09-03-15 made a tuple destructure leaf the sole owner of its
+    /// boxed payload: it registers `track_inline_option_agg_payload_var` and
+    /// cap-zeroes the element in the source. A whole-value MOVE of that leaf
+    /// then gave the payload two owners, because
+    /// `suppress_inline_option_result_binding_move_impl` tests membership in
+    /// three sets — inline Option, inline Result, boxed enum — and the tracker
+    /// records the binding in a FOURTH, `inline_option_agg_payload_vars`, which
+    /// nothing there listed. Both slots stayed armed and both freed the box.
+    ///
+    /// ASSERTED STRICTLY (`assert_eq!(run_program(..), Some(..))`) for the
+    /// reason `e2e_boxed_enum_param_escape_no_double_free` states: this program
+    /// does not misprint on the unfixed compiler, it DIES — `free(): double
+    /// free detected in tcache 2` on the two-cell form, a SIGSEGV on this
+    /// twelve-cell one, with stdout still buffered so not one line reaches the
+    /// terminal. `run_program` returns `None` for that, which the tolerant
+    /// `let Some(out) = .. else { return }` form would swallow as a skip.
+    ///
+    /// TWO CELLS WERE RED and the rest are controls. `rebind` is the row's
+    /// `let q = o;` and `ret` its `return o` (through `giveback`, so the move
+    /// crosses a function boundary). `twohop` chains two rebinds, `loopreb`
+    /// runs one twice, and `slot0` puts the `Option` in element 0 — all three
+    /// reach the same disarm.
+    ///
+    /// THE CONTROLS COVER THE OPPOSITE FAILURE, a body that stops running, and
+    /// one of them is the reason this fix is not simply "add the fourth set".
+    /// `arg` passes the leaf to a function: for THIS payload shape that is not
+    /// a transfer — the caller's slot keeps the payload and runs its body — so
+    /// admitting the set at the shared entry point silently loses `dR114`
+    /// (measured). Hence the separate `..._rebind` entry point, with only the
+    /// rebind and return sites calling it. `matched` (a consuming arm, which
+    /// has always had its own retraction), `stay` (the leaf never moves),
+    /// `plain` (a struct element, not an `Option`), `instr`
+    /// (`Option[String]` — an INLINE payload, so one of the three sets that
+    /// already worked), `fld` (the STRUCT-FIELD destructure sibling, which
+    /// registers into `boxed_enum_payload_vars`) and `loc` (a plain `Option`
+    /// local moved the same two ways) were all correct before and must stay so
+    /// — they are what isolate the defect to the one set nothing listed.
+    ///
+    /// EVERY BINDING IN THIS PROGRAM HAS A DISTINCT NAME ON PURPOSE. The
+    /// payload-ownership side tables are keyed by bare binding name, and at
+    /// least one of them is not cleared between function bodies, so two
+    /// same-named bindings in different functions interfere — a defect of its
+    /// own, filed separately, which would otherwise crash this fixture for a
+    /// reason that has nothing to do with the row it pins.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_option_agg_destructure_leaf_move_disarms_its_source`, pinned to
+    /// the same string.
+    #[test]
+    fn e2e_option_agg_destructure_leaf_move_disarms_its_source() {
+        let src = r#"struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct H { a: R, b: Option[R] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+
+fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn giveback() -> Option[R] { let tb = (mk(3), Option.Some(mk(103))); let (_, ob) = tb; return ob }
+
+fn rebind()  { let tc = (mk(2), Option.Some(mk(102))); let (_, oc) = tc; let qc = oc; println(f"  q{qc.is_some()}") }
+fn ret()     { let zd = giveback(); println(f"  z{zd.is_some()}") }
+fn twohop()  { let te = (mk(6), Option.Some(mk(106))); let (_, oe) = te; let qe = oe; let we = qe; println(f"  w{we.is_some()}") }
+fn loopreb() { let mut i = 0;
+               while i < 2 { let tf = (mk(7), Option.Some(mk(107))); let (_, of) = tf; let qf = of; i = i + 1; }
+               println("  lr") }
+fn slot0()   { let tg = (Option.Some(mk(8)), 5); let (og, kg) = tg; let qg = og; println(f"  k{kg}{qg.is_some()}") }
+fn matched() { let th = (mk(4), Option.Some(mk(104))); let (_, oh) = th; match oh { Option.Some(rh) => { println(f"  g{rh.id}") }, Option.None => { println("  n") } } }
+fn arg()     { let ti = (mk(14), Option.Some(mk(114))); let (_, oi) = ti; println(f"  e{eat(oi)}") }
+fn stay()    { let tj = (mk(5), Option.Some(mk(105))); let (_, oj) = tj; println(f"  y{oj.is_some()}") }
+fn plain()   { let (_, ok) = (mk(9), mk(109)); let qk = ok; println(f"  p{qk.id}") }
+fn instr()   { let tl = (mk(15), Option.Some(f"p15")); let (_, ol) = tl; let ql = ol; println(f"  i{ql.is_some()}") }
+fn fld()     { let hm = H { a: mk(13), b: Option.Some(mk(113)) }; let H { a, b } = hm; let qm = b; println(f"  f{qm.is_some()}") }
+fn loc()     { let on = Option.Some(mk(11)); let qn = on; println(f"  o{qn.is_some()}") }
+
+fn main() {
+  println("rebind");  rebind()
+  println("ret");     ret()
+  println("twohop");  twohop()
+  println("loopreb"); loopreb()
+  println("slot0");   slot0()
+  println("matched"); matched()
+  println("arg");     arg()
+  println("stay");    stay()
+  println("plain");   plain()
+  println("instr");   instr()
+  println("fld");     fld()
+  println("loc");     loc()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"rebind
+dR2:s2:2
+  qtrue
+dR102:s102:2
+ret
+dR3:s3:2
+  ztrue
+dR103:s103:2
+twohop
+dR6:s6:2
+  wtrue
+dR106:s106:2
+loopreb
+dR7:s7:2
+dR107:s107:2
+dR7:s7:2
+dR107:s107:2
+  lr
+slot0
+  k5true
+dR8:s8:2
+matched
+dR4:s4:2
+  g104
+dR104:s104:2
+arg
+dR14:s14:2
+  e114
+dR114:s114:2
+stay
+dR5:s5:2
+  ytrue
+dR105:s105:2
+plain
+dR9:s9:2
+  p109
+dR109:s109:2
+instr
+dR15:s15:2
+  itrue
+fld
+dR13:s13:2
+  ftrue
+dR113:s113:2
+loc
+  otrue
+dR11:s11:2
+done
+"#
+            )
+        );
+    }
+
     /// B-2026-09-03-25 — A WILDCARD TUPLE LEAF OVER AN `Option`/`Result`
     /// ELEMENT OWNS ITS PAYLOAD'S `Drop` BODY.
     ///

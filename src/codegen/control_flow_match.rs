@@ -11663,7 +11663,26 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
-        self.suppress_inline_option_result_binding_move_impl(value, false);
+        self.suppress_inline_option_result_binding_move_impl(value, false, false);
+    }
+
+    /// B-2026-09-04-10 — the WHOLE-VALUE REBIND entry point (`let q = o;`),
+    /// which additionally disarms a source registered through
+    /// `track_inline_option_agg_payload_var` (a boxed user struct/enum payload,
+    /// recorded in `inline_option_agg_payload_vars`).
+    ///
+    /// SEPARATE from the plain entry point above rather than folded into it,
+    /// and the difference is measured. Every other caller of that one is a
+    /// CONSUMING position — a call argument, a struct-literal field init, a
+    /// method receiver, a channel send — and for this payload shape those do
+    /// NOT transfer ownership: the caller's slot stays the payload's owner and
+    /// runs its `Drop` body at scope exit. Admitting the set there silently
+    /// LOSES that body (measured: `eat(o)` over `(R, Option[R])` printed the
+    /// payload's `dR114` before and nothing after). A rebind and a return are
+    /// the two positions where the transfer is real, so they are the two that
+    /// get the wider disarm.
+    pub(super) fn suppress_inline_option_agg_binding_rebind(&self, value: &Expr) {
+        self.suppress_inline_option_result_binding_move_impl(value, false, true);
     }
 
     /// B-2026-08-30-8 — the ESCAPING entry point: `value` is being RETURNED, so
@@ -11682,10 +11701,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// legitimately have kept its buffer, so it keeps the veto and reaches the
     /// caller through the chain's own value, not through this slot.
     pub(super) fn suppress_inline_option_result_binding_escape(&self, value: &Expr) {
-        self.suppress_inline_option_result_binding_move_impl(value, true);
+        // `agg: true` — a RETURN hands the header to the caller, so the boxed
+        // payload's ownership genuinely moves (B-2026-09-04-10).
+        self.suppress_inline_option_result_binding_move_impl(value, true, true);
     }
 
-    fn suppress_inline_option_result_binding_move_impl(&self, value: &Expr, escaping: bool) {
+    fn suppress_inline_option_result_binding_move_impl(
+        &self,
+        value: &Expr,
+        escaping: bool,
+        agg: bool,
+    ) {
         // Resolve the OWNING binding whose scope-exit payload free must be
         // disarmed because the caller (`unwrap_or`) has taken and freed the
         // aliased Err/None payload. Two receiver shapes reach here:
@@ -11740,7 +11766,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .payload_vars
             .boxed_enum_payload_vars
             .contains(name.as_str());
-        if !in_option && !in_result && !in_boxed {
+        // B-2026-09-04-10 — the FOURTH set, and the one that was missing.
+        // `track_inline_option_agg_payload_var` registers an `EnumDrop` running
+        // the tag-guarded `karac_drop_Option_<payload>` and records the binding
+        // HERE rather than in any of the three above, because its payload is a
+        // boxed user STRUCT/ENUM — neither the inline `{ptr,len,cap}` shape nor
+        // the `BoxedEnumDrop` action. B-2026-09-03-15 made that tracker the
+        // owner of a TUPLE destructure leaf and cap-zeroed the element in the
+        // source, so the leaf is the payload's sole owner; a move then handed
+        // that ownership on while this suppressor returned early on the
+        // membership test, leaving both slots armed.
+        //
+        // The failure is a HARD ABORT on an ordinary build, not a sanitizer
+        // finding: `let t = (mk(2), Option.Some(mk(102))); let (_, o) = t;
+        // let q = o;` dies with glibc's `free(): double free detected in
+        // tcache 2` before any buffered output reaches the terminal, and
+        // `return o` from the same leaf dies identically. Every neighbouring
+        // shape was already correct — a plain `Option` local moved the same two
+        // ways, the STRUCT-FIELD destructure leaf (which registers into
+        // `boxed_enum_payload_vars`), the same leaf passed to a function, and
+        // an `Option[String]` leaf (inline payload, so `inline_option_payload_vars`)
+        // — which is what isolates this to the one set nothing here listed.
+        //
+        // The zeroing below is shape-blind, so admitting the set is the whole
+        // fix: tag 0 is `None`, and the `EnumDrop`'s own guard then skips.
+        let in_agg = agg
+            && self
+                .payload_vars
+                .inline_option_agg_payload_vars
+                .contains(name.as_str());
+        if !in_option && !in_result && !in_boxed && !in_agg {
             return;
         }
         let Some(slot) = self.variables.get(name.as_str()).copied() else {

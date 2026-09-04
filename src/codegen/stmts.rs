@@ -7509,7 +7509,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // have already been copied out. Self-gated on
                                 // `boxed_enum_payload_vars` membership, so a
                                 // non-boxed initializer is untouched.
-                                self.suppress_inline_option_result_binding_move(value);
+                                //
+                                // B-2026-09-04-10 — the REBIND entry point, so
+                                // the disarm also covers a source registered
+                                // through `track_inline_option_agg_payload_var`
+                                // (a TUPLE destructure leaf over
+                                // `Option[<struct>]`, which B-2026-09-03-15
+                                // made the payload's sole owner). Without it
+                                // `let (_, o) = t; let q = o;` armed both slots
+                                // and aborted with glibc's `free(): double free
+                                // detected in tcache 2` on an ordinary build.
+                                // A rebind transfers ownership; the consuming
+                                // positions that share the plain entry point do
+                                // not, for this shape — see that entry point's
+                                // doc for the measurement.
+                                self.suppress_inline_option_agg_binding_rebind(value);
                             }
                         }
                     }

@@ -332,6 +332,121 @@ mod memory_sanitizer_tests {
         );
     }
 
+    /// B-2026-09-04-10 — the BALANCE assertion for the disarm that
+    /// `e2e_option_agg_destructure_leaf_move_disarms_its_source` pins as a
+    /// transcript.
+    ///
+    /// The fix ZEROES a source slot so its `EnumDrop` skips, which is exactly
+    /// the shape that trades a double free for a leak if the reasoning about
+    /// who owns the payload afterwards is wrong. The transcript cannot tell
+    /// those apart — a leaked box and a handed-off one both print the same `dR`
+    /// lines — so the ownership claim is checked here.
+    ///
+    /// The `arg` cell is the one to watch. Its payload is NOT transferred by
+    /// being passed, so the caller's slot must stay armed; the first draft of
+    /// this fix disarmed it too and lost `dR114:s114:2` outright. It is a
+    /// transcript failure rather than a leak, and it is pinned in the codegen
+    /// twin — but the reverse mistake, disarming too little, is a double free
+    /// that only this suite reports.
+    ///
+    /// `loopreb` runs two iterations so a per-iteration imbalance shows as a
+    /// multiple rather than as one block.
+    #[test]
+    fn asan_option_agg_destructure_leaf_move_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct H { a: R, b: Option[R] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+
+fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn giveback() -> Option[R] { let tb = (mk(3), Option.Some(mk(103))); let (_, ob) = tb; return ob }
+
+fn rebind()  { let tc = (mk(2), Option.Some(mk(102))); let (_, oc) = tc; let qc = oc; println(f"  q{qc.is_some()}") }
+fn ret()     { let zd = giveback(); println(f"  z{zd.is_some()}") }
+fn twohop()  { let te = (mk(6), Option.Some(mk(106))); let (_, oe) = te; let qe = oe; let we = qe; println(f"  w{we.is_some()}") }
+fn loopreb() { let mut i = 0;
+               while i < 2 { let tf = (mk(7), Option.Some(mk(107))); let (_, of) = tf; let qf = of; i = i + 1; }
+               println("  lr") }
+fn slot0()   { let tg = (Option.Some(mk(8)), 5); let (og, kg) = tg; let qg = og; println(f"  k{kg}{qg.is_some()}") }
+fn matched() { let th = (mk(4), Option.Some(mk(104))); let (_, oh) = th; match oh { Option.Some(rh) => { println(f"  g{rh.id}") }, Option.None => { println("  n") } } }
+fn arg()     { let ti = (mk(14), Option.Some(mk(114))); let (_, oi) = ti; println(f"  e{eat(oi)}") }
+fn stay()    { let tj = (mk(5), Option.Some(mk(105))); let (_, oj) = tj; println(f"  y{oj.is_some()}") }
+fn plain()   { let (_, ok) = (mk(9), mk(109)); let qk = ok; println(f"  p{qk.id}") }
+fn instr()   { let tl = (mk(15), Option.Some(f"p15")); let (_, ol) = tl; let ql = ol; println(f"  i{ql.is_some()}") }
+fn fld()     { let hm = H { a: mk(13), b: Option.Some(mk(113)) }; let H { a, b } = hm; let qm = b; println(f"  f{qm.is_some()}") }
+fn loc()     { let on = Option.Some(mk(11)); let qn = on; println(f"  o{qn.is_some()}") }
+
+fn main() {
+  println("rebind");  rebind()
+  println("ret");     ret()
+  println("twohop");  twohop()
+  println("loopreb"); loopreb()
+  println("slot0");   slot0()
+  println("matched"); matched()
+  println("arg");     arg()
+  println("stay");    stay()
+  println("plain");   plain()
+  println("instr");   instr()
+  println("fld");     fld()
+  println("loc");     loc()
+  println("done")
+}
+"#,
+            &[
+                "rebind",
+                "dR2:s2:2",
+                "  qtrue",
+                "dR102:s102:2",
+                "ret",
+                "dR3:s3:2",
+                "  ztrue",
+                "dR103:s103:2",
+                "twohop",
+                "dR6:s6:2",
+                "  wtrue",
+                "dR106:s106:2",
+                "loopreb",
+                "dR7:s7:2",
+                "dR107:s107:2",
+                "dR7:s7:2",
+                "dR107:s107:2",
+                "  lr",
+                "slot0",
+                "  k5true",
+                "dR8:s8:2",
+                "matched",
+                "dR4:s4:2",
+                "  g104",
+                "dR104:s104:2",
+                "arg",
+                "dR14:s14:2",
+                "  e114",
+                "dR114:s114:2",
+                "stay",
+                "dR5:s5:2",
+                "  ytrue",
+                "dR105:s105:2",
+                "plain",
+                "dR9:s9:2",
+                "  p109",
+                "dR109:s109:2",
+                "instr",
+                "dR15:s15:2",
+                "  itrue",
+                "fld",
+                "dR13:s13:2",
+                "  ftrue",
+                "dR113:s113:2",
+                "loc",
+                "  otrue",
+                "dR11:s11:2",
+                "done",
+            ],
+            "b10-optres-agg-leaf-move",
+        );
+    }
+
     /// B-2026-09-03-39 — THE FRESH-SOURCE TWIN OF THE ARM ABOVE MUST STAY
     /// BALANCED WHILE IT GAINS OWNERS.
     ///
