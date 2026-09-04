@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 367 |
 | run-vs-build | 332 |
-| leak | 262 |
+| leak | 263 |
 | missing-feature | 194 |
 | double-free | 177 |
 | codegen-gap | 166 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1448 |
+| codegen | 1449 |
 | interp | 350 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -149,7 +149,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-41 | 2026-09-02 | interp+codegen | medium | THE TWO-STEP DESTRUCTURE OF A NESTED TUPLE FIELD SPLITS THE BACKENDS -- `let (inner, y) = h.pe; let (r, x) = inner; let m = r;` runs ONE `Drop` body under `--interp` and TWO on `karac run` / `karac build` / `KARAC_AUTO_PAR=0`. The interpreter is right; the compiled side records nothing for the tuple-typed leaf under an owner-runs-bodies source | — |
 | B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
-| B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
 | B-2026-09-03-34 | 2026-09-03 | codegen | medium | A STRUCT DESTRUCTURED OUT OF A MATCH ARM'S PAYLOAD BINDING LOSES A PLAIN FIELD'S `Drop` BODY ON THE COMPILED BACKENDS -- `match w { Wrap.W(h) => { let Ho2 { a, b } = h; .. } }` runs `dR152 dR52` under `--interp` and only `dR152` on jit/aot/AUTO_PAR=0; the payload half was fixed by B-2026-09-03-24 and this is the residue, because the place-source body transfer is gated on the source owning a `StructFieldBodies` action and a match payload does not | — |
@@ -166,6 +165,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-30 | 2026-09-04 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self) { println(self.a.id) }` prints `rd1` and no `dR` line under --interp, jit and aot alike; `mk(3).m()` loses `R`'s own body the same way. A LOCAL receiver (`let h = ..; h.m()`) runs them from the caller after the call, and there the interpreter runs a destructured receiver's leaf bodies as well -- twice. Codegen treats `self` as caller-retained like a by-value param; a temp has no caller walk, so nobody owns the bodies | — |
 | B-2026-09-04-31 | 2026-09-04 | codegen | medium | A TUPLE-HELD `shared` ELEMENT IS RELEASED BEFORE THE TUPLE'S FIRST READ on all three compiled surfaces -- `let a = (S{id:14, tag:"alpha"}, 3); println(a.0.id, a.0.tag)` prints `dS14/alpha` and THEN `v14/alpha`, reading a value whose user `Drop` body has already run; identically for a bare tuple binding, a tuple built from a live binding, and a tuple in a struct FIELD | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
+| B-2026-09-04-33 | 2026-09-04 | codegen | medium | AN `Option` TUPLE ELEMENT WHOSE PAYLOAD IS A LITERAL IS UNTYPED, so `tuple_elem_optres_drop_ok` declines the element, the tuple `let` falls to the enum-blind LLVM-type walker, and the payload is never freed -- `let t = (mkD(9), Option.Some(f"p{9}")); let t2 = t;` strands its `String` on the compiled backends while the `Drop` body still fires exactly once. UNCONDITIONAL, not shape-dependent: split from B-2026-09-03-28, whose "only when other tuple shapes are DEFINED" framing was OPTIMIZER DCE -- the emitted IR is byte-identical between the one-function program that runs clean and the eight-function one that leaks | — |
 
 ### Relocated
 
@@ -2198,6 +2198,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-25 | codegen | medium | A WILDCARD TUPLE LEAF OVER AN `Option[<struct with a Drop body>]` ELEMENT LOSES THE PAYLOAD'S BODY ON THE COMPILED BACKENDS -- `let (r, _) = t;` and… | 6b8e246 |
 | B-2026-09-03-26 | ownership | medium | THE USE-AFTER-MOVE HINT DENIES A `.clone()` THAT EXISTS, AND `karac fix` WITHHOLDS THE EDIT, FOR FIVE TYPE CATEGORIES -- `Option[T]`, `Result[T, E]`,… | f77d2cc |
 | B-2026-09-03-27 | runtime | medium | `resolve_pool_workers()` STILL DOES A FULL `std::env::var` SCAN PER PARALLEL-REGION ENTRY after B-2026-09-03-18 cached the tier BELOW it, so an auto-… | 953006d |
+| B-2026-09-03-28 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;… | cd49671 |
 | B-2026-09-03-31 | codegen | medium | A STRUCT WITH ITS OWN `impl Drop` NEVER RELEASES A `shared struct` FIELD'S RC BOX -- 16 B per instance and unbounded in a loop (80 B / 5 instances),… | dc8cfe24 |
 | B-2026-09-03-33 | codegen | medium | A `Result[O, E]` STRUCT-FIELD DESTRUCTURE LEAF RUNS A HUSK `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h;` over `{ a: R, b: Result[… | 85d34ce |
 | B-2026-09-03-35 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` IS NEVER LOWERED, so ADDING IT MAKES A CLEAN PROGRAM LEAK EVERY HEAP FIELD -- `Box3[String] { v, tag }` is… | f07fab6b |
