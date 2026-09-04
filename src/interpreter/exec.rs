@@ -806,6 +806,25 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
 /// Called after the statement evaluates successfully, so the drop
 /// slot lands at the program-order LIFO position the binding
 /// claims in the unified stack.
+/// One owed field-held `shared struct` release (B-2026-09-03-9), parked by a
+/// draining drop slot and performed at the enclosing block's scope exit —
+/// which is where the compiled backends put a refcount release, while a
+/// holder's PLAIN Drop-bearing fields fire at its NLL endpoint.
+///
+/// Two shapes because the two holders differ in whether their slot survives
+/// long enough to be re-read. A plain struct or tuple holder keeps its binding
+/// until scope exit, so its release is addressed BY NAME and the count is read
+/// fresh at drain. A `shared` holder does not: its own arm releases the slot as
+/// soon as it drains, so the values it held are CAPTURED first and carried
+/// here — which is also what makes the drain's `strong_count == 1` test exact.
+#[derive(Debug, Clone)]
+pub(crate) enum PendingRelease {
+    /// Re-read `name`'s slot at scope exit and release what it holds.
+    Binding(String),
+    /// A `(type name, value)` clone taken out of a dying `shared` holder.
+    Captured(String, Value),
+}
+
 pub(crate) fn push_drops_for_stmt(stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
     match &stmt.kind {
         StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {

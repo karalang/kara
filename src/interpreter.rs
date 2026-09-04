@@ -58,7 +58,7 @@ mod type_order;
 pub(crate) mod user_hasher;
 mod value;
 
-use exec::{deep_clone_value, option_value_from, ControlFlow, Env};
+use exec::{deep_clone_value, option_value_from, ControlFlow, Env, PendingRelease};
 use value::{
     try_write_or_panic, upgrade_weak_to_option, EnumData, FieldCell, OrdValue, SharedStructInner,
     ERROR_TRACE_MAX_DEPTH,
@@ -570,7 +570,7 @@ pub struct Interpreter<'a> {
     /// exit path out of `eval_block_inner` can leak a frame: a drain takes
     /// every entry at or below its own depth, which is exactly this block's
     /// and any deeper one a drop body opened.
-    pub(crate) pending_shared_releases: Vec<(usize, String)>,
+    pub(crate) pending_shared_releases: Vec<(usize, PendingRelease)>,
     /// B-2026-08-29-33, tuple leg — `(variable, element index)` pairs whose ENUM
     /// element's PAYLOAD bodies such an arm took, with the element's own body
     /// still owed. The tuple sibling of the set above; codegen's twin is

@@ -19,7 +19,7 @@ use crate::token::Span;
 
 use super::exec::{
     compute_block_last_use, push_drops_for_stmt, CleanupAction, ControlFlow, ErrDeferEntry,
-    EvalResult, ExitPath,
+    EvalResult, ExitPath, PendingRelease,
 };
 use super::value::{EnumData, Value};
 use super::{ConsoleSeg, ConsoleStream, Interpreter};
@@ -916,7 +916,7 @@ impl<'a> super::Interpreter<'a> {
         // which is what lets the LAST of several holders reach its own last
         // reference and fire.
         let depth = self.env.scope_depth();
-        let mut owed: Vec<String> = Vec::new();
+        let mut owed: Vec<PendingRelease> = Vec::new();
         let mut i = 0;
         while i < self.pending_shared_releases.len() {
             if self.pending_shared_releases[i].0 >= depth {
@@ -925,9 +925,39 @@ impl<'a> super::Interpreter<'a> {
                 i += 1;
             }
         }
-        for name in owed {
-            if self.run_field_held_shared_user_drops(&name) {
-                self.env.remove_local(&name);
+        // A work QUEUE, not a plain loop: firing a captured value can uncover
+        // shared values IT held, and a two-deep chain has to cascade in one
+        // block exit rather than wait for a drain that never comes.
+        while !owed.is_empty() {
+            match owed.remove(0) {
+                PendingRelease::Binding(name) => {
+                    if self.run_field_held_shared_user_drops(&name) {
+                        self.env.remove_local(&name);
+                    }
+                }
+                PendingRelease::Captured(type_name, value) => {
+                    // The capture is the ONLY reference left when the holder
+                    // that owned it was the last one: `remove_local` dropped
+                    // the holder after this clone was taken, so a count of 1
+                    // here means exactly that. Any other holder — live, or one
+                    // whose own capture is still queued — keeps it above 1 and
+                    // the release falls to whichever entry drains last.
+                    let Value::SharedStruct(ref inner) = value else {
+                        continue;
+                    };
+                    if Arc::strong_count(inner) != 1 {
+                        continue;
+                    }
+                    // Capture what IT holds before running the body, then let
+                    // this reference go: the nested value's own last-reference
+                    // test needs the parent's slot already gone, exactly as
+                    // this one needed the holder's.
+                    let nested = self.capture_shared_fields_of_shared_value(&value);
+                    self.run_user_drop_body_on_value(&type_name, value);
+                    for (tn, v) in nested {
+                        owed.push(PendingRelease::Captured(tn, v));
+                    }
+                }
             }
         }
     }
@@ -1321,6 +1351,13 @@ impl<'a> super::Interpreter<'a> {
                     if walks_fields {
                         self.drop_user_drop_fields_of_binding(name);
                     }
+                    // B-2026-09-03-9, nested-shared leg — the walk above cannot
+                    // reach a `shared` field (its view drops them, because
+                    // their drop is refcount-driven), and no binding exists for
+                    // one held in a field, so `shared struct H { l: Leaf }`
+                    // ran NO body under `--interp` while both compiled backends
+                    // ran it once at scope exit.
+                    self.capture_shared_fields_of_shared_holder(name);
                 }
                 // The release must extend to the walks-fields case too, not
                 // just the own-body case: without it an ALIAS (`let h2 = h;`)
@@ -1390,8 +1427,75 @@ impl<'a> super::Interpreter<'a> {
         };
         if owed {
             let depth = self.env.scope_depth();
-            self.pending_shared_releases.push((depth, name.to_string()));
+            self.pending_shared_releases
+                .push((depth, PendingRelease::Binding(name.to_string())));
         }
+    }
+
+    /// B-2026-09-03-9, nested-shared leg — park the release of every
+    /// Drop-relevant `shared struct` a DYING `shared` holder holds in a field.
+    ///
+    /// The plain-holder path above can address its holder by NAME and re-read
+    /// the slot at scope exit. This one cannot: the shared arm of
+    /// `invoke_user_drop_if_applicable` releases the holder's own slot
+    /// immediately (`remove_local` is what lets a later alias reach its last
+    /// reference), so by scope exit there is no binding left to read. It parks
+    /// the VALUES instead, cloned here while the holder is still alive.
+    ///
+    /// That clone is also what makes the drain's test exact. Taking it before
+    /// `remove_local` means the holder's death leaves this reference standing,
+    /// so a strong-count of 1 at drain time says "the holder that just died
+    /// held the last one" and nothing else does.
+    fn capture_shared_fields_of_shared_holder(&mut self, name: &str) {
+        let captures = {
+            let Some(slot) = self.env.slot_ref(name) else {
+                return;
+            };
+            self.capture_shared_fields_of_shared_value(slot)
+        };
+        if captures.is_empty() {
+            return;
+        }
+        let depth = self.env.scope_depth();
+        for (type_name, value) in captures {
+            self.pending_shared_releases
+                .push((depth, PendingRelease::Captured(type_name, value)));
+        }
+    }
+
+    /// The `shared struct`s held in a `shared` value's own fields, cloned, in
+    /// declared field order. Empty for anything that is not a `SharedStruct`.
+    ///
+    /// Presents the holder as the equivalent `Value::Struct` — INCLUDING its
+    /// shared fields, which the drop-walk's view deliberately drops — so the
+    /// declared-order traversal and the Drop-relevance gate are the same two
+    /// the field walk uses, rather than a second set that could drift from it.
+    fn capture_shared_fields_of_shared_value(&self, value: &Value) -> Vec<(String, Value)> {
+        let Value::SharedStruct(inner) = value else {
+            return Vec::new();
+        };
+        let mut fields: HashMap<String, Value> = inner
+            .immutable_fields
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (k, cell) in &inner.mut_fields {
+            if let Ok(g) = cell.value.read() {
+                fields.insert(k.clone(), g.clone());
+            }
+        }
+        let view = Value::Struct {
+            name: inner.name.clone(),
+            fields,
+        };
+        let mut ptrs = Vec::new();
+        self.collect_field_held_shared(&view, &mut ptrs, 0);
+        let firing: std::collections::HashSet<usize> =
+            ptrs.into_iter().map(|(_, p, _)| p).collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        self.collect_field_held_shared_values(&view, &firing, &mut seen, &mut out, 0);
+        out
     }
 
     /// B-2026-09-03-9 — run the user `impl Drop` of every `shared struct` a

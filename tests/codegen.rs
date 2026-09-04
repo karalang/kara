@@ -8000,6 +8000,56 @@ fn main() {
         );
     }
 
+    /// B-2026-09-03-9 — the compiled half of the field-held `shared struct`
+    /// release, which is what the interpreter fix had to match.
+    ///
+    /// Three things are pinned here, and only the first is about the body
+    /// running at all:
+    ///
+    ///   1. A `shared struct` in a struct FIELD runs its body exactly once.
+    ///      (The interpreter ran it ZERO times; this side always ran it.)
+    ///   2. WHERE it runs. `Mx { r: R, s: S }` splits: the plain field's body
+    ///      fires at the binding's NLL endpoint, the shared field's release at
+    ///      SCOPE EXIT — `dR1` before `post`, `dS2` after it. That split is
+    ///      the whole reason the interpreter parks its release rather than
+    ///      firing it beside the plain walk, so a change that collapsed the
+    ///      two placements here would silently un-match the two backends.
+    ///   3. Two holders of ONE shared value release it once, at the last one.
+    ///
+    /// Kept in one program so the three answers are read off a single output
+    /// and cannot drift apart across separate fixtures.
+    #[test]
+    fn e2e_field_held_shared_struct_release_placement() {
+        let Some(out) = run_program(
+            "shared struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+             struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+             struct Sw { s: S }\n\
+             struct Mx { r: R, s: S }\n\
+             fn build(k: i64) -> Sw {\n\
+             \x20   let s: S = S { id: k };\n\
+             \x20   return Sw { s: s }\n\
+             }\n\
+             fn main() {\n\
+             \x20   { let a: Sw = build(14); println(f\"v{a.s.id}\"); println(\"one\"); }\n\
+             \x20   { let m: Mx = Mx { r: R { id: 1 }, s: S { id: 2 } }; println(f\"v{m.s.id}\"); println(\"two\"); }\n\
+             \x20   { let s: S = S { id: 3 }; let w1: Sw = Sw { s: s }; let w2: Sw = Sw { s: s }; println(f\"v{w1.s.id}{w2.s.id}\"); println(\"three\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            // Block 1: release at scope exit, after `one` — NOT at `a`'s last
+            // use. Block 2: `dR1` at the NLL endpoint, `dS2` at scope exit,
+            // with `two` between them. Block 3: exactly one `dS3`, at the last
+            // holder's release.
+            "v14\none\ndS14\nv2\ndR1\ntwo\ndS2\nv33\nthree\ndS3\nend\n"
+        );
+    }
+
     /// B-2026-08-02-25 — displacing an `Option[T]` binding runs the DISPLACED
     /// payload's user `impl Drop` body.
     ///

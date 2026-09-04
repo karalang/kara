@@ -7742,15 +7742,119 @@ fn test_user_drop_shared_struct_alias_fires_once_at_last_ref() {
     );
 }
 
-// NOTE: recursive / field-held shared structs (`Node { next: Some(child) }`)
-// still do NOT fire the user body on the interpreter path — an inner ref
-// held inside another shared struct's field is never an env binding, so it
-// never reaches a `CleanupAction::Drop` drain and env-release-on-drain
-// can't see it. Closing that needs an Arc-drop hook (a `SharedStructInner`
-// Drop impl that calls back into the interpreter). Codegen fires these
-// correctly (refcount→0; see the recursive-chain codegen + ASAN tests).
-// Tracked under the phase-7 "Drop ordering reconciliation across backends"
-// item (L940), recursive sub-item.
+// B-2026-09-03-9 — field-held shared structs DO fire now, on every surface.
+// The note that stood here said they did not: a shared value held in a field
+// is never an env binding, so it never reached a `CleanupAction::Drop` drain
+// and `drop_target` (which reports a refcount only for a BARE `SharedStruct`
+// slot) could not see it. The release is now performed against the holder
+// instead — see `run_field_held_shared_user_drops`. What is still open is the
+// TUPLE-ELEMENT spelling, and it is open on the COMPILED side: both compiled
+// backends release the element before the tuple's first read, so the fix there
+// is not the interpreter's. `Option[shared]` payloads are likewise untouched.
+
+/// B-2026-09-03-9 — a `shared struct` in a struct FIELD runs its body ONCE,
+/// at the holder's scope exit.
+///
+/// It ran ZERO times before: the plain field walk skips shared fields (their
+/// drop is refcount-driven and it has no refcount to consult) and the
+/// refcount path is keyed on a named binding, which a field-held value has
+/// not got. Both compiled backends ran it exactly once, so this was a
+/// run-vs-build divergence on the shipping side.
+///
+/// The trailing `post` is load-bearing: it pins the release to SCOPE EXIT
+/// rather than the holder's NLL endpoint, which is where the compiled
+/// backends put it (see the sibling placement test).
+#[test]
+fn test_user_drop_field_held_shared_struct_fires_once_at_scope_exit() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct S { id: i64 }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+         struct Sw { s: S }\n\
+         fn build(k: i64) -> Sw {\n\
+             let s: S = S { id: k };\n\
+             println(\"mid\");\n\
+             return Sw { s: s }\n\
+         }\n\
+         fn main() {\n\
+             let a: Sw = build(14);\n\
+             println(f\"v{a.s.id}\");\n\
+             println(\"post\");\n\
+         }",
+    );
+    assert_eq!(output.concat(), "mid\nv14\npost\ndS14\n");
+}
+
+/// B-2026-09-03-9 — the two halves of one holder land in DIFFERENT places,
+/// and both compiled backends agree on that split.
+///
+/// `Mx { r: R, s: S }` runs the plain field's body at the binding's NLL
+/// endpoint (`dR1` before `post`) and releases the shared field at scope exit
+/// (`dS2` after it). Firing the shared half beside the plain one would run the
+/// right body in the wrong place — a visible divergence rather than a silent
+/// gap — so this asserts the interleaving, not just the bodies.
+#[test]
+fn test_user_drop_field_held_shared_release_lands_at_scope_exit_not_nll() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct S { id: i64 }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+         struct R { id: i64 }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\"); } }\n\
+         struct Mx { r: R, s: S }\n\
+         fn main() {\n\
+             let a: Mx = Mx { r: R { id: 1 }, s: S { id: 2 } };\n\
+             println(f\"v{a.s.id}\");\n\
+             println(\"post\");\n\
+         }",
+    );
+    assert_eq!(output.concat(), "v2\ndR1\npost\ndS2\n");
+}
+
+/// B-2026-09-03-9 — two holders of ONE shared value fire the body exactly
+/// once, when the last of them releases it.
+///
+/// The guard against the obvious wrong fix: releasing on each holder's death
+/// would print `dS1` twice, which is a double-drop of a live value rather
+/// than the under-fire this row was about.
+#[test]
+fn test_user_drop_field_held_shared_aliased_by_two_holders_fires_once() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct S { id: i64 }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+         struct Sw { s: S }\n\
+         fn main() {\n\
+             let s: S = S { id: 1 };\n\
+             let w1: Sw = Sw { s: s };\n\
+             let w2: Sw = Sw { s: s };\n\
+             println(f\"v{w1.s.id}{w2.s.id}\");\n\
+             println(\"post\");\n\
+         }",
+    );
+    assert_eq!(output.concat(), "v11\npost\ndS1\n");
+}
+
+/// B-2026-09-03-9, nested-shared leg — a `shared struct` held in ANOTHER
+/// `shared struct`'s field, which is the shape the note above used to record
+/// as permanently open.
+///
+/// It needs its own path: the shared arm releases the holder's slot as soon as
+/// it drains, so by scope exit there is no binding left to re-read and the
+/// values have to be captured while the holder is still alive. Two levels
+/// deep, so the release also has to CASCADE within one block exit.
+#[test]
+fn test_user_drop_shared_struct_held_in_shared_field_fires_once() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct Leaf { id: i64 }\n\
+         impl Drop for Leaf { fn drop(mut ref self) { println(f\"dL{self.id}\"); } }\n\
+         shared struct Mid { l: Leaf }\n\
+         shared struct Top { m: Mid }\n\
+         fn main() {\n\
+             let t: Top = Top { m: Mid { l: Leaf { id: 5 } } };\n\
+             println(f\"v{t.m.l.id}\");\n\
+             println(\"post\");\n\
+         }",
+    );
+    assert_eq!(output.concat(), "v5\npost\ndL5\n");
+}
 
 // ── Move-suppression for user-Drop bindings (let-rebind) ──
 //
