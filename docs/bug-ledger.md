@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 260 |
 | missing-feature | 194 |
 | double-free | 171 |
-| codegen-gap | 163 |
+| codegen-gap | 164 |
 | diagnostics | 123 |
 | false-positive | 106 |
 | soundness | 95 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1427 |
+| codegen | 1428 |
 | interp | 347 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -161,12 +161,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-1 | 2026-09-04 | codegen | medium | A `Result` DESTRUCTURE LEAF CONSUMED BY A MATCH LOSES THE PAYLOAD'S `Drop` BODY ON THE COMPILED BACKENDS -- `let HoRes { a, b } = h; match b { Result.Ok(r) => .. }` over `{ a: R, b: Result[R, String] }` runs `dR109` under `--interp` and on none of jit/aot/AUTO_PAR=0, where the arm BINDS and READS the payload as an ordinary owned binding; distinct from the `Result` deferral B-2026-09-03-33 left in place, which is about the unconsumed leaf and is agreed-and-absent on both backends | — |
 | B-2026-09-04-3 | 2026-09-04 | codegen | medium | A `shared struct` HELD IN A TUPLE ELEMENT RUNS NO `Drop` BODY ON ANY OF THE THREE BACKENDS, and MEMORY IS BALANCED -- the box and its `String` are both freed, so there is no leak and no A/B tell, only the missing side effect. One cell isolates it: a PLAIN `Drop` struct in the same tuple position is correct, and the same `shared` type is correct in a struct field, a Vec, an Option and as a bare binding. It is exactly the intersection, and it CORRECTS the compiled-side tuple sub-measurement in B-2026-09-03-9 | — |
 | B-2026-09-04-4 | 2026-09-04 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop for S[T]` STILL RUNS NO BODY ON THE COMPILED BACKENDS -- `--interp` prints `dB`, `karac build` prints nothing, and the non-generic control is correct on both. `drop` is the ONE impl method with no source call site, so the mono pipeline it is deferred to never instantiates it and no `<T>.drop` symbol is ever emitted. The leak half is fixed (B-2026-09-03-35); this needs per-monomorph `<T>.drop$<concrete>` emission, and the erased shortcut is MEASURED to break compilation on three of six probes | — |
-| B-2026-09-04-5 | 2026-09-04 | codegen | medium | A `Vec[Option[shared]]` ELEMENT CLONED IN ARGUMENT POSITION MAKES CODEGEN FALL THROUGH TO A STDLIB METHOD IT NEVER NEEDED -- `work[i] = merge_two_lists(work[i].clone(), work[i + interval].clone());` compiles under `--interp` and produces mirror-exact output, while JIT and AOT both die with "no handler for method 'push' on variable 'new_args'", naming a LOCAL IN `runtime/stdlib/cli.kara` THAT THE PROGRAM NEVER CALLS; the reported span points at a COMMENT LINE, so neither the variable nor the location in the diagnostic belongs to the failing construct | — |
 | B-2026-09-04-6 | 2026-09-04 | other | low | design.md CONTRADICTS ITSELF ON `#[derive(Copy)]` WITHOUT `Clone`, and the half that is wrong is the one a reader looking up `Copy` will find -- § Derive says "`Copy` without `Clone` is never a compile error, because the compiler fills in the missing dependency" (line 2970, and this is what karac implements) while § Copy says "Writing `#[derive(Copy)]` without `Clone` is an error" (line 9146) | — |
 | B-2026-09-04-7 | 2026-09-04 | interp+codegen | high | A SCALAR READ THROUGH A `Drop`-BEARING STRUCT FIELD CRASHES THE INTERPRETER AND LOSES BOTH `Drop` BODIES ON THE COMPILED BACKENDS -- `let z = h.a.id;` over `struct H { a: R, b: R }` panics `--interp` with the internal error "field 'id' not found on struct 'R'" (an ICE, not a diagnostic) while jit/build/AUTO_PAR=0 print the value and run NEITHER user body; the whole-field spelling `let r = h.a;` and the scalar-of-a-non-Drop-field spelling `let z = h.n;` are both correct and agreed on all four surfaces | — |
 | B-2026-09-04-8 | 2026-09-04 | interp+codegen | medium | THE TUPLE PROJECTION DESTRUCTURE DIVERGES FOR A LOCAL ROOT -- `struct W { inner: (R, Result[R, String]) }; let (a, b) = w.inner;` runs `rd9 dR9` under `--interp` against `dR109 rd9 dR9` on jit/build/AUTO_PAR=0, and `e2e_projection_source_tuple_destructure_is_a_view` cannot catch it because all six of its cells are PARAM-rooted | — |
 | B-2026-09-04-9 | 2026-09-04 | codegen | medium | A FRESH TUPLE SOURCE'S `Option` BINDING LEAF STILL LOSES ITS PAYLOAD'S `Drop` BODY -- `let (_, o) = (mk(32), Option.Some(mk(132)));` and `let (a, b) = ...` run the body under `--interp` and on no compiled surface, while the WILDCARD spelling of the same literal is correct on all four since B-2026-09-03-39. The element is typed correctly now; what the leaf lacks is a memory owner it can hang the walker on, and the owner that fits DOUBLE-FREES a moved leaf (B-2026-09-04-10) | — |
 | B-2026-09-04-10 | 2026-09-04 | codegen | high | AN `Option[<struct>]` DESTRUCTURE LEAF OFF A PLACE SOURCE FREES ITS PAYLOAD TWICE WHEN THE LEAF IS MOVED WHOLE -- `let (_, o) = t; let q = o;` double-frees and `return o` corrupts the allocation header, on an UNMODIFIED `main`. B-2026-09-03-15 gave the leaf sole ownership of the boxed payload and a consuming `match` retracts it; a whole-value MOVE has no retraction. A plain struct element moved the same two ways is clean | — |
+| B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
 
 ### Relocated
 
@@ -2203,6 +2203,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-39 | codegen | medium | A FRESH TUPLE SOURCE LOSES AN `Option`/`Result` ELEMENT'S PAYLOAD `Drop` BODY -- `let (r, _) = (mk(31), Option.Some(mk(131)));` runs the body under `… | ebe5821 |
 | B-2026-09-03-40 | codegen+runtime | high | THE AUTO-PAR COST GATE IS DEFEATED BY AN IMPLAUSIBLE `per_iter_cost` ESTIMATE, so the DEFAULT build fans out a region entered ~1M times and runs 7x s… | 5641972 |
 | B-2026-09-04-2 | codegen | medium | A STRUCT DESTRUCTURE WHOSE SOURCE IS A PROJECTION RUNS BOTH FIELD BODIES AT THE DESTRUCTURE ON THE COMPILED BACKENDS, ONE OF THEM BEFORE ITS BINDING'… | 2bdffd1 |
+| B-2026-09-04-5 | codegen | medium | A `Vec[Option[shared]]` ELEMENT CLONED IN ARGUMENT POSITION MAKES CODEGEN FALL THROUGH TO A STDLIB METHOD IT NEVER NEEDED -- `work[i] = merge_two_lis… | e28c468 |
 
 </details>
 
