@@ -104,14 +104,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 90 |
 | other | 75 |
 | crash | 72 |
-| use-after-free | 27 |
+| use-after-free | 28 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1431 |
-| interp | 348 |
+| codegen | 1432 |
+| interp | 349 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 71 |
@@ -164,6 +164,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
 | B-2026-09-04-13 | 2026-09-04 | interp+codegen | medium | A `shared struct` HOLDER RUNS NO FIELD `Drop` BODY ON ANY OF THE FOUR SURFACES -- `shared struct Sh { a: R, b: R }` with a Drop-bearing `R` prints NEITHER body where the identical NON-shared struct prints both, with no projection, destructure or move anywhere in the program; the whole-field read `let r = h.a;` recovers the MOVED field's body alone and the sibling's stays lost | — |
+| B-2026-09-04-15 | 2026-09-04 | interp+codegen | high | MOVING A FIELD OUT OF A `shared struct` LEAVES NO DISARM, SO AN ALIAS READS THE MOVED-FROM FIELD AFTER ITS `Drop` HAS RUN AND ITS BUFFER IS FREED -- `let h2 = h; let r = h.a;` then `h2.a.tag` prints garbage and valgrind reports `Invalid read of size 2 ... inside a block of size 66 free'd`, identically on both compiled backends and under `--interp`. This is the missing disarm that ALSO produces B-2026-09-04-13's lost field bodies and its 134 B leak, so it is the row that has to be settled first | — |
 
 ### Relocated
 
