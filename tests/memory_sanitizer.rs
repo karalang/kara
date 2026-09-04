@@ -2462,6 +2462,163 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-7 — a scalar read through a `Drop`-bearing field touches no
+    /// memory, before OR after the fix.
+    ///
+    /// The filing row measured `9 allocs, 9 frees, 0 bytes in use at exit` on
+    /// the BROKEN binary against `13 allocs, 13 frees` on the correct
+    /// whole-field spelling: the four missing allocations were the two lost
+    /// drop bodies' own f-string buffers. So the defect was invisible to ASAN,
+    /// valgrind and the exit status alike — a lost user `Drop` BODY with the
+    /// books balanced, which is the silent-wrong-behaviour profile a resource
+    /// release would have hit and nothing would have reported.
+    ///
+    /// This case therefore does not guard a leak that once existed. It guards
+    /// the FIX: the bodies now run, so they allocate, and handing a binding
+    /// back a walk another site may already own is exactly how this family
+    /// produces double frees. The `shared` cell earns its place here rather
+    /// than only in the A/B fixture — declining a mask on an RC handle is the
+    /// one arm of this change that could unbalance a refcount. Three
+    /// iterations, because a per-iteration imbalance accumulates rather than
+    /// hiding in one pass.
+    #[test]
+    fn asan_scalar_read_through_drop_field_is_balanced() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+impl R { fn idm(ref self) -> i64 { return self.id; } }
+struct H2 { a: R, b: R }
+struct H3 { a: R, b: R, c: R }
+struct HOwn { a: R, b: R }
+impl Drop for HOwn { fn drop(mut ref self) { println("dHOwn") } }
+shared struct Box1 { v: i64 }
+struct R2 { id: i64, sh: Box1 }
+impl Drop for R2 { fn drop(mut ref self) { println(f"dR2{self.id}/{self.sh.v}") } }
+struct Hb { a: R2, b: R2 }
+struct Inner { r: R }
+struct Outer { h: Inner }
+fn c_scalar() { let h = H2 { a: mk(1), b: mk(101) }; let z = h.a.id; println(f"  z{z}") }
+fn c_method() { let h = H2 { a: mk(2), b: mk(102) }; let z = h.a.idm(); println(f"  z{z}") }
+fn c_three()  { let h = H3 { a: mk(3), b: mk(103), c: mk(203) }; let z = h.a.id; println(f"  z{z}") }
+fn c_own()    { let h = HOwn { a: mk(4), b: mk(104) }; let z = h.a.id; println(f"  z{z}") }
+fn c_move()   { let o = Outer { h: Inner { r: mk(5) } }; let x = o.h.r; println(f"  z{x.id}") }
+fn c_shared() { let h = Hb { a: R2 { id: 7, sh: Box1 { v: 71 } }, b: R2 { id: 8, sh: Box1 { v: 81 } } }; let sv = h.a.sh; println(f"  s{sv.v}") }
+fn c_live()   { let h = H2 { a: mk(6), b: mk(106) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("scalar"); c_scalar();
+        println("method"); c_method();
+        println("three"); c_three();
+        println("own"); c_own();
+        println("move"); c_move();
+        println("shared"); c_shared();
+        println("live"); c_live();
+        i = i + 1;
+    }
+}
+"#,
+            // The helper compares the WHOLE stdout and `main` loops three
+            // times, so the per-iteration block appears three times.
+            &[
+                "scalar",
+                "dR101/t101",
+                "dR1/t1",
+                "  z1",
+                "method",
+                "dR102/t102",
+                "dR2/t2",
+                "  z2",
+                "three",
+                "dR203/t203",
+                "dR103/t103",
+                "dR3/t3",
+                "  z3",
+                "own",
+                "dHOwn",
+                "dR104/t104",
+                "dR4/t4",
+                "  z4",
+                "move",
+                "  z5",
+                "dR5/t5",
+                "shared",
+                "dR28/81",
+                "dR27/71",
+                "  s71",
+                "live",
+                "  z6",
+                "  b106",
+                "dR106/t106",
+                "dR6/t6",
+                "scalar",
+                "dR101/t101",
+                "dR1/t1",
+                "  z1",
+                "method",
+                "dR102/t102",
+                "dR2/t2",
+                "  z2",
+                "three",
+                "dR203/t203",
+                "dR103/t103",
+                "dR3/t3",
+                "  z3",
+                "own",
+                "dHOwn",
+                "dR104/t104",
+                "dR4/t4",
+                "  z4",
+                "move",
+                "  z5",
+                "dR5/t5",
+                "shared",
+                "dR28/81",
+                "dR27/71",
+                "  s71",
+                "live",
+                "  z6",
+                "  b106",
+                "dR106/t106",
+                "dR6/t6",
+                "scalar",
+                "dR101/t101",
+                "dR1/t1",
+                "  z1",
+                "method",
+                "dR102/t102",
+                "dR2/t2",
+                "  z2",
+                "three",
+                "dR203/t203",
+                "dR103/t103",
+                "dR3/t3",
+                "  z3",
+                "own",
+                "dHOwn",
+                "dR104/t104",
+                "dR4/t4",
+                "  z4",
+                "move",
+                "  z5",
+                "dR5/t5",
+                "shared",
+                "dR28/81",
+                "dR27/71",
+                "  s71",
+                "live",
+                "  z6",
+                "  b106",
+                "dR106/t106",
+                "dR6/t6",
+            ],
+            "scalar_read_through_drop_field",
+            60,
+        );
+    }
+
     /// B-2026-09-04-2 — the projection-source struct destructure hands each leaf
     /// its `Drop` body; this is the memory gate on that hand-off.
     ///

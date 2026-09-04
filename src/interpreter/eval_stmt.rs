@@ -6198,12 +6198,66 @@ impl<'a> super::Interpreter<'a> {
                 // below is what limited this to one hop: `g.h` is a
                 // `FieldAccess`, so nothing was recorded and the root's walk
                 // kept the leaf's body.
+                // B-2026-09-04-7 — but NOT for a `Copy` scalar leaf. A `Copy`
+                // field read takes nothing out: the typechecker says so where
+                // it exempts a `Copy` field from `partial_move_of_drop_struct`
+                // ("a `Copy` field is read, not moved: the struct keeps every
+                // field and the drop body still sees them all"), so a mask
+                // recorded for one is pure damage.
+                //
+                // At ONE hop the damage was invisible — masking a body-less
+                // field only removes a walk step that does nothing, which is
+                // why `let z = h.n;` was always correct. At TWO the mask is a
+                // PATH, and `remove_field_at_path` deletes the leaf out of the
+                // intermediate STRUCT: `let z = h.a.id;` over
+                // `struct H { a: R, b: R }` left `h.a` as an `R` with no `id`,
+                // and `R`'s own drop body then read `self.id` off it and hit
+                // the `unreachable!` in `read_field` — an ICE, on a program the
+                // typechecker is right to accept.
+                //
+                // NARROW ON PURPOSE, and the asymmetry is the reason. Skipping
+                // a mask that WAS needed doubles a `Drop` body; keeping one
+                // that was not is inert unless its leaf belongs to a
+                // Drop-bearing struct, which is the bug above. So the test is
+                // not "does this value carry Drop work" but the far smaller
+                // "is this leaf definitely `Copy`" — a scalar owns nothing, so
+                // declining the mask for one cannot lose an owner. The broad
+                // form was tried and is wrong: `field_value_carries_user_drop`
+                // answers a `Tuple` by asking `value_runs_user_drop` of each
+                // element, which is struct-only, so `let (k, _) = h.pe;` over
+                // `(i64, Option[R])` read as "no Drop work", skipped a mask it
+                // needed and ran `dR3` twice
+                // (`test_destructure_owner_mask_reaches_the_remaining_arms`).
+                //
+                // Depth 1 is left ALONE for the same asymmetry: it is measured
+                // correct, and re-gating it buys nothing this bug needs.
+                //
+                // `shared` joins the scalars because it is the typechecker's
+                // OTHER exemption from the same rule — `copy_is_only_an_rc_retain`,
+                // "a `shared` read RETAINS" — and so reaches the identical ICE
+                // by the identical route: `let s = h.a.sh;` over a
+                // Drop-bearing `R2 { id, sh }` deleted `sh` out of `h.a` and
+                // `R2`'s body then read `self.sh.v` off what was left. A retain
+                // leaves the source holding its own handle, so declining the
+                // mask cannot orphan an owner — and codegen already declines
+                // it, since `type_runs_user_drop` answers `false` for a shared
+                // type, which is why the three compiled surfaces are the oracle
+                // this arm is being matched to.
                 if let ExprKind::FieldAccess { object, field } = &value.kind {
                     if let ExprKind::Identifier(src) = &object.kind {
                         self.moved_out_struct_field_bodies
                             .insert((src.clone(), field.clone()));
-                    } else if let Some((root, path)) = Self::field_chain_name_path(value) {
-                        self.moved_out_nested_field_bodies.insert((root, path));
+                    } else if !matches!(
+                        &val,
+                        Value::Int(_)
+                            | Value::Float(_)
+                            | Value::Bool(_)
+                            | Value::Char(_)
+                            | Value::SharedStruct(_)
+                    ) {
+                        if let Some((root, path)) = Self::field_chain_name_path(value) {
+                            self.moved_out_nested_field_bodies.insert((root, path));
+                        }
                     }
                     let _ = field;
                 }

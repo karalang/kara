@@ -9322,6 +9322,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the original (src, moved_field) pair.
                             let mut chain_cur = object;
                             let mut disarm_field = moved_field.as_str();
+                            // B-2026-09-04-7 — the chain root-to-LEAF segments,
+                            // collected alongside the first-segment walk above
+                            // so the leaf can be typed. `disarm_field` is the
+                            // hop the disarm targets; the LAST segment here is
+                            // the field actually READ, and only that one says
+                            // whether anything moved.
+                            let mut segs_rev: Vec<&str> = vec![moved_field.as_str()];
                             let chain_src = loop {
                                 match &chain_cur.kind {
                                     ExprKind::Identifier(o) => break Some(o.as_str()),
@@ -9330,6 +9337,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                         field: mid,
                                     } => {
                                         disarm_field = mid.as_str();
+                                        segs_rev.push(mid.as_str());
                                         chain_cur = inner;
                                     }
                                     _ => break None,
@@ -9341,11 +9349,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_types.var_type_names.get(src).cloned(),
                                 ) {
                                     let disarm_field = disarm_field.to_string();
-                                    self.disarm_user_drop_fields_for_moved_field(
-                                        src_slot.ptr,
-                                        &src_type,
-                                        &disarm_field,
-                                    );
+                                    // B-2026-09-04-7 — decline when the leaf
+                                    // read is a COPY. See
+                                    // `place_chain_leaf_runs_user_drop`: depth 1
+                                    // asks this inside the callee and is
+                                    // correct; depth 2+ hands the callee an
+                                    // INTERMEDIATE and so asked about the wrong
+                                    // hop, deleting the root's entire
+                                    // field-bodies walk for a scalar read.
+                                    let segs: Vec<&str> = segs_rev.iter().rev().copied().collect();
+                                    let leaf_moves = self
+                                        .place_chain_leaf_runs_user_drop(&src_type, &segs)
+                                        .unwrap_or(true);
+                                    if leaf_moves {
+                                        self.disarm_user_drop_fields_for_moved_field(
+                                            src_slot.ptr,
+                                            &src_type,
+                                            &disarm_field,
+                                        );
+                                    }
                                     // B-2026-09-02-27 — and, when the source is
                                     // a bare-tuple ELEMENT binding, zero the
                                     // moved field's `cap` in the TUPLE's slot

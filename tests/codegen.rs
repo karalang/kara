@@ -13933,6 +13933,145 @@ done
         );
     }
 
+    /// B-2026-09-04-7 — a SCALAR read through a `Drop`-bearing struct field is
+    /// a COPY, so the source keeps every field and still owes every body.
+    ///
+    /// `let z = h.a.id;` over `struct H2 { a: R, b: R }` printed `z1` and ran
+    /// NEITHER body on all three compiled surfaces (three fields lost all
+    /// three), while `--interp` ran `b`'s body and then hit an `unreachable!`
+    /// reading `self.id` off an `a` it had emptied. One cause, two shapes: both
+    /// backends recorded the read as a MOVE of the field it was reached
+    /// through. Codegen's `disarm_user_drop_fields_for_moved_field` is handed
+    /// the FIRST chain segment at depth 2 (B-2026-08-01-31, so the disarm lands
+    /// on the root's subtree walk), and its `type_runs_user_drop` gate then
+    /// answered about that INTERMEDIATE rather than the leaf — an intermediate
+    /// that is Drop-bearing whenever the leaf is interesting at all. Depth 1
+    /// asks the same gate about the field actually read, which is why
+    /// `let z = h.n;` was always correct.
+    ///
+    /// The `shared` cell is the SECOND route to the same defect, not a garnish:
+    /// `copy_is_only_an_rc_retain` is the typechecker's other exemption from
+    /// `partial_move_of_drop_struct` ("a `shared` read RETAINS"), so
+    /// `let sv = h.a.sh;` reached it by the identical path — the compiled
+    /// backends losing both bodies and the interpreter hitting the same
+    /// `unreachable!`. It is pinned here because codegen was measured broken on
+    /// it: `type_runs_user_drop` answers `false` for a shared type, but only
+    /// when it is asked about the shared field, and at depth 2 it was being
+    /// asked about the Drop-bearing intermediate instead.
+    ///
+    /// THE FIXTURE CARRIES ITS OWN ORACLES, which is what makes the expectation
+    /// below something other than "whatever the compiler prints today":
+    /// `scalar`, `method` (`h.a.idm()`, a call returning the same scalar) and
+    /// `nodest` (no projection at all) are three spellings of one program and
+    /// must print the same body sequence modulo ids — they did not before.
+    /// `whole` and `plain` are the two controls the filing row measured as
+    /// already correct, and `move` is the genuine deep move the disarm exists
+    /// for (B-2026-07-29-39): exactly one `dR8`, never two.
+    #[test]
+    fn e2e_scalar_read_through_drop_field_keeps_every_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+impl R { fn idm(ref self) -> i64 { return self.id; } }
+
+struct H2 { a: R, b: R }
+struct H3 { a: R, b: R, c: R }
+struct Hn { a: R, n: i64 }
+struct HOwn { a: R, b: R }
+impl Drop for HOwn { fn drop(mut ref self) { println("dHOwn") } }
+struct Inner { r: R }
+struct Outer { h: Inner }
+shared struct Box1 { v: i64 }
+struct R2 { id: i64, sh: Box1 }
+impl Drop for R2 { fn drop(mut ref self) { println(f"dR2{self.id}/{self.sh.v}") } }
+struct Hb { a: R2, b: R2 }
+struct Mid { r: R, q: R }
+struct Top { m: Mid, s: R }
+
+fn cell_scalar() { let h = H2 { a: mk(1), b: mk(101) }; let z = h.a.id; println(f"  z{z}") }
+fn cell_method() { let h = H2 { a: mk(2), b: mk(102) }; let z = h.a.idm(); println(f"  z{z}") }
+fn cell_nodest() { let h = H2 { a: mk(3), b: mk(103) }; println("  no") }
+fn cell_three()  { let h = H3 { a: mk(4), b: mk(104), c: mk(204) }; let z = h.a.id; println(f"  z{z}") }
+fn cell_own()    { let h = HOwn { a: mk(5), b: mk(105) }; let z = h.a.id; println(f"  z{z}") }
+fn cell_whole()  { let h = H2 { a: mk(6), b: mk(106) }; let r = h.a; println(f"  z{r.id}") }
+fn cell_plain()  { let h = Hn { a: mk(7), n: 4 }; let z = h.n; println(f"  z{z}") }
+fn cell_move()   { let o = Outer { h: Inner { r: mk(8) } }; let x = o.h.r; println(f"  z{x.id}") }
+fn cell_three_hop() { let t = Top { m: Mid { r: mk(9), q: mk(109) }, s: mk(209) }; let z = t.m.r.id; println(f"  z{z}") }
+fn cell_shared() { let h = Hb { a: R2 { id: 11, sh: Box1 { v: 111 } }, b: R2 { id: 12, sh: Box1 { v: 112 } } }; let sv = h.a.sh; println(f"  s{sv.v}") }
+fn cell_live()   { let h = H2 { a: mk(10), b: mk(110) }; let z = h.a.id; println(f"  z{z}"); println(f"  b{h.b.id}") }
+
+fn main() {
+    println("scalar");   cell_scalar()
+    println("method");   cell_method()
+    println("nodest");   cell_nodest()
+    println("three");    cell_three()
+    println("own");      cell_own()
+    println("whole");    cell_whole()
+    println("plain");    cell_plain()
+    println("move");     cell_move()
+    println("threehop"); cell_three_hop()
+    println("shared");   cell_shared()
+    println("live");     cell_live()
+    println("done")
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"scalar
+dR101/t101
+dR1/t1
+  z1
+method
+dR102/t102
+dR2/t2
+  z2
+nodest
+dR103/t103
+dR3/t3
+  no
+three
+dR204/t204
+dR104/t104
+dR4/t4
+  z4
+own
+dHOwn
+dR105/t105
+dR5/t5
+  z5
+whole
+dR106/t106
+  z6
+dR6/t6
+plain
+dR7/t7
+  z4
+move
+  z8
+dR8/t8
+threehop
+dR209/t209
+dR109/t109
+dR9/t9
+  z9
+shared
+dR212/112
+dR211/111
+  s111
+live
+  z10
+  b110
+dR110/t110
+dR10/t10
+done
+"#
+        );
+    }
+
     /// Twin of `tests/interpreter.rs`'s
     /// `test_projection_source_tuple_destructure_is_a_view`, pinned to the same
     /// string.

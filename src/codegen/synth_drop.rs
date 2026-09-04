@@ -7136,6 +7136,71 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-09-04-7 — does the LEAF of a place chain rooted at a struct
+    /// binding carry user-`Drop` work?
+    ///
+    /// The move-out disarm below is justified by exactly one thing: the read
+    /// took Drop work OUT of the source, so the source must stop running it.
+    /// A `Copy` field read takes nothing — the typechecker says so in as many
+    /// words, exempting a `Copy` field from `partial_move_of_drop_struct`
+    /// because "a `Copy` field is read, not moved: the struct keeps every
+    /// field and the drop body still sees them all". So the disarm must not
+    /// fire for one.
+    ///
+    /// DEPTH IS WHY THIS EXISTS AS A SEPARATE QUESTION. At depth 1 the callee's
+    /// own `type_runs_user_drop` gate already asks it, because the field it is
+    /// handed IS the field that was read — `let z = h.n;` over an `i64` field
+    /// declines there and is measured correct. At depth 2 the chain walk hands
+    /// the callee the FIRST segment instead (B-2026-08-01-31, so the root's
+    /// subtree walk is the thing disarmed), and that segment is an intermediate
+    /// whose type is Drop-bearing whenever the leaf is interesting at all. The
+    /// gate then answers about the wrong hop and passes: `let z = h.a.id;` over
+    /// `struct H { a: R, b: R }` disarmed `h` at `a` and, since `H` runs no own
+    /// body, deleted the whole per-binding walk — losing `b`'s body as well as
+    /// `a`'s, with three fields losing all three.
+    ///
+    /// `None` for a chain this cannot resolve, and the caller keeps its prior
+    /// behaviour on `None` rather than declining: an unresolved chain is not
+    /// evidence the read was a copy, and declining on no evidence would restore
+    /// the DOUBLE body B-2026-07-29-39 removed.
+    pub(super) fn place_chain_leaf_runs_user_drop(
+        &self,
+        root_type: &str,
+        segments: &[&str],
+    ) -> Option<bool> {
+        let mut cur = root_type.to_string();
+        for (i, seg) in segments.iter().enumerate() {
+            let idx = self
+                .type_decls
+                .struct_field_names
+                .get(cur.as_str())
+                .and_then(|names| names.iter().position(|n| n == seg))?;
+            let next = self
+                .type_decls
+                .struct_field_type_names
+                .get(cur.as_str())
+                .and_then(|v| v.get(idx))
+                .cloned()
+                .flatten();
+            if i + 1 == segments.len() {
+                // A leaf with NO named type answers `None`, not `false`. It was
+                // `false` for one build, on the reasoning that an unnamed field
+                // is a primitive — and that is wrong, because a TUPLE field has
+                // no name either and carries whatever is inside it.
+                // `let x = g.h.pe;` over `struct H { pe: (R, i64) }` then
+                // skipped a disarm it needed and ran `R`'s body a second time
+                // over the moved-out husk, printing `dR44//0` — the empty tag
+                // and zero-length `Vec` of a struct whose contents had already
+                // left (`e2e_place_source_tuple_binding_records_its_elements`).
+                // Unknown means unknown, and the caller keeps its prior
+                // behaviour there.
+                return next.map(|t| self.type_runs_user_drop(&t, &mut Vec::new()));
+            }
+            cur = next?;
+        }
+        None
+    }
+
     pub(super) fn disarm_user_drop_fields_for_moved_field(
         &mut self,
         base_ptr: PointerValue<'ctx>,
