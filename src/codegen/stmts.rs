@@ -9687,7 +9687,47 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else if has_user_drop
                                 && !self.type_decls.shared_types.contains_key(&struct_name)
                             {
-                                self.track_user_drop_var(&struct_name, var_name, alloca);
+                                // B-2026-09-03-35 — `has_user_drop` reads
+                                // `drop_method_keys`, which is keyed by the impl
+                                // target's HEAD name, so `impl[T] Drop for S[T]`
+                                // registers `S` and answers true here. The
+                                // WRAPPER, though, is only emitted when
+                                // `module.get_function("S.drop")` finds a symbol
+                                // — and a generic impl's methods are deferred to
+                                // the mono pipeline, which instantiates from CALL
+                                // SITES. `drop` has none: it is reached only from
+                                // the wrapper being built. So no `S.drop` is ever
+                                // emitted, no wrapper exists, and
+                                // `track_user_drop_var` silently returns having
+                                // registered nothing.
+                                //
+                                // That silence is what made ADDING `impl Drop` to
+                                // a generic struct LEAK: the true `has_user_drop`
+                                // steered past the `StructDrop` arm below, and the
+                                // wrapper that was supposed to replace it did not
+                                // exist. `Box3[String] { v, tag }` lost both
+                                // `String`s — 16 B in 2 blocks — where the same
+                                // program without the impl is clean.
+                                //
+                                // Ask for the wrapper rather than assuming it:
+                                // when it is absent, register the ordinary
+                                // per-monomorph memory drop, which is exactly what
+                                // this binding had before the impl was written.
+                                // The body still does not run — that half needs
+                                // per-monomorph `S.drop$<concrete>` emission and
+                                // is tracked separately — but nothing leaks, and
+                                // no body can double-run because none ran at all.
+                                if self
+                                    .drop_rc
+                                    .user_drop_wrapper_fns
+                                    .contains_key(&struct_name)
+                                {
+                                    self.track_user_drop_var(&struct_name, var_name, alloca);
+                                } else {
+                                    let inst =
+                                        self.type_decls.enum_inst_var_types.get(var_name).cloned();
+                                    self.track_struct_var_inst(&struct_name, alloca, inst);
+                                }
                             } else if has_field_user_drop {
                                 // B-2026-07-29-39 — TWO registrations, doing
                                 // disjoint work on the same slot:

@@ -3862,6 +3862,68 @@ mod codegen_tests {
         }
     }
 
+    /// B-2026-09-03-35 — adding `impl[T] Drop for S[T]` to a clean generic
+    /// struct made it LEAK every heap field, the exact inverse of what the
+    /// declaration is for.
+    ///
+    /// `has_user_drop` reads `drop_method_keys`, which is keyed by the impl
+    /// target's HEAD name, so a generic impl registers `Box3` and answers true.
+    /// The `karac_drop_<T>` WRAPPER, though, is only emitted when
+    /// `module.get_function("Box3.drop")` finds a symbol — and a generic impl's
+    /// methods are deferred to the mono pipeline, which instantiates from CALL
+    /// SITES. `drop` has none: it is reached only from the wrapper being built.
+    /// So no symbol, no wrapper, and `track_user_drop_var` returned having
+    /// registered nothing — while the true `has_user_drop` had already steered
+    /// the binding past the `StructDrop` arm it used to take. Both halves lost
+    /// from one cause; `Box3[String] { v, tag }` leaked both `String`s.
+    ///
+    /// THIS IS AN IR ASSERTION, NOT AN ASAN FIXTURE, and that is forced rather
+    /// than preferred: the leak is `-O0`-ONLY. Measured on the pre-fix compiler,
+    /// the row's own repro loses 16 B in 2 blocks at `KARAC_OPT_LEVEL=0` and is
+    /// completely clean at the default `-O2`, where LLVM elides the allocations
+    /// outright — and a five-cell fixture built to defeat that (payloads read
+    /// through `contains`, lengths seeded from `env.args().len()`) still
+    /// measured 720 B + 168 B at `-O0` and zero at `-O2`. `memory_sanitizer`'s
+    /// harness compiles in-process with no opt-level knob, so a fixture there
+    /// would assert nothing on the very build CI runs. The emitted call is
+    /// opt-level-independent, so it is what the regression is pinned to.
+    ///
+    /// The `$String` suffix is load-bearing: it is the PER-MONOMORPH drop, the
+    /// one that drains the concrete field layout. A name-shared
+    /// `__karac_drop_struct_Box3` would GEP the erased layout, where a bare-`T`
+    /// field is one word and every field after it sits at the wrong offset.
+    #[test]
+    fn generic_struct_with_user_drop_still_registers_its_memory_drop() {
+        let src = r#"
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println("dB") } }
+fn main() { let b: Box3[String] = Box3 { v: f"vvvvvvvv", tag: f"tttttttt" };
+            println(f"v{b.v.len()}") }
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed");
+        assert!(
+            ir.contains(r#"call void @"__karac_drop_struct_Box3$String""#),
+            "the generic struct's binding registered no memory drop, so both \
+             `String` fields leak — B-2026-09-03-35. `main` IR:\n{}",
+            ir.lines()
+                .skip_while(|l| !l.starts_with("define i32 @main"))
+                .take_while(|l| *l != "}")
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
     /// The error text codegen declines a program with. Runs the FULL pipeline
     /// (ownership included) so the span-keyed display tables the diagnostic
     /// reads are populated exactly as `karac build` populates them.
