@@ -107,6 +107,36 @@ The same applies to `karac_jit_runner`, for the same reason and with the same si
 
 **`karac run` (the default JIT executor) needs the SIBLING `karac_jit_runner` binary rebuilt too — `cargo build --bin karac` alone leaves it STALE.** `karac run` defaults to LLJIT (LLJIT-productionization Slice 6c; `--interp` forces the tree-walk backend), and it executes by spawning a *separate* one-shot `karac_jit_runner` binary (its own `[[bin]]` target, `src/bin/karac_jit_runner.rs`) that statically links the runtime and hands its `#[no_mangle] karac_*` symbols to the JIT via `dlsym`. Because it is a distinct bin, `cargo build --features llvm --bin karac` does **not** rebuild it — so after you add or touch a runtime symbol (anything in `runtime/src/`), a `--bin karac`-only rebuild pairs your fresh `karac` with a **stale runner** whose symbol table predates your change, and `karac run` then fails cryptically with `JIT session error: Symbols not found: [ karac_<sym> ]` (even on `hello world`, if the missing symbol is one every module declares — e.g. `karac_critical_section_release`) while `karac build` (AOT, links the archive) and `karac run --interp` both work. This is a build-staleness footgun, NOT a compiler bug: **before trusting `karac run`, rebuild BOTH bins** — `cargo build --features llvm` (no `--bin` filter), or explicitly `cargo build --features llvm --bin karac --bin karac_jit_runner`. (`cargo test --features llvm` also rebuilds all bins, which is why the failure evaporates after a test run.) A JIT symbol that AOT resolves but the runner can't usually means either a stale runner (rebuild) or a genuine missing `__preserve_no_mangle_symbols` keep-list entry (`runtime/src/lib.rs`, the `karac_realloc_or_panic` / B-2026-07-12-22 class) — check the runner's freshness FIRST.
 
+## Long-running verification: don't poll it, and sweep what you started
+
+The full gate set here runs 25–40 minutes (`cargo test`, then the `--features
+llvm` suite, then four clippy legs), which is long enough that the natural move
+is to write a wait loop. Don't. **When a harness-tracked background command
+finishes, the session is re-invoked automatically**, so an `until … sleep` loop
+adds nothing — and it is the thing that gets stranded. Start the run in the
+background and let the notification arrive. (A foreground run is not the
+alternative: these cycles exceed the 600 s tool timeout and get backgrounded
+anyway.)
+
+**Never scan for a process by a string that also appears in your own command
+line.** `pgrep -f "cargo test"` matches the shell running the very loop that
+contains it, so the condition never goes false and the waiter polls until the
+container is reclaimed. The `pkill` form is worse: `pkill -f "cargo test"`, used
+to cancel a gate cycle, killed the issuing shell along with it (exit 144).
+Measured 2026-09-04 — one session finished its work with three such loops still
+running, two of them self-matching.
+
+If a wait is genuinely unavoidable, poll a **sentinel the command itself writes
+as its last action** (`echo "ALL GATES DONE" >> gate.log`) — a string that exists
+only on completion and does not appear in the waiter. That has one failure mode
+worth knowing: if the run is CANCELLED the sentinel never lands, so its waiter
+strands forever. Killing a gate cycle means stopping its waiter too.
+
+**Sweep before declaring the work done.** `pgrep -af 'sleep|until'`, or `TaskStop`
+on the ids the task list reports. Stragglers do not touch the tree, but they keep
+the session looking busy indefinitely and they burn CPU on the same box the gate
+timings are measured on.
+
 ## Branch management
 
 **Two environments, two workflows — pick by where the session runs.** The worktree rules in the rest of this section govern the **local multi-worktree checkout** (the primary machine, where sibling worktrees run parallel slices and the primary's clean `git status` is load-bearing). They do **not** apply to an **ephemeral cloud container** (Claude Code on the web / a fresh clone discarded when the session ends): there are no sibling worktrees, no parallel slices, and nothing to isolate from, so `EnterWorktree` + a feature branch buys nothing but ceremony. In a cloud container, **work directly on `main`** — commit straight to `main`, no feature branch, no PR unless explicitly asked (owner-authorized 2026-07-07, overriding the mandatory-worktree default below for this environment only).
