@@ -997,6 +997,155 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-25 — a struct destructured out of a PROJECTION of a by-value
+    /// PARAM (`fn f(w: WrapR) { let HoRes { a, b } = w.inner; .. }`) hands each
+    /// `Option` / `Result` leaf the field, on every surface.
+    ///
+    /// On the parent the leaf was a view of the param's storage registered in no
+    /// set, while the param's own `StructDrop` still owned the field: `rmatch` ran
+    /// the payload's body twice on aot and aborted with glibc's `free(): double free
+    /// detected in tcache 2` on jit; `rlive` ran it twice around the later read;
+    /// `rcall` ran it from the arm binding and again from `eat`'s callee copy; and
+    /// under `--interp`, `wild` / `awild` ran a discarded field's body at the
+    /// destructure and again at the param's exit. The projection now takes the
+    /// identifier source's transfer (`sfld.move` into the param in place, the leaf
+    /// owning the field) and its leaves are param views (`mark_views`), so a
+    /// consuming arm's binding takes the memory-only struct drop its identifier
+    /// twin takes; the interpreter's discard walk defers a projected wildcard to
+    /// the param's drop as it already did for `let HoRes { a, b: _ } = h`. `two`
+    /// is the two-hop root, `errs` the `Err` side, `runused` / `ounused` the unread
+    /// leaf, `livecall` a moving arm with the param read again. A rebind of the
+    /// leaf and a `self` receiver split identically for the identifier source and
+    /// keep their own row.
+    ///
+    /// ASAN twin of `e2e_param_projection_optres_leaf_owns_its_field` (tests/codegen.rs): `rmatch` aborted on a double
+    /// free under the JIT, so the balance is the pin.
+    #[test]
+    fn asan_param_projection_optres_leaf_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoErr { a: R, b: Result[String, R] }
+struct HoOpt { a: R, b: Option[R] }
+struct WrapR { inner: HoRes }
+struct WrapE { inner: HoErr }
+struct WrapO { inner: HoOpt }
+struct Outer { h: WrapR }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn rmatch(w: WrapR)  { let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+                       match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rlive(w: WrapR)   { let HoRes { a, b } = w.inner; println(f"  rd{a.id}")
+                       match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") }
+                       println(f"  w{w.inner.a.id}") }
+fn two(o: Outer)     { let HoRes { a, b } = o.h.inner; println(f"  rd{a.id}")
+                       match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn rcall(w: WrapR)   { let HoRes { a, b } = w.inner;
+                       match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn runused(w: WrapR) { let HoRes { a, b } = w.inner; println(f"  rd{a.id}") }
+fn errs(w: WrapE)    { let HoErr { a, b } = w.inner;
+                       match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(r) => println(f"  er{r.tag}") } }
+fn wild(w: WrapR)    { let HoRes { a, b: _ } = w.inner; println(f"  rd{a.id}") }
+fn awild(w: WrapR)   { let HoRes { a: _, b } = w.inner;
+                       match b { Result.Ok(r) => println(f"  ok{r.tag}"), Result.Err(e) => println(f"  er{e}") } }
+fn livecall(w: WrapR){ let HoRes { a, b } = w.inner;
+                       match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") }
+                       println(f"  w{w.inner.a.id}") }
+fn omatch(w: WrapO)  { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+                       match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") } }
+fn olive(w: WrapO)   { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}")
+                       match b { Option.Some(r) => println(f"  ok{r.tag}"), Option.None => println("  none") }
+                       println(f"  w{w.inner.a.id}") }
+fn ocall(w: WrapO)   { let HoOpt { a, b } = w.inner;
+                       match b { Option.Some(r) => eat(r), Option.None => println("  none") } }
+fn ounused(w: WrapO) { let HoOpt { a, b } = w.inner; println(f"  rd{a.id}") }
+
+fn main() {
+  println("rmatch");   rmatch(WrapR { inner: HoRes { a: mk(1), b: Result.Ok(mk(101)) } })
+  println("rlive");    rlive(WrapR { inner: HoRes { a: mk(2), b: Result.Ok(mk(102)) } })
+  println("two");      two(Outer { h: WrapR { inner: HoRes { a: mk(3), b: Result.Ok(mk(103)) } } })
+  println("rcall");    rcall(WrapR { inner: HoRes { a: mk(4), b: Result.Ok(mk(104)) } })
+  println("runused");  runused(WrapR { inner: HoRes { a: mk(5), b: Result.Ok(mk(105)) } })
+  println("errs");     errs(WrapE { inner: HoErr { a: mk(6), b: Result.Err(mk(106)) } })
+  println("wild");     wild(WrapR { inner: HoRes { a: mk(7), b: Result.Ok(mk(107)) } })
+  println("awild");    awild(WrapR { inner: HoRes { a: mk(8), b: Result.Ok(mk(108)) } })
+  println("livecall"); livecall(WrapR { inner: HoRes { a: mk(9), b: Result.Ok(mk(109)) } })
+  println("omatch");   omatch(WrapO { inner: HoOpt { a: mk(10), b: Option.Some(mk(110)) } })
+  println("olive");    olive(WrapO { inner: HoOpt { a: mk(11), b: Option.Some(mk(111)) } })
+  println("ocall");    ocall(WrapO { inner: HoOpt { a: mk(12), b: Option.Some(mk(112)) } })
+  println("ounused");  ounused(WrapO { inner: HoOpt { a: mk(13), b: Option.Some(mk(113)) } })
+  println("done")
+}
+"#,
+            &[
+                "rmatch",
+                "  rd1",
+                "  okt101",
+                "dR101/t101",
+                "dR1/t1",
+                "rlive",
+                "  rd2",
+                "  okt102",
+                "  w2",
+                "dR102/t102",
+                "dR2/t2",
+                "two",
+                "  rd3",
+                "  okt103",
+                "dR103/t103",
+                "dR3/t3",
+                "rcall",
+                "  eat104",
+                "dR104/t104",
+                "dR4/t4",
+                "runused",
+                "  rd5",
+                "dR105/t105",
+                "dR5/t5",
+                "errs",
+                "  ert106",
+                "dR106/t106",
+                "dR6/t6",
+                "wild",
+                "  rd7",
+                "dR107/t107",
+                "dR7/t7",
+                "awild",
+                "  okt108",
+                "dR108/t108",
+                "dR8/t8",
+                "livecall",
+                "  eat109",
+                "  w9",
+                "dR109/t109",
+                "dR9/t9",
+                "omatch",
+                "  rd10",
+                "  okt110",
+                "dR110/t110",
+                "dR10/t10",
+                "olive",
+                "  rd11",
+                "  okt111",
+                "  w11",
+                "dR111/t111",
+                "dR11/t11",
+                "ocall",
+                "  eat112",
+                "dR112/t112",
+                "dR12/t12",
+                "ounused",
+                "  rd13",
+                "dR113/t113",
+                "dR13/t13",
+                "done",
+            ],
+            "asan_param_projection_optres_leaf_is_balanced",
+        );
+    }
+
     /// B-2026-09-03-22 — the BALANCE half of
     /// `e2e_result_agg_destructure_leaf_owns_its_payload_body`, and the
     /// assertion the row was actually blocked on.

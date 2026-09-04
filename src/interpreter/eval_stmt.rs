@@ -2793,11 +2793,16 @@ impl<'a> super::Interpreter<'a> {
         // Mirror of `let_destructures_owned_param`'s two conditions, minus its
         // mutation. `false` for a method frame means "the leaf owns it", which
         // is why the early return is ordered this way.
+        // B-2026-09-04-25 — through a PROJECTION of the param too
+        // (`let HoRes { a, b: _ } = w.inner;`): the discarded field is still
+        // the param's, whose own drop runs its body at the callee's exit.
+        // Keyed on the bare identifier, this walk ran it here as well.
         let caller_owns = self.owned_param_frame_is_method.last().copied() != Some(true)
-            && matches!(&value.kind, ExprKind::Identifier(n)
-                if self.owned_param_names_stack
+            && self.destructure_source_param_root(value).is_some_and(|n| {
+                self.owned_param_names_stack
                     .last()
-                    .is_some_and(|params| params.contains(n.as_str())));
+                    .is_some_and(|params| params.contains(n))
+            });
         if caller_owns {
             return;
         }

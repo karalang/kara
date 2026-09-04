@@ -13409,11 +13409,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // So the two are mutually exclusive already; the `place_body_src`
         // conjunct below makes that structural rather than incidental, so this
         // can never mark a leaf that did take the body.
+        // B-2026-09-04-25 — is the source a projection of a by-value param
+        // that carries its own `StructDrop`? Computed here, ahead of
+        // `mark_views`; `callee_owned_src` below makes the same test.
+        let param_projection = matches!(&value.kind, ExprKind::FieldAccess { .. })
+            && self
+                .projection_field_index_path(value)
+                .is_some_and(|(root, path)| {
+                    !path.is_empty()
+                        && self.fn_ctx.current_fn_param_names.contains(root.as_str())
+                        && self
+                            .variables
+                            .get(root.as_str())
+                            .is_some_and(|slot| self.ptr_has_registered_struct_drop(slot.ptr))
+                });
         let mark_views = place_body_src.is_none()
             && !fresh
-            && matches!(&value.kind, ExprKind::Identifier(root)
+            && (matches!(&value.kind, ExprKind::Identifier(root)
                 if !self.borrow_vars.ref_params.contains_key(root.as_str())
-                    && self.fn_ctx.current_fn_param_names.contains(root.as_str()));
+                    && self.fn_ctx.current_fn_param_names.contains(root.as_str()))
+                // B-2026-09-04-25 — the leaves of a by-value param's PROJECTION
+                // are views of the param exactly as an identifier source's
+                // are (the projection arm of `callee_owned_src` admits only a
+                // param root). Unmarked, a consuming arm's binding took the
+                // full `karac_drop_R` where the identifier twin's takes the
+                // memory-only struct drop, and `Ok(r) => eat(r)` ran the body
+                // from `r` and again from `eat`'s callee copy.
+                || param_projection);
         // B-2026-09-04-21 — a PROJECTION source whose root is an owned local
         // and whose field read was MOVED rather than defensively copied
         // (`uam_defensive_copy_field` copies only at a flagged use-after-move
@@ -13494,6 +13516,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 .copied()
                 .filter(|slot| self.ptr_has_registered_struct_drop(slot.ptr))
                 .map(|slot| slot.ptr)
+        } else if let Some((root, path)) = self
+            .projection_field_index_path(value)
+            .filter(|(_, path)| !path.is_empty())
+        {
+            // Computed here rather than read off `place_body_path`, whose
+            // `var_owns_struct_field_bodies` filter looks for a
+            // `StructFieldBodies` action — a LOCAL's shape; a param's field
+            // bodies live inside its `StructDrop`, so that path is `None`
+            // for every param root.
+            // B-2026-09-04-25 — a PROJECTION of a by-value param (`let HoRes
+            // { a, b } = w.inner;` inside `fn f(w: WrapR)`). The param is
+            // entry-copied and carries its own `StructDrop`, and
+            // `uam_defensive_copy_field` never copies a param's field, so the
+            // leaves always alias storage that drop frees — the identifier
+            // source's shape one level down. It took none of that source's
+            // transfer: `r` in `match b { Ok(r) => .. }` got a full struct
+            // drop beside the param's, the body ran twice on aot and jit
+            // aborted with glibc's double free. Hand this branch the INNER
+            // struct's address and the same `sfld.move` transfer follows:
+            // each leaf owns its field, cap-zeroed in the param in place, and
+            // the param's walk skips it exactly as it skips `take(h: HoRes)`'s.
+            if self.fn_ctx.current_fn_param_names.contains(root.as_str())
+                && self
+                    .variables
+                    .get(root.as_str())
+                    .is_some_and(|slot| self.ptr_has_registered_struct_drop(slot.ptr))
+            {
+                self.projection_place_ptr(&root, &path)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -14090,8 +14143,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             if !self.borrow_vars.ref_params.contains_key(n.as_str()))
                         // B-2026-09-04-21 — a projection's leaf owns the field
                         // too: transferred out of the root on a move, or its
-                        // own defensive copy on a copy. Not for a param root.
-                        || projection_leaf_owns;
+                        // own defensive copy on a copy. B-2026-09-04-25 — and
+                        // a by-value param's projection, through the
+                        // callee-owned transfer.
+                        || projection_leaf_owns
+                        || callee_owned_src.is_some();
                     if source_owned {
                         if let Some(slot) = self.variables.get(&name).copied() {
                             // B-2026-08-05-7 (leak B): if this field's payload is
