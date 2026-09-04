@@ -14773,6 +14773,126 @@ done
         );
     }
 
+    /// B-2026-09-04-30 — A BY-VALUE `self` RECEIVER ON A TEMP RUNS ITS `Drop`
+    /// BODIES, and the fresh-temp receiver's field walk runs BEFORE its memory
+    /// is freed.
+    ///
+    /// Two defects, one site. The row's own is the missing OWNER: codegen
+    /// treats a by-value `self` exactly like a by-value param — caller-retained
+    /// (`owner_runs_bodies` is true for a `SelfValue` source), so the callee
+    /// registers no walker — while B-2026-08-01-5 had excluded owned `self`
+    /// from the CALLER's receiver-temp registration to stop a passthrough chain
+    /// double-firing. A local receiver still had an owner (its own binding), and
+    /// a by-value param temp always had one (`param-twin` here), but a TEMP
+    /// receiver had none on any surface: `temp-recv-fields` printed `rd1` and
+    /// neither field body, and `temp-recv-own` lost `R`'s own. Owned `self` is
+    /// admitted again behind `owned_self_return_is_opaque_to_receiver`, which
+    /// declines every return shape that could hand the receiver back — so the
+    /// three guard cells below (`returns-self`, `hands-field-out`,
+    /// `generic-return`) still stand the caller down and their bodies come from
+    /// the result binding, exactly once.
+    ///
+    /// The second was underneath it and is why `temp-recv-refself` is here: the
+    /// no-own-`Drop` arm registered the field-bodies walk and then the memory
+    /// `StructDrop`, and every drain over that frame is LIFO, so the FREE ran
+    /// first and each body read its own fields out of freed storage
+    /// (`dR105/dR10` — the body's own f-string showing through the tag it had
+    /// just released; valgrind: invalid read of the two-byte tag). Pre-existing
+    /// on the `ref self` path, which is the spelling that cell pins; the fix
+    /// registers the memory action first so LIFO puts the bodies ahead of it.
+    ///
+    /// `param-twin` and `local-recv` are the controls that say what the temp
+    /// receiver OWES — both were always right, and `temp-recv-fields` now
+    /// matches `param-twin` cell for cell.
+    ///
+    /// Interpreter twin `test_owned_self_temp_receiver_runs_drop_bodies`; ASAN
+    /// twin `asan_owned_self_temp_receiver_is_balanced`.
+    #[test]
+    fn e2e_owned_self_temp_receiver_runs_drop_bodies() {
+        let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct Pair { a: R, b: R }
+struct OwnD { a: R, n: i64 }
+impl Drop for OwnD { fn drop(mut ref self) { println(f"dOwnD{self.n}") } }
+
+impl HoRes { fn plain(self) { println(f"  rd{self.a.id}") } }
+impl Pair { fn eat(self) { println(f"  pr{self.a.id}") } fn peek(ref self) { println(f"  bo{self.a.id}") } }
+impl OwnD { fn eat(self) { println(f"  od{self.n}") } }
+impl R {
+  fn ident(self) { println(f"  id{self.id}") }
+  fn area(self) -> i64 { return self.id * 2; }
+  fn me(self) -> R { return self; }
+}
+struct W { a: R }
+impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { return Option.Some(self.a); } }
+
+fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
+
+fn main() {
+  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain()
+  println("temp-recv-own");     mk(2).ident()
+  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat()
+  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat()
+  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek()
+  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) })
+  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain()
+  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}")
+  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}")
+  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}")
+  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built")
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"temp-recv-fields
+  rd1
+dR101/t101
+dR1/t1
+temp-recv-own
+  id2
+dR2/t2
+temp-recv-ownd
+  od3
+dOwnD3
+dR3/t3
+temp-recv-pair
+  pr4
+dR104/t104
+dR4/t4
+temp-recv-refself
+  bo5
+dR105/t105
+dR5/t5
+param-twin
+  pd6
+dR106/t106
+dR6/t6
+local-recv
+  rd7
+dR107/t107
+dR7/t7
+scalar-return
+dR8/t8
+  v16
+returns-self
+  m9
+dR9/t9
+hands-field-out
+  g10
+dR10/t10
+generic-return
+dR11/t11
+  built
+done
+"#
+            )
+        );
+    }
+
     /// B-2026-09-03-22 — A `Result[O, E]` DESTRUCTURE LEAF OWNS ITS PAYLOAD'S
     /// `Drop` BODY.
     ///
@@ -29348,11 +29468,18 @@ fn main() {
     /// B-2026-08-01-5 — fresh method-RECEIVER Drop temps: a `ref self`
     /// method's fresh receiver fires its body at STATEMENT END on both
     /// backends (pre-fix: never under `karac run`, at scope exit under
-    /// `karac build`); an owned-`self` method CONSUMED the receiver, so its
-    /// temp stays body-silent on both (pre-fix codegen fired it late over a
-    /// possibly-stale slot); a passthrough result (`mk(4).me()`) is owned by
-    /// its binding alone — exactly one fire, at the binding's death. Twin of
+    /// `karac build`); a passthrough result (`mk(4).me()`) is owned by its
+    /// binding alone — exactly one fire, at the binding's death. Twin of
     /// `tests/interpreter.rs`'s `test_fresh_recv_temp_drop_semantics`.
+    ///
+    /// Cell `b` (`mk(2).eat()`, owned `self`) was pinned SILENT on the
+    /// reasoning that the callee CONSUMED the receiver. It consumes the
+    /// VALUE; it does not run the bodies — codegen treats a by-value `self`
+    /// as caller-retained, so nobody ran them and the `Res` was destroyed
+    /// with its destructor never firing. B-2026-09-04-30 is that lost body
+    /// and `drop 2 r2` is this pin moving to match. Cell `d` becomes the
+    /// guard for the fix: `me(self) -> Res` hands the receiver back, so the
+    /// caller still stands down and the single fire comes from `m`.
     #[test]
     fn e2e_fresh_recv_temp_drop_semantics() {
         let Some(out) = run_program(
@@ -29380,7 +29507,7 @@ fn main() {
              \x20   println(\"a: ref-method fresh struct receiver\");\n\
              \x20   let x = mk(1).ident();\n\
              \x20   println(f\"x={x}\");\n\
-             \x20   println(\"b: owned-self consumed receiver (silent)\");\n\
+             \x20   println(\"b: owned-self consumed receiver\");\n\
              \x20   let y = mk(2).eat();\n\
              \x20   println(f\"y={y}\");\n\
              \x20   println(\"c: bare ref-method statement\");\n\
@@ -29396,7 +29523,7 @@ fn main() {
         assert_eq!(
             out,
             "a: ref-method fresh struct receiver\ndrop 1 r1\nx=1\n\
-             b: owned-self consumed receiver (silent)\ny=102\n\
+             b: owned-self consumed receiver\ndrop 2 r2\ny=102\n\
              c: bare ref-method statement\ndrop 3 r3\n\
              d: passthrough result owned by binding\nm=4\ndrop 4 r4\nend\n"
         );

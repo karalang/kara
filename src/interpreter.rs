@@ -1337,6 +1337,44 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// The impl-method AST for `type_name.method`, resolved through the same
+    /// program-then-stdlib chain as [`Self::method_self_param`], for the
+    /// predicates that need the whole `Function` rather than one field of it.
+    /// Codegen's twin is `find_impl_method_ast` in `codegen/method_call.rs`.
+    pub(crate) fn find_impl_method_ast<'s>(
+        &'s self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<&'s crate::ast::Function> {
+        fn find_in<'p>(
+            items: &'p [Item],
+            type_name: &str,
+            method: &str,
+        ) -> Option<&'p crate::ast::Function> {
+            items.iter().find_map(|item| {
+                let Item::ImplBlock(imp) = item else {
+                    return None;
+                };
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                    _ => None,
+                };
+                if target != Some(type_name) {
+                    return None;
+                }
+                imp.items.iter().find_map(|it| match it {
+                    ImplItem::Method(m) if m.name == method => Some(&**m),
+                    _ => None,
+                })
+            })
+        }
+        find_in(&self.program.items, type_name, method).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| find_in(&p.items, type_name, method))
+        })
+    }
+
     /// Per-parameter "is a mutate-through-borrow mode" flags for the impl
     /// method `type_name.method` — the method sibling of
     /// [`Self::fn_param_mut_ref_flags`], resolved through the same

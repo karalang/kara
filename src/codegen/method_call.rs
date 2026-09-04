@@ -10150,6 +10150,33 @@ impl<'ctx> super::Codegen<'ctx> {
         None
     }
 
+    /// The impl-method AST for `type_name.method`, for the predicates that need
+    /// the whole `Function` rather than the (self-mode, borrow-return) pair
+    /// [`Self::impl_method_self_and_borrow_return`] extracts. Same target-type
+    /// and method matching as that one, so the two never disagree about which
+    /// method they are describing.
+    pub(super) fn find_impl_method_ast<'a>(
+        &'a self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<&'a crate::ast::Function> {
+        let program = self.program_snapshot.as_deref()?;
+        program.items.iter().find_map(|item| {
+            let crate::ast::Item::ImplBlock(imp) = item else {
+                return None;
+            };
+            let target_ok = matches!(&imp.target_type.kind, crate::ast::TypeKind::Path(p)
+                if p.segments.last().is_some_and(|s| s == type_name));
+            if !target_ok {
+                return None;
+            }
+            imp.items.iter().find_map(|ii| match ii {
+                crate::ast::ImplItem::Method(f) if f.name == method => Some(&**f),
+                _ => None,
+            })
+        })
+    }
+
     fn try_compile_nonident_collection_method(
         &mut self,
         object: &Expr,
@@ -10537,6 +10564,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // site over: there it was the callee's owned param, here the caller's
         // receiver temp.
         let recv_inst = self.type_decls.enum_inst_var_types.get(&synth).cloned();
+        // B-2026-09-04-30 — the receiver temp's own INSTANTIATION, resolved once
+        // for the two body-side questions below. A generic parent's declared
+        // field types are bare params, so the name-keyed `type_runs_user_drop` /
+        // `field_bodies_fn_for_owned_temp` answer "no Drop fields" for
+        // `Box3[R] { v: mk(1) }` and the arm falls through to memory-only: the
+        // interpreter ran `v`'s body and the compiled backends ran nothing.
+        // `track_struct_var_inst` right below has taken the instantiation since
+        // B-2026-08-25-16 for the memory half — this is the body half of the
+        // same lookup, and B-2026-08-02-14 is the same defect one owner over
+        // (a generic parent's mono binding, silent at owner death).
+        let recv_subst = recv_inst
+            .as_ref()
+            .map(|i| self.generic_struct_subst_from_inst(&type_name, i))
+            .unwrap_or_default();
         let receiver_is_fresh_owned = self.expr_yields_fresh_owned_temp(object)
             || matches!(&object.kind, ExprKind::StructLiteral { .. });
         if receiver_is_fresh_owned {
@@ -10558,15 +10599,62 @@ impl<'ctx> super::Codegen<'ctx> {
                     &object.kind,
                     ExprKind::StructLiteral { .. } | ExprKind::Call { .. }
                 );
+                // B-2026-09-04-30 — an OWNED-`self` receiver joins the
+                // borrowing ones here, behind the return-opacity gate.
+                //
+                // A by-value receiver is caller-retained exactly as a by-value
+                // PARAM is (`owner_runs_bodies` is true for a `SelfValue`
+                // source, so the callee registers no walker for it), and the
+                // param twin shows the convention working: `p_plain(HoRes { .. })`
+                // prints `pd4 dR104 dR4` on all four surfaces. The receiver
+                // spelling printed `rd1` and nothing else — the callee runs no
+                // body because it believes the caller will, and the caller ran
+                // none because B-2026-08-01-5 excluded owned `self` outright.
+                // A TEMP receiver therefore had NO owner for its `Drop` bodies
+                // on any surface: `HoRes { a: mk(1), .. }.s_plain()` ran neither
+                // field body, and `mk(3).r_plain()` lost `R`'s OWN body. A local
+                // receiver was always fine (`let h = ..; h.s_plain()` → the
+                // binding's own drop), which is what localises the fault to the
+                // temp.
+                //
+                // The exclusion was not wrong, only too wide. What it was
+                // protecting against is the PASSTHROUGH chain
+                // (`mk(3).me().ident()`, `mk(1).plus(10)`): a method that hands
+                // the receiver back makes the caller's RESULT the owner, and a
+                // temp registration on top of that fires the body twice.
+                // `owned_self_return_is_opaque_to_receiver` asks exactly that
+                // question and declines every shape whose return could carry the
+                // receiver, so the chains stay body-silent and only the
+                // consuming spelling gains its bodies back.
+                //
+                // Routed through the SAME branch ladder below rather than a new
+                // arm, so an owned-`self` temp gets the identical treatment a
+                // borrowing one gets — the own-`Drop` wrapper when the type has
+                // one, the field-bodies walk plus `track_struct_var_inst`
+                // otherwise. Memory is unchanged either way: the fresh-owned
+                // temp was already memory-tracked on every path through this
+                // block (the wrapper carries body+memory, the walk is
+                // bodies-only beside the same `track_struct_var_inst` the
+                // else-arm ran), so this adds bodies and moves no free.
+                let self_mode = self.impl_method_self_and_borrow_return(&type_name, method);
+                let owned_self_consumes =
+                    matches!(self_mode, Some((crate::ast::SelfParam::Owned, false)))
+                        && self
+                            .find_impl_method_ast(&type_name, method)
+                            .is_some_and(|f| {
+                                let drop_probe =
+                                    &mut |n: &str| self.type_runs_user_drop(n, &mut Vec::new());
+                                crate::ast::owned_self_return_is_opaque_to_receiver(f, drop_probe)
+                            });
                 let bodies_eligible = shape_ok
                     && !self.user_ref_method_names.contains(method)
-                    && matches!(
-                        self.impl_method_self_and_borrow_return(&type_name, method),
+                    && (matches!(
+                        self_mode,
                         Some((
                             crate::ast::SelfParam::Ref | crate::ast::SelfParam::MutRef,
                             false
                         ))
-                    );
+                    ) || owned_self_consumes);
                 let has_user_drop = self
                     .program_snapshot
                     .as_deref()
@@ -10583,8 +10671,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.track_enum_var(&type_name, slot);
                 } else if bodies_eligible && has_user_drop {
                     self.track_user_drop_var(&type_name, "__urecv_drop_tmp", slot);
-                } else if bodies_eligible && self.type_runs_user_drop(&type_name, &mut Vec::new()) {
-                    if let Some(f) = self.field_bodies_fn_for_owned_temp(&type_name) {
+                } else if bodies_eligible && self.type_runs_user_drop_mono(&type_name, &recv_subst)
+                {
+                    // ORDER IS LOAD-BEARING: memory FIRST, bodies SECOND.
+                    //
+                    // Both actions land on the same cleanup frame and every
+                    // drain over it is LIFO, so the last one registered is the
+                    // first one run. Registered bodies-then-memory — the order
+                    // this arm had — the FREE ran first and each body then read
+                    // its own fields out of freed storage: `NoOwn { a: mk(1) }.br()`
+                    // printed `dR1/dR`, the `Drop` body's own f-string buffer
+                    // showing through the tag it had just released (valgrind:
+                    // "Invalid read of size 2 ... 0 bytes inside a block of size
+                    // 2 free'd", the two-byte tag). A silent use-after-free on
+                    // every fresh-temp receiver of a struct that carries `Drop`
+                    // fields but has no `impl Drop` of its own — this arm is
+                    // reached only by that shape, which is why the neighbouring
+                    // `has_user_drop` arm never showed it: its
+                    // `karac_drop_<T>` wrapper is ONE action that runs the body
+                    // and the memory in the right order internally.
+                    //
+                    // Registering the free first is the whole fix: the walk is
+                    // bodies-only and frees nothing, so it is safe anywhere
+                    // before the free and correct nowhere after it.
+                    self.track_struct_var_inst(&type_name, slot, recv_inst.clone());
+                    if let Some(f) =
+                        self.field_bodies_fn_for_owned_temp_mono(&type_name, &recv_subst)
+                    {
                         self.track_user_drop_var_with_fn(
                             &type_name,
                             "__urecv_drop_tmp",
@@ -10593,7 +10706,6 @@ impl<'ctx> super::Codegen<'ctx> {
                             UserDropKind::StructFieldBodies,
                         );
                     }
-                    self.track_struct_var_inst(&type_name, slot, recv_inst.clone());
                 } else {
                     self.track_struct_var_inst(&type_name, slot, recv_inst.clone());
                 }

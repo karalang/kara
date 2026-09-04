@@ -4057,6 +4057,36 @@ impl<'ctx> super::Codegen<'ctx> {
         )
     }
 
+    /// [`Self::field_bodies_fn_for_owned_temp`] keyed by the temp's recorded
+    /// INSTANTIATION rather than by the bare type name (B-2026-09-04-30).
+    ///
+    /// A generic parent declares its fields at bare type params, so the
+    /// name-keyed walk sees no `Drop` field in `Box3[T] { v: T }` and this
+    /// declines — leaving `Box3[R] { v: mk(1) }.show()` with no body on the
+    /// compiled backends while the interpreter, which reads the runtime value,
+    /// ran `v`'s. `emit_user_drop_field_bodies_fn_skipping` has been subst-aware
+    /// since B-2026-08-02-14 and folds the surviving index list into the symbol
+    /// name, so a mono walker never aliases the erased one in the module memo;
+    /// only the two GATE lookups in front of it were still name-keyed. An empty
+    /// subst is exactly the old behaviour, so the non-generic callers are
+    /// unaffected.
+    pub(super) fn field_bodies_fn_for_owned_temp_mono(
+        &mut self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.type_decls.struct_types.contains_key(type_name)
+            || !self.type_runs_user_drop_mono(type_name, subst)
+        {
+            return None;
+        }
+        self.emit_user_drop_field_bodies_fn_skipping(
+            type_name,
+            subst,
+            &super::synth_drop::FieldSkipTree::default(),
+        )
+    }
+
     /// The struct type name of an argument expression that materializes a FRESH
     /// owned struct temporary — the shapes whose heap this frame must free.
     ///

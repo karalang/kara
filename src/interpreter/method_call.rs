@@ -915,10 +915,30 @@ impl<'a> super::Interpreter<'a> {
         if !fresh {
             return;
         }
+        // B-2026-09-04-30 — an OWNED-`self` method joins the borrowing ones,
+        // behind the same return-opacity gate the codegen registrar uses, from
+        // the same shared predicate. A by-value receiver is caller-retained
+        // exactly as a by-value param is, so a TEMP receiver's field bodies
+        // belong here; excluding owned `self` outright (B-2026-08-01-5) left
+        // them with no owner on ANY surface, because the callee does not run
+        // them either. Declining when the return could carry the receiver is
+        // what keeps the passthrough chain (`mk(3).me().ident()`) from firing
+        // the body a second time on top of the caller's RESULT binding — the
+        // double-fire that motivated the original exclusion.
+        let self_param = self.method_self_param(type_name, method);
+        let owned_self_consumes = matches!(self_param, Some(crate::ast::SelfParam::Owned))
+            && self
+                .find_impl_method_ast(type_name, method)
+                .is_some_and(|f| {
+                    let drop_probe =
+                        &mut |n: &str| self.type_name_runs_user_drop(n, &mut Vec::new());
+                    crate::ast::owned_self_return_is_opaque_to_receiver(f, drop_probe)
+                });
         if !matches!(
-            self.method_self_param(type_name, method),
+            self_param,
             Some(crate::ast::SelfParam::Ref | crate::ast::SelfParam::MutRef)
-        ) {
+        ) && !owned_self_consumes
+        {
             return;
         }
         if self.method_returns_borrow(type_name, method) {

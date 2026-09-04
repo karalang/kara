@@ -46655,10 +46655,20 @@ fn test_owned_enum_arg_payload_body_single_caller_fire() {
 /// B-2026-08-01-5 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_fresh_recv_temp_drop_semantics`, same source and expected string.
 /// Pre-fix the interpreter fired NO receiver-temp body ever (the free-fn
-/// arg hook had no method-receiver sibling); the new
-/// `run_fresh_recv_temp_drop` hook fires a `ref self` method's fresh
-/// receiver at statement end and stays silent for owned-`self` (the callee
-/// consumed the value) and borrow-returning methods.
+/// arg hook had no method-receiver sibling); the
+/// `run_fresh_recv_temp_drop` hook fires a fresh receiver's body at
+/// statement end and stays silent for a borrow-returning method (the
+/// result aliases the receiver).
+///
+/// Cell `b` was pinned SILENT here and read "the callee consumed the
+/// value" — which is true of the value and false of the BODIES: codegen
+/// treats a by-value `self` as caller-retained, so the callee ran no body
+/// either and `mk(2).eat()` destroyed a `Res` without ever running its
+/// destructor. B-2026-09-04-30 is that lost body, and `drop 2 r2` is the
+/// pin moving to match. Cells `a`/`c` (`ref self`) and `d` (a passthrough
+/// whose result binding owns the body) are unchanged, and `d` is now also
+/// the guard cell: `me(self) -> Res` returns a type that runs a user
+/// `Drop`, so the caller still stands down and the body comes from `m`.
 #[test]
 fn test_fresh_recv_temp_drop_semantics() {
     assert_eq!(
@@ -46686,7 +46696,7 @@ fn test_fresh_recv_temp_drop_semantics() {
                  println(\"a: ref-method fresh struct receiver\");\n\
                  let x = mk(1).ident();\n\
                  println(f\"x={x}\");\n\
-                 println(\"b: owned-self consumed receiver (silent)\");\n\
+                 println(\"b: owned-self consumed receiver\");\n\
                  let y = mk(2).eat();\n\
                  println(f\"y={y}\");\n\
                  println(\"c: bare ref-method statement\");\n\
@@ -46697,7 +46707,7 @@ fn test_fresh_recv_temp_drop_semantics() {
                  println(\"end\");\n\
              }\n"),
         "a: ref-method fresh struct receiver\ndrop 1 r1\nx=1\n\
-         b: owned-self consumed receiver (silent)\ny=102\n\
+         b: owned-self consumed receiver\ndrop 2 r2\ny=102\n\
          c: bare ref-method statement\ndrop 3 r3\n\
          d: passthrough result owned by binding\nm=4\ndrop 4 r4\nend\n"
     );
@@ -59888,6 +59898,106 @@ done
 ///
 /// Interpreter twin of `e2e_param_destructure_leaf_rebind_runs_body_once` (tests/codegen.rs) — same program string, same
 /// pin.
+/// B-2026-09-04-30 — a by-value `self` receiver on a TEMP runs its `Drop`
+/// bodies, and the fresh-temp receiver's field walk runs BEFORE its memory is
+/// freed.
+///
+/// Codegen treats a by-value `self` exactly like a by-value param —
+/// caller-retained — while B-2026-08-01-5 had excluded owned `self` from the
+/// caller's receiver-temp registration to stop a passthrough chain
+/// double-firing. A local receiver still had an owner and a by-value param temp
+/// always had one (`param-twin`), but a TEMP receiver had none on any surface.
+/// The three guard cells (`returns-self`, `hands-field-out`, `generic-return`)
+/// pin that a return which can carry the receiver still stands the caller down.
+/// `temp-recv-refself` pins the second half — the no-own-`Drop` arm's
+/// bodies-then-memory registration order let the LIFO drain free the fields
+/// before the walk read them.
+///
+/// Interpreter twin of `e2e_owned_self_temp_receiver_runs_drop_bodies`
+/// (tests/codegen.rs) — same program string, same pin.
+#[test]
+fn test_owned_self_temp_receiver_runs_drop_bodies() {
+    let out = run(r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct Pair { a: R, b: R }
+struct OwnD { a: R, n: i64 }
+impl Drop for OwnD { fn drop(mut ref self) { println(f"dOwnD{self.n}") } }
+
+impl HoRes { fn plain(self) { println(f"  rd{self.a.id}") } }
+impl Pair { fn eat(self) { println(f"  pr{self.a.id}") } fn peek(ref self) { println(f"  bo{self.a.id}") } }
+impl OwnD { fn eat(self) { println(f"  od{self.n}") } }
+impl R {
+  fn ident(self) { println(f"  id{self.id}") }
+  fn area(self) -> i64 { return self.id * 2; }
+  fn me(self) -> R { return self; }
+}
+struct W { a: R }
+impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { return Option.Some(self.a); } }
+
+fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
+
+fn main() {
+  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain()
+  println("temp-recv-own");     mk(2).ident()
+  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat()
+  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat()
+  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek()
+  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) })
+  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain()
+  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}")
+  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}")
+  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}")
+  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built")
+  println("done")
+}
+"#);
+    assert_eq!(
+        out.trim_end(),
+        r#"temp-recv-fields
+  rd1
+dR101/t101
+dR1/t1
+temp-recv-own
+  id2
+dR2/t2
+temp-recv-ownd
+  od3
+dOwnD3
+dR3/t3
+temp-recv-pair
+  pr4
+dR104/t104
+dR4/t4
+temp-recv-refself
+  bo5
+dR105/t105
+dR5/t5
+param-twin
+  pd6
+dR106/t106
+dR6/t6
+local-recv
+  rd7
+dR107/t107
+dR7/t7
+scalar-return
+dR8/t8
+  v16
+returns-self
+  m9
+dR9/t9
+hands-field-out
+  g10
+dR10/t10
+generic-return
+dR11/t11
+  built
+done"#
+    );
+}
+
 #[test]
 fn test_param_destructure_leaf_rebind_runs_body_once() {
     let out = run(r#"struct R { id: i64, tag: String }

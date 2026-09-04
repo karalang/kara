@@ -1442,6 +1442,67 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
     walk_block(&f.body, param_name)
 }
 
+/// B-2026-09-04-30 — for an OWNED-`self` method: can its RETURN VALUE carry any
+/// part of the receiver back to the caller?
+///
+/// The receiver twin of [`fn_returns_param`]'s question, asked about the return
+/// TYPE rather than by walking for a bare identifier. `self` is
+/// `ExprKind::SelfValue`, not `ExprKind::Identifier("self")`, so none of the
+/// name-keyed passthrough predicates above can see it — and a syntactic walk
+/// would still have to chase `self.field`, a `Self`-typed forward, and an
+/// aggregate that closes over any of them. The type answers all three at once:
+/// if nothing the receiver owns can be spelled in the return type, nothing the
+/// receiver owns crosses back, whatever the body does with it.
+///
+/// **Why the caller needs an answer at all.** A by-value receiver's field
+/// `Drop` bodies are CALLER-retained, exactly as a by-value parameter's are
+/// (design.md § Drop, "Interaction with move semantics": the destination takes
+/// over, and codegen's destination for both is the caller's temp). The caller
+/// runs them on its temp at statement end. When the callee hands the receiver
+/// back out, the caller's RESULT binding is the owner instead and the temp
+/// registration must stand down or the body fires twice — the passthrough
+/// double-fire (`mk(3).me().ident()`) that made B-2026-08-01-5 disable owned-
+/// `self` receiver bodies wholesale. Disabling them wholesale is what left a
+/// TEMP receiver with no owner on any surface, since the callee never runs them
+/// either; this predicate is the narrow gate that was missing.
+///
+/// `type_runs_user_drop` is the caller's own Drop table, passed in rather than
+/// duplicated, so the interpreter and codegen reach the same verdict from the
+/// same syntax and agree by construction (the rule the Arrow IPC twin and
+/// `String.normalize` follow).
+///
+/// Conservative toward `true` (= can carry, so the caller stands down) at every
+/// unrecognised shape. That direction costs a body that nobody runs — the
+/// status quo for this whole family — where the other direction costs a double
+/// free. Declined shapes, each because the receiver's payload can ride out
+/// inside it without being named:
+///
+///  * any GENERIC path — `Result[R, String]`, `Option[R]`, `Vec[R]`;
+///  * `Self`, which names the receiver's own type and so always can;
+///  * a tuple, array, pointer, `ref`/`mut ref`, or `Fn` return.
+pub fn owned_self_return_is_opaque_to_receiver(
+    f: &Function,
+    type_runs_user_drop: &mut dyn FnMut(&str) -> bool,
+) -> bool {
+    let Some(rt) = f.return_type.as_ref() else {
+        // Unit return: there is no value to carry anything back in.
+        return true;
+    };
+    let crate::ast::TypeKind::Path(p) = &rt.kind else {
+        return false;
+    };
+    if p.generic_args.is_some() {
+        return false;
+    }
+    match p.segments.last() {
+        // `Self` is the receiver's own type by definition, so it can always
+        // carry it — and it resolves to no entry in either backend's Drop
+        // table, which would read as "clean" if it reached the lookup.
+        Some(name) if name != "Self" => !type_runs_user_drop(name),
+        _ => false,
+    }
+}
+
 /// B-2026-08-28-70 — does `f` hand parameter `arg_index` back to its caller on
 /// EVERY exit?
 ///

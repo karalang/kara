@@ -1146,6 +1146,110 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-30 — a by-value `self` receiver on a TEMP runs its `Drop`
+    /// bodies, and the fresh-temp receiver's field walk runs BEFORE its memory is
+    /// freed.
+    ///
+    /// Codegen treats a by-value `self` exactly like a by-value param —
+    /// caller-retained — while B-2026-08-01-5 had excluded owned `self` from the
+    /// caller's receiver-temp registration to stop a passthrough chain
+    /// double-firing. A local receiver still had an owner and a by-value param temp
+    /// always had one (`param-twin`), but a TEMP receiver had none on any surface.
+    /// The three guard cells (`returns-self`, `hands-field-out`, `generic-return`)
+    /// pin that a return which can carry the receiver still stands the caller down.
+    /// `temp-recv-refself` pins the second half — the no-own-`Drop` arm's
+    /// bodies-then-memory registration order let the LIFO drain free the fields
+    /// before the walk read them.
+    ///
+    /// ASAN twin of `e2e_owned_self_temp_receiver_runs_drop_bodies` (tests/codegen.rs).
+    /// The balance is the pin the stdout cannot give: pre-fix, the `ref self`
+    /// cell read a freed two-byte tag, which valgrind and LSan both flag and a
+    /// stdout comparison only renders as mojibake.
+    #[test]
+    fn asan_owned_self_temp_receiver_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct Pair { a: R, b: R }
+struct OwnD { a: R, n: i64 }
+impl Drop for OwnD { fn drop(mut ref self) { println(f"dOwnD{self.n}") } }
+
+impl HoRes { fn plain(self) { println(f"  rd{self.a.id}") } }
+impl Pair { fn eat(self) { println(f"  pr{self.a.id}") } fn peek(ref self) { println(f"  bo{self.a.id}") } }
+impl OwnD { fn eat(self) { println(f"  od{self.n}") } }
+impl R {
+  fn ident(self) { println(f"  id{self.id}") }
+  fn area(self) -> i64 { return self.id * 2; }
+  fn me(self) -> R { return self; }
+}
+struct W { a: R }
+impl W { fn unwrap_a(self) -> R { return self.a; } fn opt(self) -> Option[R] { return Option.Some(self.a); } }
+
+fn p_plain(h: HoRes) { println(f"  pd{h.a.id}") }
+
+fn main() {
+  println("temp-recv-fields");  HoRes { a: mk(1), b: Result.Ok(mk(101)) }.plain()
+  println("temp-recv-own");     mk(2).ident()
+  println("temp-recv-ownd");    OwnD { a: mk(3), n: 3 }.eat()
+  println("temp-recv-pair");    Pair { a: mk(4), b: mk(104) }.eat()
+  println("temp-recv-refself"); Pair { a: mk(5), b: mk(105) }.peek()
+  println("param-twin");        p_plain(HoRes { a: mk(6), b: Result.Ok(mk(106)) })
+  println("local-recv");        let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; h.plain()
+  println("scalar-return");     let v = mk(8).area(); println(f"  v{v}")
+  println("returns-self");      let m = mk(9).me(); println(f"  m{m.id}")
+  println("hands-field-out");   let g = W { a: mk(10) }.unwrap_a(); println(f"  g{g.id}")
+  println("generic-return");    let o = W { a: mk(11) }.opt(); println("  built")
+  println("done")
+}
+"#,
+            &[
+                "temp-recv-fields",
+                "  rd1",
+                "dR101/t101",
+                "dR1/t1",
+                "temp-recv-own",
+                "  id2",
+                "dR2/t2",
+                "temp-recv-ownd",
+                "  od3",
+                "dOwnD3",
+                "dR3/t3",
+                "temp-recv-pair",
+                "  pr4",
+                "dR104/t104",
+                "dR4/t4",
+                "temp-recv-refself",
+                "  bo5",
+                "dR105/t105",
+                "dR5/t5",
+                "param-twin",
+                "  pd6",
+                "dR106/t106",
+                "dR6/t6",
+                "local-recv",
+                "  rd7",
+                "dR107/t107",
+                "dR7/t7",
+                "scalar-return",
+                "dR8/t8",
+                "  v16",
+                "returns-self",
+                "  m9",
+                "dR9/t9",
+                "hands-field-out",
+                "  g10",
+                "dR10/t10",
+                "generic-return",
+                "dR11/t11",
+                "  built",
+                "done",
+            ],
+            "asan_owned_self_temp_receiver_is_balanced",
+        );
+    }
+
     /// B-2026-09-04-29 — a by-value param destructure leaf REBOUND (`let c = b;`)
     /// runs the payload's body exactly once.
     ///
