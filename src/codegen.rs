@@ -9562,6 +9562,46 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
         let mut t_pattern_binding_borrow_modes = tp.pattern_binding_borrow_modes.clone();
+        // B-2026-09-04-5 — the fourteen program-derived span tables that were
+        // installed from the USER program at `compile_program` and never
+        // swapped here, in violation of the "swap ALL program-derived span
+        // tables" rule this function's doc comment states.
+        //
+        // `Span` carries no file identity — it is `(line, column, offset,
+        // length)` — so every span-keyed table is keyed by BYTE OFFSET alone,
+        // shared across the user program and each baked stdlib module. A
+        // stdlib body compiled with the user's tables installed therefore
+        // reads the user's entry for any expression that happens to sit at the
+        // same (offset, length), and the collision is silent: both entries are
+        // well-formed, so nothing detects the mismatch.
+        //
+        // Measured: `process.kara` byte 5150 len 13 is `self.cmd_args`, and
+        // byte 5150 len 13 of `23-merge-k-sorted-lists/divide_and_conquer.kara`
+        // is `merge_k_lists` — a free-fn name the lowering pass records in
+        // `fn_value_typed_exprs` as a `Fn(..)` value. Compiling `Command.arg`
+        // (`let mut new_args = self.cmd_args;`) then hit that entry in
+        // `let_binding_fn_value_type`, took the first-class-fn-value branch,
+        // bound the `Vec[String]` as a closure fat pointer and returned early
+        // — so `vec_elem_types` / `var_type_names` were never registered and
+        // the next line's `new_args.push(a)` fell out of method dispatch with
+        // "no handler for method 'push' on variable 'new_args'". The kata
+        // never calls `Command` at all; a program is only exposed when its own
+        // text is long enough to reach the colliding offset, which is why this
+        // presented as a size-dependent, unreducible failure.
+        let mut t_method_impl_dispatch = tp.method_impl_dispatch.clone();
+        let mut t_char_typed_exprs = tp.char_typed_exprs.clone();
+        let mut t_iterator_typed_exprs = tp.iterator_typed_exprs.clone();
+        let mut t_fn_value_typed_exprs = tp.fn_value_typed_exprs.clone();
+        let mut t_dbg_arg_type_exprs = tp.dbg_arg_type_exprs.clone();
+        let mut t_dbg_arg_type_names = tp.dbg_arg_type_names.clone();
+        let mut t_call_type_subs = tp.call_type_subs.clone();
+        let mut t_call_type_subs_mangle = tp.call_type_subs_mangle.clone();
+        let mut t_call_type_subs_te = tp.call_type_subs_te.clone();
+        let mut t_concrete_named_type_exprs = tp.concrete_named_type_exprs.clone();
+        let mut t_optional_chain_lowering = tp.optional_chain_lowering.clone();
+        let mut t_iter_terminal_elem_types = tp.iter_terminal_elem_types.clone();
+        let mut t_iter_terminal_acc_types = tp.iter_terminal_acc_types.clone();
+        let mut t_stats_elem_types = tp.stats_elem_types.clone();
         macro_rules! swap_all {
             () => {{
                 std::mem::swap(
@@ -9702,6 +9742,59 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.pattern_state.pattern_binding_borrow_modes,
                     &mut t_pattern_binding_borrow_modes,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.method_impl_dispatch,
+                    &mut t_method_impl_dispatch,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.char_typed_exprs,
+                    &mut t_char_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.iterator_typed_exprs,
+                    &mut t_iterator_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.fn_value_typed_exprs,
+                    &mut t_fn_value_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.dbg_arg_type_exprs,
+                    &mut t_dbg_arg_type_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.dbg_arg_type_names,
+                    &mut t_dbg_arg_type_names,
+                );
+                std::mem::swap(&mut self.span_tables.call_type_subs, &mut t_call_type_subs);
+                std::mem::swap(
+                    &mut self.span_tables.call_type_subs_mangle,
+                    &mut t_call_type_subs_mangle,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.call_type_subs_te,
+                    &mut t_call_type_subs_te,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.concrete_named_type_exprs,
+                    &mut t_concrete_named_type_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.optional_chain_lowering,
+                    &mut t_optional_chain_lowering,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.iter_terminal_elem_types,
+                    &mut t_iter_terminal_elem_types,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.iter_terminal_acc_types,
+                    &mut t_iter_terminal_acc_types,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.stats_elem_types,
+                    &mut t_stats_elem_types,
                 );
             }};
         }

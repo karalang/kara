@@ -9626,11 +9626,22 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
         };
+        // B-2026-09-04-5 — name the ENCLOSING FUNCTION. A fall-through can
+        // happen while compiling a baked stdlib body (`Command.arg`,
+        // `Parser.arg`, …), and `Span` carries no file identity, so the
+        // caret is rendered at the stdlib expression's byte offset INSIDE
+        // THE USER'S FILE — pointing at whatever text happens to live there,
+        // in that case a comment line. With only the message and that caret,
+        // a reader has neither the failing construct nor its file: the
+        // variable belongs to a module the program may never mention. The
+        // qualified function name is the one piece of the location that
+        // survives, so it goes in the message text itself.
         Err(format!(
-            "codegen: no handler for method '{}' on {} (method dispatch fell through; \
-             this is a codegen bug — add a dispatcher arm in `compile_method_call` \
-             or mark the test `#[ignore]` if the method is genuinely deferred)",
-            method, receiver_desc
+            "codegen: no handler for method '{}' on {} in `{}` \
+             (method dispatch fell through; this is a codegen bug — add a \
+             dispatcher arm in `compile_method_call` or mark the test \
+             `#[ignore]` if the method is genuinely deferred)",
+            method, receiver_desc, self.fn_ctx.current_fn_name
         ))
     }
 
