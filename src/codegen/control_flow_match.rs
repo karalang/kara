@@ -1356,6 +1356,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(nm) = &arm.body.kind {
                         let nm = nm.clone();
                         self.suppress_container_elem_bodies_for_var(&nm);
+                        self.suppress_user_drop_for_arm_tail_binding(&arm.pattern, &nm);
                     }
                 }
                 // Move-aware, Map/Set variant: `match opt { Some(m) => m }`
@@ -10840,6 +10841,17 @@ impl<'ctx> super::Codegen<'ctx> {
             || self
                 .payload_vars
                 .inline_result_payload_vars
+                .contains(owner.as_str())
+            // B-2026-09-04-1's probe — a `Result` TUPLE destructure leaf
+            // (B-2026-09-03-22's tracker) is a rebind source too. Without it
+            // `let c = b;` opened no registration for `c` at all: `b` kept the
+            // payload — which is what double-freed once `c` was consumed — and
+            // once the transfer disarm reached `b` (same probe) the payload had
+            // no owner left and leaked (valgrind: 4 bytes in `let (a, b) = t;
+            // let c = b;` with `c` never read).
+            || self
+                .payload_vars
+                .inline_result_agg_payload_vars
                 .contains(owner.as_str()))
         .then_some(owner)
     }
@@ -11827,13 +11839,55 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return;
         };
-        let layout_name = if in_result { "Result" } else { "Option" };
+        // The `Result` AGG set selects the `Result` layout too (B-2026-09-04-1's
+        // probe): it is six words to `Option`'s four, and a zero sized for the
+        // wrong layout left the slot's last two words live. Tag 0 is `Err`
+        // over a zeroed direct half, so the drop still skipped — by luck of
+        // the Err type, not by construction.
+        let in_result_agg = agg
+            && self
+                .payload_vars
+                .inline_result_agg_payload_vars
+                .contains(name.as_str());
+        let layout_name = if in_result || in_result_agg {
+            "Result"
+        } else {
+            "Option"
+        };
         let Some(layout) = self.type_decls.enum_layouts.get(layout_name) else {
             return;
         };
         let _ = self
             .builder
             .build_store(slot.ptr, layout.llvm_type.const_zero());
+    }
+
+    /// B-2026-09-04-1's probe — an arm whose VALUE is one of its own payload
+    /// bindings hands that binding's resource to the match result, so the
+    /// binding's `UserDrop` must go with it.
+    ///
+    /// `bind_pattern_values` registers `track_user_drop_var` for a
+    /// `Drop`-bearing user-struct payload binding (`karac_drop_R` at the arm's
+    /// end), and nothing retracted it when the arm's body was the bare
+    /// binding: `let g = match r { Ok(x) => x, .. }` ran `x`'s body and freed
+    /// its String at the arm's end, then `g` — a bit-copy of the same words —
+    /// ran the body again over the freed buffer (`dR109/` with an empty tag,
+    /// then the real line) and freed it again. Every neighbouring spelling was
+    /// already correct: a direct-`String` payload (the identifier-move site
+    /// cap-zeroes it), a boxed `Option[R]` payload (a different action family),
+    /// `Ok(x) => eat(x)` (the arg site retracts), and `Ok(x) => { let g = x;
+    /// .. }` (the `let` site retracts). Only the arm-tail position was missing
+    /// the retraction. Measured on a plain `let r: Result[R, String]` local —
+    /// no destructure — and on the `Err` side alike.
+    ///
+    /// Restricted to a binding the ARM's own pattern introduced: an outer
+    /// local named as an arm value keeps whatever handling it has today.
+    pub(super) fn suppress_user_drop_for_arm_tail_binding(&mut self, pattern: &Pattern, nm: &str) {
+        let mut binds: Vec<String> = Vec::new();
+        collect_pattern_bindings(pattern, &mut binds);
+        if binds.iter().any(|b| b == nm) {
+            self.suppress_user_drop_for_var(nm);
+        }
     }
 
     /// B-2026-07-30-11 (Option/Result leg) — retract a named `Option`/`Result`
@@ -12479,16 +12533,30 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
             return;
         };
-        let Some(payload_ty) = layout.llvm_type.get_field_type_at_index(1) else {
-            return;
-        };
-        if let Ok(payload_ptr) =
-            self.builder
-                .build_struct_gep(layout.llvm_type, slot.ptr, 1, "resagg.suppress.payload")
-        {
-            let _ = self
-                .builder
-                .build_store(payload_ptr, payload_ty.const_zero());
+        // EVERY payload word, not word 0 alone (B-2026-09-04-1's probe). The
+        // `Result` layout is six FLAT `i64`s — `{tag, w0, w1, w2, w3, w4}` — so
+        // field 1 is one word, and the first cut of this suppressor zeroed
+        // exactly that: enough for a heap-BOXED payload, whose box pointer is
+        // word 0, and nothing at all for an INLINE one. `R { id: i64, tag:
+        // String }` is four words and fits the five-word area, so it is laid
+        // inline; zeroing word 0 cleared `id` and left the String's
+        // `{ptr,len,cap}` at words 1..3 live, and the leaf's `karac_drop_Result_*`
+        // freed a buffer the arm binding had already freed — glibc's `free():
+        // double free detected in tcache 2` on an ordinary build, for every
+        // arm that MOVES the binding (`Ok(r) => eat(r)`, `=> { let g = r; .. }`,
+        // `=> r`). A read-only arm was clean only because the borrow classifier
+        // skips this suppressor for it. `Option[R]` boxes the same `R` (its
+        // area is three words), which is why the `Option` peer never saw this.
+        let i64_t = self.context.i64_type();
+        for word in 1..layout.llvm_type.count_fields() {
+            if let Ok(word_ptr) = self.builder.build_struct_gep(
+                layout.llvm_type,
+                slot.ptr,
+                word,
+                "resagg.suppress.payload",
+            ) {
+                let _ = self.builder.build_store(word_ptr, i64_t.const_zero());
+            }
         }
     }
 

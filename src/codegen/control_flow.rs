@@ -639,6 +639,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::Identifier(nm) = &fe.kind {
                     let nm = nm.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&nm);
+                    // B-2026-09-04-1's probe — the `if let` twin of the match
+                    // arm's tail retraction; see
+                    // `suppress_user_drop_for_arm_tail_binding`.
+                    if owns_result {
+                        self.suppress_user_drop_for_arm_tail_binding(pattern, &nm);
+                    }
                 }
                 // B-2026-08-29-5 — the then-arm sibling of the fresh-tail
                 // owner in `compile_block_with_frame`. This arm hand-rolls

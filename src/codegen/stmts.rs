@@ -7523,8 +7523,32 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // positions that share the plain entry point do
                                 // not, for this shape — see that entry point's
                                 // doc for the measurement.
-                                self.suppress_inline_option_agg_binding_transfer(value);
                             }
+                            // B-2026-09-04-1's probe — OUTSIDE the `boxed` gate,
+                            // beside the nested peer below and for the same
+                            // reason: the gate asks whether the DESTINATION's
+                            // payload is heap-boxed, and the sets this disarm
+                            // reads are keyed on the SOURCE's registration,
+                            // which is a different question. `Result[R, String]`
+                            // with `R { id: i64, tag: String }` lays `R` INLINE
+                            // (four words in a five-word area; the same `R` is
+                            // boxed by `Option`'s three-word area), so `boxed`
+                            // was empty here and `let c = r;` never reached
+                            // the call: `r`'s `FreeInlineResultPayload` — or,
+                            // for a tuple destructure leaf, its agg `EnumDrop` —
+                            // stayed armed beside `c`'s own, and the program
+                            // aborted with glibc's `free(): double free
+                            // detected in tcache 2` on an ordinary build. No
+                            // destructure anywhere is needed; a plain `let r:
+                            // Result[R, String] = Result.Ok(mk(109)); let c =
+                            // r;` is enough. Every direct-`String` half was
+                            // clean only because the move site cap-zeroes the
+                            // source's word 3 — `cap` for a direct payload,
+                            // `len` for the inline struct, where it is a no-op.
+                            //
+                            // Self-gated on the four source sets, so a boxed
+                            // destination runs it exactly as before, once.
+                            self.suppress_inline_option_agg_binding_transfer(value);
                         }
                     }
                 }
@@ -13822,7 +13846,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if wrapper_took_memory || place_leaf_took_memory {
                     leaf_cleanup_registered = true;
-                } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
+                } else if fresh
+                    && (self.destructure_field_needs_cleanup(&field_te)
+                        // B-2026-09-04-1's probe — the `Result` field of a FRESH
+                        // source (a call or a struct literal) had no owner at
+                        // all: `destructure_field_needs_cleanup` has no `Result`
+                        // arm, and the callee-owned branch below — which admits
+                        // the same three `Result` classes — is by construction
+                        // not this one. So `let HoStr { a, b } = mkhs(9);` with
+                        // `b: Result[String, String]` left unread leaked the
+                        // payload's buffer outright (valgrind: 4 bytes
+                        // definitely lost), and the struct-payload twin leaked
+                        // the same way with the optimizer hiding it (the dead
+                        // `mk(..)` chain is deleted — the B-2026-08-28-12 mask),
+                        // which is why a leak-check alone never saw it. A
+                        // CONSUMED leaf was clean because the arm binding took
+                        // the payload. The same tracker the callee-owned branch
+                        // uses already carries the `Result` arm
+                        // (`track_inline_result_payload_var`), so admitting the
+                        // classes here is the whole memory half; the body half
+                        // is the `Result` block further down, keyed on
+                        // `leaf_cleanup_registered` — which this sets.
+                        || self.result_field_direct_vecstr_halves_ok(&field_te)
+                        || self.result_field_struct_enum_payload_ok(&field_te)
+                        || self.result_field_map_or_set_half_ok(&field_te).is_some())
+                {
                     if let Some(slot) = self.variables.get(&name).copied() {
                         self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
                         leaf_cleanup_registered = true;
@@ -14054,6 +14102,56 @@ impl<'ctx> super::Codegen<'ctx> {
                         // source has no lingering struct-drop, so nothing to disarm.
                         if let Some(src_ptr) = callee_owned_src {
                             self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
+                        }
+                    }
+                }
+                // B-2026-09-04-1 — the `Result` twin of the B-2026-09-03-24
+                // body registration above. That block's closing note deferred
+                // `Result` because "the MEMORY half does not generalize"; the
+                // memory half has since landed (B-2026-09-03-22's tracker for
+                // the tuple leaf, and the struct-field leaf was always owned
+                // through `track_owned_destructure_field_cleanup` →
+                // `track_inline_result_payload_var` in the `transferable` arm
+                // above). What the field leaf still lacked was the BODY walk:
+                // `let HoRes { a, b } = h;` over `{ a: R, b: Result[R, String] }`
+                // and then `match b { Ok(r) => println(r.id) }` ran `dR109`
+                // under `--interp` and on none of jit/aot/AUTO_PAR=0 — the
+                // arm only borrows `r`, so nothing at the arm owns the body,
+                // and the leaf's `FreeInlineResultPayload` runs a memory-only
+                // `__karac_drop_struct_R`. Same on `if let`, on the `Err` side,
+                // and for an arm that binds without reading; the UNCONSUMED
+                // leaf lost it on every backend. `Option[R]` in the same
+                // field, and a `Result` TUPLE leaf, were already correct —
+                // which is what isolated it to this one site.
+                //
+                // Same walker, same key, same LIFO placement as the `Option`
+                // block: after the memory registration so the bodies run
+                // before the buffer they read is freed. A consuming arm
+                // retracts it through `suppress_optres_payload_bodies_for_match`
+                // exactly as it does the `Option` twin's. Gated on the leaf
+                // having TAKEN the memory (`leaf_cleanup_registered`), which
+                // is what makes the pair balanced, and on the owner not
+                // already walking its fields (`!owner_runs_bodies`, the
+                // by-value-param source) — the same gate as above.
+                if !owner_runs_bodies
+                    && leaf_cleanup_registered
+                    && !view_src
+                    && self.result_field_struct_enum_payload_ok(&field_te)
+                {
+                    if let Some(slot) = self.variables.get(&name).copied() {
+                        if let Some(bodies) =
+                            self.emit_optres_payload_user_drop_bodies_fn(&field_te)
+                        {
+                            self.var_types
+                                .optres_var_payload_tes
+                                .insert(name.clone(), field_te.clone());
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &name,
+                                slot.ptr,
+                                bodies,
+                                UserDropKind::ContainerElemBodies,
+                            );
                         }
                     }
                 }
@@ -16159,6 +16257,31 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.result_field_struct_enum_payload_ok(te)
             || self.result_field_map_or_set_half_ok(te).is_some()
         {
+            // B-2026-09-04-1 — a heap-BOXED struct/enum half takes the agg
+            // tracker instead. `track_inline_result_payload_var` nulls a boxed
+            // side on the premise that a `BoxedEnumDrop` "registered just
+            // before this at the same binding" owns it — true of a `let`,
+            // never of a destructure leaf, which registers nothing before
+            // reaching here. So `let HoW { a, b } = h;` over `b: Result[W,
+            // String]` with a seven-word `W` left the box with no owner at
+            // all: valgrind found the payload's Strings definitely lost,
+            // consumed or not (the optimizer's dead-chain mask hid the
+            // unread case until a body walk made the words live). The tuple
+            // leaf over the same type is clean because B-2026-09-03-22 routed
+            // it through `track_inline_result_agg_payload_var`, whose
+            // `emit_result_drop_fn` walks the box; this is the same route for
+            // the same shape. An inline struct half keeps the tracker below,
+            // which handles it through `result_inline_payload_struct_drops`.
+            let boxed_agg_half = Self::result_payload_tes(te).is_some_and(|(ok, err)| {
+                (self.option_payload_struct_or_enum_drop_ok(&ok)
+                    && self.result_payload_is_boxed(&ok))
+                    || (self.option_payload_struct_or_enum_drop_ok(&err)
+                        && self.result_payload_is_boxed(&err))
+            });
+            if boxed_agg_half {
+                self.track_inline_result_agg_payload_var(var_name, alloca, te);
+                return;
+            }
             self.track_inline_result_payload_var(var_name, alloca, te);
             return;
         }

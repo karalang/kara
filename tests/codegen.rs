@@ -13480,6 +13480,427 @@ done
         );
     }
 
+    /// B-2026-09-04-1 — a STRUCT-FIELD destructure leaf typed `Result[<struct with
+    /// a Drop body>, _]` runs the payload's body exactly once, on every surface.
+    ///
+    /// The row's cell (`loc`): the arm only borrows `r`, so nothing at the arm owned
+    /// the body, and the leaf's memory action was a body-less struct drop — `dR101`
+    /// ran under `--interp` and on none of jit/aot/AUTO_PAR=0. `iflet`, `errs`,
+    /// `noread`, `solo` and `rename` are the same defect in five spellings the row
+    /// did not record; `unused` is the UNCONSUMED leaf, which lost the body on every
+    /// backend (the B-2026-09-03-33 deferral, closed here). `fcall` / `flit` /
+    /// `fcallu` are FRESH sources, whose `Result` field had no owner at all (a leak
+    /// the optimizer's dead-chain mask hid until a body walk made the words live;
+    /// `fstru` is the unmasked direct-`String` twin, valgrind: 4 bytes). The `w*`
+    /// cells are the heap-BOXED payload (seven words), which the inline tracker
+    /// declined and nothing else owned. `param` is the by-value-param source, whose
+    /// own field walk already ran the body — unchanged.
+    ///
+    /// The interpreter twin runs the same string; the ASAN twin is
+    /// `asan_struct_field_result_leaf_is_balanced`.
+    #[test]
+    fn e2e_struct_field_result_leaf_owns_its_payload_body() {
+        let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoErr { a: R, b: Result[String, R] }
+struct SoloRes { b: Result[R, String] }
+struct HoStr { a: R, b: Result[String, String] }
+struct HoW { a: R, b: Result[W, String] }
+fn mkho(n: i64) -> HoRes { return HoRes { a: mk(n), b: Result.Ok(mk(n + 100)) }; }
+fn mkhs(n: i64) -> HoStr { return HoStr { a: mk(n), b: Result.Ok(f"s{n + 100}") }; }
+fn mkhw(n: i64) -> HoW { return HoW { a: mk(n), b: Result.Ok(mkw(n + 100)) }; }
+
+fn loc()    { let h = HoRes { a: mk(1), b: Result.Ok(mk(101)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn iflet()  { let h = HoRes { a: mk(2), b: Result.Ok(mk(102)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+              if let Result.Ok(r) = b { println(f"  ok{r.id}") } }
+fn errs()   { let h = HoErr { a: mk(3), b: Result.Err(mk(103)) }; let HoErr { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(r) => println(f"  er{r.id}") } }
+fn noread() { let h = HoRes { a: mk(4), b: Result.Ok(mk(104)) }; let HoRes { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println("  ok"), Result.Err(e) => println(f"  er{e}") } }
+fn solo()   { let h = SoloRes { b: Result.Ok(mk(105)) }; let SoloRes { b } = h;
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn rename() { let h = HoRes { a: mk(6), b: Result.Ok(mk(106)) }; let HoRes { a: aa, b: bb } = h; println(f"  rd{aa.id}")
+              match bb { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn unused() { let h = HoRes { a: mk(7), b: Result.Ok(mk(107)) }; let HoRes { a, b } = h; println(f"  rd{a.id}") }
+fn fcall()  { let HoRes { a, b } = mkho(8); println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn flit()   { let HoRes { a, b } = HoRes { a: mk(9), b: Result.Ok(mk(109)) }; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn fcallu() { let HoRes { a, b } = mkho(10); println(f"  rd{a.id}") }
+fn fstru()  { let HoStr { a, b } = mkhs(11); println(f"  rd{a.id}") }
+fn fstr()   { let HoStr { a, b } = mkhs(12); println(f"  rd{a.id}")
+              match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(e) => println(f"  er{e}") } }
+fn wloc()   { let h = HoW { a: mk(13), b: Result.Ok(mkw(113)) }; let HoW { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wunused(){ let h = HoW { a: mk(14), b: Result.Ok(mkw(114)) }; let HoW { a, b } = h; println(f"  rd{a.id}") }
+fn wfcall() { let HoW { a, b } = mkhw(15); println(f"  rd{a.id}")
+              match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wfcallu(){ let HoW { a, b } = mkhw(16); println(f"  rd{a.id}") }
+fn param()  { take(HoRes { a: mk(17), b: Result.Ok(mk(117)) }) }
+fn take(h: HoRes) { let HoRes { a, b } = h; println(f"  rd{a.id}")
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+
+fn main() {
+  println("loc");     loc()
+  println("iflet");   iflet()
+  println("errs");    errs()
+  println("noread");  noread()
+  println("solo");    solo()
+  println("rename");  rename()
+  println("unused");  unused()
+  println("fcall");   fcall()
+  println("flit");    flit()
+  println("fcallu");  fcallu()
+  println("fstru");   fstru()
+  println("fstr");    fstr()
+  println("wloc");    wloc()
+  println("wunused"); wunused()
+  println("wfcall");  wfcall()
+  println("wfcallu"); wfcallu()
+  println("param");   param()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"loc
+  rd1
+dR1/t1
+  ok101
+dR101/t101
+iflet
+  rd2
+dR2/t2
+  ok102
+dR102/t102
+errs
+  rd3
+dR3/t3
+  er103
+dR103/t103
+noread
+  rd4
+dR4/t4
+  ok
+dR104/t104
+solo
+  ok105
+dR105/t105
+rename
+  rd6
+dR6/t6
+  ok106
+dR106/t106
+unused
+dR107/t107
+  rd7
+dR7/t7
+fcall
+  rd8
+dR8/t8
+  ok108
+dR108/t108
+flit
+  rd9
+dR9/t9
+  ok109
+dR109/t109
+fcallu
+dR110/t110
+  rd10
+dR10/t10
+fstru
+  rd11
+dR11/t11
+fstr
+  rd12
+dR12/t12
+  oks112
+wloc
+  rd13
+dR13/t13
+  ok113
+dW113/x113y113
+wunused
+dW114/x114y114
+  rd14
+dR14/t14
+wfcall
+  rd15
+dR15/t15
+  ok115
+dW115/x115y115
+wfcallu
+dW116/x116y116
+  rd16
+dR16/t16
+param
+  rd17
+  ok117
+dR117/t117
+dR17/t17
+done
+"#
+            )
+        );
+    }
+
+    /// B-2026-09-04-1's probe — moving a `Result[<inline struct>, _]` local, or a
+    /// destructure leaf over one, by REBIND or as a match arm's TAIL VALUE.
+    ///
+    /// No destructure is needed: a plain `let r: Result[R, String] = Result.Ok(..)`
+    /// aborted on `let c = r;` (`rebind`, glibc `free(): double free detected in
+    /// tcache 2` on an ordinary build) and ran a phantom body over freed memory on
+    /// `let g = match r { Ok(x) => x, .. }` (`esc`, `escerr`, `esciflet`: `dR3/`
+    /// with an empty tag, then the real line). `R { id, tag: String }` is four words,
+    /// INLINE in a five-word `Result` and BOXED in a three-word `Option` — the axis
+    /// every neighbouring control sits on: `optesc` (boxed), `strreb` / `stresc`
+    /// (direct String), `call` (the arg site retracts), `inner` (the `let` site
+    /// retracts). `treb` / `tesc` / `freb` / `fesc` are the tuple and struct-field
+    /// leaves over the same type; `trebu` is the rebind whose destination is never
+    /// read (the leak the first cut of this fix opened). The `w*` cells are the
+    /// seven-word boxed twin of each.
+    #[test]
+    fn e2e_inline_struct_result_transfer_disarms_its_source() {
+        let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
+struct HoRes { a: R, b: Result[R, String] }
+struct HoW { a: R, b: Result[W, String] }
+fn eat(x: R) { println(f"  eat{x.id}") }
+
+fn rebind()   { let r: Result[R, String] = Result.Ok(mk(1)); let c = r;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn rebindu()  { let r: Result[R, String] = Result.Ok(mk(2)); let c = r; println("  m") }
+fn esc()      { let r: Result[R, String] = Result.Ok(mk(3)); let g = match r { Result.Ok(x) => x, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn escerr()   { let r: Result[String, R] = Result.Err(mk(4)); let g = match r { Result.Ok(x) => mk(0), Result.Err(e) => e }; println(f"  got{g.id}") }
+fn esciflet() { let r: Result[R, String] = Result.Ok(mk(5)); let g = if let Result.Ok(x) = r { x } else { mk(0) }; println(f"  got{g.id}") }
+fn call()     { let r: Result[R, String] = Result.Ok(mk(6)); match r { Result.Ok(x) => eat(x), Result.Err(e) => println(f"  er{e}") } }
+fn inner()    { let r: Result[R, String] = Result.Ok(mk(7)); match r { Result.Ok(x) => { let g = x; println(f"  got{g.id}") }, Result.Err(e) => println(f"  er{e}") } }
+fn strreb()   { let r: Result[String, String] = Result.Ok("s8"); let c = r;
+                match c { Result.Ok(x) => println(f"  ok{x}"), Result.Err(e) => println(f"  er{e}") } }
+fn stresc()   { let r: Result[String, i64] = Result.Ok("s9"); let g = match r { Result.Ok(x) => x, Result.Err(e) => "z" }; println(f"  got{g}") }
+fn optesc()   { let r: Option[R] = Option.Some(mk(10)); let g = match r { Option.Some(x) => x, Option.None => mk(0) }; println(f"  got{g.id}") }
+fn treb()     { let t: (R, Result[R, String]) = (mk(11), Result.Ok(mk(111))); let (a, b) = t; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn trebu()    { let t: (R, Result[R, String]) = (mk(12), Result.Ok(mk(112))); let (a, b) = t; let c = b; println("  m") }
+fn tesc()     { let t: (R, Result[R, String]) = (mk(13), Result.Ok(mk(113))); let (a, b) = t;
+                let g = match b { Result.Ok(x) => x, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn freb()     { let h = HoRes { a: mk(14), b: Result.Ok(mk(114)) }; let HoRes { a, b } = h; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn fesc()     { let h = HoRes { a: mk(15), b: Result.Ok(mk(115)) }; let HoRes { a, b } = h;
+                let g = match b { Result.Ok(x) => x, Result.Err(e) => mk(0) }; println(f"  got{g.id}") }
+fn wreb()     { let r: Result[W, String] = Result.Ok(mkw(16)); let c = r;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wesc()     { let r: Result[W, String] = Result.Ok(mkw(17)); let g = match r { Result.Ok(x) => x, Result.Err(e) => mkw(0) }; println(f"  got{g.id}") }
+fn wtreb()    { let t: (R, Result[W, String]) = (mk(18), Result.Ok(mkw(118))); let (a, b) = t; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wfreb()    { let h = HoW { a: mk(19), b: Result.Ok(mkw(119)) }; let HoW { a, b } = h; let c = b;
+                match c { Result.Ok(x) => println(f"  ok{x.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn wfesc()    { let h = HoW { a: mk(20), b: Result.Ok(mkw(120)) }; let HoW { a, b } = h;
+                let g = match b { Result.Ok(x) => x, Result.Err(e) => mkw(0) }; println(f"  got{g.id}") }
+
+fn main() {
+  println("rebind");   rebind()
+  println("rebindu");  rebindu()
+  println("esc");      esc()
+  println("escerr");   escerr()
+  println("esciflet"); esciflet()
+  println("call");     call()
+  println("inner");    inner()
+  println("strreb");   strreb()
+  println("stresc");   stresc()
+  println("optesc");   optesc()
+  println("treb");     treb()
+  println("trebu");    trebu()
+  println("tesc");     tesc()
+  println("freb");     freb()
+  println("fesc");     fesc()
+  println("wreb");     wreb()
+  println("wesc");     wesc()
+  println("wtreb");    wtreb()
+  println("wfreb");    wfreb()
+  println("wfesc");    wfesc()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"rebind
+  ok1
+dR1/t1
+rebindu
+dR2/t2
+  m
+esc
+  got3
+dR3/t3
+escerr
+  got4
+dR4/t4
+esciflet
+  got5
+dR5/t5
+call
+  eat6
+dR6/t6
+inner
+  got7
+dR7/t7
+strreb
+  oks8
+stresc
+  gots9
+optesc
+  got10
+dR10/t10
+treb
+dR11/t11
+  ok111
+dR111/t111
+trebu
+dR12/t12
+dR112/t112
+  m
+tesc
+dR13/t13
+  got113
+dR113/t113
+freb
+dR14/t14
+  ok114
+dR114/t114
+fesc
+dR15/t15
+  got115
+dR115/t115
+wreb
+  ok16
+dW16/x16y16
+wesc
+  got17
+dW17/x17y17
+wtreb
+dR18/t18
+  ok118
+dW118/x118y118
+wfreb
+dR19/t19
+  ok119
+dW119/x119y119
+wfesc
+dR20/t20
+  got120
+dW120/x120y120
+done
+"#
+            )
+        );
+    }
+
+    /// B-2026-09-04-1's probe (B-2026-09-03-22 follow-up) — a `Result` tuple
+    /// destructure leaf whose consuming arm MOVES the binding out.
+    ///
+    /// The B-2026-09-03-22 suppressor zeroed one word of the leaf's payload — the
+    /// box pointer, for the seven-word payload its own fixture used — and `R { id,
+    /// tag: String }` is four words, laid inline, so `id` was cleared and the
+    /// String's `{ptr,len,cap}` stayed live: `call`, `inner` and `esc` all aborted
+    /// with glibc's double-free on an ordinary build; `read` was clean only because
+    /// the borrow classifier skips the suppressor for a read-only arm. `errc` is
+    /// the `Err` side; the `w*` cells are the boxed twin, which was always correct
+    /// and pins that the wider zero does not disturb it.
+    #[test]
+    fn e2e_result_agg_leaf_moving_arm_zeroes_the_whole_payload() {
+        let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"t{n}" }; }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+fn mkw(n: i64) -> W { return W { id: n, x: f"x{n}", y: f"y{n}" }; }
+fn eat(x: R) { println(f"  eat{x.id}") }
+fn eatw(w: W) { println(f"  eatw{w.id}") }
+
+fn read()   { let t: (R, Result[R, String]) = (mk(1), Result.Ok(mk(101))); let (a, b) = t;
+              match b { Result.Ok(r) => println(f"  ok{r.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn call()   { let t: (R, Result[R, String]) = (mk(2), Result.Ok(mk(102))); let (a, b) = t;
+              match b { Result.Ok(r) => eat(r), Result.Err(e) => println(f"  er{e}") } }
+fn inner()  { let t: (R, Result[R, String]) = (mk(3), Result.Ok(mk(103))); let (a, b) = t;
+              match b { Result.Ok(r) => { let g = r; println(f"  got{g.id}") }, Result.Err(e) => println(f"  er{e}") } }
+fn esc()    { let t: (R, Result[R, String]) = (mk(4), Result.Ok(mk(104))); let (a, b) = t;
+              let g = match b { Result.Ok(r) => r, Result.Err(_) => mk(0) }; println(f"  got{g.id}") }
+fn errc()   { let t: (R, Result[String, R]) = (mk(5), Result.Err(mk(105))); let (a, b) = t;
+              match b { Result.Ok(s) => println(f"  ok{s}"), Result.Err(r) => eat(r) } }
+fn wread()  { let t: (R, Result[W, String]) = (mk(6), Result.Ok(mkw(106))); let (a, b) = t;
+              match b { Result.Ok(w) => println(f"  ok{w.id}"), Result.Err(e) => println(f"  er{e}") } }
+fn winner() { let t: (R, Result[W, String]) = (mk(7), Result.Ok(mkw(107))); let (a, b) = t;
+              match b { Result.Ok(w) => { let g = w; println(f"  got{g.id}") }, Result.Err(e) => println(f"  er{e}") } }
+fn wesc()   { let t: (R, Result[W, String]) = (mk(8), Result.Ok(mkw(108))); let (a, b) = t;
+              let g = match b { Result.Ok(w) => w, Result.Err(_) => mkw(0) }; println(f"  got{g.id}") }
+
+fn main() {
+  println("read");   read()
+  println("call");   call()
+  println("inner");  inner()
+  println("esc");    esc()
+  println("errc");   errc()
+  println("wread");  wread()
+  println("winner"); winner()
+  println("wesc");   wesc()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"read
+dR1/t1
+  ok101
+dR101/t101
+call
+dR2/t2
+  eat102
+dR102/t102
+inner
+dR3/t3
+  got103
+dR103/t103
+esc
+dR4/t4
+  got104
+dR104/t104
+errc
+dR5/t5
+  eat105
+dR105/t105
+wread
+dR6/t6
+  ok106
+dW106/x106y106
+winner
+dR7/t7
+  got107
+dW107/x107y107
+wesc
+dR8/t8
+  got108
+dW108/x108y108
+done
+"#
+            )
+        );
+    }
+
     /// B-2026-09-03-22 — A `Result[O, E]` DESTRUCTURE LEAF OWNS ITS PAYLOAD'S
     /// `Drop` BODY.
     ///
@@ -14247,6 +14668,15 @@ done
     /// the fix exactly as `loc` did, so the phantom was never about which leaf
     /// came first. `nest` moves the destructure into an inner block, where the
     /// husk had drained at the block\'s exit rather than at the statement.
+    ///
+    /// B-2026-09-04-1 — the "missing body is agreed-and-absent on both and stays
+    /// that way" sentence above is now history: the leaf owns the body on every
+    /// source shape here (`loc`, `box`, `awild`, `nest`, `call`, `lit` each gain
+    /// their `dR1xx` line, at the destructure — the unused leaf's last use). The
+    /// phantom this fixture was written for stays gone, which is what `wild` and
+    /// `param` (unchanged) still pin. `awild` is pinned per backend: both run `a`'s
+    /// discard body and `b5`'s body at the same statement, in opposite sequence —
+    /// filed as its own row, see `test_struct_field_destructure_result_leaf_leaves_no_husk_body`.
     #[test]
     fn e2e_struct_field_destructure_result_leaf_leaves_no_husk_body() {
         let Some(out) = run_program(
@@ -14315,9 +14745,11 @@ fn main() {
         assert_eq!(
             out,
             r#"loc
+dR101/t101
   rd1
 dR1/t1
 box
+dQ102/u102
   rd2
 dQ2/u2
 err
@@ -14328,9 +14760,11 @@ dR104/t104
   rd4
 dR4/t4
 awild
+dR105/t105
 dR5/t5
   rb5
 nest
+dR106/t106
   in6
 dR6/t6
   outer
@@ -14339,9 +14773,11 @@ param
 dR107/t107
 dR7/t7
 call
+dR108/t108
   rd8
 dR8/t8
 lit
+dR109/t109
   rd9
 dR9/t9
 done
@@ -14397,6 +14833,11 @@ done
     /// spellings still run it. Before this fix the compiled side ran it for the
     /// projection spelling alone; converging on the sibling removes that, which
     /// is a backend split closing rather than a body being lost.
+    ///
+    /// B-2026-09-04-1 — `local` (the owned-local source) now runs the leaf's body,
+    /// `dR102`, at the destructure. The PROJECTION cells (`res`, `two`, `live`) are
+    /// unchanged and still agreed-absent: the compiled leaf there is a view the
+    /// source's drop owns, and that family keeps its own row.
     #[test]
     fn e2e_projection_source_struct_destructure_hands_each_leaf_its_body() {
         let Some(out) = run_program(
@@ -14446,6 +14887,7 @@ fn main() {
   rd1
 dR1/t1
 local
+dR102/t102
   rd2
 dR2/t2
 opt
