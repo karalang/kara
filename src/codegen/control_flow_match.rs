@@ -11666,22 +11666,32 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_result_binding_move_impl(value, false, false);
     }
 
-    /// B-2026-09-04-10 — the WHOLE-VALUE REBIND entry point (`let q = o;`),
-    /// which additionally disarms a source registered through
+    /// B-2026-09-04-10 — the OWNERSHIP-TRANSFER entry point, which
+    /// additionally disarms a source registered through
     /// `track_inline_option_agg_payload_var` (a boxed user struct/enum payload,
     /// recorded in `inline_option_agg_payload_vars`).
     ///
     /// SEPARATE from the plain entry point above rather than folded into it,
-    /// and the difference is measured. Every other caller of that one is a
-    /// CONSUMING position — a call argument, a struct-literal field init, a
-    /// method receiver, a channel send — and for this payload shape those do
-    /// NOT transfer ownership: the caller's slot stays the payload's owner and
-    /// runs its `Drop` body at scope exit. Admitting the set there silently
-    /// LOSES that body (measured: `eat(o)` over `(R, Option[R])` printed the
-    /// payload's `dR114` before and nothing after). A rebind and a return are
-    /// the two positions where the transfer is real, so they are the two that
-    /// get the wider disarm.
-    pub(super) fn suppress_inline_option_agg_binding_rebind(&self, value: &Expr) {
+    /// and the difference is measured. Its callers split into two kinds, and
+    /// for THIS payload shape they behave oppositely:
+    ///
+    ///  * A TRANSFER — a whole-value rebind (`let q = o;`), a `return`, or a
+    ///    move into a struct-literal or enum-struct-variant FIELD. The
+    ///    destination owns the box afterwards, so the source's own free must
+    ///    go; leaving it armed frees the box twice
+    ///    (`free(): double free detected in tcache 2`, measured on
+    ///    `let we = W { p: o };`).
+    ///  * A CONSUMING position that does NOT transfer — a call argument, a
+    ///    method receiver, a channel send. The caller's slot stays the
+    ///    payload's owner and runs its `Drop` body at scope exit, so disarming
+    ///    it silently LOSES that body (measured: `eat(o)` over
+    ///    `(R, Option[R])` printed the payload's `dR114` before and nothing
+    ///    after).
+    ///
+    /// Renamed from `..._rebind` (B-2026-09-04-9): the field-init sites are
+    /// transfers too, which the rebind-only name would have made it awkward to
+    /// say.
+    pub(super) fn suppress_inline_option_agg_binding_transfer(&self, value: &Expr) {
         self.suppress_inline_option_result_binding_move_impl(value, false, true);
     }
 

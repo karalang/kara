@@ -6715,7 +6715,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Boxed / inline-heap `Option`/`Result` binding moved whole into
                 // this shared-enum struct-variant field — mirrors the
                 // struct-literal field-init paths (`compile_struct_init`).
-                self.suppress_inline_option_result_binding_move(&init.value);
+                self.suppress_inline_option_agg_binding_transfer(&init.value);
                 if let ExprKind::Identifier(n) = &init.value.kind {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
@@ -6774,7 +6774,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Boxed / inline-heap `Option`/`Result` binding moved whole into
             // this non-shared enum struct-variant field — mirrors the
             // struct-literal field-init paths (`compile_struct_init`).
-            self.suppress_inline_option_result_binding_move(&init.value);
+            self.suppress_inline_option_agg_binding_transfer(&init.value);
             if let ExprKind::Identifier(n) = &init.value.kind {
                 let n = n.clone();
                 self.suppress_map_cleanup_for_tail_identifier(&n);

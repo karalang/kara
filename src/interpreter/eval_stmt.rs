@@ -5392,10 +5392,15 @@ impl<'a> super::Interpreter<'a> {
         }
         match &value.kind {
             ExprKind::Tuple(items) => {
-                let tes = items
-                    .iter()
-                    .map(|e| self.expr_instantiation_te(e))
-                    .collect();
+                // B-2026-09-04-9 — through `destructure_elem_te`, so a NESTED
+                // tuple element keeps its shape here too. Without it the
+                // PLACE-source spelling of the nested destructure
+                // (`let t = ((mk(6), Option.Some(mk(106))), 7);
+                // let ((_, o), n) = t;`) read its element back as an opaque
+                // `None` and lost the leaf, while the direct-literal spelling
+                // of the same statement was correct — the two differ only in
+                // which table the element type is read out of.
+                let tes = items.iter().map(|e| self.destructure_elem_te(e)).collect();
                 self.tuple_var_elem_tes.insert(name.to_string(), tes);
             }
             ExprKind::Identifier(src) => {
@@ -5436,12 +5441,23 @@ impl<'a> super::Interpreter<'a> {
         }
         match &value.kind {
             ExprKind::Identifier(src) => self.tuple_var_elem_tes.get(src.as_str()).cloned(),
-            ExprKind::Tuple(items) => Some(
-                items
-                    .iter()
-                    .map(|e| self.expr_instantiation_te(e))
-                    .collect(),
-            ),
+            // B-2026-09-04-9 — a NESTED tuple literal element keeps its shape.
+            // `expr_instantiation_te` answers for a value expression and has
+            // nothing to say about `(mk(2), Option.Some(mk(102)))`, so the
+            // element came back `None` and the nested-pattern recursion in
+            // `record_destructure_optres_payload_tes` had no type to descend
+            // into — the leaf's payload body ran on all three compiled surfaces
+            // and on none here.
+            //
+            // An unresolvable SUB-element becomes the empty path rather than
+            // collapsing the whole tuple to `None`: the recursion looks up
+            // leaves positionally, so one unnameable sibling must not cost the
+            // others their type. The empty path names nothing and is filtered
+            // out downstream, which is the same fail-closed convention
+            // codegen's element inference uses.
+            ExprKind::Tuple(items) => {
+                Some(items.iter().map(|e| self.destructure_elem_te(e)).collect())
+            }
             ExprKind::FieldAccess { object, field } => {
                 let obj = self.eval_place_type_name(object)?;
                 let fields = self.program.items.iter().find_map(|item| match item {
@@ -5456,6 +5472,32 @@ impl<'a> super::Interpreter<'a> {
             }
             _ => None,
         }
+    }
+
+    /// B-2026-09-04-9 — one tuple-literal element's type for
+    /// [`Self::destructure_source_elem_tes`], preserving a NESTED tuple's shape
+    /// so the leaf recursion can descend into it.
+    fn destructure_elem_te(&self, e: &Expr) -> Option<TypeExpr> {
+        if let ExprKind::Tuple(inner) = &e.kind {
+            let inner_tes: Vec<TypeExpr> = inner
+                .iter()
+                .map(|x| {
+                    self.destructure_elem_te(x).unwrap_or(TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec![String::new()],
+                            generic_args: None,
+                            span: x.span,
+                        }),
+                        span: x.span,
+                    })
+                })
+                .collect();
+            return Some(TypeExpr {
+                kind: TypeKind::Tuple(inner_tes),
+                span: e.span,
+            });
+        }
+        self.expr_instantiation_te(e)
     }
 
     /// B-2026-09-03-15 — the struct NAME a place expression's current value
@@ -5526,18 +5568,47 @@ impl<'a> super::Interpreter<'a> {
                 let Some(elem_tes) = self.destructure_source_elem_tes(ty, value) else {
                     return;
                 };
-                pats.iter()
-                    .enumerate()
-                    .filter_map(|(idx, pat)| {
-                        let PatternKind::Binding(leaf) = &pat.kind else {
-                            return None;
+                // B-2026-09-04-9 — RECURSE into a nested tuple sub-pattern
+                // (`let ((_, o), n) = ((mk(2), Option.Some(mk(102))), 3);`).
+                // Taking only the top level answered that shape differently
+                // from the compiled backends, whose nested-pattern recursion
+                // reaches the same leaf: the payload's body ran on all three
+                // compiled surfaces and on none here.
+                //
+                // The WILDCARD sibling was already correct, through a different
+                // path — `run_discarded_destructure_user_drops`' `collect`
+                // recurses — which is what made the gap look like a binding /
+                // wildcard asymmetry rather than a depth one.
+                //
+                // Descends only where BOTH sides are tuples: an element whose
+                // recorded type is not a tuple cannot name the sub-leaves, and
+                // guessing one would register a payload walk against the wrong
+                // type.
+                fn collect_leaves(
+                    pats: &[Pattern],
+                    tes: &[Option<TypeExpr>],
+                    out: &mut Vec<(String, TypeExpr)>,
+                ) {
+                    for (idx, pat) in pats.iter().enumerate() {
+                        let Some(Some(te)) = tes.get(idx) else {
+                            continue;
                         };
-                        match elem_tes.get(idx) {
-                            Some(Some(te)) => Some((leaf.clone(), te.clone())),
-                            _ => None,
+                        match &pat.kind {
+                            PatternKind::Binding(leaf) => out.push((leaf.clone(), te.clone())),
+                            PatternKind::Tuple(inner) => {
+                                if let TypeKind::Tuple(inner_tes) = &te.kind {
+                                    let inner_tes: Vec<Option<TypeExpr>> =
+                                        inner_tes.iter().cloned().map(Some).collect();
+                                    collect_leaves(inner, &inner_tes, out);
+                                }
+                            }
+                            _ => {}
                         }
-                    })
-                    .collect()
+                    }
+                }
+                let mut out = Vec::new();
+                collect_leaves(pats, &elem_tes, &mut out);
+                out
             }
             PatternKind::Struct { path, fields, .. } => {
                 let Some(sname) = path

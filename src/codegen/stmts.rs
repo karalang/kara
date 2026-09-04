@@ -7510,7 +7510,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // `boxed_enum_payload_vars` membership, so a
                                 // non-boxed initializer is untouched.
                                 //
-                                // B-2026-09-04-10 — the REBIND entry point, so
+                                // B-2026-09-04-10 — the TRANSFER entry point, so
                                 // the disarm also covers a source registered
                                 // through `track_inline_option_agg_payload_var`
                                 // (a TUPLE destructure leaf over
@@ -7523,7 +7523,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // positions that share the plain entry point do
                                 // not, for this shape — see that entry point's
                                 // doc for the measurement.
-                                self.suppress_inline_option_agg_binding_rebind(value);
+                                self.suppress_inline_option_agg_binding_transfer(value);
                             }
                         }
                     }
@@ -15053,10 +15053,76 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-09-04-9 — an `Option[P]` leaf, the FRESH-source
+                    // twin of the arm B-2026-09-03-15 added to
+                    // `place_source_tuple_leaf_cleanups`. The call below is
+                    // keyed by NAME
+                    // (`emit_enum_payload_user_drop_bodies_fn("Option")` has no
+                    // variant to walk and returns `None`), so the payload's
+                    // user `Drop` body was owned by nobody:
+                    // `let (_, o) = (mk(32), Option.Some(mk(132)));` ran `dR32`
+                    // and never `dR132` on all three compiled surfaces, against
+                    // both under `--interp`. B-2026-09-03-39 gave this leaf its
+                    // element TYPE, which is what makes the walker buildable at
+                    // all; this is the owner to hang it on.
+                    //
+                    // BOTH HALVES, and the memory half is not optional. Arming
+                    // a `ContainerElemBodies` action stops whoever was freeing
+                    // the boxed payload, so bodies alone leak 76 bytes per
+                    // occurrence (measured under LSan). The peer that owns this
+                    // shape is `track_inline_option_agg_payload_var` — the same
+                    // one -15's place-source arm uses, and the same one the
+                    // struct-FIELD destructure uses through
+                    // `option_payload_struct_or_enum_drop_ok`.
+                    //
+                    // THIS COULD NOT LAND UNTIL B-2026-09-04-10 DID. Registering
+                    // that owner made every leaf that stays put balanced and
+                    // DOUBLE-FREED the one that moves whole (`let q = o;`,
+                    // `return o`) — because the move-disarm did not know this
+                    // tracker's set. -10 taught it, so the owner is safe to
+                    // register here now.
+                    //
+                    // `Option` only. `Result` has no
+                    // `track_inline_option_agg_payload_var` peer, so admitting
+                    // it would hand the leaf a body with no owner and leak —
+                    // the trade -15 refused on its own arm. That spelling is
+                    // agreed-wrong on all four surfaces today (B-2026-09-03-22)
+                    // rather than split, so it loses nothing by waiting.
+                    let optres_te = elem_tes
+                        .and_then(|tes| tes.get(idx))
+                        .filter(|te| {
+                            matches!(&te.kind, TypeKind::Path(p)
+                                if p.segments.last().map(String::as_str) == Some("Option"))
+                        })
+                        .cloned();
                     if let Some(slot) = self.variables.get(name.as_str()).copied() {
                         // A fresh owned temp has no named source to hold a
                         // competing body, so the leaf always takes it.
                         self.track_destructure_leaf_cleanup(name, slot.ptr, true);
+                        if let Some(te) = optres_te {
+                            if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&te)
+                            {
+                                // MEMORY FIRST, then bodies — the frame drains
+                                // LIFO, so registering memory first is what
+                                // makes the body run BEFORE the payload it
+                                // reads is freed.
+                                if Self::option_payload_te(&te).is_some_and(|pt| {
+                                    self.option_payload_struct_or_enum_drop_ok(&pt)
+                                }) {
+                                    self.track_inline_option_agg_payload_var(name, slot.ptr, &te);
+                                }
+                                self.var_types
+                                    .optres_var_payload_tes
+                                    .insert(name.clone(), te.clone());
+                                self.track_user_drop_var_with_fn(
+                                    "",
+                                    name,
+                                    slot.ptr,
+                                    bodies,
+                                    UserDropKind::ContainerElemBodies,
+                                );
+                            }
+                        }
                     }
                 }
                 // `let (a, _) = pair()` — the discarded element still owns its

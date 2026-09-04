@@ -13477,6 +13477,165 @@ done
         );
     }
 
+    /// B-2026-09-04-9 — A FRESH TUPLE SOURCE'S `Option` BINDING LEAF OWNS ITS
+    /// PAYLOAD'S `Drop` BODY.
+    ///
+    /// B-2026-09-03-39 gave this leaf its element TYPE, which is what makes the
+    /// payload walker buildable; what it still lacked was an owner to hang the
+    /// walker on. The wildcard sibling took the element whole
+    /// (`free_memory: true`) and was fixed there; the binding leaf keeps its
+    /// memory where `track_destructure_leaf_cleanup` put it, so it needs the
+    /// `track_inline_option_agg_payload_var` owner as well — bodies alone leak
+    /// 76 bytes per occurrence, because arming a `ContainerElemBodies` action
+    /// stops whoever was freeing the boxed payload.
+    ///
+    /// IT COULD NOT LAND UNTIL B-2026-09-04-10 DID. Registering that owner
+    /// balanced every leaf that stays put and DOUBLE-FREED the one that moves
+    /// whole, because the move-disarm did not know this tracker's set. -10
+    /// taught it, and this fix then also had to widen that disarm to the
+    /// struct-literal and enum-struct-variant FIELD inits — a field takes
+    /// ownership, and `let wm = W { p: om };` aborted with `free(): double free
+    /// detected in tcache 2` until it did. A call ARGUMENT is the counter-case
+    /// and stays on the old entry point: it does not transfer, so disarming
+    /// there loses the body instead (`arg` is the cell that proves it).
+    ///
+    /// EIGHT CELLS WERE RED ON THE COMPILED BACKENDS and the row recorded two.
+    /// `bind` and `bindsib` are the row's own; `slot0` puts the `Option` in
+    /// element 0, `nested` reaches the leaf through a nested pattern, `loopb`
+    /// runs it twice, `consume` hands the payload to a `match` arm, and `arg`
+    /// passes it to a function. Pre-fix, this exact program loses `dR132`,
+    /// `dR148`, `dR72`, `dR102`, both `dR164`s, `dR152` and `dR158`.
+    ///
+    /// TWO CELLS WERE RED ON THE INTERPRETER, which is why its twin is not a
+    /// no-op here as it usually is: `nested` and `nestpl` lost `dR102` and
+    /// `dR106` under `--interp` while all three compiled surfaces ran them
+    /// once the codegen half landed. `record_destructure_optres_payload_tes`
+    /// walked only the TOP level of a tuple pattern, and the element types it
+    /// reads flattened a nested tuple to `None`. Both halves are fixed, so the
+    /// twins share one string again.
+    ///
+    /// THE CONTROLS COVER THE OPPOSITE FAILURE — a body running twice, or one
+    /// starting where none is due. `moved`, `ret` and `field` were already
+    /// correct because the DESTINATION owns the payload afterwards and runs the
+    /// body; `instr` is an inline `Option[String]` with no user `Drop`;
+    /// `plainel` is a struct element; `none` has no payload; `wildcd` is the
+    /// wildcard leaf B-2026-09-03-39 fixed.
+    ///
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_fresh_tuple_option_binding_leaf_owns_its_payload_body`, pinned to
+    /// the same string.
+    #[test]
+    fn e2e_fresh_tuple_option_binding_leaf_owns_its_payload_body() {
+        let src = r#"struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct W { p: Option[R] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn give() -> Option[R] { let (_, ob) = (mk(56), Option.Some(mk(156))); return ob }
+
+fn bind()   { let (_, oc) = (mk(32), Option.Some(mk(132))); println("  b") }
+fn bindsib(){ let (ad, bd) = (mk(48), Option.Some(mk(148))); println(f"  rd{ad.id}") }
+fn slot0()  { let (oe, ke) = (Option.Some(mk(72)), 5); println(f"  k{ke}") }
+fn nested() { let ((_, of), nf) = ((mk(2), Option.Some(mk(102))), 3); println(f"  n{nf}") }
+fn nestpl() { let tg = ((mk(6), Option.Some(mk(106))), 7); let ((_, og), ng) = tg; println(f"  p{ng}") }
+fn loopb()  { let mut i = 0; while i < 2 { let (_, oh) = (mk(64), Option.Some(mk(164))); i = i + 1; } println("  l") }
+fn consume(){ let (_, oi) = (mk(52), Option.Some(mk(152))); match oi { Option.Some(ri) => { println(f"  c{ri.id}") }, Option.None => { println("  z") } } }
+fn moved()  { let (_, oj) = (mk(54), Option.Some(mk(154))); let qj = oj; println(f"  m{qj.is_some()}") }
+fn ret()    { let zk = give(); println(f"  r{zk.is_some()}") }
+fn arg()    { let (_, ol) = (mk(58), Option.Some(mk(158))); println(f"  a{eat(ol)}") }
+fn field()  { let (_, om) = (mk(76), Option.Some(mk(176))); let wm = W { p: om }; println(f"  f{wm.p.is_some()}") }
+fn instr()  { let (_, on) = (mk(60), Option.Some(f"q60")); println("  s") }
+fn none()   { let np: Option[R] = Option.None; let (_, op) = (mk(62), np); println("  o") }
+fn plainel(){ let (_, oq) = (mk(9), mk(109)); println("  q") }
+fn wildcd() { let (_, _) = (mk(31), Option.Some(mk(131))); println("  w") }
+
+fn main() {
+  println("bind");    bind()
+  println("bindsib"); bindsib()
+  println("slot0");   slot0()
+  println("nested");  nested()
+  println("nestpl");  nestpl()
+  println("loopb");   loopb()
+  println("consume"); consume()
+  println("moved");   moved()
+  println("ret");     ret()
+  println("arg");     arg()
+  println("field");   field()
+  println("instr");   instr()
+  println("none");    none()
+  println("plainel"); plainel()
+  println("wildcd");  wildcd()
+  println("done")
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                r#"bind
+dR32:s32:2
+dR132:s132:2
+  b
+bindsib
+dR148:s148:2
+  rd48
+dR48:s48:2
+slot0
+dR72:s72:2
+  k5
+nested
+dR2:s2:2
+dR102:s102:2
+  n3
+nestpl
+dR6:s6:2
+dR106:s106:2
+  p7
+loopb
+dR64:s64:2
+dR164:s164:2
+dR64:s64:2
+dR164:s164:2
+  l
+consume
+dR52:s52:2
+  c152
+dR152:s152:2
+moved
+dR54:s54:2
+  mtrue
+dR154:s154:2
+ret
+dR56:s56:2
+  rtrue
+dR156:s156:2
+arg
+dR58:s58:2
+  a158
+dR158:s158:2
+field
+dR76:s76:2
+  ftrue
+dR176:s176:2
+instr
+dR60:s60:2
+  s
+none
+dR62:s62:2
+  o
+plainel
+dR9:s9:2
+dR109:s109:2
+  q
+wildcd
+dR31:s31:2
+dR131:s131:2
+  w
+done
+"#
+            )
+        );
+    }
+
     /// B-2026-09-04-10 — AN `Option[<struct>]` DESTRUCTURE LEAF THAT IS MOVED
     /// WHOLE MUST DISARM ITS SOURCE.
     ///

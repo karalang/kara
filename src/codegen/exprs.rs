@@ -3552,7 +3552,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Boxed / inline-heap `Option`/`Result` binding moved whole
                     // into this shared-struct field — see the non-shared peer
                     // below for the rationale.
-                    self.suppress_inline_option_result_binding_move(&field_init.value);
+                    self.suppress_inline_option_agg_binding_transfer(&field_init.value);
                     // B-2026-08-04-2 — see the shared-struct branch above.
                     self.suppress_boxed_payload_view_move(&field_init.value);
                     // B-2026-08-04-2 — a boxed payload VIEW moved into this
@@ -3774,7 +3774,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // body, .. }` for `let mut body = Some(parse_block())` frees the
                 // boxed `Block` at the builder's scope exit while the returned
                 // node still references it → UAF (selfhost slice 3c-iv).
-                self.suppress_inline_option_result_binding_move(&field_init.value);
+                self.suppress_inline_option_agg_binding_transfer(&field_init.value);
                 // B-2026-08-04-2 — see the shared-struct branch above.
                 self.suppress_boxed_payload_view_move(&field_init.value);
                 // Map/Set sibling of the Vec suppression (see the shared-struct

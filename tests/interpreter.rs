@@ -58371,3 +58371,127 @@ done
 "#
     );
 }
+
+/// B-2026-09-04-9 — the INTERPRETER half of
+/// `e2e_fresh_tuple_option_binding_leaf_owns_its_payload_body`, pinned to the
+/// same string.
+///
+/// UNUSUALLY FOR THIS FAMILY, this side was not already correct. Two of the
+/// fifteen cells were red HERE and green on all three compiled surfaces once
+/// the codegen half landed: `nested` and `nestpl` lost their payload's body,
+/// because `record_destructure_optres_payload_tes` walked only the top level of
+/// a tuple pattern and the element types it reads flattened a nested tuple to
+/// `None`. The wildcard sibling of the same nesting was correct through a
+/// different path, which is what made the gap look like a binding/wildcard
+/// asymmetry rather than a depth one.
+///
+/// So this file is not merely the invariant here — it is half the regression.
+#[test]
+fn test_fresh_tuple_option_binding_leaf_owns_its_payload_body() {
+    let out = run(r#"struct R { id: i64, s: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}:{self.s}:{self.xs.len()}") } }
+struct W { p: Option[R] }
+fn mk(n: i64) -> R { return R { id: n, s: f"s{n}", xs: [n, n] }; }
+fn eat(xa: Option[R]) -> i64 { match xa { Option.Some(ra) => { ra.id }, Option.None => { 0 } } }
+fn give() -> Option[R] { let (_, ob) = (mk(56), Option.Some(mk(156))); return ob }
+
+fn bind()   { let (_, oc) = (mk(32), Option.Some(mk(132))); println("  b") }
+fn bindsib(){ let (ad, bd) = (mk(48), Option.Some(mk(148))); println(f"  rd{ad.id}") }
+fn slot0()  { let (oe, ke) = (Option.Some(mk(72)), 5); println(f"  k{ke}") }
+fn nested() { let ((_, of), nf) = ((mk(2), Option.Some(mk(102))), 3); println(f"  n{nf}") }
+fn nestpl() { let tg = ((mk(6), Option.Some(mk(106))), 7); let ((_, og), ng) = tg; println(f"  p{ng}") }
+fn loopb()  { let mut i = 0; while i < 2 { let (_, oh) = (mk(64), Option.Some(mk(164))); i = i + 1; } println("  l") }
+fn consume(){ let (_, oi) = (mk(52), Option.Some(mk(152))); match oi { Option.Some(ri) => { println(f"  c{ri.id}") }, Option.None => { println("  z") } } }
+fn moved()  { let (_, oj) = (mk(54), Option.Some(mk(154))); let qj = oj; println(f"  m{qj.is_some()}") }
+fn ret()    { let zk = give(); println(f"  r{zk.is_some()}") }
+fn arg()    { let (_, ol) = (mk(58), Option.Some(mk(158))); println(f"  a{eat(ol)}") }
+fn field()  { let (_, om) = (mk(76), Option.Some(mk(176))); let wm = W { p: om }; println(f"  f{wm.p.is_some()}") }
+fn instr()  { let (_, on) = (mk(60), Option.Some(f"q60")); println("  s") }
+fn none()   { let np: Option[R] = Option.None; let (_, op) = (mk(62), np); println("  o") }
+fn plainel(){ let (_, oq) = (mk(9), mk(109)); println("  q") }
+fn wildcd() { let (_, _) = (mk(31), Option.Some(mk(131))); println("  w") }
+
+fn main() {
+  println("bind");    bind()
+  println("bindsib"); bindsib()
+  println("slot0");   slot0()
+  println("nested");  nested()
+  println("nestpl");  nestpl()
+  println("loopb");   loopb()
+  println("consume"); consume()
+  println("moved");   moved()
+  println("ret");     ret()
+  println("arg");     arg()
+  println("field");   field()
+  println("instr");   instr()
+  println("none");    none()
+  println("plainel"); plainel()
+  println("wildcd");  wildcd()
+  println("done")
+}
+"#);
+    assert_eq!(
+        out,
+        r#"bind
+dR32:s32:2
+dR132:s132:2
+  b
+bindsib
+dR148:s148:2
+  rd48
+dR48:s48:2
+slot0
+dR72:s72:2
+  k5
+nested
+dR2:s2:2
+dR102:s102:2
+  n3
+nestpl
+dR6:s6:2
+dR106:s106:2
+  p7
+loopb
+dR64:s64:2
+dR164:s164:2
+dR64:s64:2
+dR164:s164:2
+  l
+consume
+dR52:s52:2
+  c152
+dR152:s152:2
+moved
+dR54:s54:2
+  mtrue
+dR154:s154:2
+ret
+dR56:s56:2
+  rtrue
+dR156:s156:2
+arg
+dR58:s58:2
+  a158
+dR158:s158:2
+field
+dR76:s76:2
+  ftrue
+dR176:s176:2
+instr
+dR60:s60:2
+  s
+none
+dR62:s62:2
+  o
+plainel
+dR9:s9:2
+dR109:s109:2
+  q
+wildcd
+dR31:s31:2
+dR131:s131:2
+  w
+done
+"#
+    );
+}
