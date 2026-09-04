@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 365 |
-| run-vs-build | 329 |
+| run-vs-build | 330 |
 | leak | 262 |
 | missing-feature | 194 |
 | double-free | 175 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1439 |
+| codegen | 1440 |
 | interp | 349 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -151,7 +151,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 | B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
 | B-2026-09-03-21 | 2026-09-03 | codegen | medium | A BY-VALUE TUPLE PARAM WITH AN `Option[T]` ELEMENT LOSES THE PAYLOAD'S `Drop` BODY ON ALL THREE COMPILED SURFACES, with NO DESTRUCTURE anywhere in the function -- `fn p(t: (R, Option[R])) { println(f"{t.0.id}") }` runs `dR11` under `--interp` and nothing on jit/build/AUTO_PAR=0, while the USER-ENUM element in the identical position is correct on both backends | — |
-| B-2026-09-03-23 | 2026-09-03 | codegen | medium | A GENERIC FUNCTION'S MONOMORPH BODY ANSWERS THE `Drop`-OWNERSHIP QUESTION FROM ITS CALLER'S TABLES -- a LOCAL in `fn inner[T]` whose name matches ANY caller's parameter has its tuple-field element's `Drop` body run on a CAP-ZEROED HUSK (`dR60//0`) before the live read, on all three compiled surfaces against a clean `--interp`. `compile_generic_call` populates neither `current_fn_param_names` nor `owned_struct_params` for the body it emits, and because that body is emitted ONCE and shared, the corruption reaches call sites with no such parameter | — |
 | B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
@@ -167,6 +166,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-21 | 2026-09-04 | codegen | high | A STRUCT-FIELD DESTRUCTURE OVER A PROJECTION SOURCE (`let HoRes { a, b } = w.inner;`) IS WRONG THREE WAYS -- a `Result[R, String]` leaf CONSUMED by a match aborts with glibc's `free(): double free detected in tcache 2` on an ordinary build; the same leaf UNCONSUMED loses the payload's `Drop` body on every backend (the last shape of the B-2026-09-03-33 deferral); and the `Option[R]` twin runs the body at the WRONG TIME on the compiled backends -- at the destructure, or after a later read of the source, where the interpreter runs it at the arm's end | — |
 | B-2026-09-04-22 | 2026-09-04 | codegen | medium | A HEAP-BOXED `Result` PAYLOAD BOUND OUT OF AN AGG DESTRUCTURE LEAF AND MOVED INTO A BY-VALUE CALL LOSES ITS `Drop` BODY -- `let (a, b) = t; match b { Result.Ok(w) => eatw(w), .. }` over `Result[W, String]` (seven-word `W`) prints `eat7` and never `dW7` on jit/aot/AUTO_PAR=0, where `--interp` runs the body after the call; the same arm over a plain `let` local, over `Option[W]`, or over the four-word inline `R`, is correct | — |
 | B-2026-09-04-23 | 2026-09-04 | codegen | low | A DISCARDED FIELD AND AN UNUSED LEAF DROPPED AT THE SAME DESTRUCTURE RUN THEIR BODIES IN OPPOSITE ORDER ON THE TWO BACKENDS -- `let HoRes { a: _, b: b5 } = h5;` with `b5` never read runs `a`'s body then `b5`'s payload body under `--interp` and `b5`'s then `a`'s on jit/aot/AUTO_PAR=0; both at the statement, sequence only | — |
+| B-2026-09-04-24 | 2026-09-04 | codegen | medium | A GENERIC FUNCTION'S BY-VALUE STRUCT PARAM LOSES THE TUPLE ELEMENT'S `Drop` BODY WHEN THE ARGUMENT IS A TEMP LITERAL -- `gfn(G[R] { pe: (mk(81), 5), z: 9 })` runs NO body on all three compiled surfaces against a clean `--interp`, while the same callee handed a NAMED LOCAL is correct, and the non-generic twin is correct with either argument form. Memory is balanced (valgrind clean), so only the user body is lost | — |
 
 ### Relocated
 
@@ -2192,6 +2192,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-19 | codegen | high | A WHOLE-VALUE REBIND OF A TUPLE HOLDING AN `Option[<heap struct>]` DOUBLE-FREES THE PAYLOAD -- `let t = (mk(1), Option.Some(mk(2))); let t2 = t;` is… | 03c805f |
 | B-2026-09-03-20 | typecheck | medium | `partial_move_of_drop_struct` IS SITE-BASED, NOT SHAPE-BASED, so five value positions escape the now-BLOCKING rule -- `return w.r;`, a tail `w.r`, a… | 0ae5836 |
 | B-2026-09-03-22 | codegen | low | A `Result[O, E]` LEAF OF A DESTRUCTURED TUPLE CANNOT TAKE ITS PAYLOAD'S `Drop` BODY, because a heap-BOXED Result payload has no memory owner to hand… | 6ab46d5 |
+| B-2026-09-03-23 | codegen | medium | A GENERIC FUNCTION'S MONOMORPH BODY ANSWERS THE `Drop`-OWNERSHIP QUESTION FROM ITS CALLER'S TABLES -- a LOCAL in `fn inner[T]` whose name matches ANY… | 9e88c050 |
 | B-2026-09-03-24 | interp+codegen | medium | A STRUCT-FIELD DESTRUCTURE LEAF TYPED `Option[<struct with a Drop body>]` LOSES THE PAYLOAD'S BODY -- `let Ho2 { a, b } = h;` over `{ a: R, b: Option… | e187718 |
 | B-2026-09-03-25 | codegen | medium | A WILDCARD TUPLE LEAF OVER AN `Option[<struct with a Drop body>]` ELEMENT LOSES THE PAYLOAD'S BODY ON THE COMPILED BACKENDS -- `let (r, _) = t;` and… | 6b8e246 |
 | B-2026-09-03-26 | ownership | medium | THE USE-AFTER-MOVE HINT DENIES A `.clone()` THAT EXISTS, AND `karac fix` WITHHOLDS THE EDIT, FOR FIVE TYPE CATEGORIES -- `Option[T]`, `Result[T, E]`,… | f77d2cc |
