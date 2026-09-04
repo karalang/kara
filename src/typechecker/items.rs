@@ -4339,6 +4339,213 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or(false)
     }
 
+    /// B-2026-09-04-15 — whether `name` is declared `shared` OR `par`, i.e.
+    /// whether its values are RC/Arc boxes rather than inline aggregates.
+    ///
+    /// [`Self::name_is_shared_decl`] deliberately answers only for `shared`,
+    /// because its callers ask "does copying this retain?" — true of a `shared`
+    /// handle. This asks the different question "is the OWNER a refcounted box
+    /// that an alias may outlive?", and `par` is exactly as refcounted as
+    /// `shared` (the two flags are mutually exclusive spellings of the same
+    /// storage, Arc rather than Rc). Measured: the use-after-free below
+    /// reproduces byte-for-byte on `par struct`.
+    fn name_is_rc_backed_decl(&self, name: &str) -> bool {
+        self.env
+            .structs
+            .get(name)
+            .map(|i| i.is_shared || i.is_par)
+            .or_else(|| self.env.enums.get(name).map(|i| i.is_shared || i.is_par))
+            .unwrap_or(false)
+    }
+
+    /// B-2026-09-04-15 — [`Self::place_named_type`] widened by one variant.
+    ///
+    /// That helper answers only for `Type::Named`, and a `shared` / `par` value
+    /// is spelled `Type::Shared(name)` — a distinct variant carrying the name
+    /// directly, not a `Named` wrapping it (see the note in `types.rs`). So the
+    /// original returns `None` for exactly the receivers this rule is about,
+    /// which is why it needs its own resolver rather than a call. Kept separate
+    /// rather than widening the shared one: every existing caller asks about
+    /// INLINE aggregates, and teaching that helper to answer for RC boxes would
+    /// silently enrol them in rules written when it could not.
+    fn rc_place_type_name(&self, expr: &Expr) -> Option<String> {
+        let ty = match &expr.kind {
+            ExprKind::Identifier(n) => self.local_scope.lookup(n.as_str())?.clone(),
+            ExprKind::SelfValue => self.current_self_type.clone()?,
+            ExprKind::FieldAccess { object, field } => {
+                let owner = self.rc_place_type_name(object)?;
+                self.env
+                    .structs
+                    .get(&owner)?
+                    .fields
+                    .iter()
+                    .find(|(n, _, _)| n == field)
+                    .map(|(_, t, _)| t.clone())?
+            }
+            _ => return None,
+        };
+        match ty {
+            Type::Named { name, .. } | Type::Shared(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// B-2026-09-04-15 — the owner of a non-`Copy` field being moved OUT of a
+    /// `shared` / `par` struct, if that is what `value` is.
+    ///
+    /// The structural twin of [`Self::partial_move_of_drop_struct`], and every
+    /// exemption there is an exemption here for the same reasons — a `Copy`
+    /// field is read not moved, an RC-retain copy makes no hole, a borrow-typed
+    /// position takes no ownership. What differs is the OWNER test: that rule
+    /// asks whether the struct has its own `impl Drop` (so its destructor would
+    /// walk a half-populated value); this one asks whether the struct is
+    /// refcounted, because then the hole is visible to every OTHER handle and
+    /// outlives the move entirely.
+    fn shared_field_move_owner(&self, value: &Expr, ty: &Type) -> Option<String> {
+        if !matches!(
+            value.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
+            return None;
+        }
+        if matches!(ty, Type::Error | Type::Never)
+            || self.is_copy_type_during_check(ty)
+            || self.copy_is_only_an_rc_retain(ty)
+            || matches!(ty, Type::Function { .. } | Type::TypeParam(_))
+        {
+            return None;
+        }
+        if matches!(ty, Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }) {
+            return None;
+        }
+        // Only a plain AGGREGATE field is actually moved out of the box. A
+        // `String` / `Vec` / `Map` / `Set` field read off a shared struct is
+        // DEEP-COPIED by codegen — that is what B-2026-08-28-14, -20 and -49
+        // fixed, and `test_e2e_shared_struct_heap_field_read_is_a_copy` pins
+        // it: the box keeps its buffer, an alias still reads it, so there is
+        // no hole and nothing to reject. Measured the hard way — without this
+        // gate the rule fails 5 tests whose whole subject is that the read IS
+        // a copy, and it would have re-broken three fixed leak rows.
+        //
+        // A nested plain STRUCT field is the shape that has no such copy, and
+        // it is the one the use-after-free was measured on. Whether a tuple,
+        // `Array` or `Option` field behaves like the copied set or the moved
+        // set is NOT measured here, so they are left alone rather than guessed
+        // into the rule — recorded as the remainder on B-2026-09-04-15.
+        let Type::Named {
+            name: field_ty_name,
+            ..
+        } = ty
+        else {
+            return None;
+        };
+        if matches!(
+            field_ty_name.as_str(),
+            "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet" | "Array"
+        ) {
+            return None;
+        }
+        if !self.env.structs.contains_key(field_ty_name.as_str())
+            || self.name_is_rc_backed_decl(field_ty_name)
+        {
+            return None;
+        }
+        let object = match &value.kind {
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => object,
+            _ => return None,
+        };
+        let owner = self.rc_place_type_name(object)?;
+        if !self.name_is_rc_backed_decl(&owner) {
+            return None;
+        }
+        // The root must be an owned binding, exactly as the `Drop` twin
+        // requires: through a `ref` parameter the projection COPIES rather than
+        // moves, so the box keeps its field and there is no hole to observe.
+        let mut cur = value;
+        loop {
+            match &cur.kind {
+                ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                    cur = object;
+                }
+                ExprKind::Identifier(n) => {
+                    let borrowed = self.current_fn_ref_params.contains(n.as_str())
+                        && matches!(
+                            self.local_scope.lookup(n.as_str()),
+                            Some(Type::Ref(_) | Type::MutRef(_))
+                        );
+                    return (!borrowed).then_some(owner);
+                }
+                ExprKind::SelfValue => {
+                    return (!self.current_fn_ref_params.contains("self")).then_some(owner);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// B-2026-09-04-15 — reject moving a non-`Copy` field out of a `shared` /
+    /// `par` struct.
+    ///
+    /// A refcounted box is not partially movable, for the same reason a `Vec`
+    /// is not: there is no `Sh` with a hole in it, and unlike a plain struct
+    /// the hole is reachable from every OTHER handle. `let h2 = h; let r = h.a;`
+    /// runs `r`'s `Drop` body and frees its buffer while `h2` still points at
+    /// the box, so `h2.a` is a read of freed memory — measured with valgrind
+    /// reporting an invalid read inside a freed block, on both compiled
+    /// backends and under `--interp`, and identically for `par`.
+    ///
+    /// This is the same rule Rust enforces for `Rc<T>`: a shared handle derefs
+    /// to a borrow, and you may clone out of it or borrow into it, but never
+    /// take ownership of a part. Rejecting it here is also what makes
+    /// B-2026-09-04-13's field walk correct by construction — with no move-out
+    /// possible, the box is the sole owner of its fields and the walk has
+    /// nothing to collide with.
+    pub(super) fn reject_shared_field_move(&mut self, value: &Expr, ty: &Type) {
+        let Some(owner) = self.shared_field_move_owner(value, ty) else {
+            return;
+        };
+        let has_clone = self.type_supports_clone(ty);
+        let message = if has_clone {
+            format!(
+                "error[E_SHARED_FIELD_MOVE]: cannot move a field out of `{owner}`, which is \
+                 declared `shared`/`par`: the value is a refcounted box, so any other handle \
+                 to it would still see the moved-from field — and would read it after this \
+                 field's `Drop` body has run and its buffer is freed. Take an independent \
+                 copy (`.clone()`), or borrow the field instead"
+            )
+        } else {
+            format!(
+                "error[E_SHARED_FIELD_MOVE]: cannot move a field out of `{owner}`, which is \
+                 declared `shared`/`par`: the value is a refcounted box, so any other handle \
+                 to it would still see the moved-from field — and would read it after this \
+                 field's `Drop` body has run and its buffer is freed. Borrow the field \
+                 instead. (No `.clone()` is offered: this field type does not have one.)"
+            )
+        };
+        if has_clone {
+            // Behaviour-PRESERVING migration, the shape `karac fix` can apply
+            // mechanically: the field is already being read out, so appending
+            // `.clone()` keeps the program's meaning and only makes the copy
+            // explicit — exactly what the index-move rule's fix-it does.
+            self.type_error_with_fix_it(
+                message,
+                value.span,
+                TypeErrorKind::TypeMismatch,
+                crate::typechecker::FixIt {
+                    span: Span {
+                        offset: value.span.offset + value.span.length,
+                        length: 0,
+                        line: value.span.line,
+                        column: value.span.column,
+                    },
+                    replacement: ".clone()".to_string(),
+                },
+            );
+        } else {
+            self.type_error(message, value.span, TypeErrorKind::TypeMismatch);
+        }
+    }
+
     /// Whether copying a value of this type duplicates nothing but reference
     /// counts — the exemption test for [`Self::warn_borrow_projection_copy`].
     ///
@@ -4747,6 +4954,9 @@ impl<'a> super::TypeChecker<'a> {
             return;
         };
         self.warn_partial_move_of_drop_struct(value, &ty);
+        // B-2026-09-04-15 — the RC-owner spelling, in the same ctor-payload
+        // value position (`Option.Some(h.a)` moves the field out too).
+        self.reject_shared_field_move(value, &ty);
     }
 
     pub(super) fn warn_partial_move_of_drop_struct(&mut self, value: &Expr, ty: &Type) {
@@ -4976,6 +5186,8 @@ impl<'a> super::TypeChecker<'a> {
                 // through a BORROW rather than through a container index.
                 self.warn_borrow_projection_copy(value, &expected_ty);
                 self.warn_partial_move_of_drop_struct(value, &expected_ty);
+                // B-2026-09-04-15 — the RC-owner spelling of the same shape.
+                self.reject_shared_field_move(value, &expected_ty);
                 // B-2026-07-31-20 — record the result type of a
                 // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                 // (read as an implicit binding annotation). The intercept in
@@ -5146,6 +5358,8 @@ impl<'a> super::TypeChecker<'a> {
                     // value position.
                     self.warn_borrow_projection_copy(value, &rhs_ty);
                     self.warn_partial_move_of_drop_struct(value, &rhs_ty);
+                    // B-2026-09-04-15 — the RC-owner spelling of the same shape.
+                    self.reject_shared_field_move(value, &rhs_ty);
                 }
                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
                 if let ExprKind::Unary {

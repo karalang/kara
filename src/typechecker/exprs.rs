@@ -1940,6 +1940,9 @@ impl<'a> super::TypeChecker<'a> {
                 // partial-move rule. The borrow gate above is now inside that
                 // rule's predicate, so this call needs no gate of its own.
                 self.warn_partial_move_of_drop_struct(&arg.value, param_ty);
+                // B-2026-09-04-15 — the RC-owner spelling of the same shape,
+                // and it inherits that rule's borrow gate identically.
+                self.reject_shared_field_move(&arg.value, param_ty);
                 if apply_call_site_marker {
                     self.check_call_site_marker(arg, param_ty, &arg_ty);
                 }

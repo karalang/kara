@@ -49618,3 +49618,121 @@ fn main() { let h = Holder { s: "x".to_string() }; println(f"{need_copy(h)}"); }
         "a non-Copy argument must still fail; got {errs:?}",
     );
 }
+
+/// B-2026-09-04-15 — `E_SHARED_FIELD_MOVE`: moving a non-`Copy` field out of a
+/// `shared` / `par` struct is rejected, because the box is refcounted and the
+/// hole is visible to every OTHER handle.
+///
+/// The measurement that forced the rule: with `let h2 = h;` taken first,
+/// `let r = h.a;` runs `r`'s `Drop` body and frees its buffer while `h2` still
+/// points at the box, so `h2.a.tag` is a read of freed memory — valgrind
+/// reports `Invalid read of size 2 ... inside a block of size 66 free'd`, on
+/// both compiled backends and under `--interp`, and byte-for-byte the same for
+/// `par struct`. This is the rule Rust enforces for `Rc<T>`: clone out of it or
+/// borrow into it, never take ownership of a part.
+///
+/// WHY THE SITE SET DIFFERS FROM `E_INDEX_MOVE_NON_COPY`'s, deliberately. That
+/// rule permits the owned-required positions (`return`, a tail, a struct-literal
+/// field, a `Some` / `Ok` / `Err` payload) because a borrow cannot be spelled
+/// there and codegen's deep copy is CORRECT — two independent values, measured.
+/// Here the copy is not correct and not made: the box keeps a slot the moved-out
+/// owner also owns, which is the use-after-free above, so permitting a position
+/// permits unsoundness rather than an extra `Drop` body. `.clone()` is the
+/// migration and it is spellable in every one of those positions, which is why
+/// the ctor-payload site rejects here and permits there.
+///
+/// It also makes B-2026-09-04-13's field walk correct by construction: with no
+/// move-out possible, the box is the sole owner of its fields and a walk that
+/// runs their `Drop` bodies has nothing to collide with.
+#[test]
+fn shared_field_move_rejected_and_borrow_and_copy_shapes_permitted() {
+    const PRELUDE: &str = "struct R { s: String }\n\
+         shared struct Sh { r: R, n: i64, s: String, v: Vec[i64] }\n\
+         par struct Pa { r: R, n: i64 }\n\
+         struct Plain { r: R, n: i64 }\n\
+         shared struct Inner { k: i64 }\n\
+         shared struct Holder { i: Inner, n: i64 }\n\
+         fn eat(x: R) { println(x.s); }\n";
+    const MAIN: &str = "fn main() { println(\"ok\"); }\n";
+
+    fn hits(src: &str) -> usize {
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolved.errors
+        );
+        typecheck(&parsed.program, &resolved)
+            .errors
+            .iter()
+            .filter(|e| e.message.contains("E_SHARED_FIELD_MOVE"))
+            .count()
+    }
+    let fires = |items: &str| -> usize { hits(&format!("{PRELUDE}{items}{MAIN}")) };
+
+    // ── REJECTED: the field leaves the box, and an alias would see the hole ──
+    for (label, items) in [
+        (
+            "let initializer",
+            "fn f(h: Sh) -> i64 { let x = h.r; return x.s.len(); }\n",
+        ),
+        (
+            "assignment RHS",
+            "fn f(h: Sh) -> i64 { let mut x = R { s: \"z\" }; x = h.r; \
+             return x.s.len(); }\n",
+        ),
+        ("call argument", "fn f(h: Sh) { eat(h.r); }\n"),
+        (
+            "`par` owner — the same storage, Arc rather than Rc; the \
+             use-after-free reproduces byte-for-byte",
+            "fn f(p: Pa) -> i64 { let x = p.r; return x.s.len(); }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 1, "expected a rejection for {label}");
+    }
+
+    // ── PERMITTED: nothing leaves the box ──
+    for (label, items) in [
+        (
+            "a `Copy` field is read, not moved — the box keeps every field",
+            "fn f(h: Sh) -> i64 { let x = h.n; return x; }\n",
+        ),
+        (
+            "a `ref` root COPIES rather than moves, so the box keeps its field \
+             — the same gate the own-`Drop` twin carries. Uses the NON-`Copy` \
+             field deliberately: with `h.n` this cell would pass for the `Copy` \
+             reason above and never exercise the borrow gate at all",
+            "fn f(h: ref Sh) -> i64 { let x = h.r; return x.s.len(); }\n",
+        ),
+        (
+            "a plain (non-RC) owner is the own-`Drop` rule's business, not this \
+             one's: no alias can outlive the move",
+            "fn f(p: Plain) -> i64 { let x = p.r; return x.s.len(); }\n",
+        ),
+        (
+            "a `shared`-typed FIELD read RETAINS rather than moves, so the box's \
+             slot stays intact — the same exemption the index rule carries",
+            "fn f(h: Holder) -> i64 { let x = h.i; return x.k; }\n",
+        ),
+        (
+            "a `String` field is DEEP-COPIED on read, so the box keeps its \
+             buffer and an alias still reads it. This is the boundary of the \
+             rule, not an oversight: B-2026-08-28-14/-20/-49 fixed exactly this \
+             shape to copy, and rejecting it fails 5 tests whose subject is \
+             that the read IS a copy (measured)",
+            "fn f(h: Sh) -> i64 { let x = h.s; return x.len(); }\n",
+        ),
+        (
+            "a `Vec` field, same boundary and same reason",
+            "fn f(h: Sh) -> i64 { let x = h.v; return x.len(); }\n",
+        ),
+    ] {
+        assert_eq!(fires(items), 0, "expected NO rejection for {label}");
+    }
+}
