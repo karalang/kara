@@ -54651,6 +54651,63 @@ SortedMap{}
 SortedSet{}
 ";
 
+    /// B-2026-09-04-16 — a plain `Map`/`Set` whose binding name is also used by
+    /// a `SortedMap`/`SortedSet` in ANOTHER function. `twin()` is never called;
+    /// its mere presence used to be enough.
+    const SORTED_MARKER_LEAK_SRC: &str = r#"
+fn twin() -> i64 {
+    let mut cols: SortedMap[i64, i64] = SortedMap.new();
+    cols.insert(1, 1);
+    let mut only: SortedSet[i64] = SortedSet.new();
+    only.insert(4);
+    return cols.len() + only.len();
+}
+fn colliding() -> String {
+    let mut cols: Map[i64, i64] = Map.new();
+    for i in 0..12 { cols.insert((i * 37) % 97 - 50, i); }
+    let k = cols.keys();
+    let mut s = "".to_string();
+    for i in 0..k.len() { s = s + k[i].to_string() + ","; }
+    return s;
+}
+fn clean() -> String {
+    let mut zzz: Map[i64, i64] = Map.new();
+    for i in 0..12 { zzz.insert((i * 37) % 97 - 50, i); }
+    let k = zzz.keys();
+    let mut s = "".to_string();
+    for i in 0..k.len() { s = s + k[i].to_string() + ","; }
+    return s;
+}
+fn main() {
+    println(if colliding() == clean() { "01 same" } else { "01 DIVERGED" });
+    let mut cols: Map[i64, i64] = Map.new();
+    cols.insert(7, 7);
+    println(cols);
+    println(f"03 {cols}");
+    let mut only: Set[i64] = Set.new();
+    only.insert(5);
+    println(only);
+    let mut keep: SortedMap[i64, i64] = SortedMap.new();
+    keep.insert(9, 9);
+    keep.insert(3, 3);
+    println(keep);
+    println(twin());
+}
+"#;
+
+    /// Expected render of [`SORTED_MARKER_LEAK_SRC`] — the `karac run --interp`
+    /// oracle's byte-for-byte output. Before the fix the compiled backends
+    /// produced `01 DIVERGED`, `SortedMap{7: 7}`, `03 SortedMap{7: 7}` and
+    /// `SortedSet{5}` for the first four lines.
+    const SORTED_MARKER_LEAK_EXPECTED: &str = "\
+01 same
+{7: 7}
+03 {7: 7}
+Set{5}
+SortedMap{3: 3, 9: 9}
+2
+";
+
     #[test]
     fn e2e_sorted_map_and_set_display_prefix_and_order_codegen() {
         // B-2026-08-14-35 — `SortedMap` / `SortedSet` share `Map` / `Set`'s
@@ -54676,6 +54733,40 @@ SortedSet{}
         // `sorted_map_and_set_display_prefix_and_order_interp`.
         if let Some(out) = run_program(SORTED_DISPLAY_SRC) {
             assert_eq!(out, SORTED_DISPLAY_EXPECTED);
+        }
+    }
+
+    /// B-2026-09-04-16 — the sortedness marker is keyed by BARE BINDING NAME
+    /// and survived a function boundary, so an unrelated `Map`/`Set` that
+    /// happened to reuse a `SortedMap`/`SortedSet` binding's name in a LATER
+    /// function iterated in sorted order and rendered with the sorted prefix.
+    /// The twin need only be PRESENT — `twin()` below is never called — and
+    /// renaming either binding made the program correct.
+    ///
+    /// Every line here is WRONG before the fix except the last two:
+    ///   01 DIVERGED / SortedMap{7: 7} / 03 SortedMap{7: 7} / SortedSet{5}
+    /// which covers `keys()`, `println(m)` (the `compile_print` path) and
+    /// `f"{m}"` (the `synth_display` path — a different consult of the same
+    /// marker), and the `Set` half alongside the `Map` half.
+    ///
+    /// Line 01 is deliberately ORDER-FREE: it fills two plain `Map`s with the
+    /// SAME keys in the SAME sequence and asserts their `keys()` AGREE, never
+    /// that either equals a particular permutation. Hash order is per-process
+    /// random (see CLAUDE.md), so an assertion naming a sequence would fail on
+    /// most runs; two maps in ONE process share the key and the growth path,
+    /// so their orders match whenever neither is being force-sorted. The
+    /// `.keys()` call has to sit INSIDE the colliding function — routing it
+    /// through a shared `fn ks(m: ref Map[..])` helper makes the receiver `m`
+    /// at the call site and the test then passes even unfixed (measured).
+    ///
+    /// The last two lines are the don't-overshoot guard: a real `SortedMap`
+    /// must still sort and still say `SortedMap{`.
+    ///
+    /// Twin: `sorted_marker_does_not_leak_across_functions_interp`.
+    #[test]
+    fn e2e_sorted_marker_does_not_leak_across_functions() {
+        if let Some(out) = run_program(SORTED_MARKER_LEAK_SRC) {
+            assert_eq!(out, SORTED_MARKER_LEAK_EXPECTED);
         }
     }
 

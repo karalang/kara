@@ -118,6 +118,10 @@ pub(super) struct SavedVarSideTables<'ctx> {
     set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     set_elem_type_names: HashMap<String, String>,
     set_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// B-2026-09-04-16 — the sortedness marker travels with the six
+    /// map/set tables above; without it a mono body inherited the CALLER's
+    /// `SortedMap` bindings by name (and leaked its own back out).
+    sorted_collection_vars: std::collections::HashSet<String>,
     atomic_var_inner_is_bool: std::collections::HashSet<String>,
     owned_vecstr_params: std::collections::HashSet<String>,
     closure_fn_types: HashMap<String, inkwell::types::FunctionType<'ctx>>,
@@ -1592,6 +1596,7 @@ impl<'ctx> super::Codegen<'ctx> {
             set_elem_types: std::mem::take(&mut self.mapset.set_elem_types),
             set_elem_type_names: std::mem::take(&mut self.mapset.set_elem_type_names),
             set_elem_type_exprs: std::mem::take(&mut self.mapset.set_elem_type_exprs),
+            sorted_collection_vars: std::mem::take(&mut self.mapset.sorted_collection_vars),
             atomic_var_inner_is_bool: std::mem::take(&mut self.atomic_var_inner_is_bool),
             owned_vecstr_params: std::mem::take(&mut self.borrow_vars.owned_vecstr_params),
             closure_fn_types: std::mem::take(&mut self.closure_state.closure_fn_types),
@@ -1616,6 +1621,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_types = saved.set_elem_types;
         self.mapset.set_elem_type_names = saved.set_elem_type_names;
         self.mapset.set_elem_type_exprs = saved.set_elem_type_exprs;
+        self.mapset.sorted_collection_vars = saved.sorted_collection_vars;
         self.atomic_var_inner_is_bool = saved.atomic_var_inner_is_bool;
         self.borrow_vars.owned_vecstr_params = saved.owned_vecstr_params;
         self.closure_state.closure_fn_types = saved.closure_fn_types;

@@ -49030,6 +49030,69 @@ fn test_compound_assign_through_mut_ref_param() {
     );
 }
 
+/// B-2026-09-04-16 — the interpreter oracle for the sortedness-marker leak.
+///
+/// This backend carries sortedness IN THE VALUE (`Value::SortedMap` /
+/// `Value::SortedSet`), so it has no name-keyed marker to leak and was already
+/// right on every line. That is exactly what makes it the oracle: codegen
+/// tracks sortedness in a `HashSet<String>` of BINDING NAMES that outlived the
+/// function it was registered in, so a plain `Map`/`Set` reusing a
+/// `SortedMap`/`SortedSet` binding's name in a later function iterated sorted
+/// and rendered with the sorted prefix. Compiled output was
+/// `01 DIVERGED` / `SortedMap{7: 7}` / `03 SortedMap{7: 7}` / `SortedSet{5}`.
+///
+/// The program is byte-identical to `SORTED_MARKER_LEAK_SRC` in
+/// `tests/codegen.rs`, whose twin asserts this exact output under
+/// `karac build`. Line 01 compares two identically-filled plain `Map`s to each
+/// other rather than to a fixed sequence — hash order is per-process random, so
+/// naming a permutation would be the wrong assertion in either backend.
+#[test]
+fn test_sorted_marker_does_not_leak_across_functions() {
+    assert_eq!(
+        run(r#"
+fn twin() -> i64 {
+    let mut cols: SortedMap[i64, i64] = SortedMap.new();
+    cols.insert(1, 1);
+    let mut only: SortedSet[i64] = SortedSet.new();
+    only.insert(4);
+    return cols.len() + only.len();
+}
+fn colliding() -> String {
+    let mut cols: Map[i64, i64] = Map.new();
+    for i in 0..12 { cols.insert((i * 37) % 97 - 50, i); }
+    let k = cols.keys();
+    let mut s = "".to_string();
+    for i in 0..k.len() { s = s + k[i].to_string() + ","; }
+    return s;
+}
+fn clean() -> String {
+    let mut zzz: Map[i64, i64] = Map.new();
+    for i in 0..12 { zzz.insert((i * 37) % 97 - 50, i); }
+    let k = zzz.keys();
+    let mut s = "".to_string();
+    for i in 0..k.len() { s = s + k[i].to_string() + ","; }
+    return s;
+}
+fn main() {
+    println(if colliding() == clean() { "01 same" } else { "01 DIVERGED" });
+    let mut cols: Map[i64, i64] = Map.new();
+    cols.insert(7, 7);
+    println(cols);
+    println(f"03 {cols}");
+    let mut only: Set[i64] = Set.new();
+    only.insert(5);
+    println(only);
+    let mut keep: SortedMap[i64, i64] = SortedMap.new();
+    keep.insert(9, 9);
+    keep.insert(3, 3);
+    println(keep);
+    println(twin());
+}
+"#),
+        "01 same\n{7: 7}\n03 {7: 7}\nSet{5}\nSortedMap{3: 3, 9: 9}\n2\n"
+    );
+}
+
 /// B-2026-08-14-35 — the interpreter oracle for `SortedMap` / `SortedSet`
 /// rendering. This backend renders from the value's own type and was right on
 /// every line here already; what makes it the oracle is that codegen, which

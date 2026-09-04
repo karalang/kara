@@ -1676,6 +1676,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.set_elem_types.clear();
         self.mapset.set_elem_type_names.clear();
         self.mapset.set_elem_type_exprs.clear();
+        // B-2026-09-04-16 — the SORTEDNESS MARKER, missing from this list
+        // while every side-table it is registered ALONGSIDE (the six above)
+        // was already here. Keyed by bare binding name like its siblings, so
+        // a `let cols: SortedMap[..]` in one function made a completely
+        // unrelated `let cols: Map[..]` in a LATER function iterate in sorted
+        // order and render with a `SortedMap{` prefix — the twin need only be
+        // PRESENT, never called, and renaming either binding made the program
+        // correct. Codegen tracks sortedness in this name-keyed set; the
+        // interpreter carries it in the value (`Value::SortedMap`), which is
+        // why only the compiled backends diverged.
+        self.mapset.sorted_collection_vars.clear();
         self.atomic_var_inner_is_bool.clear();
         // The handle-backed builtins were missing from this list (same
         // per-function-reset rationale — every entry is keyed by bare var
