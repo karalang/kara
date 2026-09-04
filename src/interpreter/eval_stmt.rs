@@ -902,6 +902,34 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
         }
+        // Phase 3: field-held `shared struct` releases owed by this block
+        // (B-2026-09-03-9). Parked by `defer_field_held_shared_release` when
+        // each holder's drop slot drained — at its NLL endpoint, which is
+        // EARLIER than this for any binding used before the block's last
+        // statement — and performed here because scope exit is where the
+        // compiled backends put a refcount release.
+        //
+        // At or below this block's depth: its own entries, plus anything a
+        // drop body opened a scope for and left behind. Order is preserved,
+        // so two holders release in the order their slots drained, and each
+        // release drops the holder's reference before the next is tested —
+        // which is what lets the LAST of several holders reach its own last
+        // reference and fire.
+        let depth = self.env.scope_depth();
+        let mut owed: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < self.pending_shared_releases.len() {
+            if self.pending_shared_releases[i].0 >= depth {
+                owed.push(self.pending_shared_releases.remove(i).1);
+            } else {
+                i += 1;
+            }
+        }
+        for name in owed {
+            if self.run_field_held_shared_user_drops(&name) {
+                self.env.remove_local(&name);
+            }
+        }
     }
 
     /// B-2026-08-30-51 — the values of the same-scope bindings a `let` is about
@@ -1311,6 +1339,11 @@ impl<'a> super::Interpreter<'a> {
             // program's lifetime. This must sit OUTSIDE the early-out, not
             // after the body call below.
             self.drop_user_drop_fields_of_binding(name);
+            // B-2026-09-03-9 — the SHARED half of that walk, which the walk
+            // itself cannot do: it skips shared fields because their drop is
+            // refcount-driven and it has no refcount to consult. Placed after
+            // the plain fields so a holder mixing the two fires in one order.
+            self.defer_field_held_shared_release(name);
             return;
         }
         // A `#[compiler_builtin]` stdlib `impl Drop` (e.g.
@@ -1327,6 +1360,221 @@ impl<'a> super::Interpreter<'a> {
         // moved-out-field set (`let x = h.a;` hands that body to `x`).
         self.run_user_drop_body(&type_name, name);
         self.drop_user_drop_fields_of_binding(name);
+        // B-2026-09-03-9 — same shared half, for a holder that also has an own
+        // body. Last, matching the `!has_user_drop` path above.
+        self.defer_field_held_shared_release(name);
+    }
+
+    /// B-2026-09-03-9 — note that `name`'s field-held `shared struct` release
+    /// is owed, to be performed at the enclosing block's scope exit by
+    /// [`Self::run_cleanup`] rather than here.
+    ///
+    /// The delay is not a convenience: it is where the compiled backends put
+    /// it. A holder's PLAIN Drop-bearing field fires at the binding's NLL
+    /// endpoint, its `shared` field's release at scope exit — measured on both
+    /// compiled backends with `struct Mx { r: R, s: S }`, which prints
+    /// `v2 dR1 post dS2` on each. Firing the shared half here instead would run
+    /// the right body in the wrong place, turning a silent gap into a visible
+    /// run-vs-build divergence.
+    ///
+    /// Nothing is recorded for a binding with no Drop-relevant shared content,
+    /// so the ordinary case adds one bounded walk and no allocation.
+    fn defer_field_held_shared_release(&mut self, name: &str) {
+        let owed = {
+            let Some(slot) = self.env.slot_ref(name) else {
+                return;
+            };
+            let mut out = Vec::new();
+            self.collect_field_held_shared(slot, &mut out, 0);
+            !out.is_empty()
+        };
+        if owed {
+            let depth = self.env.scope_depth();
+            self.pending_shared_releases.push((depth, name.to_string()));
+        }
+    }
+
+    /// B-2026-09-03-9 — run the user `impl Drop` of every `shared struct` a
+    /// dying binding holds in a struct FIELD or a tuple ELEMENT, when this
+    /// binding turns out to hold the last reference to it.
+    ///
+    /// The plain field walk cannot do this, and deliberately does not try:
+    /// [`Self::drop_user_drop_fields_of_value`] skips `shared` fields because
+    /// their drop is refcount-driven, so firing on a holder's death would drop
+    /// a value other holders still reference. But nothing else fired them
+    /// either. `invoke_user_drop_if_applicable`'s shared arm is keyed on a
+    /// NAMED BINDING (`Env::drop_target` reports a count only for a bare
+    /// `SharedStruct` slot), and a shared value living in a FIELD has no
+    /// binding to drain — so `struct Sw { s: S }` over a `shared struct S`
+    /// ran S's body ZERO times under `--interp` while both compiled backends
+    /// ran it exactly once. This is that missing release: the holder's death
+    /// drops the holder's reference, and at the last one the body fires,
+    /// mirroring codegen's `emit_rc_dec` free branch.
+    ///
+    /// Counting is the whole difficulty, and it is why this reads the slot
+    /// through `Env::slot_ref` rather than `Env::get`: a clone of the holder
+    /// clones the `Arc`s inside it, so a count read off a cloned value is
+    /// inflated by the read itself. Pass 1 therefore collects raw pointers and
+    /// counts with NO clone in flight; pass 2 clones only what will fire, by
+    /// which point the decision is already made.
+    ///
+    /// A holder can hold the same `Arc` in two positions, so the
+    /// last-reference test is `strong_count == occurrences in this holder`
+    /// rather than `== 1`: codegen would `rc_dec` once per slot and reach zero,
+    /// and both spellings have to agree.
+    ///
+    /// Returns whether any Drop-relevant shared value was found — the caller
+    /// releases the holder's slot on `true` and only then, so a holder with no
+    /// such field keeps its present behaviour (including whether its slot
+    /// survives, which decides when a LATER alias reaches its own last
+    /// reference). That release is the same discipline, and for the same
+    /// reason, as the shared arm's `remove_local`.
+    fn run_field_held_shared_user_drops(&mut self, name: &str) -> bool {
+        // Pass 1: pointers and counts, no clones. `(type name, ptr, count)`
+        // in the order the field/element walks would visit them.
+        let occurrences: Vec<(String, usize, usize)> = {
+            let Some(slot) = self.env.slot_ref(name) else {
+                return false;
+            };
+            let mut out = Vec::new();
+            self.collect_field_held_shared(slot, &mut out, 0);
+            out
+        };
+        if occurrences.is_empty() {
+            return false;
+        }
+        // Fire where this holder accounts for every live reference.
+        let firing: std::collections::HashSet<usize> = occurrences
+            .iter()
+            .map(|(_, ptr, count)| (*ptr, *count))
+            .filter(|(ptr, count)| {
+                *count == occurrences.iter().filter(|(_, p, _)| p == ptr).count()
+            })
+            .map(|(ptr, _)| ptr)
+            .collect();
+        // Pass 2: clone only the firing values, first occurrence of each.
+        let to_fire: Vec<(String, Value)> = {
+            let Some(slot) = self.env.slot_ref(name) else {
+                return false;
+            };
+            let mut seen = std::collections::HashSet::new();
+            let mut out = Vec::new();
+            self.collect_field_held_shared_values(slot, &firing, &mut seen, &mut out, 0);
+            out
+        };
+        for (type_name, value) in to_fire {
+            // Own body then fields, exactly as the shared arm of
+            // `invoke_user_drop_if_applicable` and as codegen's
+            // `__karac_rc_drop_<T>`. `run_user_drop_body_on_value` is that
+            // pair, and no-ops on the half a given type does not have.
+            self.run_user_drop_body_on_value(&type_name, value);
+        }
+        true
+    }
+
+    /// Pass 1 of [`Self::run_field_held_shared_user_drops`]: every
+    /// Drop-relevant `shared struct` held at a walkable position, as
+    /// `(type name, Arc pointer, strong count)`.
+    ///
+    /// Walks struct FIELDS in reverse declaration order and tuple ELEMENTS
+    /// forward — the orders [`Self::drop_user_drop_fields_of_value`] already
+    /// uses for each, so a holder mixing plain and shared content fires in one
+    /// consistent sequence. Field order comes off the `StructDef`, never off
+    /// the value: the interpreter stores fields in a `HashMap` whose iteration
+    /// order is not even stable run to run.
+    ///
+    /// Stops AT a `SharedStruct` rather than descending through it. A shared
+    /// value nested inside another shared value is released by that one's own
+    /// drop, not by this holder's — the same ownership line the shared-field
+    /// skip in the plain walk draws.
+    fn collect_field_held_shared(
+        &self,
+        value: &Value,
+        out: &mut Vec<(String, usize, usize)>,
+        depth: u32,
+    ) {
+        if depth > 8 {
+            return;
+        }
+        match value {
+            Value::SharedStruct(inner) => {
+                let tn = inner.name.clone();
+                // Drop-relevance gate: a shared struct with neither an own body
+                // nor a Drop-bearing field is invisible here, so a holder of
+                // one keeps its present behaviour byte-for-byte — including
+                // its slot, which the caller only releases when this answers
+                // non-empty.
+                if self.program.drop_method_keys.contains_key(&tn)
+                    || self.shared_holder_has_drop_bearing_field(&tn)
+                {
+                    out.push((tn, Arc::as_ptr(inner) as usize, Arc::strong_count(inner)));
+                }
+            }
+            Value::Struct {
+                name: struct_name,
+                fields,
+            } => {
+                let Some(def) = self.find_struct_def(struct_name) else {
+                    return;
+                };
+                let names: Vec<String> = def.fields.iter().map(|f| f.name.clone()).collect();
+                for field in names.into_iter().rev() {
+                    if let Some(fv) = fields.get(&field) {
+                        self.collect_field_held_shared(fv, out, depth + 1);
+                    }
+                }
+            }
+            Value::Tuple(items) => {
+                for item in items.iter() {
+                    self.collect_field_held_shared(item, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Pass 2 of [`Self::run_field_held_shared_user_drops`]: the same walk,
+    /// cloning the values whose `Arc` pointer is in `firing`, first occurrence
+    /// only. Split from pass 1 so no clone exists while pass 1 reads counts.
+    fn collect_field_held_shared_values(
+        &self,
+        value: &Value,
+        firing: &std::collections::HashSet<usize>,
+        seen: &mut std::collections::HashSet<usize>,
+        out: &mut Vec<(String, Value)>,
+        depth: u32,
+    ) {
+        if depth > 8 {
+            return;
+        }
+        match value {
+            Value::SharedStruct(inner) => {
+                let ptr = Arc::as_ptr(inner) as usize;
+                if firing.contains(&ptr) && seen.insert(ptr) {
+                    out.push((inner.name.clone(), value.clone()));
+                }
+            }
+            Value::Struct {
+                name: struct_name,
+                fields,
+            } => {
+                let Some(def) = self.find_struct_def(struct_name) else {
+                    return;
+                };
+                let names: Vec<String> = def.fields.iter().map(|f| f.name.clone()).collect();
+                for field in names.into_iter().rev() {
+                    if let Some(fv) = fields.get(&field) {
+                        self.collect_field_held_shared_values(fv, firing, seen, out, depth + 1);
+                    }
+                }
+            }
+            Value::Tuple(items) => {
+                for item in items.iter() {
+                    self.collect_field_held_shared_values(item, firing, seen, out, depth + 1);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// B-2026-07-29-39 — run the user `impl Drop` of every Drop-bearing FIELD

@@ -979,6 +979,37 @@ impl Env {
         self.define(name.to_string(), val);
     }
 
+    /// Current scope nesting depth. Used to key a deferred shared-field
+    /// release to the block that owes it (B-2026-09-03-9).
+    pub(crate) fn scope_depth(&self) -> usize {
+        self.scopes.len()
+    }
+
+    /// Borrow a binding's slot WITHOUT cloning it. `get` clones, which for
+    /// any `SharedStruct` reachable from the slot bumps the `Arc`
+    /// strong-count and defeats a last-reference test — the same reason
+    /// `drop_target` exists for a BARE shared slot. This is its
+    /// arbitrarily-deep sibling, used by the field-held shared-struct drop
+    /// hook (B-2026-09-03-9) to read counts through a holder's fields.
+    ///
+    /// The three aliasing slot kinds `get` auto-derefs (`SharedCell`,
+    /// `MapSlotRef`, `VecSlotRef`) answer `None` rather than the aliasing
+    /// slot itself: each denotes storage owned elsewhere, so a holder's
+    /// death is not the release of what it points at.
+    pub(crate) fn slot_ref(&self, name: &str) -> Option<&Value> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(v) = scope.get(name) {
+                return match v {
+                    Value::SharedCell(_) | Value::MapSlotRef { .. } | Value::VecSlotRef { .. } => {
+                        None
+                    }
+                    other => Some(other),
+                };
+            }
+        }
+        None
+    }
+
     /// Read a binding by name. Auto-derefs `SharedCell` (a closure mut-ref
     /// alias) and `MapSlotRef` (an `or_insert` mut-ref into a Map slot) so
     /// callers always see the underlying value rather than the aliasing

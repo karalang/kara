@@ -555,6 +555,22 @@ pub struct Interpreter<'a> {
     /// binding's own field", and a path there would change what they answer.
     /// Codegen's twin is the path-keyed `struct_moved_nested_field_bodies`.
     pub(crate) moved_out_nested_field_bodies: HashSet<(String, Vec<String>)>,
+    /// B-2026-09-03-9 — bindings whose FIELD-HELD `shared struct` release is
+    /// owed at the enclosing block's scope exit, as `(scope depth, name)`.
+    ///
+    /// The release cannot happen where the binding's other drop work happens.
+    /// Measured on all three compiled backends: a holder's PLAIN Drop-bearing
+    /// field fires at the binding's NLL endpoint, while its `shared` field's
+    /// refcount release fires at SCOPE EXIT — `struct Mx { r: R, s: S }` prints
+    /// `dR1` before the following statement and `dS2` after it. So the shared
+    /// half is parked here when the drop slot drains and drained by
+    /// `run_cleanup`, which is the one call every block exit makes.
+    ///
+    /// Keyed by `Env::scope_depth` rather than held in a per-block stack so no
+    /// exit path out of `eval_block_inner` can leak a frame: a drain takes
+    /// every entry at or below its own depth, which is exactly this block's
+    /// and any deeper one a drop body opened.
+    pub(crate) pending_shared_releases: Vec<(usize, String)>,
     /// B-2026-08-29-33, tuple leg — `(variable, element index)` pairs whose ENUM
     /// element's PAYLOAD bodies such an arm took, with the element's own body
     /// still owed. The tuple sibling of the set above; codegen's twin is
@@ -1087,6 +1103,7 @@ impl<'a> Interpreter<'a> {
             param_view_tuple_elems: HashSet::new(),
             moved_out_struct_field_payload_bodies: HashSet::new(),
             moved_out_nested_field_bodies: HashSet::new(),
+            pending_shared_releases: Vec::new(),
             moved_out_tuple_elem_payload_bodies: HashSet::new(),
             pending_payload_masked_fields: None,
             moved_out_enum_payload_slots: HashSet::new(),
