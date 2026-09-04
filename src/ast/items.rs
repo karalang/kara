@@ -1480,6 +1480,102 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
 ///  * any GENERIC path — `Result[R, String]`, `Option[R]`, `Vec[R]`;
 ///  * `Self`, which names the receiver's own type and so always can;
 ///  * a tuple, array, pointer, `ref`/`mut ref`, or `Fn` return.
+/// B-2026-09-04-30 — does `f`'s body BIND A PART OF `self` OUT: a `let` (or
+/// `let…else`) initialized from `self` or a `self`-rooted place, or a
+/// `match` / `if let` / `while let` whose scrutinee is one?
+///
+/// The second half of the owned-`self` receiver gate, and the boundary between
+/// this row and its neighbours. The caller runs a by-value receiver's field
+/// bodies BECAUSE nobody else does — but the moment the callee binds a field,
+/// a destructure leaf, or a payload out of `self`, THAT binding owns the part
+/// and runs its body, and the caller's whole-struct walk fires a second time on
+/// top. Measured, with the caller's walk registered unconditionally:
+///
+/// ```text
+/// fn plain(self)  { println(f"  rd{self.a.id}") }          each body once   ✓
+/// fn field(self)  { let x = self.a; .. }                   dR2, dR102 TWICE ✗
+/// fn matchb(self) { match self.b { Ok(r) => .. } }         dR104 TWICE      ✗
+/// fn s_call(self) { let HoRes { a, b } = self;
+///                   match b { Ok(r) => eat(r), .. } }      dR103 TWICE      ✗
+/// ```
+///
+/// Memory stays balanced through all of them (ASAN clean) — it is the BODY that
+/// doubles, which is why only a stdout pin catches it.
+///
+/// So this predicate declines exactly the cells that belong to the neighbouring
+/// rows rather than to this one: B-2026-09-03-7 (a by-value param destructured
+/// inside a method), B-2026-09-04-29 (the `self` destructure's transfer), and
+/// B-2026-09-02-24 (the callee's retained walk firing on a value an arm handed
+/// out). Declining is the pre-existing behaviour for every one of them, so the
+/// conservative direction here is also the no-regression direction.
+///
+/// A bare READ of `self` is not a bind-out: `self.a.id` in an interpolation
+/// leaves the field where it is, which is what keeps the plain receiver — the
+/// row's whole subject — admitted.
+pub fn fn_binds_self_part_out(f: &Function) -> bool {
+    /// Is `e` rooted at `self`? `self`, `self.a`, `self.inner.a`, `self[i]`.
+    fn self_rooted(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::SelfValue => true,
+            ExprKind::FieldAccess { object, .. } => self_rooted(object),
+            ExprKind::Index { object, .. } => self_rooted(object),
+            _ => false,
+        }
+    }
+    fn walk_expr(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Match { scrutinee, arms } => {
+                self_rooted(scrutinee)
+                    || walk_expr(scrutinee)
+                    || arms.iter().any(|a| walk_expr(&a.body))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self_rooted(value)
+                    || walk_expr(value)
+                    || walk_block(then_block)
+                    || else_branch.as_deref().is_some_and(walk_expr)
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                self_rooted(value) || walk_expr(value) || walk_block(body)
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block(b),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk_expr(condition)
+                    || walk_block(then_block)
+                    || else_branch.as_deref().is_some_and(walk_expr)
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body),
+            _ => false,
+        }
+    }
+    fn walk_block(b: &Block) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                self_rooted(value) || walk_expr(value)
+            }
+            StmtKind::Expr(e) => walk_expr(e),
+            _ => false,
+        }) || b.final_expr.as_deref().is_some_and(walk_expr)
+    }
+    walk_block(&f.body)
+}
+
 pub fn owned_self_return_is_opaque_to_receiver(
     f: &Function,
     type_runs_user_drop: &mut dyn FnMut(&str) -> bool,

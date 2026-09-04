@@ -10645,6 +10645,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let drop_probe =
                                     &mut |n: &str| self.type_runs_user_drop(n, &mut Vec::new());
                                 crate::ast::owned_self_return_is_opaque_to_receiver(f, drop_probe)
+                                    // A callee that binds a field, a destructure
+                                    // leaf, or a payload out of `self` OWNS that
+                                    // part and runs its body; the caller's
+                                    // whole-struct walk would fire a second time
+                                    // on top of it.
+                                    && !crate::ast::fn_binds_self_part_out(f)
                             });
                 let bodies_eligible = shape_ok
                     && !self.user_ref_method_names.contains(method)

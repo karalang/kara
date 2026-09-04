@@ -933,6 +933,7 @@ impl<'a> super::Interpreter<'a> {
                     let drop_probe =
                         &mut |n: &str| self.type_name_runs_user_drop(n, &mut Vec::new());
                     crate::ast::owned_self_return_is_opaque_to_receiver(f, drop_probe)
+                        && !crate::ast::fn_binds_self_part_out(f)
                 });
         if !matches!(
             self_param,
