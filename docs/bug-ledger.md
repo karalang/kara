@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 326 |
 | leak | 261 |
 | missing-feature | 194 |
-| double-free | 171 |
+| double-free | 172 |
 | codegen-gap | 165 |
 | diagnostics | 123 |
 | false-positive | 106 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1430 |
+| codegen | 1431 |
 | interp | 348 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -163,7 +163,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-6 | 2026-09-04 | other | low | design.md CONTRADICTS ITSELF ON `#[derive(Copy)]` WITHOUT `Clone`, and the half that is wrong is the one a reader looking up `Copy` will find -- § Derive says "`Copy` without `Clone` is never a compile error, because the compiler fills in the missing dependency" (line 2970, and this is what karac implements) while § Copy says "Writing `#[derive(Copy)]` without `Clone` is an error" (line 9146) | — |
 | B-2026-09-04-8 | 2026-09-04 | interp+codegen | medium | THE TUPLE PROJECTION DESTRUCTURE DIVERGES FOR A LOCAL ROOT -- `struct W { inner: (R, Result[R, String]) }; let (a, b) = w.inner;` runs `rd9 dR9` under `--interp` against `dR109 rd9 dR9` on jit/build/AUTO_PAR=0, and `e2e_projection_source_tuple_destructure_is_a_view` cannot catch it because all six of its cells are PARAM-rooted | — |
 | B-2026-09-04-9 | 2026-09-04 | codegen | medium | A FRESH TUPLE SOURCE'S `Option` BINDING LEAF STILL LOSES ITS PAYLOAD'S `Drop` BODY -- `let (_, o) = (mk(32), Option.Some(mk(132)));` and `let (a, b) = ...` run the body under `--interp` and on no compiled surface, while the WILDCARD spelling of the same literal is correct on all four since B-2026-09-03-39. The element is typed correctly now; what the leaf lacks is a memory owner it can hang the walker on, and the owner that fits DOUBLE-FREES a moved leaf (B-2026-09-04-10) | — |
-| B-2026-09-04-10 | 2026-09-04 | codegen | high | AN `Option[<struct>]` DESTRUCTURE LEAF OFF A PLACE SOURCE FREES ITS PAYLOAD TWICE WHEN THE LEAF IS MOVED WHOLE -- `let (_, o) = t; let q = o;` double-frees and `return o` corrupts the allocation header, on an UNMODIFIED `main`. B-2026-09-03-15 gave the leaf sole ownership of the boxed payload and a consuming `match` retracts it; a whole-value MOVE has no retraction. A plain struct element moved the same two ways is clean | — |
 | B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
 | B-2026-09-04-13 | 2026-09-04 | interp+codegen | medium | A `shared struct` HOLDER RUNS NO FIELD `Drop` BODY ON ANY OF THE FOUR SURFACES -- `shared struct Sh { a: R, b: R }` with a Drop-bearing `R` prints NEITHER body where the identical NON-shared struct prints both, with no projection, destructure or move anywhere in the program; the whole-field read `let r = h.a;` recovers the MOVED field's body alone and the sibling's stays lost | — |
@@ -2206,6 +2205,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-2 | codegen | medium | A STRUCT DESTRUCTURE WHOSE SOURCE IS A PROJECTION RUNS BOTH FIELD BODIES AT THE DESTRUCTURE ON THE COMPILED BACKENDS, ONE OF THEM BEFORE ITS BINDING'… | 2bdffd1 |
 | B-2026-09-04-5 | codegen | medium | A `Vec[Option[shared]]` ELEMENT CLONED IN ARGUMENT POSITION MAKES CODEGEN FALL THROUGH TO A STDLIB METHOD IT NEVER NEEDED -- `work[i] = merge_two_lis… | e28c468 |
 | B-2026-09-04-7 | interp+codegen | high | A SCALAR READ THROUGH A `Drop`-BEARING STRUCT FIELD CRASHES THE INTERPRETER AND LOSES BOTH `Drop` BODIES ON THE COMPILED BACKENDS -- `let z = h.a.id;… | 8500074 |
+| B-2026-09-04-10 | codegen | high | AN `Option[<struct>]` DESTRUCTURE LEAF OFF A PLACE SOURCE FREES ITS PAYLOAD TWICE WHEN THE LEAF IS MOVED WHOLE -- `let (_, o) = t; let q = o;` double… | 35d0ec0 |
+| B-2026-09-04-14 | codegen | high | A BINDING NAME CARRIES OWNERSHIP STATE OUT OF ITS FUNCTION, so an `Option` local moved in one function is double-freed because an UNCALLED function e… | 9e70222 |
 
 </details>
 

@@ -13397,7 +13397,7 @@ done
         );
     }
 
-    /// B-2026-09-04-13 — A BINDING NAME MUST NOT CARRY OWNERSHIP STATE OUT OF
+    /// B-2026-09-04-14 — A BINDING NAME MUST NOT CARRY OWNERSHIP STATE OUT OF
     /// ITS FUNCTION.
     ///
     /// `drop_rc.inline_optres_retained_sources` is a `HashSet<String>` keyed by

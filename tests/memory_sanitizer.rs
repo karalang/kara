@@ -332,7 +332,7 @@ mod memory_sanitizer_tests {
         );
     }
 
-    /// B-2026-09-04-13 — the BALANCE half of
+    /// B-2026-09-04-14 — the BALANCE half of
     /// `e2e_retained_source_veto_does_not_escape_its_function`.
     ///
     /// The fix CLEARS a veto set per function, and a veto exists precisely to
@@ -70192,7 +70192,7 @@ fn main() {
     // deliberately, because a two-`String` tuple additionally loses its
     // interior in a monomorph (6 B here, measured) and that is a separate
     // live defect this fixture must not silently depend on. See
-    // B-2026-09-04-13.
+    // B-2026-09-04-14.
     let p = (n, n + 1, n + 2, n + 3);
     let c2 = takesOpt(Some(p));
 
