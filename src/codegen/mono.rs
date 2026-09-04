@@ -2672,6 +2672,18 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_ref_params = std::mem::take(&mut self.borrow_vars.ref_params);
             let saved_signature_ref_params =
                 std::mem::take(&mut self.borrow_vars.signature_ref_params);
+            // B-2026-09-03-23 — the mono body now builds its own param-ownership
+            // identity in `compile_mono_function`'s prologue (see the note
+            // there). Swap the caller's sets out for the nested compile and
+            // restore them below, exactly like `ref_params`: without this the
+            // body's `clear()` would erase the enclosing function's own params
+            // for everything after the call.
+            let saved_fn_param_names = std::mem::take(&mut self.fn_ctx.current_fn_param_names);
+            let saved_owned_struct_params =
+                std::mem::take(&mut self.borrow_vars.owned_struct_params);
+            let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
+            let saved_param_view_callee_owned =
+                std::mem::take(&mut self.drop_rc.param_view_callee_owned);
             // Slice 5: per-binding layout carrier — the mono body seeds its own
             // locals at their `let` sites; swap out the caller's map and restore
             // below, parallel to `variables` / `ref_params`.
@@ -2720,6 +2732,10 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_types.binding_layouts = saved_binding_layouts;
             self.borrow_vars.ref_params = saved_ref_params;
             self.borrow_vars.signature_ref_params = saved_signature_ref_params;
+            self.fn_ctx.current_fn_param_names = saved_fn_param_names;
+            self.borrow_vars.owned_struct_params = saved_owned_struct_params;
+            self.payload_vars.param_view_locals = saved_param_view_locals;
+            self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
             self.borrow_vars.entry_slot_ref_vars = saved_entry_slot_ref_vars;
             self.mono_state.layout_subst = saved_layout_subst;
             self.mono_state.const_subst = saved_const_subst;
@@ -3360,6 +3376,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // ref param would mark a same-named caller binding as a borrow.
         let saved_ref_params = std::mem::take(&mut self.borrow_vars.ref_params);
         let saved_signature_ref_params = std::mem::take(&mut self.borrow_vars.signature_ref_params);
+        // B-2026-09-03-23 — see the twin in `compile_generic_call`.
+        let saved_fn_param_names = std::mem::take(&mut self.fn_ctx.current_fn_param_names);
+        let saved_owned_struct_params = std::mem::take(&mut self.borrow_vars.owned_struct_params);
+        let saved_param_view_locals = std::mem::take(&mut self.payload_vars.param_view_locals);
+        let saved_param_view_callee_owned =
+            std::mem::take(&mut self.drop_rc.param_view_callee_owned);
         // Slice 5: the mono body seeds its own locals' layouts in
         // `binding_layouts` at their `let` sites. Take the caller's carrier for
         // the duration (the body starts empty, like `variables`) and restore it
@@ -3392,6 +3414,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_types.binding_layouts = saved_binding_layouts;
         self.borrow_vars.ref_params = saved_ref_params;
         self.borrow_vars.signature_ref_params = saved_signature_ref_params;
+        self.fn_ctx.current_fn_param_names = saved_fn_param_names;
+        self.borrow_vars.owned_struct_params = saved_owned_struct_params;
+        self.payload_vars.param_view_locals = saved_param_view_locals;
+        self.drop_rc.param_view_callee_owned = saved_param_view_callee_owned;
         self.borrow_vars.entry_slot_ref_vars = saved_entry_slot_ref_vars;
         self.return_layout = saved_return_layout;
         self.mono_state.layout_subst = saved_layout_subst;
@@ -3542,6 +3568,35 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_ctx.current_fn_name = func.name.clone();
         self.variables.clear();
         self.var_types.var_type_names.clear();
+        // B-2026-09-03-23 — the mono body's OWN param-ownership identity.
+        //
+        // A mono body is compiled INLINE inside its caller's, and the name-keyed
+        // sets below are per-FUNCTION state that `compile_function` builds in its
+        // own param loop. This prologue never touched them, so every
+        // ownership gate that consults them (`finish_place_source_tuple_-
+        // destructure` and its siblings) was answering about the ENCLOSING
+        // function while compiling this body. That is worse than answering from
+        // an empty set: a mono LOCAL whose name collides with any caller's
+        // parameter read `current_fn_param_names = {"h"}` off that caller, took
+        // the tuple element's memory, cap-zeroed the source without recording
+        // the take, and left the source's walk to run the element's `Drop` body
+        // on the husk (`dR60//0`). The body is emitted ONCE and shared, so the
+        // corruption reached call sites with no such parameter at all.
+        //
+        // Cleared here and repopulated below from THIS function's own params,
+        // mirroring `compile_function`; both nested-compile entry points
+        // (`compile_generic_call`, the layout-mono path) save and restore the
+        // caller's sets around the call, exactly as they already do for
+        // `variables` / `ref_params`.
+        self.fn_ctx.current_fn_param_names.clear();
+        for p in &func.params {
+            if let crate::ast::PatternKind::Binding(n) = &p.pattern.kind {
+                self.fn_ctx.current_fn_param_names.insert(n.clone());
+            }
+        }
+        self.borrow_vars.owned_struct_params.clear();
+        self.payload_vars.param_view_locals.clear();
+        self.drop_rc.param_view_callee_owned.clear();
         // Per-binding layout carrier (slice 5): the caller's map was swapped out
         // (`mem::take`) at the mono entry point, so this fresh body starts empty
         // and seeds its own locals; `let`-site registrations land here.
@@ -3777,11 +3832,46 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if matches!(&param.ty.kind, TypeKind::Path(_)) {
                 if let Some(concrete) = self.var_types.var_type_names.get(&param_name).cloned() {
-                    self.make_aggregate_param_callee_owned_inst(
+                    // B-2026-09-03-23 — the caller-retains registration
+                    // `compile_function` makes for the same param shape, and the
+                    // second half of giving this body its own ownership identity.
+                    // Keyed on the CONCRETE name so a generic struct param
+                    // registers exactly as its non-generic twin does; the
+                    // heap-field test reads `struct_field_type_names`, which is
+                    // keyed by DECLARATION name and so answers for `Mix[T] { v: T,
+                    // s: String }` off the `String` field however `T` is bound.
+                    // Registered BEFORE the callee-owned conversion below and
+                    // retired if that conversion takes the param, mirroring
+                    // `compile_function`'s #17-gap-1 retirement: a callee-owned
+                    // param's heap fields are its own entry copies, and leaving
+                    // the caller-retains band-aid on top of that deep-copies a
+                    // second time on every field move-out AND suppresses the
+                    // source cap-zeroing, so the callee-owned drop and the
+                    // moved-out binding both free the buffer.
+                    if self
+                        .type_decls
+                        .struct_field_type_names
+                        .get(concrete.as_str())
+                        .is_some_and(|fields| {
+                            fields.iter().any(|f| {
+                                matches!(
+                                    f.as_deref(),
+                                    Some("Vec") | Some("VecDeque") | Some("String")
+                                )
+                            })
+                        })
+                    {
+                        self.borrow_vars
+                            .owned_struct_params
+                            .insert(param_name.clone());
+                    }
+                    if self.make_aggregate_param_callee_owned_inst(
                         &concrete,
                         alloca,
                         param_inst.clone(),
-                    );
+                    ) {
+                        self.borrow_vars.owned_struct_params.remove(&param_name);
+                    }
                 }
             }
             // B-2026-08-27-37 — the TUPLE leg of the pairing rule above. That

@@ -58050,14 +58050,15 @@ fn test_ordinary_lowercase_receivers_are_unaffected() {
 /// parameter in either position; `nested` goes a level down; `wildcard`
 /// discards the leaf; `paramroot` is the non-generic by-value param.
 ///
-/// `genericfn` PINS THE ONE SHAPE THIS FIX DECLINES. A by-value param of a
-/// GENERIC function is emitted by `compile_generic_call`, which populates
+/// `genericfn` PINNED THE ONE SHAPE THIS FIX DECLINED. A by-value param of a
+/// GENERIC function is emitted by `compile_generic_call`, which populated
 /// neither `current_fn_param_names` nor `owned_struct_params`, so the ownership
-/// gate cannot tell it from a local and the leaf would take a body the caller's
-/// copy also runs. The substitution makes that shape reachable for the first
-/// time, so it is guarded rather than answered wrongly; the cell holds it at ONE
-/// body, matching its non-generic twin. Filed separately — when that gap closes,
-/// the guard comes off and this cell must not move.
+/// gate could not tell it from a local and the leaf would take a body the
+/// caller's copy also runs. The substitution made that shape reachable for the
+/// first time, so it was guarded rather than answered wrongly. B-2026-09-03-23
+/// gave the monomorph body its own param-ownership identity and REMOVED that
+/// guard; this cell is the pin that it did not move when it came off, and it
+/// still holds at ONE body matching its non-generic twin.
 ///
 /// Twin of `tests/codegen.rs`'s
 /// `e2e_generic_parent_projection_destructure_hands_the_body_to_the_leaf`, pinned to the same string.
@@ -58148,6 +58149,128 @@ paramroot
   b52/t52
 dR52/t52/1
 paramroot end
+done
+"#
+    );
+}
+
+/// B-2026-09-03-23 — A MONOMORPH BODY MUST ANSWER THE `Drop`-OWNERSHIP QUESTION
+/// FROM ITS OWN PARAMETERS, NOT ITS CALLER'S.
+///
+/// `compile_generic_call` emits the monomorph body INLINE, mid-caller, and
+/// populated neither `current_fn_param_names` nor `owned_struct_params` for it.
+/// Those sets are per-FUNCTION and were still the ENCLOSING function's, so a
+/// LOCAL inside `fn inner[T]` whose name matched ANY caller's parameter answered
+/// `owner_runs_bodies = true`, took the tuple element's MEMORY, cap-zeroed the
+/// source without recording the take, and left the source's own walk to run the
+/// element's `Drop` body against the slot the cap-zeroing had just emptied.
+///
+/// Every body renders `tag` and `xs.len()`, so a body running on a cap-zeroed
+/// husk prints `dRnn//0` and is distinguishable from a correct one — a test that
+/// asserted body COUNTS would see one body on both sides and pass. Silent
+/// otherwise: no crash, no leak, no diagnostic (valgrind reports the program
+/// fully balanced either way).
+///
+/// ACTION AT A DISTANCE, AND IT SPREADS. The trigger is a name in a DIFFERENT
+/// function — `takesH`'s parameter, never called from `main`. Because the body is
+/// emitted ONCE and shared by every call site, the corruption reached
+/// `plainLocal`, which has no parameter at all. `fresh` is the same shape under a
+/// different name (`q`, colliding with `takesQ`) so the fixture cannot pass by
+/// special-casing one identifier; `strfield` is the sibling whose struct carries a
+/// `String` field, which is what makes the mono param loop's `owned_struct_params`
+/// registration fire.
+///
+/// `marker` pins PLACEMENT, not only content: it extends the SOURCE's live range
+/// past the read (`z{h.z}`), so a body belonging to the leaf prints before `z9`
+/// and one belonging to the source prints after it. Pre-fix it printed
+/// `dR64//0` after `z9` — wrong on both axes at once.
+///
+/// OVER-REACH CONTROLS, in the opposite direction, so a widened fix fails here
+/// rather than passing quietly. `nongen` is the non-generic twin that was correct
+/// throughout; `nodrop` instantiates the same shape at a `Drop`-less type and must
+/// stay silent; `genparam` is the by-value param of a generic function that
+/// B-2026-09-03-16 guarded and this fix un-guards — it must still read ONE body,
+/// and is the same cell as that row's `genericfn`.
+///
+/// Measured pre-fix: `collide`, `fresh`, `strfield` and `marker` all print the
+/// husk on all three compiled surfaces against a clean `--interp`; the three
+/// controls are byte-identical either way.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_monomorph_body_answers_drop_ownership_from_its_own_params`, pinned to the
+/// same string.
+#[test]
+fn test_monomorph_body_answers_drop_ownership_from_its_own_params() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Hn { pe: (R, i64), z: i64 }
+struct Hs { pe: (R, i64), s: String }
+struct G[T] { pe: (T, i64), z: i64 }
+struct Plain { a: i64, b: i64 }
+
+fn genLocal[T](x: T) -> i64 { let h = Hn { pe: (mk(60), 0), z: 1 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn genFresh[T](x: T) -> i64 { let q = Hn { pe: (mk(61), 0), z: 1 }; let (r, k) = q.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn genStr[T](x: T)   -> i64 { let h = Hs { pe: (mk(62), 0), s: f"s" }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn ngLocal(x: i64)   -> i64 { let h = Hn { pe: (mk(63), 0), z: 1 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}/{r.xs.len()}"); return k; }
+fn genMark[T](x: T)  -> i64 { let h = Hn { pe: (mk(64), 0), z: 9 }; let (r, k) = h.pe; println(f"  b{r.id}/{r.tag}"); println(f"  z{h.z}"); return k; }
+fn genNoDrop[T](x: T) -> i64 { let h = G[Plain] { pe: (Plain { a: 1, b: 2 }, 0), z: 1 }; let (p, k) = h.pe; println(f"  b{p.a}/{p.b}"); return k; }
+
+fn takesH(h: Hn) -> i64 { return genLocal(5); }
+fn takesQ(q: Hn) -> i64 { return genFresh(5); }
+fn takesHs(h: Hs) -> i64 { return genStr(5); }
+fn takesHm(h: Hn) -> i64 { return genMark(5); }
+fn takesHn(h: G[Plain]) -> i64 { return genNoDrop(5); }
+
+fn plainLocal() -> i64 { return genLocal(5); }
+fn plainFresh() -> i64 { return genFresh(5); }
+fn plainStr()   -> i64 { return genStr(5); }
+fn plainMark()  -> i64 { return genMark(5); }
+fn plainNoDrop() -> i64 { return genNoDrop(5); }
+
+fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
+fn gfnLocal() { let h = G[R] { pe: (mk(65), 5), z: 9 }; let _ = gfn(h); }
+
+fn main() {
+    println("collide");  let _ = plainLocal();  println("collide end")
+    println("fresh");    let _ = plainFresh();  println("fresh end")
+    println("strfield"); let _ = plainStr();    println("strfield end")
+    println("nongen");   let _ = ngLocal(5);    println("nongen end")
+    println("marker");   let _ = plainMark();   println("marker end")
+    println("nodrop");   let _ = plainNoDrop(); println("nodrop end")
+    println("genparam"); gfnLocal();            println("genparam end")
+    println("done")
+}
+"#),
+        r#"collide
+  b60/t60/1
+dR60/t60/1
+collide end
+fresh
+  b61/t61/1
+dR61/t61/1
+fresh end
+strfield
+  b62/t62/1
+dR62/t62/1
+strfield end
+nongen
+  b63/t63/1
+dR63/t63/1
+nongen end
+marker
+  b64/t64
+dR64/t64/1
+  z9
+marker end
+nodrop
+  b1/2
+nodrop end
+genparam
+  in
+dR65/t65/1
+genparam end
 done
 "#
     );

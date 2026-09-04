@@ -14529,43 +14529,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // agreed-wrong cell at once; the interpreter's matching widening (see
         // `let_destructures_owned_param`) rides in the same commit.
         //
-        // B-2026-09-03-16 — a GENERIC owner inside a MONOMORPH body cannot be
-        // answered here, so decline rather than answer it wrongly.
+        // B-2026-09-03-16 declined a GENERIC owner inside a MONOMORPH body here
+        // rather than answer it wrongly, because the two tables consulted below
+        // did not describe the body being compiled: `compile_generic_call` emitted
+        // it without populating either, so a by-value `h: One[T]` answered NO to
+        // both and the leaf took a body the caller's copy also ran. Worse than
+        // empty, those tables belonged to the ENCLOSING function, so a mono LOCAL
+        // sharing a name with any caller's parameter read that caller's set and
+        // ran the element's body on a cap-zeroed husk.
         //
-        // The substitution that makes this row's leaves reachable at all (see
-        // `place_chain_tuple_tes`) reaches them inside a monomorph body too, and
-        // there the two tables the gate below consults do not describe the body
-        // being compiled: `compile_generic_call` emits it without populating
-        // either, so a by-value `h: One[T]` answers NO to both and the leaf takes
-        // a body the caller's copy also runs -- `dR10` twice where the NON-generic
-        // twin `fn np(h: OneN)`, which does reach `compile_function`'s param loop
-        // and lands in `owned_struct_params`, is correct at one on every surface.
-        // Worse than empty: those tables belong to the ENCLOSING function, and
-        // that is MEASURED, not feared -- a generic body whose LOCAL shares a
-        // name with any caller's parameter reads `params={"h"}` from that caller
-        // and runs the element's body on a cap-zeroed husk. See B-2026-09-03-23.
-        //
-        // Narrowed to a generic owner deliberately. The unpopulated-tables gap is
-        // real for every shape in a monomorph body, but only this one is newly
-        // reachable, and declining more widely would change paths that work today
-        // on a theory this row has not measured. When B-2026-09-03-23 closes, this
-        // guard comes off and the `genericfn` cell of
+        // B-2026-09-03-23 GAVE THE MONO BODY ITS OWN param-ownership identity
+        // (`compile_mono_function`'s prologue plus the `owned_struct_params`
+        // registration in its param loop, saved/restored at both nested-compile
+        // entry points), so both tables now answer about the body being compiled
+        // and the guard is gone -- the gate below reaches a monomorph body on the
+        // same terms as any other. The `genericfn` cell of
         // `e2e_generic_parent_projection_destructure_hands_the_body_to_the_leaf`
-        // must not move.
-        if !self.mono_state.type_subst_names.is_empty() {
-            if let ExprKind::FieldAccess { object, .. } = &value.kind {
-                if let Some(n) = self.place_chain_type_name(object) {
-                    if self
-                        .type_decls
-                        .struct_generic_params
-                        .get(n.as_str())
-                        .is_some_and(|p| !p.is_empty())
-                    {
-                        return;
-                    }
-                }
-            }
-        }
+        // pins that the guarded shape did not move when it came off.
         let owner_runs_bodies = match Self::place_root_ident(value) {
             Some(root) if self.borrow_vars.owned_struct_params.contains(root) => return,
             Some(root) => {
