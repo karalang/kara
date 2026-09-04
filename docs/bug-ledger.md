@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 366 |
+| miscompile | 367 |
 | run-vs-build | 332 |
 | leak | 262 |
 | missing-feature | 194 |
@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 106 |
 | soundness | 95 |
 | perf | 90 |
-| other | 75 |
+| other | 76 |
 | crash | 72 |
 | use-after-free | 29 |
 
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1446 |
+| codegen | 1448 |
 | interp | 350 |
 | typecheck | 293 |
 | ownership | 74 |
-| other | 71 |
+| other | 72 |
 | cli | 70 |
 | autopar | 55 |
 | parser | 46 |
@@ -149,7 +149,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-41 | 2026-09-02 | interp+codegen | medium | THE TWO-STEP DESTRUCTURE OF A NESTED TUPLE FIELD SPLITS THE BACKENDS -- `let (inner, y) = h.pe; let (r, x) = inner; let m = r;` runs ONE `Drop` body under `--interp` and TWO on `karac run` / `karac build` / `KARAC_AUTO_PAR=0`. The interpreter is right; the compiled side records nothing for the tuple-typed leaf under an owner-runs-bodies source | — |
 | B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
-| B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
 | B-2026-09-03-28 | 2026-09-03 | codegen | medium | A TUPLE REBIND LEAKS ITS `Option` PAYLOAD ONLY WHEN OTHER TUPLE SHAPES ARE DEFINED IN THE SAME FILE -- `let t = (0, Option.Some(mkD(8))); let t2 = t;` is clean as a one-function program and leaks a whole 56-byte struct once unrelated tuple types exist alongside it, `KARAC_AUTO_PAR=0` and under auto-par alike. Every `Drop` BODY still fires exactly once, so only the buffers survive -- the signature of a walker memoization keyed too loosely, the class B-2026-09-03-13 fixed one table over | — |
 | B-2026-09-03-30 | 2026-09-03 | interp | medium | A FRESH VALUE ASSIGNED OVER A PARAM VIEW LOSES ITS SCOPE-EXIT `Drop` BODY UNDER `--interp` -- `a = h; a = R{5}` prints `dR5` on both compiled backends and nothing on the interpreter; the DISPLACEMENT fire of that same value is KEPT (`a = h; a = R{5}; a = R{6}` loses only `dR6`), and a LOCAL source in place of the param view is clean on all three, so the trigger is the intervening param-view assignment rather than the reassignment | — |
 | B-2026-09-03-32 | 2026-09-03 | interp+codegen | medium | A BOUND DESTRUCTURE LEAF THAT IS IMMEDIATELY DEAD DRAINS BEFORE THE SOURCE'S RESIDUAL FIELD-BODIES WALK ON THE COMPILED BACKENDS AND AFTER IT UNDER `--interp` -- `let Two { a, b: _ } = h;` over `{ a: R, b: R }` prints `dR42 dR142` compiled against `dR142 dR42` interpreted, with NO `Option` anywhere in the program; giving `a` a later use separates the two live ranges and the split vanishes | — |
@@ -165,6 +164,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-27 | 2026-09-04 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop` RUNS NO BODY WHEN THE VALUE IS A `Vec` ELEMENT -- `let v: Vec[Box3[String]] = [Box3 { .. }]` prints `dB4` under `--interp` and nothing on any of the three compiled backends. B-2026-09-04-4 fixed both BINDING sites (the `let` and the callee's by-value param) by resolving the binding's instantiation to a per-monomorph `karac_drop_S$<concrete>` wrapper; a container element is reached instead by the per-element drain, which selects an element drop BY TYPE and deliberately routes a `Drop`-bearing struct past the wrapper, so there is no per-monomorph body for it to run. The non-generic control is correct on all four surfaces | — |
 | B-2026-09-04-28 | 2026-09-04 | codegen | medium | AN `Array[T, N]` READ OUT OF A STRUCT FIELD LOSES ITS ELEMENT TYPE FOR CODEGEN, so a field access through one of its elements fails to lower -- `let x = h.a; let e = ref x[0]; e.id` is `2/tag2` under `--interp` and `cannot resolve field 'id' on this receiver` on both compiled backends, identically for a PLAIN and a `shared` struct; it also blocks measuring whether a `shared struct`'s `Array` field is copied or moved (B-2026-09-04-17) | — |
 | B-2026-09-04-30 | 2026-09-04 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self) { println(self.a.id) }` prints `rd1` and no `dR` line under --interp, jit and aot alike; `mk(3).m()` loses `R`'s own body the same way. A LOCAL receiver (`let h = ..; h.m()`) runs them from the caller after the call, and there the interpreter runs a destructured receiver's leaf bodies as well -- twice. Codegen treats `self` as caller-retained like a by-value param; a temp has no caller walk, so nobody owns the bodies | — |
+| B-2026-09-04-31 | 2026-09-04 | codegen | medium | A TUPLE-HELD `shared` ELEMENT IS RELEASED BEFORE THE TUPLE'S FIRST READ on all three compiled surfaces -- `let a = (S{id:14, tag:"alpha"}, 3); println(a.0.id, a.0.tag)` prints `dS14/alpha` and THEN `v14/alpha`, reading a value whose user `Drop` body has already run; identically for a bare tuple binding, a tuple built from a live binding, and a tuple in a struct FIELD | — |
+| B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
 
 ### Relocated
 
@@ -2178,6 +2179,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-03-5 | codegen | high | A `ref Option[T]` PARAMETER RENDERS `None` ON ALL THREE COMPILED SURFACES -- `fn show(x: ref Option[String]) { println(f"{x}") }` called with a `Some… | d2ec071 |
 | B-2026-09-03-6 | codegen | high | A `Result[Option[String], E]` ARGUMENT PASSED BY VALUE DOUBLE-FREES ITS INNER PAYLOAD -- `karac run` ABORTS with `free(): double free detected in tca… | 27a60a4 |
 | B-2026-09-03-8 | interp+codegen | medium | THE REBIND SPELLING OF B-2026-09-01-3 STILL DOUBLES A TUPLE ELEMENT'S `Drop` BODY -- `let t = (r, 5); let t2 = t; let x = t2.0;` prints `dR1 dR1` whe… | 18bbecf |
+| B-2026-09-03-9 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly on… | 9d2fe4f |
 | B-2026-09-03-10 | codegen | high | ALL THREE COMPILED BACKENDS SKIP A LOOP-BODY LOCAL'S `Drop` BODY ON EVERY ITERATION when a conditional `return` inside the loop hands that local out… | 6876c5f |
 | B-2026-09-03-11 | interp+codegen | medium | THE TWO-HOP SPELLING OF B-2026-09-02-43 DOUBLES THE ELEMENT'S `Drop` BODY ON ALL FOUR SURFACES -- `let g = G { h: H { pe: (mk(24), 0) } }; let (r, k)… | 0cc1492 |
 | B-2026-09-03-12 | codegen | medium | A TUPLE BOUND OUT OF A STRUCT FIELD RECORDS NOTHING ABOUT ITS ELEMENTS, so the element's `Drop` BODY RUNS ZERO TIMES on all three compiled surfaces a… | 32d30ee |
