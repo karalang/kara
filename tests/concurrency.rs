@@ -5498,3 +5498,130 @@ fn test_console_writes_are_inferred_but_do_not_serialize() {
         main_fc.parallel_groups
     );
 }
+
+// ── B-2026-09-03-40: `branches_may_hide_work` ───────────────────
+//
+// The flag the codegen `karac_par_run` cost gate consults before applying
+// its per-branch visibility floor. It answers "could a low estimate here
+// mean I was BLIND rather than that the branch is small?", and only a
+// polymorphic call or a user-resource effect can make that true.
+
+#[test]
+fn test_branches_may_hide_work_false_for_pure_and_allocating_branches() {
+    // The kata-306 `add_digits` prologue, verbatim in shape: a `Vec.new()`
+    // (allocates), two pure `len()` reads, and an integer literal. Nothing
+    // here can hide work, so the codegen gate must be free to decline the
+    // band on its cost alone — which is what stops it dispatching once per
+    // call of a helper invoked millions of times.
+    let analysis = analyze_lowered(
+        r#"
+        fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+            let mut rev: Vec[i64] = Vec.new();
+            let mut i = a.len() - 1;
+            let mut j = b.len() - 1;
+            let mut carry = 0;
+            rev.push(carry);
+            return i + j + rev.len();
+        }
+        fn main() { }
+        "#,
+    );
+    let fc = get_function(&analysis, "add_digits");
+    let group = fc
+        .parallel_groups
+        .iter()
+        .find(|g| g.statement_indices.contains(&0))
+        .expect("the four initializers form a group");
+    assert!(
+        !group.branches_may_hide_work,
+        "no branch is polymorphic and the only effect is `allocates`, so \
+         nothing is hidden from the estimator; group {:?} reason {:?}",
+        group.statement_indices, group.reason
+    );
+}
+
+#[test]
+fn test_branches_may_hide_work_true_for_user_resource_effect() {
+    // The shape `PAR_RUN_VISIBILITY_THRESHOLD_UNITS` was written for: a thin
+    // wrapper whose body is one method call the estimator cannot see into.
+    // The `reads`/`writes` effect is the signal that work may be hiding
+    // there, so the visibility floor must still apply and keep these
+    // parallel.
+    let analysis = analyze_lowered(
+        r#"
+        effect resource UserDb;
+        effect resource Orders;
+        fn fetch_profile(uid: i64) -> i64 reads(UserDb) { uid }
+        fn fetch_orders(uid: i64) -> i64 reads(Orders) { uid }
+        fn main() {
+            let p = fetch_profile(1);
+            let o = fetch_orders(2);
+            println((p + o).to_string());
+        }
+        "#,
+    );
+    let fc = get_function(&analysis, "main");
+    let group = fc
+        .parallel_groups
+        .iter()
+        .find(|g| g.statement_indices.contains(&0))
+        .expect("the two independent fetches form a group");
+    assert!(
+        group.branches_may_hide_work,
+        "a `reads(UserDb)` branch reaches outside pure computation, so its \
+         low structural estimate is not evidence of cheapness; group {:?}",
+        group.statement_indices
+    );
+}
+
+#[test]
+fn test_branches_may_hide_work_ignores_allocates_but_not_blocks() {
+    // `allocates` is priced at the allocating call site, so it does not set
+    // the flag — this is the half that `is_trivial`'s `all_pure` gets
+    // deliberately differently, and getting it wrong is what made the
+    // kata-306 band look opaque. `blocks` is an execution verb and does
+    // hide work, so it does set it.
+    let alloc_only = analyze_lowered(
+        r#"
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            let mut b: Vec[i64] = Vec.new();
+            a.push(1);
+            b.push(2);
+            println((a.len() + b.len()).to_string());
+        }
+        "#,
+    );
+    let fc = get_function(&alloc_only, "main");
+    for g in &fc.parallel_groups {
+        assert!(
+            !g.branches_may_hide_work,
+            "`allocates` alone must not set the flag; group {:?} reason {:?}",
+            g.statement_indices, g.reason
+        );
+    }
+
+    let blocking = analyze_lowered(
+        r#"
+        fn wait_a() -> i64 blocks { 1 }
+        fn wait_b() -> i64 blocks { 2 }
+        fn main() {
+            let x = wait_a();
+            let y = wait_b();
+            println((x + y).to_string());
+        }
+        "#,
+    );
+    let fc = get_function(&blocking, "main");
+    let group = fc
+        .parallel_groups
+        .iter()
+        .find(|g| g.statement_indices.contains(&0))
+        .expect("two independent blocking calls form a group");
+    assert!(
+        group.branches_may_hide_work,
+        "`blocks` is an execution verb — the branch is waiting on something \
+         the estimator cannot price; group {:?}",
+        group.statement_indices
+    );
+}

@@ -1600,9 +1600,64 @@ impl<'ctx> super::Codegen<'ctx> {
                 &group_stmts,
                 Some(self.fn_ctx.current_fn_name.as_str()),
             );
+            // `KARAC_COST_DEBUG=1` prints the band gate's numbers, the same
+            // lever `par_cost::fanout_verdict_with_cost` uses for the reduce
+            // gate — and for the same reason it was added there ("why is this
+            // body above/below the floor?" meant hand-counting AST nodes).
+            // B-2026-09-03-40 is the proof that the band half was missing: the
+            // lever printed one line, for a reduce loop entered 90 times, while
+            // the band that was actually costing 6x dispatched 2.25M times and
+            // said nothing — so the row was filed against the number that DID
+            // print. Cost is one `env::var` per group per compile.
+            if std::env::var("KARAC_COST_DEBUG").as_deref() == Ok("1") {
+                eprintln!(
+                    "karac-band-debug: fn={} stmts={:?} total={} min_per_branch={} \
+                     dispatch_floor={} visibility_floor={} may_hide_work={}",
+                    self.fn_ctx.current_fn_name,
+                    group.statement_indices,
+                    total_cost,
+                    min_per_branch,
+                    super::reduce::PAR_RUN_DISPATCH_THRESHOLD_UNITS,
+                    super::reduce::PAR_RUN_VISIBILITY_THRESHOLD_UNITS,
+                    group.branches_may_hide_work,
+                );
+            }
+            // The visibility floor (b) applies only to a group that has
+            // somewhere to hide work — see
+            // `ParallelGroup::branches_may_hide_work`. Applying it to every
+            // group INVERTED this gate (B-2026-09-03-40): the floor's premise
+            // is "an estimate this low means I could not see the branch", but
+            // for a branch of pure arithmetic or a literal the estimate is
+            // low because the branch IS that small, and the estimator saw all
+            // of it. So the cheaper and more obviously unprofitable a band
+            // was, the more certainly it escaped the gate. `add_digits`'s
+            // four local initializers scored `[11, 21, 21, 1]` — total 54
+            // against a 500-unit dispatch threshold — and rode the `1` (a
+            // `carry = 0` literal) past the floor, dispatching 2.25M times on
+            // kata 306 for a 6x wall-clock loss on the default build.
+            //
+            // The parallax shape the floor was written for is unaffected: its
+            // branches carry `reads(UserDB)`, so the flag is set and the floor
+            // still keeps them parallel.
+            //
+            // RESIDUAL, stated because the flag is about effects and the
+            // estimator has a second way to be blind: a branch whose real work
+            // sits below `CostEstimator::INLINE_DEPTH_CAP` (3) is truncated,
+            // and if it is also effect-free it now gets declined where it used
+            // to ride the floor. Reaching that needs heavy work behind three
+            // levels of effect-free straight-line forwarding — any loop in the
+            // visible levels scores >= 64 per nest and carries the group past
+            // the 500-unit threshold on its own. Not observed in the corpus;
+            // if it turns up, the fix is to report truncation out of the
+            // estimator and OR it into the condition here, NOT to widen
+            // `branches_may_hide_work` to mean "contains a call" — that is the
+            // shape that produced this bug, since `a.len()` and
+            // `UserDB.fetch_profile(uid)` are the same unresolved method call
+            // to an estimator with no receiver-type info.
             if total_cost > 0
                 && total_cost < super::reduce::PAR_RUN_DISPATCH_THRESHOLD_UNITS
-                && min_per_branch >= super::reduce::PAR_RUN_VISIBILITY_THRESHOLD_UNITS
+                && (!group.branches_may_hide_work
+                    || min_per_branch >= super::reduce::PAR_RUN_VISIBILITY_THRESHOLD_UNITS)
             {
                 continue;
             }

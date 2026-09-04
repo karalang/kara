@@ -4075,9 +4075,15 @@ fn main() {
             format!(
                 "shared struct P {{ v: i64 }}\n\
                  shared struct Q {{ a: i64, b: i64, c: i64 }}\n\
+                 fn mix(seed: i64) -> i64 {{\n\
+                 \x20   let mut s: i64 = seed;\n\
+                 \x20   let mut i: i64 = 0;\n\
+                 \x20   while i < 8 {{ s = s + i * 3; i = i + 1; }}\n\
+                 \x20   return s;\n\
+                 }}\n\
                  fn build(seed: i64) -> i64 {{\n\
-                 \x20   let p: P = P {{ v: seed }};\n\
-                 \x20   let q: Q = Q {{ a: seed, b: seed, c: seed }};\n\
+                 \x20   let p: P = P {{ v: mix(seed) }};\n\
+                 \x20   let q: Q = Q {{ a: mix(seed), b: mix(seed), c: mix(seed) }};\n\
                  \x20   let mut w: {vec_ty} = Vec.new();\n\
                  \x20   w.push({pushed});\n\
                  \x20   return w.len() + q.a - q.a;\n\

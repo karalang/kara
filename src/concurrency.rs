@@ -445,6 +445,36 @@ pub struct ParallelGroup {
     /// `Vec[shared]` leak). Codegen falls back to sequential whenever this
     /// set is non-empty, independent of the outside-reads check.
     pub captured_container_mutations: HashSet<String>,
+    /// True when at least one branch could be doing work the cost
+    /// estimator cannot see, so a low per-branch estimate is evidence of
+    /// BLINDNESS rather than of cheapness.
+    ///
+    /// Exactly two things hide work from `par_cost::CostEstimator`, and
+    /// both are named here rather than guessed at from the estimate's
+    /// magnitude:
+    ///
+    /// 1. a **polymorphic call** — the estimator resolves free-fn callees
+    ///    by name and cannot see a trait-method impl body at all;
+    /// 2. a **user-resource effect** (`reads`/`writes`/`sends`/`receives`
+    ///    on a non-console resource, or the execution verbs
+    ///    `blocks`/`suspends`) — the branch reaches outside pure
+    ///    computation, so its real cost is not structural.
+    ///
+    /// `allocates` and `panics` are deliberately NOT in that set:
+    /// allocation is a bounded cost already priced at the allocating call
+    /// site, and a panic edge does no work on the taken path. Console
+    /// reads/writes are excluded on the same grounds as `is_trivial`'s
+    /// `all_pure` (see `is_console_resource`).
+    ///
+    /// Consumed by the codegen-side `karac_par_run` cost gate, which
+    /// applies its per-branch visibility floor only when this is set.
+    /// B-2026-09-03-40: without it that floor inverted the gate — a band
+    /// of four local initializers in `add_digits` scored `[11, 21, 21, 1]`
+    /// and the `1` (a `carry = 0` literal, the one branch the estimator
+    /// understands *perfectly*) pushed the minimum under the floor, so the
+    /// cheapest band in the program was the one that could never be
+    /// declined. It dispatched 2.25M times on kata 306.
+    pub branches_may_hide_work: bool,
 }
 
 // ── Internal: Per-statement metadata ───────────────────────────
@@ -2083,6 +2113,19 @@ impl<'a> ConcurrencyChecker<'a> {
                     .filter(|&&i| !infos[i].is_constant_init)
                     .count();
                 let is_trivial = all_pure || non_constant_count <= 1;
+                // See `ParallelGroup::branches_may_hide_work`. Note this is
+                // NOT `!all_pure`: `all_pure` counts an `allocates` effect
+                // against purity, which is right for "could codegen delete
+                // this?" and wrong for "might this be hiding work?" — and
+                // `Allocates:Heap` on a `Vec.new()` initializer is exactly
+                // what made the kata-306 band look opaque.
+                let branches_may_hide_work = group_indices.iter().any(|&i| {
+                    infos[i].calls_polymorphic
+                        || infos[i].effects.iter().any(|e| {
+                            !matches!(e.verb, EffectVerbKind::Allocates | EffectVerbKind::Panics)
+                                && !is_console_resource(&e.resource)
+                        })
+                });
                 // Union of (defines − let_introduced) across the group's
                 // stmts. Names in this set name *captured* locals that
                 // some branch will mutate without introducing them as a
@@ -2105,6 +2148,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     is_trivial,
                     captured_mutations,
                     captured_container_mutations,
+                    branches_may_hide_work,
                 });
             }
         }

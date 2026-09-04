@@ -3222,6 +3222,15 @@ fn main() {
     /// `asan_auto_par_ingroup_dropval_map_freed`). This guards the value
     /// path: displaced-insert Drop bodies still fire in source order and
     /// the program output is byte-identical to sequential.
+    /// B-2026-09-03-40 — `spin` is a third, independent branch that carries
+    /// `work`'s group past the band gate's 500-unit dispatch threshold; `a` and
+    /// the Map let are byte-identical, and `heavy - heavy` leaves the printed
+    /// sum unchanged. Without it the band no longer forms and this E2E silently
+    /// becomes a test of SEQUENTIAL lowering — it asserts stdout, which is
+    /// correct either way, so nothing would have failed. Its IR twin
+    /// `test_ir_auto_par_ingroup_dropval_map_transfers_handle_free` is the one
+    /// that fails loudly, and it carries the same reshape; keep the two sources
+    /// in step.
     #[test]
     fn test_e2e_auto_par_ingroup_dropval_map_output() {
         let out = run_program(
@@ -3232,12 +3241,19 @@ impl Drop for Res {
         println(f"drop {self.id}")
     }
 }
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
 fn work(n: i64) -> i64 {
     let a = n + 1;
     let mut m: Map[i64, Res] = Map.new();
+    let heavy = spin(8);
     let _ = m.insert(1, Res { id: 7 });
     let _ = m.insert(1, Res { id: 8 });
-    a + m.len()
+    a + m.len() + heavy - heavy
 }
 fn main() {
     let mut k = 0i64;
@@ -4402,6 +4418,84 @@ fn main() {
                 "expected branch fn {needle} in IR:\n{ir}"
             );
         }
+    }
+
+    /// B-2026-09-03-40 — a band of cheap, FULLY VISIBLE branches is declined.
+    ///
+    /// This is the kata-306 `add_digits` prologue: `Vec.new()`, two `len()`
+    /// reads, and an integer literal. Estimated `[11, 21, 21, 1]`, total 54
+    /// against `PAR_RUN_DISPATCH_THRESHOLD_UNITS` (500) — the most obviously
+    /// unprofitable band there is.
+    ///
+    /// It used to be dispatched anyway, because the gate's per-branch
+    /// visibility floor read the `1` (the `carry = 0` literal) as "I could not
+    /// see this branch" when in fact it is the one branch the estimator
+    /// understands perfectly. The floor therefore INVERTED the gate: the
+    /// cheaper a band was, the more certainly it escaped. On kata 306 this
+    /// band dispatched 2.25M times — measured 2.63s against 0.47s sequential,
+    /// and 25.1s against 0.11s on that kata's differential.
+    #[test]
+    fn test_ir_cheap_visible_band_is_declined() {
+        let ir = ir_for_with_concurrency(
+            r#"
+fn add_digits(a: ref Vec[i64], b: ref Vec[i64]) -> i64 {
+    let mut rev: Vec[i64] = Vec.new();
+    let mut i = a.len() - 1;
+    let mut j = b.len() - 1;
+    let mut carry = 0;
+    rev.push(carry);
+    return i + j + rev.len();
+}
+
+fn main() {
+    let x: Vec[i64] = Vec.new();
+    let y: Vec[i64] = Vec.new();
+    println(add_digits(x, y).to_string());
+}
+"#,
+        );
+        let calls = ir.matches("call void @karac_par_run").count();
+        assert_eq!(
+            calls, 0,
+            "a 54-unit band of pure/allocating initializers must not dispatch; \
+             found {calls} karac_par_run call(s); IR:\n{ir}"
+        );
+    }
+
+    /// The other half of B-2026-09-03-40's fix, at IR level: an equally CHEAP
+    /// band whose branches carry a user-resource effect still dispatches.
+    ///
+    /// Structurally this is the same two-`let` shape as the declined band
+    /// above and its branches score just as low — the estimator cannot see
+    /// into `reads(UserDb)` any more than it can see into `a.len()`. The
+    /// difference is that the effect says work may genuinely be hiding there,
+    /// which is exactly what `PAR_RUN_VISIBILITY_THRESHOLD_UNITS` was written
+    /// to protect. Without this test the fix could be "corrected" into
+    /// declining every cheap band, silently killing that case.
+    #[test]
+    fn test_ir_cheap_band_with_resource_effect_still_dispatches() {
+        let ir = ir_for_with_concurrency(
+            r#"
+effect resource UserDb;
+effect resource Orders;
+
+fn fetch_profile(uid: i64) -> i64 reads(UserDb) { uid }
+fn fetch_orders(uid: i64) -> i64 reads(Orders) { uid }
+
+fn main() {
+    let p = fetch_profile(1);
+    let o = fetch_orders(2);
+    println((p + o).to_string());
+}
+"#,
+        );
+        let calls = ir.matches("call void @karac_par_run").count();
+        assert_eq!(
+            calls, 1,
+            "a cheap band whose branches read user resources must still \
+             dispatch — the visibility floor exists for exactly this shape; \
+             found {calls}; IR:\n{ir}"
+        );
     }
 
     /// Three pure top-level lets — the analyzer marks the group as
@@ -9160,8 +9254,21 @@ fn main() {
         // compiler failed verification here. The alloca check pins WHY, so a
         // future regression that merely stops parallelizing this shape does not
         // pass by accident.
+        // B-2026-09-03-40 — `spin` is an independent branch that carries this
+        // group past the band gate's 500-unit dispatch threshold. The two
+        // `a * N` bindings are left BYTE-IDENTICAL because their SYNTAX is the
+        // whole point: the bug was `infer_expr_llvm_type` reading
+        // `ExprKind::Binary` as a scalar, so rewriting either spelling would
+        // stop pinning it.
+        //
+        // Its PLACEMENT is load-bearing and was found by querying the analyzer,
+        // not guessed: the group here is `[println(fst(x,0)), let y = a * 3]`,
+        // so `y` — not `x` — is the binding published out of a branch. `spin`
+        // therefore has to extend THAT run (it sits directly after the `y`
+        // binding, making the group `[5, 6, 7]`); putting it anywhere earlier
+        // splits the run instead and the group vanishes entirely.
         let ir = ir_for_par(
-            "fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }\n             fn main() {\n                 let mut a: Column[i64] = Column.new();\n                 a.push(10); a.push_null(); a.push(30);\n                 let x = a * 2;\n                 println(fst(x, 0));\n                 let y = a * 3;\n                 println(fst(y, 0));\n             }\n",
+            "fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }\n             fn spin(n: i64) -> i64 { let mut s: i64 = 0; let mut i: i64 = 0; while i < n { s = s + i; i = i + 1; } return s; }\n             fn main() {\n                 let mut a: Column[i64] = Column.new();\n                 a.push(10); a.push_null(); a.push(30);\n                 let x = a * 2;\n                 println(fst(x, 0));\n                 let y = a * 3;\n                 let heavy = spin(8);\n                 println(fst(y, 0));\n                 println(heavy - heavy);\n             }\n",
         );
         assert!(
             ir.contains("__par_branches"),
@@ -10522,12 +10629,29 @@ fn main() {
     /// ZERO map frees, the parent exactly one.
     #[test]
     fn test_auto_par_map_slot_branch_does_not_free_published_handle() {
+        // B-2026-09-03-40 — `spin` is a THIRD, independent branch that exists
+        // only to carry the group past the band gate's 500-unit dispatch
+        // threshold. Before that row a bare `String.add` + `Map.new()` pair
+        // (~22 units) formed a band anyway, because the gate's visibility floor
+        // was inverted and never declined a cheap group. The two statements
+        // under test are deliberately left BYTE-IDENTICAL: the ownership
+        // hand-off this test pins happens in their branches, and a reshape that
+        // rewrote them would be pinning a different lowering.
         let ir = ir_for_with_concurrency(
             r#"
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
+
 fn main() {
     let name = "ka" + "ra";
     let mut m: Map[String, i64] = Map.new();
+    let heavy = spin(8);
     m.insert("a", 1);
+    println(heavy - heavy);
 }
 "#,
         );
@@ -10545,7 +10669,7 @@ fn main() {
             let end = ir[start..].find("\n}").map(|e| start + e).unwrap();
             &ir[start..end]
         };
-        for branch in ["__par_branch_0_0", "__par_branch_0_1"] {
+        for branch in ["__par_branch_0_0", "__par_branch_0_1", "__par_branch_0_2"] {
             let frees = fn_body(branch).matches("karac_map_free").count();
             assert_eq!(
                 frees, 0,
@@ -10564,13 +10688,29 @@ fn main() {
     /// after the join (insert + get) and the sibling branch's String
     /// binding must survive to its post-join read. Crash = empty/partial
     /// stdout, so the exact-match assert covers the original SIGSEGV.
+    ///
+    /// B-2026-09-03-40 — carries the same `spin` third branch as its IR twin
+    /// `test_auto_par_map_slot_branch_does_not_free_published_handle`, and for
+    /// the same reason: without it the cheap `String.add` + `Map.new()` band no
+    /// longer forms, there is no join, and this becomes an E2E of SEQUENTIAL
+    /// lowering that passes for the wrong reason. It asserts stdout, so nothing
+    /// would have failed. Keep the two sources in step.
     #[test]
     fn test_auto_par_map_slot_use_after_join_e2e() {
         let out = run_program(
             r#"
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
+
 fn main() {
     let name = "ka" + "ra";
     let mut m: Map[String, i64] = Map.new();
+    let heavy = spin(8);
+    m.insert("c", heavy - heavy);
     m.insert("a", 1);
     m.insert("b", 2);
     let b = m.get("b");
@@ -12696,12 +12836,19 @@ impl Drop for Res {
         println(f"drop {self.id}")
     }
 }
+fn spin(n: i64) -> i64 {
+    let mut s: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n { s = s + i; i = i + 1; }
+    return s;
+}
 fn work(n: i64) -> i64 {
     let a = n + 1;
     let mut m: Map[i64, Res] = Map.new();
+    let heavy = spin(8);
     let _ = m.insert(1, Res { id: 7 });
     let _ = m.insert(1, Res { id: 8 });
-    a + m.len()
+    a + m.len() + heavy - heavy
 }
 fn main() {
     let mut k = 0i64;
@@ -12735,6 +12882,14 @@ fn main() {
             "expected a non-trivial parallel group in fn work; analyzer \
              grouping changed — re-shape this test's source"
         );
+        // B-2026-09-03-40 — `spin` is a third, independent branch carrying the
+        // group past the band gate's 500-unit dispatch threshold; `a` and the
+        // Map let are byte-identical, since the handle transfer under test
+        // happens in THEIR branches. `heavy - heavy` keeps the printed sum
+        // unchanged. Note the analyzer assertion above is unaffected either way
+        // (`is_trivial` did not move) — it is the CODEGEN gate that declines a
+        // cheap fully-visible band now, which is why the premise has to be
+        // guarded at both levels.
         let ir = karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis))
             .expect("compile_to_ir");
         assert!(

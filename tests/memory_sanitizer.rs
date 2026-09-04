@@ -25122,9 +25122,29 @@ fn main() {
 shared struct P { v: i64 }
 shared struct Q { a: i64, b: i64, c: i64 }
 
+// B-2026-09-03-40 — `mix` exists to keep the p/q initializers ABOVE the
+// par_run band gate's dispatch threshold. Before that row the band formed
+// even for three bare struct literals, because the gate's visibility floor
+// was inverted and never declined a cheap group; it now declines one whose
+// work is fully visible and under 500 units, which is these three
+// initializers exactly. Without this the band never forms and the fixture
+// goes vacuous — `par_slot_shared_struct_fixtures_actually_parallelize`
+// (tests/codegen.rs) is the guard that says so, and it compiles this source
+// verbatim, so EDIT BOTH.
+//
+// It does not perturb what is being tested: `mix` is pure and heap-free, the
+// two boxes and the Vec buffer are unchanged (min-allocs still 3), and the
+// printed answer is unchanged because it is `w.len() + q.a - q.a`.
+fn mix(seed: i64) -> i64 {
+    let mut s: i64 = seed;
+    let mut i: i64 = 0;
+    while i < 8 { s = s + i * 3; i = i + 1; }
+    return s;
+}
+
 fn build(seed: i64) -> i64 {
-    let p: P = P { v: seed };
-    let q: Q = Q { a: seed, b: seed, c: seed };
+    let p: P = P { v: mix(seed) };
+    let q: Q = Q { a: mix(seed), b: mix(seed), c: mix(seed) };
     let mut w: Vec[P] = Vec.new();
     w.push(p);
     return w.len() + q.a - q.a;
@@ -25193,9 +25213,29 @@ fn main() {
 shared struct P { v: i64 }
 shared struct Q { a: i64, b: i64, c: i64 }
 
+// B-2026-09-03-40 — `mix` exists to keep the p/q initializers ABOVE the
+// par_run band gate's dispatch threshold. Before that row the band formed
+// even for three bare struct literals, because the gate's visibility floor
+// was inverted and never declined a cheap group; it now declines one whose
+// work is fully visible and under 500 units, which is these three
+// initializers exactly. Without this the band never forms and the fixture
+// goes vacuous — `par_slot_shared_struct_fixtures_actually_parallelize`
+// (tests/codegen.rs) is the guard that says so, and it compiles this source
+// verbatim, so EDIT BOTH.
+//
+// It does not perturb what is being tested: `mix` is pure and heap-free, the
+// two boxes and the Vec buffer are unchanged (min-allocs still 3), and the
+// printed answer is unchanged because it is `w.len() + q.a - q.a`.
+fn mix(seed: i64) -> i64 {
+    let mut s: i64 = seed;
+    let mut i: i64 = 0;
+    while i < 8 { s = s + i * 3; i = i + 1; }
+    return s;
+}
+
 fn build(seed: i64) -> i64 {
-    let p: P = P { v: seed };
-    let q: Q = Q { a: seed, b: seed, c: seed };
+    let p: P = P { v: mix(seed) };
+    let q: Q = Q { a: mix(seed), b: mix(seed), c: mix(seed) };
     let mut w: Vec[i64] = Vec.new();
     w.push(p.v);
     return w.len() + q.a - q.a;
@@ -67822,59 +67862,82 @@ fn s_of(i: i64) -> String {
     s.push_str(f"{i}");
     return s;
 }
-fn if_let_spelling() -> bool {
-    let h: H = H { r: R { s: s_of(1) }, n: 4 };
+fn if_let_spelling(k: i64) -> bool {
+    let h: H = H { r: R { s: s_of(k + 1) }, n: 4 };
     let mut hit: bool = false;
     if let H { r, .. } = h { hit = r.s.contains("padded"); }
     return hit;
 }
-fn let_else_spelling() -> bool {
-    let h: H = H { r: R { s: s_of(2) }, n: 4 };
+fn let_else_spelling(k: i64) -> bool {
+    let h: H = H { r: R { s: s_of(k + 2) }, n: 4 };
     let H { r, .. } = h else { return false };
     return r.s.contains("padded");
 }
-fn nested_match_spelling() -> bool {
-    let q: Q = Q { h: H { r: R { s: s_of(3) }, n: 4 } };
+fn nested_match_spelling(k: i64) -> bool {
+    let q: Q = Q { h: H { r: R { s: s_of(k + 3) }, n: 4 } };
     let mut hit: bool = false;
     match q { Q { h: H { r, .. } } => { hit = r.s.contains("padded"); } }
     return hit;
 }
-fn nested_if_let_spelling() -> bool {
-    let q: Q = Q { h: H { r: R { s: s_of(4) }, n: 4 } };
+fn nested_if_let_spelling(k: i64) -> bool {
+    let q: Q = Q { h: H { r: R { s: s_of(k + 4) }, n: 4 } };
     let mut hit: bool = false;
     if let Q { h: H { r, .. } } = q { hit = r.s.contains("padded"); }
     return hit;
 }
-fn two_fields_one_taken() -> bool {
-    let w: W = W { a: R { s: s_of(5) }, b: R { s: s_of(6) } };
+fn two_fields_one_taken(k: i64) -> bool {
+    let w: W = W { a: R { s: s_of(k + 5) }, b: R { s: s_of(k + 6) } };
     let mut hit: bool = false;
     if let W { a, .. } = w { hit = a.s.contains("padded"); }
     return hit;
 }
-fn flat_match_control() -> bool {
-    let h: H = H { r: R { s: s_of(7) }, n: 4 };
+fn flat_match_control(k: i64) -> bool {
+    let h: H = H { r: R { s: s_of(k + 7) }, n: 4 };
     let mut hit: bool = false;
     match h { H { r, .. } => { hit = r.s.contains("padded"); } }
     return hit;
 }
 fn main() {
-    println(if_let_spelling());
-    println(let_else_spelling());
-    println(nested_match_spelling());
-    println(nested_if_let_spelling());
-    println(two_fields_one_taken());
-    println(flat_match_control());
+    // B-2026-09-03-40 — `k` is RUNTIME-OPAQUE (argv length), and every payload
+    // is derived from it. With the literal seeds this fixture used to carry,
+    // `s_of(1)` builds a compile-time-known string and `contains("padded")` is
+    // provably true, so once the spurious auto-par band around these bodies
+    // stopped forming and LLVM could see through them, it folded the payloads
+    // away entirely: allocations fell 99 -> 31 and the min-allocs floor caught
+    // it. The floor was RIGHT and the fixture was leaning on the band to block
+    // constant-folding. Seeding from argv restores real allocation.
+    let k: i64 = env.args().len();
+    println(if_let_spelling(k));
+    println(let_else_spelling(k));
+    println(nested_match_spelling(k));
+    println(nested_if_let_spelling(k));
+    println(two_fields_one_taken(k));
+    println(flat_match_control(k));
     println("done");
 }
 "#,
             &["true", "true", "true", "true", "true", "true", "done"],
             "every-struct-destructure-spelling-frees-once",
-            // Measured 99 on the fixed compiler. The floor is set just under
-            // that rather than at the sibling's 200 (which was calibrated
-            // against a fixture doing more work): its job is to fail if a
-            // future optimizer folds these payloads away, and a floor above
-            // the real count would fail every run instead.
-            80,
+            // Measured 36 on the fixed compiler; the floor sits under that with
+            // margin. Its job is unchanged — fail if a future optimizer folds
+            // these payloads away, which would drop the count to near zero.
+            //
+            // It read 80 until B-2026-09-03-40, calibrated against a measured
+            // 99. That 99 was NOT 99 payload allocations: roughly 63 of them
+            // were auto-par machinery (per-branch env structs and the slot
+            // buffer) from a band these bodies should never have formed — the
+            // band gate's visibility floor was inverted and could not decline a
+            // cheap group. With the gate fixed the band is gone and so is its
+            // overhead, which is a WIN being reported here as a loss. The
+            // payloads themselves are intact: all seven still allocate, and
+            // seeding them from argv above (rather than from literals) added
+            // five more, because the literal spellings were foldable in
+            // principle once the band stopped blocking inlining.
+            //
+            // Lowering a floor deserves suspicion, so state the check plainly:
+            // 36 with payloads present, near zero if they are folded. The
+            // separation the floor relies on is intact.
+            28,
         );
     }
     /// B-2026-08-31-23 under ASAN/LSan — a consuming arm over a BOXED
