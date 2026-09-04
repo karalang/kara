@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 365 |
 | run-vs-build | 326 |
-| leak | 260 |
+| leak | 261 |
 | missing-feature | 194 |
 | double-free | 171 |
 | codegen-gap | 164 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1428 |
+| codegen | 1429 |
 | interp | 347 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -147,7 +147,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-24 | 2026-09-02 | interp+codegen | medium | A MATCH ARM THAT HANDS ITS ELEMENT/PAYLOAD OUT OF THE FUNCTION RUNS THE `Drop` BODY TWICE ON ALL FOUR SURFACES -- `dR4 got4 dR4` where one is due. The scrutinee's walk still fires at the callee's scope exit on a value the arm already gave away. The ENUM spelling is wrong identically, so this is about the ESCAPE, not about tuples; an arm that moves into a BY-VALUE CALLEE is correct everywhere | — |
 | B-2026-09-02-31 | 2026-09-02 | codegen | low | THE BARE-ARM SPELLING OF B-2026-09-01-26 STILL LEAKS -- `match mkVe(9) { Ve.A(s) => s, .. }` in a nested expression position loses 15 B per evaluation at both opt levels where the BRACED `=> { s }` spelling is now clean. Excluded by that fix's block-bodied-arm condition, which is load-bearing: dropping it fails BOTH `asan_generic_enum_heap_payload_bind_return_no_leak_or_double_free` and `selfhost_codegen_matches_seed_run`, because a bare-armed match is also how the generic-enum debox hands a value out of its frame | — |
 | B-2026-09-02-41 | 2026-09-02 | interp+codegen | medium | THE TWO-STEP DESTRUCTURE OF A NESTED TUPLE FIELD SPLITS THE BACKENDS -- `let (inner, y) = h.pe; let (r, x) = inner; let m = r;` runs ONE `Drop` body under `--interp` and TWO on `karac run` / `karac build` / `KARAC_AUTO_PAR=0`. The interpreter is right; the compiled side records nothing for the tuple-typed leaf under an owner-runs-bodies source | — |
-| B-2026-09-02-46 | 2026-09-02 | codegen | medium | A BOXED ENUM PAYLOAD INSIDE A MONOMORPH LEAKS ITS BOX WHENEVER THE ARM BINDS AND READS IT -- 48 bytes per CALL, on `Option` and `Result` alike, for a free fn and a method alike; the non-generic twin is clean, and so is the same monomorph when the arm does NOT read the payload | — |
 | B-2026-09-03-4 | 2026-09-03 | interp+codegen | medium | A MATCH ARM (OR `let`) THAT RETURNS ITS ELEMENT WRAPPED IN AN ENUM CONSTRUCTOR RUNS THE `Drop` BODY TWICE AND THE CALLER'S BINDING NEVER RUNS ITS OWN -- `fn f(t: (R, i64)) -> Option[R] { match t { (r, k) => { Some(r) } } }` prints `dR4 dR4 got` on all four surfaces where one body is due and it should fire at the CALLER's binding. SPELLING-INDEPENDENT: the `let (r, k) = t; Some(r)` form measures identically, which is what separates it from B-2026-09-02-24 | — |
 | B-2026-09-03-7 | 2026-09-03 | interp+codegen | medium | A BY-VALUE PARAM DESTRUCTURE INSIDE A METHOD PLACES THE LEAF'S `Drop` BODY AT THE CALLEE'S SCOPE EXIT ON THE COMPILED BACKENDS AND AT THE LEAF'S NLL DEATH UNDER `--interp` -- one body either way, different point, and the TUPLE and STRUCT spellings are equally affected. The interpreter has an explicit `method_frame_caller_retains_args` bail; codegen's `current_fn_param_names` cannot tell a method frame from a free one, so it has no way to ask the question at all | — |
 | B-2026-09-03-9 | 2026-09-03 | interp | medium | A `shared struct` HELD IN A STRUCT FIELD OR TUPLE ELEMENT NEVER RUNS ITS `Drop` BODY UNDER `--interp`, while both compiled backends run it exactly once -- `mid v14 post` against `mid v14 post dS14`. Five of six spellings diverge and the BARE binding (`let s: S = ...; return s`) is the only one the interpreter gets right, so return position is not the discriminator: the containing aggregate is | — |
@@ -167,6 +166,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-9 | 2026-09-04 | codegen | medium | A FRESH TUPLE SOURCE'S `Option` BINDING LEAF STILL LOSES ITS PAYLOAD'S `Drop` BODY -- `let (_, o) = (mk(32), Option.Some(mk(132)));` and `let (a, b) = ...` run the body under `--interp` and on no compiled surface, while the WILDCARD spelling of the same literal is correct on all four since B-2026-09-03-39. The element is typed correctly now; what the leaf lacks is a memory owner it can hang the walker on, and the owner that fits DOUBLE-FREES a moved leaf (B-2026-09-04-10) | — |
 | B-2026-09-04-10 | 2026-09-04 | codegen | high | AN `Option[<struct>]` DESTRUCTURE LEAF OFF A PLACE SOURCE FREES ITS PAYLOAD TWICE WHEN THE LEAF IS MOVED WHOLE -- `let (_, o) = t; let q = o;` double-frees and `return o` corrupts the allocation header, on an UNMODIFIED `main`. B-2026-09-03-15 gave the leaf sole ownership of the boxed payload and a consuming `match` retracts it; a whole-value MOVE has no retraction. A plain struct element moved the same two ways is clean | — |
 | B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
+| B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
 
 ### Relocated
 
@@ -2172,6 +2172,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-02-43 | codegen | medium | A LOCAL STRUCT'S PROJECTION DESTRUCTURE RUNS THE ELEMENT'S `Drop` BODY ON A CAP-ZEROED HUSK, BEFORE THE LIVE READ, and then again -- `let h = H { pe:… | 81c5100 |
 | B-2026-09-02-44 | interp+codegen | medium | A WHOLE-REBIND OF A STRUCT PARAM BEFORE PROJECTING STILL DOUBLES THE ELEMENT'S `Drop` BODY -- `let h2 = h; let (r, k) = h2.pe; let m = r;` runs TWO b… | 5cd4179 |
 | B-2026-09-02-45 | codegen | high | A FUNCTION PARAMETER'S `Option`/`Result` PAYLOAD TYPE OUTLIVES ITS FUNCTION AND IS INHERITED BY ANY SAME-NAMED BINDING LATER IN THE PROGRAM -- an UNU… | 76fd9e1 |
+| B-2026-09-02-46 | codegen | medium | A BOXED ENUM PAYLOAD INSIDE A MONOMORPH LEAKS ITS BOX WHENEVER THE ARM BINDS AND READS IT -- 48 bytes per CALL, on `Option` and `Result` alike, for a… | e5383380 |
 | B-2026-09-02-47 | typecheck+codegen | high | AN IMPL-LEVEL BOUND IS NEVER DISCHARGED AT AN ASSOCIATED-FUNCTION CALL SITE -- `impl[T: Copy] Pair[T] { fn twin(v: T) }` accepts `Pair.twin(<non-Copy… | a98f719 |
 | B-2026-09-03-1 | interp | low | `test_narrow_float_assoc_call_namespace_runs` SEEDS FROM `env.args().len()`, SO IT PASSES A FULL RUN AND FAILS THE DOCUMENTED SINGLE-TEST WORKFLOW --… | 565dab1 |
 | B-2026-09-03-2 | codegen | high | FORWARDING A GENERIC `Option[T]` PARAM TO A SECOND GENERIC FUNCTION PRINTS A RAW POINTER on all three COMPILED surfaces -- `fn fwd[T](x: Option[T]) {… | cbe86cd |

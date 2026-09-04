@@ -69867,7 +69867,7 @@ fn main() {
     // deliberately, because a two-`String` tuple additionally loses its
     // interior in a monomorph (6 B here, measured) and that is a separate
     // live defect this fixture must not silently depend on. See
-    // B-2026-09-04-7.
+    // B-2026-09-04-12.
     let p = (n, n + 1, n + 2, n + 3);
     let c2 = takesOpt(Some(p));
 
