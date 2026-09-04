@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 365 |
+| miscompile | 366 |
 | run-vs-build | 332 |
 | leak | 262 |
 | missing-feature | 194 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1445 |
-| interp | 349 |
+| codegen | 1446 |
+| interp | 350 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 71 |
@@ -164,7 +164,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-26 | 2026-09-04 | codegen | medium | A `Result.Ok` CTOR ELEMENT OF A TUPLE TEMP ARGUMENT LOSES ITS PAYLOAD'S `Drop` BODY, and the B-2026-09-03-21 fix cannot simply be widened to it -- filling the erased element type makes the body run and LEAKS the boxed payload's 56 B envelope, because the `Result` cell is memory-CLEAN pre-fix where the `Option` cell leaks 11 B, so something already owns that box | — |
 | B-2026-09-04-27 | 2026-09-04 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop` RUNS NO BODY WHEN THE VALUE IS A `Vec` ELEMENT -- `let v: Vec[Box3[String]] = [Box3 { .. }]` prints `dB4` under `--interp` and nothing on any of the three compiled backends. B-2026-09-04-4 fixed both BINDING sites (the `let` and the callee's by-value param) by resolving the binding's instantiation to a per-monomorph `karac_drop_S$<concrete>` wrapper; a container element is reached instead by the per-element drain, which selects an element drop BY TYPE and deliberately routes a `Drop`-bearing struct past the wrapper, so there is no per-monomorph body for it to run. The non-generic control is correct on all four surfaces | — |
 | B-2026-09-04-28 | 2026-09-04 | codegen | medium | AN `Array[T, N]` READ OUT OF A STRUCT FIELD LOSES ITS ELEMENT TYPE FOR CODEGEN, so a field access through one of its elements fails to lower -- `let x = h.a; let e = ref x[0]; e.id` is `2/tag2` under `--interp` and `cannot resolve field 'id' on this receiver` on both compiled backends, identically for a PLAIN and a `shared` struct; it also blocks measuring whether a `shared struct`'s `Array` field is copied or moved (B-2026-09-04-17) | — |
-| B-2026-09-04-29 | 2026-09-04 | codegen | high | A BY-VALUE PARAM DESTRUCTURE'S `Result` LEAF IS WRONG THREE WAYS ON THE PARAM SOURCE ITSELF -- `fn f(h: HoRes) { let HoRes { a, b } = h; .. }`: REBOUND (`let c = b; match c { Ok(r) => .. }`) the payload's `Drop` body runs twice on both compiled backends; through a `self` RECEIVER (`fn m(self) { let HoRes { a, b } = self; match b .. }`) jit aborts with glibc's `free(): double free detected in tcache 2` and aot loses the body, and unread it is lost on both; ESCAPED as an arm value (`let g = match b { Ok(r) => r, .. }`) the body runs twice on ALL FOUR surfaces (B-2026-09-02-24's shape). The projection twin of each splits identically, so B-2026-09-04-25 deliberately left them | — |
+| B-2026-09-04-30 | 2026-09-04 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self) { println(self.a.id) }` prints `rd1` and no `dR` line under --interp, jit and aot alike; `mk(3).m()` loses `R`'s own body the same way. A LOCAL receiver (`let h = ..; h.m()`) runs them from the caller after the call, and there the interpreter runs a destructured receiver's leaf bodies as well -- twice. Codegen treats `self` as caller-retained like a by-value param; a temp has no caller walk, so nobody owns the bodies | — |
 
 ### Relocated
 
@@ -2222,6 +2222,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-20 | codegen | medium | A `Result` FIELD OF A FRESH DESTRUCTURE SOURCE HAS NO OWNER -- `let HoStr { a, b } = mkhs(9);` over `b: Result[String, String]` leaks the payload's b… | bfa5876 |
 | B-2026-09-04-21 | codegen | high | A STRUCT-FIELD DESTRUCTURE OVER A PROJECTION SOURCE (`let HoRes { a, b } = w.inner;`) IS WRONG THREE WAYS -- a `Result[R, String]` leaf CONSUMED by a… | 9a97efa |
 | B-2026-09-04-25 | codegen | high | A STRUCT DESTRUCTURED OUT OF A PROJECTION OF A BY-VALUE PARAM RUNS THE `Result` LEAF'S PAYLOAD BODY TWICE ON AOT AND DOUBLE-FREES ON JIT -- `fn takew… | e084cf9 |
+| B-2026-09-04-29 | codegen | high | A BY-VALUE PARAM DESTRUCTURE'S `Result` LEAF IS WRONG THREE WAYS ON THE PARAM SOURCE ITSELF -- `fn f(h: HoRes) { let HoRes { a, b } = h; . | 481a5b0 |
 
 </details>
 
