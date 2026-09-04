@@ -1188,6 +1188,32 @@ impl<'a> super::Interpreter<'a> {
         true
     }
 
+    /// B-2026-09-04-13 — does this `shared` / `par` struct hold a field whose
+    /// own type declares `impl Drop`, directly or through a nested plain
+    /// struct? Mirrors codegen's `plain_struct_needs_drop_walk`, and gates the
+    /// shared arm's field walk so a holder with no such field keeps its
+    /// present behaviour byte-for-byte — including whether its slot is
+    /// released, which decides when an alias reaches refcount 1.
+    fn shared_holder_has_drop_bearing_field(&self, type_name: &str) -> bool {
+        self.holder_has_drop_bearing_field_inner(type_name, 0)
+    }
+
+    fn holder_has_drop_bearing_field_inner(&self, type_name: &str, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let Some(def) = self.find_struct_def(type_name) else {
+            return false;
+        };
+        def.fields.clone().iter().any(|f| {
+            let Some(head) = Self::declared_field_type_head(&f.ty) else {
+                return false;
+            };
+            self.program.drop_method_keys.contains_key(&head)
+                || self.holder_has_drop_bearing_field_inner(&head, depth + 1)
+        })
+    }
+
     fn invoke_user_drop_if_applicable(&mut self, name: &str) {
         // A binding whose whole value moved into a variant constructor runs
         // NOTHING — own body or walks — the enum's owner does (B-2026-07-30-11
@@ -1247,10 +1273,31 @@ impl<'a> super::Interpreter<'a> {
         // Arc-drop hook; codegen handles them — the interpreter gap is
         // tracked under the L940 drop-reconciliation item.
         if let Some(count) = shared_count {
-            if has_user_drop {
+            // B-2026-09-04-13 — a shared holder's FIELDS get the same walk
+            // every other path in this function pairs with the own-body call.
+            // This arm was the one that did not, so `shared struct Sh { a: R }`
+            // with a `Drop`-bearing `R` ran NO field body on any surface while
+            // the identical non-shared struct ran both — one keyword's
+            // difference. Parent body first, then the fields, exactly as the
+            // value-type path below and as codegen's `__karac_rc_drop_<T>`.
+            //
+            // Gated on the type actually having a Drop-bearing field so a
+            // holder with none keeps its present behaviour exactly, including
+            // whether its slot is released.
+            let walks_fields = self.shared_holder_has_drop_bearing_field(&type_name);
+            if has_user_drop || walks_fields {
                 if count == 1 {
-                    self.run_user_drop_body(&type_name, name);
+                    if has_user_drop {
+                        self.run_user_drop_body(&type_name, name);
+                    }
+                    if walks_fields {
+                        self.drop_user_drop_fields_of_binding(name);
+                    }
                 }
+                // The release must extend to the walks-fields case too, not
+                // just the own-body case: without it an ALIAS (`let h2 = h;`)
+                // keeps the count above 1 at every drain, 1 is never reached,
+                // and the field bodies never fire at all.
                 self.env.remove_local(name);
             }
             return;
@@ -2975,6 +3022,42 @@ impl<'a> super::Interpreter<'a> {
     /// struct-field-only, and matching its scope exactly is what keeps the two
     /// backends in step.
     pub(crate) fn drop_user_drop_fields_of_value(&mut self, value: &Value) {
+        // B-2026-09-04-13 — a `shared struct` is `Value::SharedStruct`, a
+        // distinct variant, so the `Value::Struct` destructure below drops it
+        // on the floor and no field of a shared holder is ever walked. Present
+        // it as the equivalent `Value::Struct` and recurse, which reuses the
+        // whole declared-type-gated walk (Option/Result fields, Vec elements,
+        // tuple elements, nested structs) rather than restating it.
+        //
+        // Placed BEFORE the mask is taken so the recursive call consumes it
+        // normally; taking it here would swallow the mask one level early.
+        //
+        // A nested `Value::SharedStruct` FIELD is deliberately left out of the
+        // view. Its own body is decided by refcount, not by this walk
+        // (B-2026-09-03-9 is that gap, and is not this row), so including it
+        // would start running its fields' bodies off the OUTER holder's death
+        // — a second owner for values this walk does not own.
+        if let Value::SharedStruct(inner) = value {
+            let mut fields: std::collections::HashMap<String, Value> = inner
+                .immutable_fields
+                .iter()
+                .filter(|(_, v)| !matches!(v, Value::SharedStruct(_)))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            for (k, cell) in &inner.mut_fields {
+                if let Ok(g) = cell.value.read() {
+                    if !matches!(&*g, Value::SharedStruct(_)) {
+                        fields.insert(k.clone(), g.clone());
+                    }
+                }
+            }
+            let view = Value::Struct {
+                name: inner.name.clone(),
+                fields,
+            };
+            self.drop_user_drop_fields_of_value(&view);
+            return;
+        }
         // B-2026-08-29-33 — TAKEN, not borrowed: the mask applies to this level
         // only, so the recursion below into nested struct fields cannot inherit
         // it through a field-name collision.

@@ -46629,6 +46629,51 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-13 — a `shared` / `par` holder runs its owned fields'
+    /// `Drop` bodies, in reverse declaration order, at the same point the
+    /// identical NON-shared struct does.
+    ///
+    /// The gap was one keyword wide: `shared struct Sh { a: R, b: R }` with a
+    /// `Drop`-bearing `R` printed NEITHER body on any of the four surfaces,
+    /// while `struct Sh` printed both. Two independent causes, which is why
+    /// all four agreed and the A/B rule caught nothing —
+    /// `emit_shared_struct_rc_drop_fn` had no `SharedFieldKind` arm for a
+    /// plain struct field (it fell to `None`, a no-op), and the interpreter's
+    /// shared arm returned without the field walk every other path pairs with
+    /// the own-body call.
+    ///
+    /// The `par` cell is not decoration: `par` is a separate flag over the
+    /// same Arc storage, and it lost its bodies identically.
+    ///
+    /// PLACEMENT is asserted, not just presence. `nll_fireable_binding`
+    /// admitted only shared types with their OWN `impl Drop` to the NLL
+    /// channel, so a holder without one fired at scope exit — invisible while
+    /// its field bodies never ran, and a run/build divergence the moment they
+    /// did (`mid dR109 dR9` compiled against `dR109 dR9 mid` interpreted).
+    /// The bodies must land BEFORE `mid`, exactly as the plain control does.
+    #[test]
+    fn test_e2e_shared_holder_runs_its_field_drop_bodies() {
+        const BODY: &str = "struct R { id: i64, tag: String }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}/{self.tag}\") } }\n\
+             fn mk(n: i64) -> R { return R { id: n, tag: f\"t{n}\" }; }\n";
+        // Reverse declaration order (design.md § Drop ordering), then `mid`.
+        const EXPECT: &str = "dR109/t109\ndR9/t9\nmid\n";
+        for kw in ["struct", "shared struct", "par struct"] {
+            assert_eq!(
+                run_program(&format!(
+                    "{BODY}{kw} Sh {{ a: R, b: R }}\n\
+                     fn main() {{\n\
+                         let h = Sh {{ a: mk(9), b: mk(109) }};\n\
+                         println(\"mid\")\n\
+                     }}"
+                ))
+                .as_deref(),
+                Some(EXPECT),
+                "holder spelled `{kw}` did not run its field Drop bodies",
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_slice_and_map_elem_field_read_is_a_copy() {
         // B-2026-08-13-5's VALUE side. The clone was extended to a BORROWED

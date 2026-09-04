@@ -9147,12 +9147,22 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn nll_fireable_binding<'a>(&self, a: &'a CleanupAction<'ctx>) -> Option<&'a str> {
         match a {
             // B-2026-08-09-3 — the RC tier rides this channel via `RcDec`,
-            // restricted to shared types carrying their OWN `impl Drop`.
+            // restricted to shared types carrying their OWN `impl Drop`...
+            // B-2026-09-04-13 — ...OR now running an observable user `Drop`
+            // body for one of their plain aggregate FIELDS. Both cases put a
+            // user body on the refcount's 0-transition, so both have to fire
+            // at the same point; admitting only the first placed a holder
+            // without its own `impl Drop` at scope exit, which was invisible
+            // while its field bodies never ran and became a run/build
+            // divergence the moment they did.
             CleanupAction::RcDec {
                 name, heap_type, ..
             } => self
                 .struct_name_for_heap_type(*heap_type)
-                .is_some_and(|n| self.drop_rc.user_drop_wrapper_fns.contains_key(&n))
+                .is_some_and(|n| {
+                    self.drop_rc.user_drop_wrapper_fns.contains_key(&n)
+                        || self.shared_holder_runs_field_bodies(&n)
+                })
                 .then_some(name.as_str()),
             // B-2026-07-30-11 / B-2026-08-27-8 (container element bodies),
             // B-2026-07-31-5 (a value enum's own body) — see

@@ -31316,6 +31316,43 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-13 — a `shared struct`'s plain-struct FIELD must have its
+    /// nested heap freed. The field fell to `SharedFieldKind::None`, a no-op,
+    /// so the walk neither ran its `Drop` body nor freed its buffer: 134 B
+    /// over two `String`s, measured, and identical with the `impl Drop`
+    /// deleted — so this half was never about drop bodies at all.
+    ///
+    /// The tags are long on purpose. Short ones are inline, and with the field
+    /// never observed LLVM elides the construction entirely, which is exactly
+    /// why the original row recorded "memory is not the casualty" and measured
+    /// a balanced heap. Reading both fields forces materialization.
+    #[test]
+    fn asan_shared_holder_frees_its_plain_struct_fields_heap() {
+        assert_clean_asan_run(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(n: i64) -> R { return R { id: n, tag: f"tag-{n}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }; }
+shared struct Sh { a: R, b: R }
+fn main() {
+    let seed: Vec[i64] = [9, 109];
+    let h = Sh { a: mk(seed[0]), b: mk(seed[1]) };
+    println(f"read {h.a.tag} | {h.b.tag}");
+    println("mid")
+}
+"#,
+            &[
+                "read tag-9-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | tag-109-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                // Reverse declaration order at the holder's NLL endpoint,
+                // then `mid` — the same placement the non-shared control has.
+                "dR109",
+                "dR9",
+                "mid",
+            ],
+            "shared holder frees its plain-struct field's heap (B-2026-09-04-13)",
+        );
+    }
+
     /// B-2026-08-13-6 — a heap field read off a `shared struct` is deep-cloned,
     /// so it no longer double-frees.
     ///

@@ -4638,6 +4638,91 @@ impl<'ctx> super::Codegen<'ctx> {
     /// 100-node-chain leak (2026-05-17): without recursive drop, every
     /// `add_two_numbers` call leaked 99 transitive nodes (only the
     /// head was freed at scope-exit; `head.next.…` was stranded).
+    /// B-2026-09-04-13 — does this shared type's `__karac_rc_drop_<T>` walk
+    /// run an OBSERVABLE user `Drop` body for one of its plain aggregate
+    /// fields? Distinct from `plain_struct_needs_drop_walk`, which is true for
+    /// a heap-only field as well: this asks only about bodies, because it
+    /// decides NLL PLACEMENT and a free has no observable time.
+    ///
+    /// Consulted by `nll_fireable_binding`, whose RC arm previously admitted
+    /// only shared types carrying their OWN `impl Drop`. A holder without one
+    /// fired at scope exit instead, which was invisible while its field bodies
+    /// never ran at all — and became a run/build divergence the moment they
+    /// did (`mid dR109 dR9` compiled against `dR109 dR9 mid` interpreted).
+    pub(super) fn shared_holder_runs_field_bodies(&self, struct_name: &str) -> bool {
+        let Some(heads) = self.type_decls.struct_field_type_names.get(struct_name) else {
+            return false;
+        };
+        heads.iter().any(|h| {
+            h.as_deref().is_some_and(|n| {
+                !self.type_decls.shared_types.contains_key(n)
+                    && self.type_decls.struct_field_type_names.contains_key(n)
+                    && self.plain_struct_has_user_drop_deep(n, 0)
+            })
+        })
+    }
+
+    /// Whether `name`, or a plain struct reachable through its fields,
+    /// declares `impl Drop`. Depth-bounded like its walk sibling.
+    fn plain_struct_has_user_drop_deep(&self, name: &str, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        if self
+            .program_snapshot
+            .as_ref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(name))
+        {
+            return true;
+        }
+        let Some(heads) = self.type_decls.struct_field_type_names.get(name) else {
+            return false;
+        };
+        heads.iter().any(|h| {
+            h.as_deref()
+                .is_some_and(|n| self.plain_struct_has_user_drop_deep(n, depth + 1))
+        })
+    }
+
+    /// B-2026-09-04-13 — does a PLAIN (non-shared) struct need a drop walk?
+    /// True when it declares its own `impl Drop`, or when any field owns heap
+    /// (Vec/String/Map/Set), holds a shared box, or is itself such a struct.
+    ///
+    /// Used to decide whether a plain struct FIELD of a `shared struct` is
+    /// walkable. Gating on this rather than on "is a known struct name" keeps
+    /// `any_walkable` false — and so keeps the plain-`free` fast path — for a
+    /// holder whose nested structs are primitive-only, which is what every
+    /// such holder got before this arm existed.
+    ///
+    /// `depth` bounds mutual recursion. An `Option[T]` / `Result[O, E]` field
+    /// reports false: its head is the built-in, whose payload this predicate
+    /// cannot see, so such a field is left to the existing arms — a recorded
+    /// remainder, not a claim that it needs no walk.
+    fn plain_struct_needs_drop_walk(&self, name: &str, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        if self
+            .program_snapshot
+            .as_ref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(name))
+        {
+            return true;
+        }
+        let Some(heads) = self.type_decls.struct_field_type_names.get(name) else {
+            return false;
+        };
+        heads.iter().any(|h| match h.as_deref() {
+            Some("Vec") | Some("VecDeque") | Some("String") | Some("Map") | Some("HashMap")
+            | Some("Set") | Some("HashSet") => true,
+            Some(other) => {
+                self.type_decls.shared_types.contains_key(other)
+                    || self.plain_struct_needs_drop_walk(other, depth + 1)
+            }
+            None => false,
+        })
+    }
+
     pub(super) fn emit_shared_struct_rc_drop_fn(
         &mut self,
         struct_name: &str,
@@ -4690,6 +4775,24 @@ impl<'ctx> super::Codegen<'ctx> {
             /// single `ptr` (null = None, non-null = Some), not the 4-i64
             /// Option enum. Drop path collapses to one null-check + dec.
             OptionSharedNiche(super::state::SharedTypeInfo<'ctx>),
+            /// B-2026-09-04-13 — a PLAIN (non-shared) struct field whose type
+            /// needs drop glue: its own user `impl Drop` body, and/or heap
+            /// owned by its fields. Carries the struct's NAME; the walk
+            /// resolves that to `karac_drop_<T>` (user body + interior) when
+            /// the type declares `impl Drop`, else to the interior-only
+            /// `__karac_drop_struct_<T>`. Before this arm existed such a field
+            /// matched none of the head-name cases above and fell to `None`,
+            /// which is a no-op in the walk — so a `shared struct` holder ran
+            /// NO field body on any surface and never freed a nested field's
+            /// heap (measured: 134 B over two `String` fields).
+            ///
+            /// Safe only because B-2026-09-04-15 (ad2f1b3) rejects moving an
+            /// aggregate field OUT of a shared struct. Before that rule this
+            /// same arm turned `let r = h.a;` into a double free: the box kept
+            /// a slot the moved-out owner also owned. With the move rejected
+            /// the box is the sole owner and the walk has nothing to collide
+            /// with — which is why these two rows had to land in this order.
+            PlainAggregate(String),
             /// `weak T` field: a single nullable box pointer. Drop is a
             /// `karac_weak_drop` (weak -= 1, freeing the box iff both counts
             /// hit zero) — NEVER the strong recursive dec (a weak ref does not
@@ -4727,6 +4830,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     Some("Vec") | Some("VecDeque") | Some("String") => SharedFieldKind::VecOrString,
                     Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet") => {
                         SharedFieldKind::MapOrSet
+                    }
+                    // B-2026-09-04-13 — a plain struct field that needs drop
+                    // glue. Gated on the predicate rather than on "is a known
+                    // struct" so a primitive-only nested struct still reports
+                    // `None` and leaves `any_walkable` false, keeping the
+                    // plain-`free` fast path for shapes that had it before.
+                    Some(other)
+                        if self.type_decls.struct_field_type_names.contains_key(other)
+                            && self.plain_struct_needs_drop_walk(other, 0) =>
+                    {
+                        SharedFieldKind::PlainAggregate(other.to_string())
                     }
                     _ => SharedFieldKind::None,
                 }
@@ -4784,6 +4898,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // B-2026-09-04-13 — resolve each plain-aggregate field's drop fn HERE,
+        // in the pre-pass, for the same reason the sibling loop above runs
+        // here: `emit_struct_drop_synthesis` emits a function of its own and
+        // moves the builder, so it must not be called once we are positioned
+        // inside this fn's entry block. Reverse declaration order (design.md
+        // § Drop ordering) — the order the value-type path's field walk
+        // already uses, and therefore the one run/build parity requires now
+        // that these bodies are observable.
+        let mut plain_agg_drops: Vec<(usize, FunctionValue<'ctx>)> = Vec::new();
+        for (i, kind) in kinds.iter().enumerate().rev() {
+            if let SharedFieldKind::PlainAggregate(tn) = kind {
+                // `karac_drop_<T>` runs the user body AND the interior walk;
+                // `__karac_drop_struct_<T>` is the interior alone. Prefer the
+                // wrapper when the type declares `impl Drop`, exactly as
+                // `track_user_drop_var` does for a value binding — calling
+                // both would run the interior twice.
+                let f = match self.drop_rc.user_drop_wrapper_fns.get(tn.as_str()) {
+                    Some(f) => Some(*f),
+                    None => self.emit_struct_drop_synthesis(tn),
+                };
+                if let Some(f) = f {
+                    plain_agg_drops.push((i, f));
+                }
             }
         }
 
@@ -4890,6 +5030,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // synth; a weak-targeted type is force-headed, so base 2 against
         // `heap_type` is exact.) `docs/spikes/weak-refs.md`.
         let field_base: u32 = if info.has_weak_header { 2 } else { 1 };
+        // B-2026-09-04-13 — plain aggregate fields, reverse declaration order.
+        // The field lives INLINE in the box, so a GEP to its slot is already
+        // the pointer-to-struct-value these fns expect (the same thing a value
+        // binding's alloca is). That is why this needs no `self_slot` wrapper,
+        // unlike the user-body call above: a shared-struct METHOD receives a
+        // pointer to the slot HOLDING the heap pointer, while a value-type
+        // drop fn receives the value itself.
+        for (field_idx, drop_fn) in &plain_agg_drops {
+            let fptr = self
+                .builder
+                .build_struct_gep(
+                    heap_type,
+                    p_arg,
+                    *field_idx as u32 + field_base,
+                    "rcdrop.plain.f",
+                )
+                .unwrap();
+            self.builder
+                .build_call(*drop_fn, &[fptr.into()], "")
+                .unwrap();
+        }
         for (field_idx, kind) in kinds.iter().enumerate() {
             // Heap layout: control header at idx 0 (strong) [+ 1 (weak) when
             // weak-headered], then user fields. User field `field_idx` lives at
@@ -4897,6 +5058,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let heap_field_idx = field_idx as u32 + field_base;
             match kind {
                 SharedFieldKind::None | SharedFieldKind::_Phantom(_) => {}
+                // Emitted by the reverse-order pass above, not here — field
+                // bodies are observable and must run in reverse declaration
+                // order (design.md § Drop ordering), while this loop is
+                // forward-ordered for the memory kinds.
+                SharedFieldKind::PlainAggregate(_) => {}
                 SharedFieldKind::WeakField => {
                     // `weak T` field: load the weak slot and `karac_weak_drop`
                     // it (weak -= 1; frees the target box iff strong == 0 &&
