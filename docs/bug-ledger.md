@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 365 |
-| run-vs-build | 326 |
+| run-vs-build | 327 |
 | leak | 261 |
 | missing-feature | 194 |
 | double-free | 172 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1432 |
+| codegen | 1433 |
 | interp | 349 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -165,6 +165,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
 | B-2026-09-04-13 | 2026-09-04 | interp+codegen | medium | A `shared struct` HOLDER RUNS NO FIELD `Drop` BODY ON ANY OF THE FOUR SURFACES -- `shared struct Sh { a: R, b: R }` with a Drop-bearing `R` prints NEITHER body where the identical NON-shared struct prints both, with no projection, destructure or move anywhere in the program; the whole-field read `let r = h.a;` recovers the MOVED field's body alone and the sibling's stays lost | — |
 | B-2026-09-04-15 | 2026-09-04 | interp+codegen | high | MOVING A FIELD OUT OF A `shared struct` LEAVES NO DISARM, SO AN ALIAS READS THE MOVED-FROM FIELD AFTER ITS `Drop` HAS RUN AND ITS BUFFER IS FREED -- `let h2 = h; let r = h.a;` then `h2.a.tag` prints garbage and valgrind reports `Invalid read of size 2 ... inside a block of size 66 free'd`, identically on both compiled backends and under `--interp`. This is the missing disarm that ALSO produces B-2026-09-04-13's lost field bodies and its 134 B leak, so it is the row that has to be settled first | — |
+| B-2026-09-04-16 | 2026-09-04 | codegen | medium | CODEGEN'S `Map[i64, Vec[i64]].keys()` ITERATES SORTED AND SEED-INDEPENDENT -- diverging from the interpreter's correct random order -- WHENEVER A STRUCTURALLY IDENTICAL `SortedMap` FUNCTION IS PRESENT IN THE MODULE and the map crosses a rehash boundary; a run-vs-build divergence that defeats KARAC_HASH_SEED and silently masks order-dependence bugs | — |
 
 ### Relocated
 
