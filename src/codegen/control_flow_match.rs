@@ -9227,7 +9227,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(object) else {
             return;
         };
-        self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, *index as u32, &te);
+        // B-2026-09-04-31 — a SHARED element is not moved out of the tuple, it
+        // is ALIASED: every owning destination of `t.0` — the `let` above
+        // (which already `rc_inc`s), a struct-literal field, a returned value
+        // — takes a +1 of its own, and the source tuple's scope-exit rc-dec
+        // (new in the same row) releases the tuple's ref. Nulling the slot
+        // here on top of that inc stranded the box at rc 1: measured 40 B
+        // leaked per `let s = a.0` at `KARAC_OPT_LEVEL=0`, body never run.
+        // The whole-tuple move sites (`let p = w.p`, a by-value tuple
+        // argument) still null through `zero_tuple_elem_caps`; those hand
+        // the tuple's OWN ref over and do not inc.
+        if self.shared_heap_type_for_type_expr(&te).is_none() {
+            self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, *index as u32, &te);
+        }
         // B-2026-08-03-3 — the BODIES half of the same move-out. Cap-zeroing
         // neutralizes the source's MEMORY drop but says nothing about its
         // `__karac_dropelems_tuple_*` walk, which kept firing element `index`'s

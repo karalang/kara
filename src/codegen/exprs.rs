@@ -1411,6 +1411,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::FieldAccess { object, field } = &e.kind {
                         self.share_direct_shared_field_ref_for_return(object, field, v);
                     }
+                    // B-2026-09-04-31 — and its tuple-element twin, `return a.0`.
+                    if let ExprKind::TupleIndex { object, index } = &e.kind {
+                        self.share_tuple_elem_shared_ref_for_return(object, *index, v);
+                    }
                     if let ExprKind::Identifier(name) = &e.kind {
                         // B-2026-08-28-65 — a `return r;` NESTED in a branch
                         // moves `r` only on the path that takes it, but the
@@ -3533,6 +3537,35 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.emit_rc_inc_for_captured_option(val, inner_heap);
                         }
                     }
+                    // B-2026-09-04-31 — the BARE `shared T` twin of the
+                    // `Option[shared]` capture-inc above, for a TUPLE-ELEMENT
+                    // source: `H { s: t.0 }`. The tuple keeps its element
+                    // (its own scope-exit rc-dec is new in the same row and
+                    // `suppress_tuple_index_move_source` no longer nulls a
+                    // shared slot), so the literal is a second owner and must
+                    // take a ref of its own — as `let s = t.0` already does.
+                    // Without it the struct's field dec and the tuple's
+                    // element dec both landed on one ref: `Invalid read of
+                    // size 8` at both optimization levels. Tuple sources
+                    // only; an Identifier moves by retracting the source's
+                    // cleanup (below), and a struct-FIELD source is a
+                    // separately filed defect that crashes before any read.
+                    if matches!(&field_init.value.kind, ExprKind::TupleIndex { .. })
+                        && !self.rhs_yields_fresh_ref(&field_init.value)
+                    {
+                        let bare_shared_heap = self
+                            .type_decls
+                            .struct_field_type_exprs
+                            .get(name)
+                            .and_then(|tes| tes.get(idx))
+                            .cloned()
+                            .and_then(|te| self.shared_heap_type_for_type_expr(&te));
+                        if let (Some(heap), BasicValueEnum::PointerValue(p)) =
+                            (bare_shared_heap, val)
+                        {
+                            self.emit_rc_inc(heap, p);
+                        }
+                    }
                     // Move-aware suppression for `Foo { ..., body: body }`
                     // when the field expr is an Identifier naming a
                     // tracked Vec / String. The struct field now owns
@@ -3735,6 +3768,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                     if !init_is_none && !self.rhs_yields_fresh_ref(&field_init.value) {
                         self.emit_rc_inc_for_captured_option(val, inner_heap);
+                    }
+                }
+                // B-2026-09-04-31 — the BARE `shared T` twin of the capture-inc
+                // above, for a TUPLE-ELEMENT source: `H { s: t.0 }` with `H`
+                // an owned struct. The tuple keeps its element (its own
+                // scope-exit rc-dec is new in the same row, and
+                // `suppress_tuple_index_move_source` no longer nulls a shared
+                // slot), so this literal is a SECOND owner and takes a ref of
+                // its own — exactly what `let s = t.0` does. Without it the
+                // struct's field dec and the tuple's element dec landed on one
+                // ref: `Invalid read of size 8` at both optimization levels,
+                // with the program's output looking correct. Tuple sources
+                // only: an Identifier moves by retracting the source's cleanup
+                // (below), and a struct-FIELD source (`H { s: w.s }`) is a
+                // separately filed defect that crashes before any read.
+                if matches!(&field_init.value.kind, ExprKind::TupleIndex { .. })
+                    && !self.rhs_yields_fresh_ref(&field_init.value)
+                {
+                    let bare_shared_heap = self
+                        .type_decls
+                        .struct_field_type_exprs
+                        .get(name)
+                        .and_then(|tes| tes.get(idx))
+                        .cloned()
+                        .and_then(|te| self.shared_heap_type_for_type_expr(&te));
+                    if let (Some(heap), BasicValueEnum::PointerValue(p)) = (bare_shared_heap, val) {
+                        self.emit_rc_inc(heap, p);
                     }
                 }
                 // Move-aware suppression — same shape as the shared-

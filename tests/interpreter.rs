@@ -7856,6 +7856,81 @@ fn test_user_drop_shared_struct_held_in_shared_field_fires_once() {
     assert_eq!(output.concat(), "v5\npost\ndL5\n");
 }
 
+/// B-2026-09-04-31 — a `shared struct` in a TUPLE ELEMENT runs its body ONCE,
+/// at the tuple binding's scope exit, and every read before that returns the
+/// live value.
+///
+/// Two reads, deliberately. On the compiled side this row was a
+/// use-after-free whose FIRST read printed correctly (the field was loaded
+/// before the box was released) and whose SECOND printed garbage; the
+/// interpreter ran no body at all, because `run_array_element_user_drops`
+/// answered for the tuple before the refcount path could see it. `post`
+/// before the body pins the placement both backends now share.
+#[test]
+fn test_user_drop_tuple_held_shared_struct_fires_once_at_scope_exit() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct S { id: i64, tag: String }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}/{self.tag}\"); } }\n\
+         fn main() {\n\
+             let a: (S, i64) = (S { id: 14, tag: \"alpha\" }, 3);\n\
+             println(f\"r1={a.0.id}\");\n\
+             println(f\"r2={a.0.id}\");\n\
+             println(\"post\");\n\
+         }",
+    );
+    assert_eq!(output.concat(), "r1=14\nr2=14\npost\ndS14/alpha\n");
+}
+
+/// B-2026-09-04-31 — the tuple's element moved out three ways, each of which
+/// must still fire the body exactly once: an alias `let s = a.0` (two owners,
+/// one release), a destructure `let (s, n) = a` (which marks the tuple
+/// moved-out and used to lose the release entirely), and a tuple returned
+/// out of a function and bound at the caller.
+#[test]
+fn test_user_drop_tuple_held_shared_struct_move_outs_fire_once() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct S { id: i64 }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+         fn build(k: i64) -> (S, i64) { let s: S = S { id: k }; return (s, 3) }\n\
+         fn main() {\n\
+             { let a: (S, i64) = (S { id: 1 }, 3); let s: S = a.0; println(f\"v{s.id}\"); println(\"one\"); }\n\
+             { let a: (S, i64) = (S { id: 2 }, 3); let (s, n) = a; println(f\"v{s.id}{n}\"); println(\"two\"); }\n\
+             { let a: (S, i64) = build(4); println(f\"v{a.0.id}\"); println(\"three\"); }\n\
+             println(\"end\");\n\
+         }",
+    );
+    assert_eq!(
+        output.concat(),
+        "v1\none\ndS1\nv23\ntwo\ndS2\nv4\nthree\ndS4\nend\n"
+    );
+}
+
+/// B-2026-09-04-31 — a shared value reached through a `Vec` ELEMENT: bare
+/// (`Vec[S]`), in a tuple element, and in a struct field. The element loop
+/// skips shared members for the same reason the field walk does, so all three
+/// were silent under `--interp` while the compiled element drain fired each
+/// once. Bare `Vec[S]` is here on purpose — an earlier draft of the fix
+/// excluded it on the belief that it had its own channel; it did not.
+#[test]
+fn test_user_drop_vec_element_shared_struct_fires_once_at_scope_exit() {
+    let (output, _drops) = run_program_with_drops(
+        "shared struct S { id: i64 }\n\
+         impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+         struct Holder { s: S }\n\
+         fn main() {\n\
+             { let v: Vec[S] = [S { id: 1 }]; println(f\"v{v[0].id}\"); println(\"one\"); }\n\
+             { let v: Vec[(S, i64)] = [(S { id: 2 }, 3)]; println(f\"v{v[0].0.id}\"); println(\"two\"); }\n\
+             { let v: Vec[Holder] = [Holder { s: S { id: 3 } }]; println(f\"v{v[0].s.id}\"); println(\"three\"); }\n\
+             { let s: S = S { id: 4 }; let v: Vec[S] = [s]; println(f\"v{v[0].id}{s.id}\"); println(\"four\"); }\n\
+             println(\"end\");\n\
+         }",
+    );
+    assert_eq!(
+        output.concat(),
+        "v1\none\ndS1\nv2\ntwo\ndS2\nv3\nthree\ndS3\nv44\nfour\ndS4\nend\n"
+    );
+}
+
 // ── Move-suppression for user-Drop bindings (let-rebind) ──
 //
 // `let g = f;` where `f` has a user `impl Drop` moves the value

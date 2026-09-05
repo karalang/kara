@@ -3709,7 +3709,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // via `type_name_of_expr` (which resolves a `FieldAccess` chain
         // through `struct_field_type_names`) and look it up in
         // `shared_types`.
-        if let ExprKind::FieldAccess { .. } = &expr.kind {
+        // B-2026-09-04-31 — a TUPLE ELEMENT is the same place one hop over:
+        // `a.0.id` with `a: (S, i64)` and `S` shared. `type_name_of_expr`
+        // already resolves a `TupleIndex` to its element's struct name (via the
+        // binding's element tes, the place chain, or a call's declared tuple
+        // return), so the only thing missing was asking. Without this arm the
+        // read was claimed by nothing here and fell through to
+        // `compile_field_access`'s last resort — the B-2026-08-28-7 receiver
+        // that assumes a still-unclaimed shared pointer is a fresh TEMPORARY
+        // owning one ref, and RELEASES it after the load. On a tuple element
+        // that is the tuple's only ref: the first read ran the `Drop` body and
+        // freed the box, and every later read was a use-after-free (measured:
+        // `r1=14 r2=<garbage>`, valgrind `Invalid read of size 8`).
+        if let ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } = &expr.kind {
             if let Some(type_name) = self.type_name_of_expr(expr) {
                 if let Some(info) = self.type_decls.shared_types.get(type_name.as_str()) {
                     return Some((type_name, info.clone()));

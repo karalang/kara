@@ -660,6 +660,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.share_direct_shared_field_ref_for_return(object, field, v);
                 }
             }
+            // B-2026-09-04-31 — the tuple-element twin, `fn f(a: (S, i64)) -> S { a.0 }`.
+            if let ExprKind::TupleIndex { object, index } = &expr.kind {
+                self.share_tuple_elem_shared_ref_for_return(object, *index, v);
+            }
             return Ok(v);
         };
         match &expr.kind {
@@ -730,6 +734,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.share_option_shared_field_ref_for_arg(expr, v);
                     self.share_direct_shared_field_ref_for_return(object, field, v);
                 }
+                Ok(v)
+            }
+            // B-2026-09-04-31 — the tuple-element twin of the arm above:
+            // `fn f(a: (S, i64)) -> S { a.0 }`. Same regime, same inc.
+            ExprKind::TupleIndex { object, index } => {
+                let v = self.compile_expr(expr)?;
+                self.share_tuple_elem_shared_ref_for_return(object, *index, v);
                 Ok(v)
             }
             _ => self.compile_expr(expr),

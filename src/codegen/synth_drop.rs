@@ -4466,7 +4466,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         _ => {
                             if self.type_decls.shared_types.contains_key(&name) {
-                                // RC leaf — cleanup is the rc machinery's job.
+                                // B-2026-09-04-31 / B-2026-09-04-3 — an RC
+                                // leaf. This arm used to be empty on the
+                                // reasoning that "cleanup is the rc
+                                // machinery's job", but no rc machinery ever
+                                // reaches a tuple element: a shared value only
+                                // gets a dec through a NAMED binding's
+                                // `RcDec`, a struct field's let-cleanup walk,
+                                // or a Vec element's drain. A tuple slot is
+                                // none of those, so the element was never
+                                // released. `emit_drop_fn_for_type_expr`
+                                // answers a shared slot with the null-checked
+                                // `__karac_vec_elem_rc_dec_<T>` (B-2026-09-03-36)
+                                // — load the handle out of the slot, dec
+                                // through the heap layout, `__karac_rc_drop`
+                                // at zero — which is exactly the Vec-element
+                                // drain one channel over, and the slot
+                                // pointer is what this walk already has.
+                                // Its move-out dual is the shared arm of
+                                // `zero_tuple_elem_cap_at`, which nulls the
+                                // slot; a bare-tuple DESTRUCTURE hands out
+                                // bit-copies that own nothing and never calls
+                                // it, so the tuple stays the single owner
+                                // there and this dec is the one release.
+                                let deep = self.emit_drop_fn_for_type_expr(te);
+                                self.builder
+                                    .build_call(deep, &[field_ptr.into()], "")
+                                    .unwrap();
                             } else if self.type_decls.enum_layouts.contains_key(&name) {
                                 if let Some(enum_drop_fn) = self.emit_enum_drop_switch(&name) {
                                     self.builder
@@ -4605,7 +4631,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     _ => {
                         if self.type_decls.shared_types.contains_key(name) {
-                            // RC leaf — not freed by the tuple drop walk.
+                            // B-2026-09-04-31 — the move-suppression dual of
+                            // `emit_tuple_elem_drops`' new shared arm: null the
+                            // handle slot, so the source's rc-dec (which
+                            // null-checks) no-ops and the destination is the
+                            // one owner. Every site that calls this is a MOVE
+                            // — a whole tuple out of a struct field, a by-value
+                            // tuple argument, a returned element — and with
+                            // the source still armed each of them dec'd a box
+                            // the destination had already freed (measured:
+                            // `return a.0` off a tuple param, and
+                            // `let p = w.p`, both `Invalid read of size 8`).
+                            // Same shape as the `Map` arm above.
+                            let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
                         } else if let Some(layout) = self.type_decls.enum_layouts.get(name).cloned()
                         {
                             if !layout.is_shared {
@@ -8108,6 +8146,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the direct-`Vec` spelling is clean and the struct-wrapped
                     // one loses the element.
                     || self.contains_vec_of_heap_elems(te)
+                    // B-2026-09-04-31 / B-2026-09-04-3 — a SHARED element.
+                    // `type_expr_has_drop_heap` answers `false` for a shared
+                    // type on purpose (its drop is refcount-driven), and no
+                    // disjunct above asks about one, so `(S, i64)` classified
+                    // as needing no drop at every gate — the let-site, the
+                    // struct-field `NestedTuple`, the by-value param, the
+                    // returned tuple — and the element's box was never
+                    // released: its `Drop` body ran zero times and, at
+                    // `KARAC_OPT_LEVEL=0`, 40 B leaked per tuple. (At `-O2` a
+                    // never-read tuple's `malloc` is dead-allocation-eliminated
+                    // wholesale, which is why valgrind called it balanced.)
+                    // A `Vec[shared]` element has had this answer for a long
+                    // time; this is the tuple asking the same question.
+                    || self.shared_heap_type_for_type_expr(te).is_some()
             }
             _ => false,
         }

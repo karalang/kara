@@ -10381,6 +10381,59 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_refcount_inc(&type_name, heap_type, ptr);
     }
 
+    /// B-2026-09-04-31 — the TUPLE-ELEMENT twin of
+    /// [`Self::share_direct_shared_field_ref_for_return`]: `return a.0` (or the
+    /// tail spelling) handing out a `shared` element of a by-value TUPLE param.
+    ///
+    /// Same regime argument, and it is even simpler here: a tuple param whose
+    /// element is shared is ALWAYS caller-retains — `make_tuple_param_callee_owned`
+    /// bails on a shared leaf (not copy-supported), so the callee registers no
+    /// drop and the caller's ref is still live. The handed-out element is
+    /// therefore an alias and needs its own ref. Without it the caller's
+    /// binding of the result dec'd the caller's own tuple element to zero at
+    /// its NLL endpoint, and the tuple's scope-exit rc-dec (new in the same
+    /// row) then ran over the freed box: `Invalid read of size 8` /
+    /// `Invalid write of size 8`, `dS10` printed before `post`. Params only,
+    /// for the same reason as the field twin: a LOCAL tuple's element read is
+    /// the same-scope alias `let s = t.0` already handles with its own inc.
+    pub(super) fn share_tuple_elem_shared_ref_for_return(
+        &self,
+        object: &Expr,
+        index: u64,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::Identifier(obj) = &object.kind else {
+            return;
+        };
+        if !self.fn_ctx.current_fn_param_names.contains(obj.as_str()) {
+            return;
+        }
+        let Some(te) = self
+            .var_types
+            .tuple_var_elem_tes
+            .get(obj.as_str())
+            .cloned()
+            .or_else(|| self.tuple_var_elem_tes(obj.as_str()))
+            .and_then(|tes| tes.get(index as usize).cloned())
+        else {
+            return;
+        };
+        let te = self.subst_monomorph_type_params(&te);
+        let Some(heap_type) = self.shared_heap_type_for_type_expr(&te) else {
+            return;
+        };
+        let Some(type_name) = (match &te.kind {
+            TypeKind::Path(p) => p.segments.last().cloned(),
+            _ => None,
+        }) else {
+            return;
+        };
+        let BasicValueEnum::PointerValue(ptr) = val else {
+            return;
+        };
+        self.emit_refcount_inc(&type_name, heap_type, ptr);
+    }
+
     /// Index companion to `share_option_shared_ref_for_arg` /
     /// `share_option_shared_field_ref_for_arg`: when the call arg is a plain
     /// (non-range) Vec-element index `v[i]` whose element type is

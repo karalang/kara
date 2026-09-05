@@ -71976,4 +71976,68 @@ fn main() {
             "b0904-34-array-field-move-out",
         );
     }
+
+    /// B-2026-09-04-31 — a `shared struct` in a TUPLE ELEMENT, every shape
+    /// that was a use-after-free or a leak, under ASAN + LSan.
+    ///
+    /// The read itself was the UAF: `a.0.id` fell through to the fresh-
+    /// temporary receiver and released the element after the load, so a
+    /// second read touched freed memory (valgrind `Invalid read of size 8`,
+    /// garbage on stdout). The move-outs were UAFs in the first draft of the
+    /// fix, once the tuple started releasing its element: `return a.0` and
+    /// the tail spelling off a by-value param, `H { s: a.0 }`, and `let p =
+    /// w.p`. The never-read tuple was the LEAK half — 40 B at `-O0`, hidden
+    /// at `-O2` by dead-allocation elimination, which is why the row it came
+    /// from called it "balanced". One program, every shape, clean exit.
+    #[test]
+    fn asan_tuple_held_shared_struct_reads_and_move_outs_clean() {
+        let label = "tuple_held_shared_struct_reads_and_move_outs";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+shared struct S { id: i64, tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct H { s: S }
+struct W { p: (S, i64) }
+fn pick(a: (S, i64)) -> S { return a.0 }
+fn pick2(a: (S, i64)) -> S { a.0 }
+fn build(k: i64) -> (S, i64) { let s: S = S { id: k, tag: "b" }; return (s, 3) }
+fn main() {
+    { let a: (S, i64) = (S { id: 1, tag: "a" }, 3); println(f"r1={a.0.id}"); println(f"r2={a.0.id}"); println(f"r3={a.0.tag}"); }
+    { let b: (S, i64) = (S { id: 2, tag: "a" }, 3); }
+    { let a: (S, i64) = (S { id: 3, tag: "a" }, 3); let s: S = a.0; let u: S = a.0; println(f"v{s.id}{u.id}{a.0.id}"); }
+    { let a: (S, i64) = (S { id: 4, tag: "a" }, 3); let (s, n) = a; println(f"v{s.id}{n}"); }
+    { let a: (S, i64) = (S { id: 5, tag: "a" }, 3); let s: S = pick(a); println(f"v{s.id}"); }
+    { let a: (S, i64) = (S { id: 6, tag: "a" }, 3); let s: S = pick2(a); println(f"v{s.id}"); }
+    { let a: (S, i64) = (S { id: 7, tag: "a" }, 3); let h: H = H { s: a.0 }; println(f"v{h.s.id}{a.0.id}"); }
+    { let w: W = W { p: (S { id: 8, tag: "a" }, 3) }; let p: (S, i64) = w.p; println(f"v{p.0.id}"); }
+    { let a: (S, i64) = build(9); println(f"v{a.0.id}"); }
+    { let s: S = S { id: 10, tag: "a" }; let a: (S, i64) = (s, 1); let b: (S, i64) = (s, 2); println(f"v{a.0.id}{b.0.id}"); }
+    { let v: Vec[(S, i64)] = [(S { id: 11, tag: "a" }, 1), (S { id: 12, tag: "a" }, 2)]; let v2: Vec[(S, i64)] = v; println(f"v{v2[1].0.id}"); }
+    println("end");
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported an error (exit {:?}); stdout:\n{stdout}",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "r1=1", "r2=1", "r3=a", "dS1", "dS2", "v333", "dS3", "v43", "dS4", "v5", "dS5",
+                "v6", "dS6", "v77", "dS7", "v8", "dS8", "v9", "dS9", "v1010", "dS10", "v12",
+                "dS11", "dS12", "end",
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

@@ -8171,6 +8171,82 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-31 — a `shared struct` in a TUPLE ELEMENT is released at
+    /// the tuple binding's SCOPE EXIT, once, and every read before that sees
+    /// the live value.
+    ///
+    /// Before: the read `a.0.id` fell through `compile_field_access` to the
+    /// B-2026-08-28-7 fresh-temporary receiver, which released the element
+    /// after loading the field — the first read printed `14` out of a box
+    /// whose `Drop` body had already run, and the second read printed
+    /// garbage (valgrind: `Invalid read of size 8`). Nothing released the
+    /// element otherwise: `tuple_elem_needs_deep_drop` did not admit a shared
+    /// element, so a never-read `(S, i64)` leaked 40 B at `-O0` with no body.
+    /// Two reads and a trailing `post` pin both halves.
+    #[test]
+    fn e2e_tuple_held_shared_struct_read_then_release_at_scope_exit() {
+        let Some(out) = run_program(
+            "shared struct S { id: i64, tag: String }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}/{self.tag}\"); } }\n\
+             fn main() {\n\
+             \x20   { let a: (S, i64) = (S { id: 14, tag: \"alpha\" }, 3); println(f\"r1={a.0.id}\"); println(f\"r2={a.0.tag}\"); println(\"one\"); }\n\
+             \x20   { let b: (S, i64) = (S { id: 15, tag: \"beta\" }, 3); println(\"two\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "r1=14\nr2=alpha\none\ndS14/alpha\ntwo\ndS15/beta\nend\n"
+        );
+    }
+
+    /// B-2026-09-04-31 — the move-out matrix for a tuple's shared element. The
+    /// element's scope-exit release is new, so every owning destination must
+    /// hold a ref of its own or the two decs land on one:
+    ///
+    ///   1. `let s = a.0` — an alias (+1), the tuple keeps its slot.
+    ///   2. `let (s, n) = a` — a destructure; the bit-copy owns nothing and
+    ///      the tuple stays the single owner.
+    ///   3. `return a.0` / tail `a.0` off a by-value tuple PARAM — the param
+    ///      is caller-retains (`make_tuple_param_callee_owned` bails on a
+    ///      shared leaf), so the returned handle is an alias and incs.
+    ///   4. `H { s: a.0 }` — an owned struct literal takes its own ref.
+    ///   5. `let p = w.p` — a whole tuple moved out of a struct field nulls
+    ///      the source's slot.
+    ///
+    /// 3, 4 and 5 were each a use-after-free in the first draft of the fix
+    /// (measured `Invalid read of size 8`); the sanitizer twin asserts the
+    /// memory side, this one pins the observable order: every body exactly
+    /// once, after the block's last print.
+    #[test]
+    fn e2e_tuple_held_shared_struct_move_outs_fire_once() {
+        let Some(out) = run_program(
+            "shared struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+             struct H { s: S }\n\
+             struct W { p: (S, i64) }\n\
+             fn pick(a: (S, i64)) -> S { return a.0 }\n\
+             fn pick2(a: (S, i64)) -> S { a.0 }\n\
+             fn main() {\n\
+             \x20   { let a: (S, i64) = (S { id: 1 }, 3); let s: S = a.0; println(f\"v{s.id}{a.0.id}\"); println(\"one\"); }\n\
+             \x20   { let a: (S, i64) = (S { id: 2 }, 3); let (s, n) = a; println(f\"v{s.id}{n}\"); println(\"two\"); }\n\
+             \x20   { let a: (S, i64) = (S { id: 3 }, 3); let s: S = pick(a); println(f\"v{s.id}\"); println(\"three\"); }\n\
+             \x20   { let a: (S, i64) = (S { id: 4 }, 3); let s: S = pick2(a); println(f\"v{s.id}\"); println(\"four\"); }\n\
+             \x20   { let a: (S, i64) = (S { id: 5 }, 3); let h: H = H { s: a.0 }; println(f\"v{h.s.id}{a.0.id}\"); println(\"five\"); }\n\
+             \x20   { let w: W = W { p: (S { id: 6 }, 3) }; let p: (S, i64) = w.p; println(f\"v{p.0.id}\"); println(\"six\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "v11\none\ndS1\nv23\ntwo\ndS2\nv3\nthree\ndS3\nv4\nfour\ndS4\nv55\nfive\ndS5\nv6\nsix\ndS6\nend\n"
+        );
+    }
+
     /// B-2026-08-02-25 — displacing an `Option[T]` binding runs the DISPLACED
     /// payload's user `impl Drop` body.
     ///

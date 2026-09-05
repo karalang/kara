@@ -1134,6 +1134,29 @@ impl<'a> super::Interpreter<'a> {
         // owns the elements; walking here too fires each body twice (and
         // codegen's walk would read the moved-from slot). Checked after the
         // shape resolution so the caller still stops for an array/tuple.
+        // B-2026-09-04-31 — a tuple's SHARED elements. The element loop below
+        // runs plain bodies and walks plain fields, and skips a shared item for
+        // the reason the struct-field walk does: its drop is refcount-driven.
+        // The refcount path (`defer_field_held_shared_release`, B-2026-09-03-9)
+        // already sees a `Value::Tuple` holder — it was simply never reached,
+        // because this function answers `true` for a tuple binding before
+        // `invoke_user_drop_if_applicable` gets that far. Park the release
+        // here, so a `(S, i64)` binding fires `S`'s body once at scope exit,
+        // where the compiled backends now put it. Tuples only: an array's
+        // shared elements are released through their own channel already.
+        //
+        // BEFORE the move-out check, on purpose. A destructure `let (s, n) = a`
+        // marks `a` moved-out, but the bare `s` it hands out cannot fire
+        // (`a` still holds the value, so its count is 2 at `s`'s endpoint),
+        // and with `a`'s walk skipped nothing ever did. The refcount test at
+        // the drain is what makes this safe for a WHOLE move (`let t2 = t`):
+        // `t`'s drain sees two holders and passes, `t2`'s sees one and fires.
+        //
+        // Arrays too, for their shared elements — bare (`Vec[S]`) or held
+        // (`Vec[(S, i64)]`, `Vec[Holder]`), none of which the element loop
+        // below releases. The defer records nothing when the walk finds
+        // nothing, so an array of plain values costs one bounded walk.
+        self.defer_field_held_shared_release(name);
         if self.moved_out_container_bodies_bindings.contains(name) {
             return true;
         }
@@ -1633,6 +1656,22 @@ impl<'a> super::Interpreter<'a> {
                     self.collect_field_held_shared(item, out, depth + 1);
                 }
             }
+            // B-2026-09-04-31 — a container's ELEMENTS: a bare shared element
+            // (`Vec[S]`) and one that HOLDS a shared value (`Vec[(S, i64)]`,
+            // `Vec[Holder { s: S }]`). Codegen's element drain rc-decs all
+            // three through the element's own drop fn; the interpreter's
+            // element loop runs plain bodies and skips shared members exactly
+            // as the struct-field walk does, so nothing here released any of
+            // them. Measured silent under `--interp` for every one, against a
+            // single body on all three compiled surfaces, and exactly once
+            // after this — including the alias `let s = mk(); let v = [s]`.
+            Value::Array(cell) => {
+                if let Ok(items) = cell.read() {
+                    for item in items.iter() {
+                        self.collect_field_held_shared(item, out, depth + 1);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1675,6 +1714,14 @@ impl<'a> super::Interpreter<'a> {
             Value::Tuple(items) => {
                 for item in items.iter() {
                     self.collect_field_held_shared_values(item, firing, seen, out, depth + 1);
+                }
+            }
+            // B-2026-09-04-31 — same arm as pass 1, same bare-element exclusion.
+            Value::Array(cell) => {
+                if let Ok(items) = cell.read() {
+                    for item in items.iter() {
+                        self.collect_field_held_shared_values(item, firing, seen, out, depth + 1);
+                    }
                 }
             }
             _ => {}
