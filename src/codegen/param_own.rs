@@ -3829,6 +3829,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.zero_aggregate_field_caps(field_ptr, fst);
                 }
             }
+            // B-2026-09-04-34 — a fixed `Array[E, N]` field. Every arm above
+            // matches a `StructType`, which an array field is not, so this
+            // spelling fell out of the match entirely and suppressed nothing:
+            // the source's drop kept freeing element buffers the moved-out
+            // binding now owns. Measured on one program against its four
+            // siblings — a `Vec`, `String`, plain-struct and tuple field each
+            // moved cleanly out of `let x = h.f;`, and only `Array[R, 2]` (with
+            // `struct R { id: i64, tag: String }`) ended in `free(): double
+            // free detected in tcache 2` at scope exit, against a correct
+            // `--interp`. In the DEAD-BINDING form the source read garbage
+            // first (`h ����` where `--interp` prints `h tag2`), which is the
+            // use-after-free the double free is the tail of.
+            //
+            // The array itself owns nothing — its ELEMENTS do — so the
+            // neutralizer is the per-element rule applied N times. Shared with
+            // `zero_struct_field_move_cap_impl`'s array arm so the two
+            // spellings of this move can only ever agree.
+            Some(BasicTypeEnum::ArrayType(arr_ty)) => {
+                if let Some(elem_te) = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(sname.as_str())
+                    .and_then(|ftes| ftes.get(idx))
+                    .and_then(super::helpers::array_inner_type_expr)
+                {
+                    self.zero_array_field_move_caps(field_ptr, arr_ty, &elem_te);
+                }
+            }
             _ => {}
         }
     }

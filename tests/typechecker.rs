@@ -49756,11 +49756,16 @@ fn shared_field_move_rejected_and_borrow_and_copy_shapes_permitted() {
 /// probe is written — both shapes come back clean on all four surfaces. That
 /// near-miss is why the cells below put the read inside an inner scope.
 ///
-/// `Array` stays permitted, and that is a measurement rather than an omission:
-/// a field read off an `Array[T, N]` element does not compile on any backend
-/// ("cannot resolve field on this receiver"), and the same gap hits a PLAIN
-/// struct, so it is not shared-specific and there is no reachable hole to
-/// reject. Filed as the codegen gap it is.
+/// `Array` was permitted here for one release, and that was a measurement
+/// rather than an omission: a field read off an `Array[T, N]` element did not
+/// compile on any backend ("cannot resolve field on this receiver"), and the
+/// same gap hit a PLAIN struct, so it was not shared-specific and there was no
+/// reachable hole to reject. B-2026-09-04-28 closed that gap and took the
+/// measurement, in the dead-binding form this comment warns is the only one
+/// that shows the hazard: `shared struct ShA { a: Array[R, 2] }` prints
+/// `alias 1/<garbage>` where `--interp` prints `alias 1/tag1`, valgrind
+/// `Invalid read of size 2`. So it is REJECTED below with its two siblings, and
+/// `Array[i64, 2]` joins the scalar controls.
 ///
 /// The SCALAR-payload cells are the over-reach controls, in the opposite
 /// direction: `(i64, i64)` and `Option[i64]` read, alias and free correctly on
@@ -49772,6 +49777,7 @@ fn shared_field_move_covers_tuple_and_option_but_not_scalar_payloads() {
          shared struct ShT { t: (R, i64) }\n\
          shared struct ShO { o: Option[R] }\n\
          shared struct ShA { a: Array[R, 2] }\n\
+         shared struct ShA2 { a: Array[i64, 2] }\n\
          shared struct ShT2 { t: (i64, i64) }\n\
          shared struct ShO2 { o: Option[i64] }\n\
          shared struct ShNest { t: (Option[R], i64) }\n";
@@ -49812,12 +49818,23 @@ fn shared_field_move_covers_tuple_and_option_but_not_scalar_payloads() {
             "nested: an Option[R] inside a tuple answers through the same recursion",
             "fn f(h: ShNest) -> i64 { let x = h.t; return x.1; }\n",
         ),
+        // B-2026-09-04-28 — this cell was in the PERMITTED list until the
+        // codegen gap that made the shape unmeasurable was closed. The
+        // exclusion was never a judgement that the read is a copy; it was
+        // "there is no reachable hole to reject, because the access does not
+        // compile". It compiles now, and the dead-binding probe puts it in the
+        // MOVED half with its two siblings: the alias prints garbage where
+        // `--interp` prints the value, valgrind `Invalid read of size 2`.
+        (
+            "Array field with a non-Copy element — valgrind invalid read",
+            "fn f(h: ShA) -> i64 { let x = h.a; return 1; }\n",
+        ),
     ] {
         assert_eq!(fires(items), 1, "expected a rejection for {label}");
     }
 
     // ── PERMITTED: a scalar payload is copied, and rejecting it would be a
-    //    regression on valid code; `Array` does not compile either way ──
+    //    regression on valid code ──
     for (label, items) in [
         (
             "tuple of scalars",
@@ -49827,9 +49844,14 @@ fn shared_field_move_covers_tuple_and_option_but_not_scalar_payloads() {
             "Option of a scalar",
             "fn f(h: ShO2) -> i64 { let x = h.o; return 1; }\n",
         ),
+        // The control the `Array` arm needs: an array of SCALARS reads,
+        // aliases and frees correctly on both backends (valgrind clean), so
+        // rejecting it would be a straight regression on valid code. A rule
+        // widened to the `Array` HEAD rather than to its element fails here
+        // rather than passing quietly.
         (
-            "Array field — excluded by measurement, not by omission",
-            "fn f(h: ShA) -> i64 { let x = h.a; return 1; }\n",
+            "Array of a scalar element",
+            "fn f(h: ShA2) -> i64 { let x = h.a; return 1; }\n",
         ),
     ] {
         assert_eq!(fires(items), 0, "expected NO rejection for {label}");

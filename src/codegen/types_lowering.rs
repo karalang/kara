@@ -1256,6 +1256,41 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
                 self.call_array_return_elem_te(expr)
             }
+            // A FIELD READ whose field is declared `Array[T, N]`
+            // (B-2026-09-04-28) — `let x = h.a;`, and the `self.a` spelling
+            // through the same lookup.
+            //
+            // Every arm above answers a CALL or a LITERAL, so a field read
+            // declined and the binding recorded no element type at all. The
+            // DIRECT spelling was already fine: `h.a[0].id` resolves through
+            // `type_name_of_expr`'s indexed-FieldAccess root (B-2026-08-14-5),
+            // which does exactly this lookup on the field's declared type. Only
+            // the BOUND spelling fell through — `let x = h.a; let e = ref x[0];
+            // e.id` reached the loud "cannot resolve field 'id'" gap on both
+            // compiled backends while `--interp` answered, because by then the
+            // root is a plain identifier and the struct it came from is no
+            // longer in the expression. Recording the element at the binding is
+            // what makes the two spellings agree.
+            //
+            // Fail-closed at every step, like its siblings: a receiver codegen
+            // cannot name, a field that is not on the struct, and a field whose
+            // declared type is not a fixed array each yield `None`, leaving the
+            // shape exactly as loud as it is today.
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.type_name_of_expr(object)?;
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let field_te = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(obj_ty.as_str())?
+                    .get(idx)?;
+                super::helpers::array_inner_type_expr(field_te)
+            }
             _ => None,
         }
     }

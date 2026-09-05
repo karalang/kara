@@ -4420,16 +4420,39 @@ impl<'a> super::TypeChecker<'a> {
             Type::Tuple(elems) => elems
                 .iter()
                 .any(|e| self.shared_field_move_shape_is_moved(e)),
+            // B-2026-09-04-28 — `Array[E, N]`, previously excluded. It was
+            // excluded because the shape could not be MEASURED: a field read
+            // through an array element did not compile on any compiled backend,
+            // so there was no reachable hole to reject. Closing that gap made
+            // the measurement possible and it lands in the MOVED half, like the
+            // tuple and `Option` shapes beside it — dead-binding form,
+            // `shared struct ShA { a: Array[R, 2] }`, the alias printing
+            // `alias 1/<garbage>` where `--interp` prints `alias 1/tag1`,
+            // valgrind `Invalid read of size 2`.
+            //
+            // NOTE WHICH NODE THIS IS. The exclusion used to be the name
+            // `"Array"` in the `Type::Named` list below, and that entry was
+            // DEAD: an array is `Type::Array { element, size }`, its own
+            // variant, so it never reached that match arm and fell through to
+            // the `_ => false` tail. The exclusion held for the right answer by
+            // the wrong route, which is why removing the name alone changed
+            // nothing measurable — the arm has to be here.
+            //
+            // Recursive on the element for the same reason every other arm is:
+            // `Array[i64, 2]` reads, aliases and frees correctly on both
+            // backends (valgrind clean), and rejecting it would be a regression
+            // on valid code.
+            Type::Array { element, .. } => self.shared_field_move_shape_is_moved(element),
             Type::Named { name, args } => {
                 if matches!(name.as_str(), "Option" | "Result") {
                     return args
                         .iter()
                         .any(|a| self.shared_field_move_shape_is_moved(a));
                 }
-                // The copied set, plus `Array` (excluded — see the call site).
+                // The copied set.
                 if matches!(
                     name.as_str(),
-                    "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet" | "Array"
+                    "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet"
                 ) {
                     return false;
                 }
@@ -4488,11 +4511,21 @@ impl<'a> super::TypeChecker<'a> {
         // every surface. That is the false negative this rule's own filing row
         // was one probe away from recording.
         //
-        // `Array` stays excluded, also measured: a field read off an
-        // `Array[R, N]` element does not COMPILE at all — "cannot resolve field
-        // on this receiver" — and the same gap hits a PLAIN struct, so it is not
-        // shared-specific and there is no reachable use-after-free to reject.
-        // Filed separately as the codegen gap it is.
+        // `Array` was excluded here for one release, because the shape could
+        // not be measured at all: a field read off an `Array[R, N]` element did
+        // not COMPILE — "cannot resolve field on this receiver" — and the same
+        // gap hit a PLAIN struct, so it was not shared-specific and there was
+        // no reachable use-after-free to reject. B-2026-09-04-28 closed that
+        // gap and took the measurement this row's remainder asked for, in the
+        // dead-binding form it warned was the only one that shows the hazard:
+        //
+        //   shared struct ShA { a: Array[R, 2] }   alias prints `alias 1/<garbage>`
+        //                                          where `--interp` prints
+        //                                          `alias 1/tag1`; valgrind
+        //                                          `Invalid read of size 2`
+        //
+        // So it is in the MOVED half with its two siblings, and the exclusion
+        // is gone rather than merely re-justified.
         //
         // Both new arms recurse through `shared_field_move_shape_is_moved` so a
         // SCALAR payload stays accepted: `(i64, i64)` and `Option[i64]` read,

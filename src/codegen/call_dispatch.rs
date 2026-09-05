@@ -9009,6 +9009,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // every move-out already goes through.
             let ptr_ty = self.context.ptr_type(AddressSpace::default());
             let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+        } else if fname == "Array" {
+            // B-2026-09-04-34 — a moved-out fixed `Array[E, N]` field. `fname`
+            // is `"Array"`, which matches no arm above and is neither an enum
+            // layout nor a `struct_types` entry, so the tail below emitted
+            // nothing for it.
+            //
+            // SYMMETRY WITH THE SIBLING SUPPRESSOR, stated honestly: the
+            // measured double free is on `suppress_struct_field_move_by_name`'s
+            // path (the `let x = h.a;` field-access spelling), and this
+            // function serves the destructure / fresh-temp / callee-owned
+            // spellings. Those measure CLEAN both with this arm and without it
+            // — verified by disabling the arm and re-running `let Ha { a } = h`
+            // and `fn take(h: Ha)` under valgrind: 12 allocs, 12 frees, 0
+            // errors either way. So this is defensive symmetry rather than an
+            // independently reproducible fix, exactly as the `SortedMap` /
+            // `SortedSet` names in the Map/Set arm above are — and leaving the
+            // two neutralizers asymmetric on a shape is the precise form the
+            // bug this row is about took.
+            //
+            // Safe by construction, the same argument that arm makes: it clears
+            // ownership markers a drop would otherwise act on, and every walk
+            // it feeds already guards on them.
+            //
+            // An array is an inline run of N elements, so the neutralizer is
+            // the per-element one applied N times — the elements are the things
+            // that own buffers, not the array. Static `N`, so this unrolls.
+            if let (Some(BasicTypeEnum::ArrayType(arr_ty)), Some(elem_te)) = (
+                st.get_field_type_at_index(idx as u32),
+                field_te
+                    .as_ref()
+                    .and_then(super::helpers::array_inner_type_expr),
+            ) {
+                self.zero_array_field_move_caps(field_ptr, arr_ty, &elem_te);
+            }
         } else {
             if let Some(layout) = self.type_decls.enum_layouts.get(fname.as_str()).cloned() {
                 if !layout.is_shared {
@@ -9018,6 +9052,92 @@ impl<'ctx> super::Codegen<'ctx> {
                 && !self.type_decls.shared_types.contains_key(fname.as_str())
             {
                 self.zero_struct_move_caps(field_ptr, &fname);
+            }
+        }
+    }
+
+    /// Neutralize every ELEMENT of a moved-out fixed-`Array[E, N]` field
+    /// (B-2026-09-04-34) — the array arm of
+    /// [`Self::zero_struct_field_move_cap_impl`], split out because it applies
+    /// that function's per-shape rule N times rather than once.
+    ///
+    /// An `Array[E, N]` field is an inline run of N `E`s in the parent's
+    /// layout, and the parent's drop walks it element by element. Nothing about
+    /// the ARRAY owns a buffer, so there is no array-level marker to clear the
+    /// way the `Vec` arm clears a `cap`: the neutralizer has to reach each
+    /// element and apply that element's own rule.
+    ///
+    /// The shape arms mirror the caller's exactly, and fail closed the same
+    /// way: an element type that names nothing this compiler has a layout for
+    /// emits nothing and leaves the shape as it is today. `N` is static, so the
+    /// walk unrolls — the same choice `zero_enum_payload_caps` makes over a
+    /// variant's word offsets.
+    pub(super) fn zero_array_field_move_caps(
+        &self,
+        field_ptr: PointerValue<'ctx>,
+        arr_ty: inkwell::types::ArrayType<'ctx>,
+        elem_te: &TypeExpr,
+    ) {
+        let n = arr_ty.len();
+        if n == 0 {
+            return;
+        }
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return;
+        };
+        let Some(elem_name) = p.segments.last().cloned() else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let zero = self.context.i64_type().const_int(0, false);
+        let i64_t = self.context.i64_type();
+        // Match by concrete LLVM shape as well as by name, for the same reason
+        // the caller does: a `String` element resolved through a monomorph
+        // subst carries the name `str` but lowers to the vec struct.
+        let elem_is_vecish = matches!(elem_name.as_str(), "Vec" | "VecDeque" | "String")
+            || arr_ty.get_element_type() == vec_ty.into();
+        let enum_layout = self
+            .type_decls
+            .enum_layouts
+            .get(elem_name.as_str())
+            .cloned()
+            .filter(|l| !l.is_shared);
+        for i in 0..n {
+            let elem_ptr = unsafe {
+                match self.builder.build_gep(
+                    arr_ty,
+                    field_ptr,
+                    &[zero, i64_t.const_int(i as u64, false)],
+                    "afld.move.elem",
+                ) {
+                    Ok(p) => p,
+                    Err(_) => return,
+                }
+            };
+            if elem_is_vecish {
+                if let Ok(cap_ptr) =
+                    self.builder
+                        .build_struct_gep(vec_ty, elem_ptr, 2, "afld.move.cap")
+                {
+                    let _ = self.builder.build_store(cap_ptr, zero);
+                }
+            } else if elem_name == "Option" {
+                self.zero_option_field_tag_at(elem_ptr);
+            } else if self
+                .type_decls
+                .shared_types
+                .contains_key(elem_name.as_str())
+            {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let _ = self.builder.build_store(elem_ptr, ptr_ty.const_null());
+            } else if let Some(layout) = &enum_layout {
+                self.zero_enum_payload_caps(elem_ptr, layout);
+            } else if self
+                .type_decls
+                .struct_types
+                .contains_key(elem_name.as_str())
+            {
+                self.zero_struct_move_caps(elem_ptr, &elem_name);
             }
         }
     }

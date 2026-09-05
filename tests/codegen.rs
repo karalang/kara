@@ -46403,6 +46403,133 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-28 — an `Array[T, N]` BOUND OUT of a struct field keeps
+    /// its element type, so a field read through one of its elements lowers.
+    ///
+    /// The DIRECT spelling `h.a[0].id` has resolved since B-2026-08-14-5 (the
+    /// test above pins it): `type_name_of_expr`'s indexed-FieldAccess root
+    /// unwraps the field's declared `Array[T, N]`. The BOUND spelling did not —
+    ///
+    ///     let x = h.a;
+    ///     let e = ref x[0];
+    ///     println(f"{e.id}/{e.tag}");
+    ///
+    /// — because by the time the element is indexed the root is a plain
+    /// identifier and the struct it came from is gone from the expression.
+    /// `array_elem_type_expr_from_rhs`, which is what an un-annotated `Array`
+    /// binding records its element from, answered only for a CALL and for the
+    /// two array-valued literals, so a field read fell through and the binding
+    /// recorded no element type at all. `e.id` then hit codegen's own loud
+    /// "cannot resolve field 'id' on this receiver (its type was not recorded
+    /// for codegen)" on `karac build` and `karac run` alike, while `--interp`
+    /// printed `2/tag2` — a run-vs-build divergence that fails loudly, which is
+    /// why the row was medium rather than high.
+    ///
+    /// THE ANNOTATED SPELLING ALREADY WORKED (`let x: Array[R, 2] = h.a;`
+    /// records the element from the annotation), so the two spellings of one
+    /// move disagreed; the cells below assert both, since a fix that records
+    /// only one of them leaves the split in place.
+    ///
+    /// The `self.ns` cell is the receiver spelling of the same lookup, and
+    /// `is_sorted` is there because it is the one consumer of the recorded
+    /// element `TypeExpr` that is not a field read — it needs the element's
+    /// SIGNEDNESS to pick an ordering, so it exercises the recording rather
+    /// than just the layout.
+    ///
+    /// No `shared struct` cell: that spelling is now REJECTED at typecheck
+    /// (`E_SHARED_FIELD_MOVE` — see `shared_field_move_covers_tuple_and_option…`
+    /// in tests/typechecker.rs), which is the other half of this row's work.
+    #[test]
+    fn test_e2e_array_bound_out_of_a_struct_field_keeps_its_element_type() {
+        assert_eq!(
+            run_program(
+                "struct R { id: i64, tag: String }\n\
+                 struct Ha { a: Array[R, 2] }\n\
+                 struct Nums { ns: Array[i64, 3] }\n\
+                 fn mk(n: i64) -> R { return R { id: n, tag: f\"tag{n}\" }; }\n\
+                 impl Nums {\n\
+                     fn sorted(ref self) -> bool {\n\
+                         let x = self.ns;\n\
+                         return x.is_sorted();\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     let h = Ha { a: [mk(2), mk(3)] };\n\
+                     println(f\"direct {h.a[0].id}/{h.a[1].tag}\");\n\
+                     let h2 = Ha { a: [mk(4), mk(5)] };\n\
+                     let x = h2.a;\n\
+                     let e = ref x[0];\n\
+                     println(f\"bound {e.id}/{e.tag}\");\n\
+                     let h3 = Ha { a: [mk(6), mk(7)] };\n\
+                     let y: Array[R, 2] = h3.a;\n\
+                     println(f\"annot {y[1].id}/{y[1].tag}\");\n\
+                     let n = Nums { ns: [1, 2, 3] };\n\
+                     println(f\"sorted {n.sorted()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("direct 2/tag3\nbound 4/tag4\nannot 7/tag7\nsorted true\n"),
+        );
+    }
+
+    /// B-2026-09-04-34 — a moved-out `Array[E, N]` FIELD disarms the source, so
+    /// the element buffers are freed once.
+    ///
+    /// `let x = h.a;` moves the field out of `h`, and every neutralizer that
+    /// makes that safe for the other field shapes is keyed on the field's LLVM
+    /// type being a `StructType`. An array field is an `ArrayType`, so it fell
+    /// out of `suppress_struct_field_move_by_name`'s match entirely and nothing
+    /// was suppressed: the source struct's drop went on freeing element buffers
+    /// the binding now owned.
+    ///
+    /// MEASURED AGAINST ITS FOUR SIBLINGS on one program — a `Vec`, `String`,
+    /// plain-struct and tuple field each moved out of the identical
+    /// `let x = h.f;` cleanly, and only `Array[R, 2]` (with
+    /// `struct R { id: i64, tag: String }`) ended in `free(): double free
+    /// detected in tcache 2` at scope exit, against a correct `--interp`. In the
+    /// dead-binding form the source read garbage before that (`h ����` where
+    /// `--interp` prints `h tag2`) — the use-after-free the double free is the
+    /// tail of.
+    ///
+    /// The array itself owns nothing; its ELEMENTS do. So the neutralizer is
+    /// the per-element rule applied N times, which is why the cells below cover
+    /// a struct element (heap inside a nested aggregate), a direct `String`
+    /// element, and — as the over-reach control — a scalar element, whose
+    /// elements own nothing and must stay untouched.
+    ///
+    /// Asserts VALUES rather than needing a sanitizer twin for the abort: a
+    /// double free at scope exit takes the whole program down, so a
+    /// `run_program` that returns the expected stdout is already the assertion.
+    /// The `memory_sanitizer` twin (`asan_array_field_move_out_frees_once`)
+    /// covers the quieter half — that nothing LEAKS once the source is
+    /// disarmed.
+    #[test]
+    fn test_e2e_array_field_move_out_disarms_the_source() {
+        assert_eq!(
+            run_program(
+                "struct R { id: i64, tag: String }\n\
+                 struct Ha { a: Array[R, 2] }\n\
+                 struct Hs { a: Array[String, 2] }\n\
+                 struct Hn { a: Array[i64, 2] }\n\
+                 fn mk(n: i64) -> R { return R { id: n, tag: f\"tag{n}\" }; }\n\
+                 fn main() {\n\
+                     let h = Ha { a: [mk(2), mk(3)] };\n\
+                     let x = h.a;\n\
+                     let e = ref x[0];\n\
+                     println(f\"struct {e.id}/{e.tag}\");\n\
+                     let hs = Hs { a: [f\"one\", f\"two\"] };\n\
+                     let xs = hs.a;\n\
+                     println(f\"string {xs[0]}/{xs[1]}\");\n\
+                     let hn = Hn { a: [7, 9] };\n\
+                     let xn = hn.a;\n\
+                     println(f\"scalar {xn[0]}/{xn[1]}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("struct 2/tag2\nstring one/two\nscalar 7/9\n"),
+        );
+    }
+
     /// B-2026-08-13-20 — a Vec whose `cap` has been zeroed must not walk its
     /// ELEMENTS either, not just skip the buffer free.
     ///

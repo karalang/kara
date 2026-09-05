@@ -71751,4 +71751,67 @@ fn main() {
             20,
         );
     }
+
+    /// B-2026-09-04-34 — a moved-out `Array[E, N]` FIELD frees its element
+    /// buffers exactly once, and leaks none of them.
+    ///
+    /// The abort half of this defect is pinned by value in
+    /// `test_e2e_array_field_move_out_disarms_the_source` (tests/codegen.rs): a
+    /// `let x = h.a;` off `struct Ha { a: Array[R, 2] }` double-freed the
+    /// element `String`s at scope exit, because every arm of
+    /// `suppress_struct_field_move_by_name` matches a `StructType` field and an
+    /// array field is an `ArrayType` — so the move suppressed nothing and the
+    /// source's drop kept freeing what the binding now owned.
+    ///
+    /// This is the quiet half. A neutralizer that disarms the source is one
+    /// symmetric mistake away from disarming BOTH owners, which frees nothing
+    /// and shows up as a leak rather than an abort — the trade the `Vec` cap
+    /// arm names ("skipping the disarm where no copy was made leaves two owners
+    /// of one buffer", and doing it twice leaves none). LSan on the Linux CI leg
+    /// is what catches that direction; the abort test cannot.
+    ///
+    /// THE SCALAR CELL IS THE OVER-REACH CONTROL. `Array[i64, 2]` elements own
+    /// nothing, so the walk must emit no store at all; a rule keyed on the
+    /// array HEAD rather than on the element type still passes the two heap
+    /// cells and only shows up here.
+    #[test]
+    fn asan_array_field_move_out_frees_once() {
+        assert_clean_asan_run(
+            "struct R { id: i64, tag: String }\n\
+             struct Ha { a: Array[R, 2] }\n\
+             struct Hs { a: Array[String, 2] }\n\
+             struct Hn { a: Array[i64, 2] }\n\
+             fn mk(n: i64) -> R { return R { id: n, tag: f\"tag{n}\" }; }\n\
+             fn structElem() {\n\
+             \x20   let h = Ha { a: [mk(2), mk(3)] };\n\
+             \x20   let x = h.a;\n\
+             \x20   let e = ref x[0];\n\
+             \x20   println(f\"se{e.id}:{e.tag}\")\n\
+             }\n\
+             fn strElem() {\n\
+             \x20   let h = Hs { a: [f\"one\", f\"two\"] };\n\
+             \x20   let x = h.a;\n\
+             \x20   println(f\"st{x[0]}:{x[1]}\")\n\
+             }\n\
+             fn scalarElem() {\n\
+             \x20   let h = Hn { a: [7, 9] };\n\
+             \x20   let x = h.a;\n\
+             \x20   println(f\"sc{x[0]}:{x[1]}\")\n\
+             }\n\
+             fn annotated() {\n\
+             \x20   let h = Ha { a: [mk(4), mk(5)] };\n\
+             \x20   let x: Array[R, 2] = h.a;\n\
+             \x20   println(f\"an{x[1].id}:{x[1].tag}\")\n\
+             }\n\
+             fn main() {\n\
+             \x20   structElem();\n\
+             \x20   strElem();\n\
+             \x20   scalarElem();\n\
+             \x20   annotated();\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &["se2:tag2", "stone:two", "sc7:9", "an5:tag5", "end"],
+            "b0904-34-array-field-move-out",
+        );
+    }
 }
