@@ -1670,12 +1670,22 @@ pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
 
     /// The same test [`fn_returns_param`] applies at a return site: the bare
     /// identifier, or an aggregate literal that moves the param into itself.
+    ///
+    /// B-2026-09-05-10 — plus the param wrapped in an `Option`/`Result`
+    /// constructor (`return Option.Some(r)`), the shape B-2026-08-31-46 taught
+    /// the CONDITIONAL predicate to see. Widening this ALL-paths predicate is
+    /// safe by its own semantics, where widening the union `fn_returns_param`
+    /// was not: it answers true only when EVERY exit hands the param back, so a
+    /// true answer stands the caller down only where the result binding
+    /// provably owns the value on every path — there is no dies-inside path
+    /// left to lose a body on. `option_result_ctor_payload` is the same shape
+    /// test the conditional flip and both backends' tail walkers already share.
     fn yields(e: &Expr, name: &str) -> bool {
         match &e.kind {
             ExprKind::Identifier(n) => n == name,
             ExprKind::StructLiteral { fields, .. } => fields.iter().any(|f| yields(&f.value, name)),
             ExprKind::Tuple(elems) => elems.iter().any(|el| yields(el, name)),
-            _ => false,
+            _ => crate::ast::option_result_ctor_payload(e).is_some_and(|p| yields(p, name)),
         }
     }
     fn leaf_tails<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {

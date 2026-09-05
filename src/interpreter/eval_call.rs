@@ -3678,6 +3678,16 @@ impl<'a> super::Interpreter<'a> {
         self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
             .is_some_and(|f| {
                 crate::ast::fn_returns_param(f, i)
+                    // B-2026-09-05-10 — an ALL-paths return of the param wrapped
+                    // in an `Option`/`Result` ctor (`fn top(r) { return
+                    // Option.Some(r); }`). `fn_returns_param` above is
+                    // ctor-blind by design (widening the union would stand the
+                    // caller down on a CONDITIONAL ctor's dies-inside path too,
+                    // B-2026-08-31-46's trap); `fn_always_returns_param` is
+                    // safe because it fires only when EVERY exit hands the param
+                    // back, so the result binding owns it on every path. Codegen
+                    // reaches its own stand-down through the same predicate.
+                    || crate::ast::fn_always_returns_param(f, i)
                     || crate::ast::fn_returns_param_via_call(self.program, f, i)
                     || crate::ast::fn_returns_param_payload(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place(f, i)

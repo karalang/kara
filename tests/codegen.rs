@@ -30630,6 +30630,41 @@ fn main() {
     /// error-path drain); `tail` is the arm-tail spelling, which reaches the
     /// per-path flag through `arm_conditional_move_tail_flag` rather than the
     /// `return` handler. One string across all four surfaces.
+    /// B-2026-09-05-10 — an UNCONDITIONAL `return Option.Some(r)` (and the `Result`
+    /// and nested-aggregate spellings) of a by-value param runs the `Drop` body
+    /// ONCE. This is the DIRECT cell of that row; before this it ran twice on every
+    /// surface (the caller's fresh-temp walk AND the discarded result binding), a
+    /// double no A/B gate sees because all four surfaces agreed.
+    ///
+    /// The fix is `fn_always_returns_param`'s `yields` gaining the constructor arm
+    /// `option_result_ctor_payload` already provides — safe on this ALL-paths
+    /// predicate (a true answer stands the caller down only where the result
+    /// binding owns the value on EVERY path) where the same widening on the union
+    /// `fn_returns_param` was not (B-2026-08-31-46's trap). The REBOUND spelling
+    /// (`let m = r; return Option.Some(m)`) is a separate hole — the predicates are
+    /// name-keyed and blind to the alias, and standing the caller down there needs
+    /// the callee flip to drop the alias on the non-escaping path — split to its
+    /// own row.
+    #[test]
+    fn e2e_unconditional_ctor_return_of_param_runs_one_body() {
+        assert_eq!(
+            run_program(
+                r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+fn top(r: R) -> Option[R] { return Option.Some(r); }
+fn topwrap(r: R) -> Result[R, String] { return Result.Ok(r); }
+fn main() {
+    println("top");    let _ = top(mk(1));
+    println("wrap");   let _ = topwrap(mk(2));
+    println("done")
+}"#
+            ),
+            Some("top\ndrop 1 h1\nwrap\ndrop 2 h2\ndone\n".to_string()),
+            "an unconditional ctor-wrapped return of a param runs one body"
+        );
+    }
+
     #[test]
     fn e2e_ctor_wrapped_conditional_return_runs_one_body() {
         assert_eq!(
