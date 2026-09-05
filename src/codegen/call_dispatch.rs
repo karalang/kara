@@ -2227,6 +2227,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-09-05-6 — the STRUCT sibling of the arm above, and the
+            // half -16 did not land. A place STRUCT argument (`cEsc(g)`) whose
+            // FIELD escapes through the callee's return has the same two owners
+            // for one object: the caller's own field-bodies walk fires at `g`'s
+            // live-range end on a value the callee has already handed back, and
+            // the result's binding fires it again. Measured `in dR13 got13
+            // dR13` against a due `in got13 dR13`, identical on all four
+            // surfaces — an agreed-wrong count, which is why no A/B gate saw
+            // it, and vg-clean, because the entry copy gives each body a
+            // buffer of its own.
+            //
+            // `disarm_struct_field_bodies_at` is the right instrument for the
+            // same reason `disarm_tuple_elem_bodies_at` is above: a callee that
+            // returns field `f` IS the `let x = g.f` move-out, reached through
+            // a call, and the per-field mask keeps every other field's body
+            // armed (`fn dEsc(h: Dd) -> R { let Dd { a, b } = h; a }` still owes
+            // `b`'s). It also already knows the own-`Drop` case, where the mask
+            // has to go onto the type-level wrapper instead of a per-binding
+            // walk (B-2026-09-01-40).
+            //
+            // An owned struct PARAM source is excluded, exactly as
+            // `disarm_struct_field_move_bodies` excludes it and for its reason:
+            // the caller owns a param view and runs its bodies, so a callee
+            // masking one here would silence the only fire. Measured on
+            // `fn fwd(g: Cd) -> R { return cEsc(g); }` — with the bail the
+            // interpreter and all three compiled surfaces agree at one body;
+            // without it the compiled ones drop to zero.
+            //
+            // TOP-LEVEL fields only, matching the tuple arm and the interpreter
+            // twin: `struct_moved_field_bodies` is keyed by field INDEX, so a
+            // deeper path has no key here (B-2026-08-28-23).
+            self.disarm_escaping_place_struct_field_bodies(&name, i, &a.value);
             // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
             // `Option[Vec]` binding MOVED by value into a user function that
             // OWNS + frees it (`consume(sv)` where `sv: Option[String]` is a
@@ -4289,6 +4321,108 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             })
             .unwrap_or_default()
+    }
+
+    /// B-2026-09-05-6 — a place STRUCT argument (`cEsc(g)`) whose FIELD the
+    /// callee hands back: mask that field out of the CALLER binding's own
+    /// bodies walk.
+    ///
+    /// The struct sibling of the `disarm_tuple_elem_bodies_at` arm in
+    /// `compile_call`, and the half B-2026-08-28-16 did not land. Both channels
+    /// that mask an ESCAPING part are gated on an INLINE aggregate argument, so
+    /// a bare identifier reached neither and one object had two owners: the
+    /// caller's field walk fired at `g`'s live-range end on a value the callee
+    /// had already given away, and the result's binding fired it again.
+    ///
+    /// `disarm_struct_field_bodies_at` is the right instrument for the tuple
+    /// arm's reason — a callee that returns field `f` IS the `let x = g.f`
+    /// move-out, reached through a call instead of a projection — and its
+    /// per-field mask keeps every OTHER field's body armed, which suppressing
+    /// the binding's whole walk would not (`fn dEsc(h: Dd) -> R { let Dd { a, b
+    /// } = h; a }` still owes `b`'s).
+    ///
+    /// An owned struct PARAM source is excluded, exactly as
+    /// `disarm_struct_field_move_bodies` excludes it and for its reason: the
+    /// value is the CALLER's and the caller runs its bodies, so masking one
+    /// here would silence the only fire.
+    ///
+    /// TOP-LEVEL fields only, matching the tuple arm and the interpreter twin:
+    /// `struct_moved_field_bodies` is keyed by one field INDEX, so a deeper path
+    /// has no key here (B-2026-08-28-23's rule). A parent with its OWN `impl
+    /// Drop` cannot reach this at all — the typechecker rejects handing a field
+    /// out of one, in both the destructure and the projection spelling — so the
+    /// own-`Drop` arm inside the helper is not exercised from here.
+    ///
+    /// Interp twin: the struct leg of the identifier arm in
+    /// `run_fresh_temp_arg_drops`.
+    pub(super) fn disarm_escaping_place_struct_field_bodies(
+        &mut self,
+        callee_name: &str,
+        arg_index: usize,
+        arg: &Expr,
+    ) {
+        let ExprKind::Identifier(src) = &arg.kind else {
+            return;
+        };
+        let src = src.clone();
+        if self.borrow_vars.owned_struct_params.contains(src.as_str()) {
+            return;
+        }
+        let fields: Vec<String> = self
+            .callee_returned_param_parts(callee_name, arg_index)
+            .iter()
+            .filter_map(|path| match path.as_slice() {
+                [crate::ast::ParamPart::Field(f)] => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+        if fields.is_empty() {
+            return;
+        }
+        let Some(struct_name) = self.var_types.var_type_names.get(src.as_str()).cloned() else {
+            return;
+        };
+        // The same subst `disarm_struct_field_bodies_at` computes for this
+        // binding, so the membership test below asks its question of the same
+        // instantiation the walker was emitted under.
+        let subst = self
+            .type_decls
+            .enum_inst_var_types
+            .get(src.as_str())
+            .cloned()
+            .map(|i| self.generic_struct_subst_from_inst(&struct_name, &i))
+            .unwrap_or_default();
+        let runs_body = self.user_drop_field_indices_mono(&struct_name, &subst);
+        for f in fields {
+            let Some(fidx) = self
+                .type_decls
+                .struct_field_names
+                .get(struct_name.as_str())
+                .and_then(|names| names.iter().position(|n| *n == f))
+            else {
+                continue;
+            };
+            // ONLY a field the bodies walker actually runs. Masking one it does
+            // not is a semantic no-op but NOT a mechanical one:
+            // `disarm_struct_field_bodies_at` retracts the binding's walker and
+            // re-registers a masked replacement, and where the retraction finds
+            // nothing to replace the registration ADDS a second walk on top of
+            // whatever else already runs those bodies — B-2026-09-01-40's shape,
+            // reached here by a different route.
+            //
+            // Measured: `fn take3(h: Gn3) -> i64 { return h.z; }` hands back the
+            // SCALAR `z`, which carries no body at all, and disarming it doubled
+            // the sibling `inner` field's body — `dR7 dR7` — breaking
+            // B-2026-09-05-5's pin on a shape this row never touches. The gate
+            // is `user_drop_field_indices_mono`, the one set every registration
+            // path consults, rather than a local "is this a scalar" test: the
+            // question is not what the field IS, it is whether this binding's
+            // walker has a body there to mask.
+            if !runs_body.contains(&fidx) {
+                continue;
+            }
+            self.disarm_struct_field_bodies_at(&src, fidx);
+        }
     }
 
     /// The tuple-INDEX half of a [`Self::callee_returned_param_parts`] answer,

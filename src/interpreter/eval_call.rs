@@ -3396,6 +3396,39 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                // B-2026-09-05-6 — the STRUCT sibling of the tuple arm above,
+                // and missing since -16 landed that one: `cEsc(g)` over
+                // `fn cEsc(h: Cd) -> R { let Cd { r, z } = h; r }` hands `g.r`
+                // back, so the local's own field walk ran that body at `g`'s
+                // live-range end on a value the callee had already given away
+                // — `in dR13 got13 dR13` against a due `in got13 dR13`, on all
+                // four surfaces alike. The TEMP spelling of the same call was
+                // already correct: it reaches the masked walk below, whose
+                // `escaping_field_paths` filter is this same question asked of
+                // a value rather than of a name.
+                //
+                // Per-FIELD, not per-binding, for `mask_struct_fields`'s
+                // reason: `fn dEsc(h: Dd) -> R { let Dd { a, b } = h; a }`
+                // still owes `b`'s body in the call, and silencing `g`
+                // wholesale would take it with it (measured: `dR32` is due and
+                // survives). The projection spelling (`return h.r`, no
+                // destructure) is the same escape by a different route and is
+                // covered here too, since `fn_returns_param_part_paths`
+                // classifies both.
+                //
+                // TOP-LEVEL fields only, matching the tuple arm and for its
+                // reason: `moved_out_struct_field_bodies` is keyed by one field
+                // NAME, so a deeper path has no key here. The path-keyed
+                // `moved_out_nested_field_bodies` is where that case would go;
+                // no measurement asks for it yet (B-2026-08-28-23's rule).
+                if matches!(arg_vals.get(i), Some(Value::Struct { .. })) {
+                    for path in self.callee_returned_param_parts(callee_name, method_owner, i) {
+                        if let [crate::ast::ParamPart::Field(f)] = path.as_slice() {
+                            self.moved_out_struct_field_bodies
+                                .insert((src.clone(), f.clone()));
+                        }
+                    }
+                }
             }
             // B-2026-07-30-11 (param-tuple leg, the A shape): a tuple
             // LITERAL arg (`take_tuple((Res { id: 41 }, 10))`) moved into

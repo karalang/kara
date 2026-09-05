@@ -12869,6 +12869,67 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-09-05-6 — a place STRUCT argument whose FIELD the callee hands
+    /// back runs that field's `Drop` body exactly ONCE.
+    ///
+    /// One object had two owners: the caller's own field walk fired at `g`'s
+    /// live-range end on a value the callee had already given away, and the
+    /// result's binding fired it again — `in dR13 got13 dR13` against a due
+    /// `in got13 dR13`. Agreed-wrong on all four surfaces, so no A/B gate saw
+    /// it, and valgrind-clean (33 allocs / 33 frees post-fix), because the
+    /// entry copy gives each body a buffer of its own.
+    ///
+    /// Four legs: the destructure spelling (`g1`); a two-field struct (`g2`)
+    /// where only `a` escapes, so `dR32` is DUE inside the call and pins the
+    /// mask as per-FIELD rather than a suppression of the binding's whole
+    /// walk; the PROJECTION spelling (`g3`, `return h.r`), which the row
+    /// reported clean and is not; and the GENERIC callee (`g4`), which never
+    /// reaches `compile_call`'s argument loop, so the free-function arm alone
+    /// left this column at two bodies against the interpreter's one. `g5` pins
+    /// the discarded-result form.
+    ///
+    /// `g6` is the guard's own pin, and it is what makes the fix more than the
+    /// masking arm: `fn zEsc(h: Cd) -> i64 { return h.z; }` hands back a SCALAR
+    /// field, which carries no body to mask, but `disarm_struct_field_bodies_at`
+    /// retracts and re-registers a binding's walker — so disarming a field the
+    /// walker never ran ADDED a second walk and doubled the SIBLING `r`'s body.
+    /// That broke B-2026-09-05-5's pin (`dR7 dR7`) on a shape this row does not
+    /// touch, which is why the arm is gated on `user_drop_field_indices_mono`.
+    #[test]
+    fn test_e2e_auto_par_place_struct_arg_escaping_field_runs_one_body() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Cd { r: R, z: i64 }
+fn cEsc(h: Cd) -> R { let Cd { r, z } = h; println("in"); return r; }
+fn zEsc(h: Cd) -> i64 { println("in5"); return h.z; }
+struct Dd { a: R, b: R }
+fn dEsc(h: Dd) -> R { let Dd { a, b } = h; println("in2"); return a; }
+fn pEsc(h: Cd) -> R { println("in3"); return h.r; }
+struct Gd[T] { r: T, z: i64 }
+fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; println("in4"); return r; }
+fn main() {
+  let g1 = Cd { r: mk(13), z: 9 };  let o1 = cEsc(g1); println(f"got{o1.id}");
+  let g2 = Dd { a: mk(31), b: mk(32) }; let o2 = dEsc(g2); println(f"got{o2.id}");
+  let g3 = Cd { r: mk(41), z: 9 };  let o3 = pEsc(g3); println(f"got{o3.id}");
+  let g4 = Gd { r: mk(81), z: 9 };  let o4 = gEsc(g4); println(f"got{o4.id}");
+  let g5 = Cd { r: mk(91), z: 9 };  let _ = cEsc(g5); println("after");
+  let g6 = Cd { r: mk(51), z: 5 };  let v6 = zEsc(g6); println(f"gotz{v6}");
+  println("end");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "in\ngot13\ndR13\nin2\ndR32\ngot31\ndR31\nin3\ngot41\ndR41\nin4\ngot81\ndR81\nin\ndR91\nafter\nin5\ndR51\ngotz5\nend\n",
+                "the auto-par column owes the same single body per escaping field \
+                 as the other three; got {out:?}"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]

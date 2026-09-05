@@ -2572,6 +2572,18 @@ impl<'ctx> super::Codegen<'ctx> {
             if transfer_ident[i] {
                 self.move_declined_copy_struct_arg(&a.value);
             }
+            // B-2026-09-05-6 — the monomorph leg of the place-STRUCT escaping
+            // field mask. A generic call never reaches `compile_call`'s arg
+            // loop, so the arm added there covered the concrete callee only and
+            // `gEsc(g)` over `fn gEsc[T](h: Gd[T]) -> T` kept both owners: the
+            // interpreter went to one body and the three compiled surfaces
+            // stayed at two, which is a divergence rather than the agreed-wrong
+            // count the row opened on. Measured here, all four converge.
+            //
+            // Placed in THIS loop, not beside the registrar above, for the
+            // reason stated at its head: this edits CALLER-scope cleanup frames
+            // and so must run with the caller's substitution restored.
+            self.disarm_escaping_place_struct_field_bodies(name, i, &a.value);
         }
 
         // Slice 8y: per-call-site decision on whether the caller

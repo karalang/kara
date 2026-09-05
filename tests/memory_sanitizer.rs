@@ -4392,6 +4392,74 @@ fn main() {
         );
     }
 
+    /// B-2026-09-05-6 — the memory gate on removing a duplicate `Drop` body.
+    ///
+    /// The defect was a COUNT: a place struct argument whose field the callee
+    /// hands back ran that field's body twice, once from the caller's own field
+    /// walk at `g`'s live-range end and once from the result's binding. It was
+    /// valgrind-clean throughout, because the callee's entry copy gives each
+    /// body a buffer of its own — which is exactly why this pin matters. The
+    /// fix masks one of the two fires, and the failure mode of masking a fire
+    /// is the opposite of the original: a leak, or a body that no longer runs
+    /// over a live object.
+    ///
+    /// Four shapes over three rounds, mirroring the E2E twin: the destructure
+    /// spelling, a two-field struct whose non-escaping sibling `b` must KEEP
+    /// its body inside the call (the leg that would leak if the mask were
+    /// per-binding instead of per-field), the projection spelling, and a
+    /// generic callee. Measured on this fixture post-fix: exit 0, no
+    /// LeakSanitizer report; the standalone build is 33 allocs / 33 frees under
+    /// valgrind with 0 errors. (LSan is Linux-only; see CLAUDE.md.)
+    ///
+    /// `g6` is the guard's own pin, and it is what makes the fix more than the
+    /// masking arm: `fn zEsc(h: Cd) -> i64 { return h.z; }` hands back a SCALAR
+    /// field, which carries no body to mask, but `disarm_struct_field_bodies_at`
+    /// retracts and re-registers a binding's walker — so disarming a field the
+    /// walker never ran ADDED a second walk and doubled the SIBLING `r`'s body.
+    /// That broke B-2026-09-05-5's pin (`dR7 dR7`) on a shape this row does not
+    /// touch, which is why the arm is gated on `user_drop_field_indices_mono`.
+    #[test]
+    fn asan_place_struct_arg_escaping_field_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Cd { r: R, z: i64 }
+fn cEsc(h: Cd) -> R { let Cd { r, z } = h; println("in"); return r; }
+fn zEsc(h: Cd) -> i64 { println("in5"); return h.z; }
+struct Dd { a: R, b: R }
+fn dEsc(h: Dd) -> R { let Dd { a, b } = h; println("in2"); return a; }
+fn pEsc(h: Cd) -> R { println("in3"); return h.r; }
+struct Gd[T] { r: T, z: i64 }
+fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; println("in4"); return r; }
+fn round() {
+  let g1 = Cd { r: mk(13), z: 9 };  let o1 = cEsc(g1); println(f"got{o1.id}");
+  let g2 = Dd { a: mk(31), b: mk(32) }; let o2 = dEsc(g2); println(f"got{o2.id}");
+  let g3 = Cd { r: mk(41), z: 9 };  let o3 = pEsc(g3); println(f"got{o3.id}");
+  let g4 = Gd { r: mk(81), z: 9 };  let o4 = gEsc(g4); println(f"got{o4.id}");
+  let g5 = Cd { r: mk(91), z: 9 };  let _ = cEsc(g5); println("after");
+  let g6 = Cd { r: mk(51), z: 5 };  let v6 = zEsc(g6); println(f"gotz{v6}");
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 { round(); i = i + 1; }
+    println("done");
+}
+"#,
+            &[
+                "in", "got13", "dR13", "in2", "dR32", "got31", "dR31", "in3", "got41", "dR41",
+                "in4", "got81", "dR81", "in", "dR91", "after", "in5", "dR51", "gotz5", "in",
+                "got13", "dR13", "in2", "dR32", "got31", "dR31", "in3", "got41", "dR41", "in4",
+                "got81", "dR81", "in", "dR91", "after", "in5", "dR51", "gotz5", "in", "got13",
+                "dR13", "in2", "dR32", "got31", "dR31", "in3", "got41", "dR41", "in4", "got81",
+                "dR81", "in", "dR91", "after", "in5", "dR51", "gotz5", "done",
+            ],
+            "b0905-6-place-struct-arg-escaping-field",
+            24,
+        );
+    }
+
     /// B-2026-09-04-27 — the memory gate on the container-element half of the
     /// generic-`Drop` fix: running a per-monomorph body from a BODIES-ONLY
     /// walker must add no free and lose none.
