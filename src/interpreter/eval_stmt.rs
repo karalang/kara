@@ -295,6 +295,11 @@ impl<'a> super::Interpreter<'a> {
             // user-Drop gate; the Assign arm itself already ran the DISPLACED
             // old `a` value's body before the store.
             self.suppress_assign_move_user_drop(stmt, &mut cleanup);
+            // B-2026-09-03-30 — the RE-ARM other half of the line above: once a
+            // target that held a param view is given a value of its own again
+            // (`a = h; a = R{5}`), restore the Drop slot the retraction removed,
+            // or the fresh value's scope-exit body fires nowhere.
+            self.rearm_assign_fresh_value_drop(stmt, &mut cleanup);
             // B-2026-07-29-39 — `let x = h.a;` moves a Drop-bearing FIELD out
             // of `h`, so `h` must stop running that field's body (`x` runs it
             // now). Mirrors codegen's
@@ -4559,6 +4564,76 @@ impl<'a> super::Interpreter<'a> {
             CleanupAction::Drop { name } => name != source_name,
             _ => true,
         });
+    }
+
+    /// B-2026-09-03-30 — the RE-ARM counterpart of the param-view retraction in
+    /// [`Self::suppress_assign_move_user_drop`]'s identifier branch, mirroring
+    /// codegen's B-2026-08-30-53 second measurement.
+    ///
+    /// That branch handles `a = h;` (`h` an owned param): it RETRACTS `a`'s
+    /// Drop slot — because while `a` holds the caller's value the caller runs
+    /// the body — and marks `a` a view. It has no counterpart for the moment
+    /// `a` is given a value of its OWN again (`a = R { .. }`, or `a = g;` for a
+    /// local `g`), so the retracted slot stayed gone and the fresh value's
+    /// scope-exit body fired nowhere: `a = h; a = R{5}` printed `dR1 dR4 v5`,
+    /// losing `dR5` against every compiled backend's `dR1 dR5 dR4 v5`.
+    ///
+    /// Confined to a target ALREADY marked a view (the exact set the retraction
+    /// touched), and skips `a = h2` where the new value is ITSELF a param view —
+    /// there `a` stays a view and the retraction above is correct. Runs AFTER
+    /// that retraction and after the displacement fire (both in `eval_stmt_cf`),
+    /// which is what makes both halves right: the displacement reads the still-a-
+    /// view state and correctly skips the caller's value, and only then does the
+    /// target become the owner of something of its own. The re-arm is
+    /// unconditional on Drop-bearing, matching `push_drops_for_stmt` at the
+    /// original `let` — the retraction is name-blind too, so a plain binding
+    /// loses its slot the same way and must get it back for `drop_trace` parity.
+    fn rearm_assign_fresh_value_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
+        let StmtKind::Assign { target, value } = &stmt.kind else {
+            return;
+        };
+        let ExprKind::Identifier(target_name) = &target.kind else {
+            return;
+        };
+        // Only a target the param-view retraction actually touched — i.e. one
+        // currently in this frame's view set.
+        if !self
+            .owned_param_names_stack
+            .last()
+            .is_some_and(|s| s.contains(target_name.as_str()))
+        {
+            return;
+        }
+        // `a = h2` where the RHS is itself a param view: `a` stays a view and
+        // `suppress_assign_move_user_drop` has already (re-)retracted it. Leave
+        // it a view; re-arming here would fire the caller-owned value twice.
+        if let ExprKind::Identifier(src) = &value.kind {
+            if self
+                .owned_param_names_stack
+                .last()
+                .is_some_and(|s| s.contains(src.as_str()))
+            {
+                return;
+            }
+        }
+        // The target owns a fresh value now: clear its view-ness (both the
+        // whole-binding mark and any field/element view records rooted at it)…
+        if let Some(top) = self.owned_param_names_stack.last_mut() {
+            top.remove(target_name.as_str());
+        }
+        self.param_view_struct_fields
+            .retain(|(root, _)| root != target_name);
+        self.param_view_tuple_elems
+            .retain(|(root, _)| root != target_name);
+        // …and restore its scope-exit Drop slot, unless one already stands.
+        let already = cleanup
+            .iter()
+            .any(|a| matches!(a, CleanupAction::Drop { name } if name == target_name));
+        if !already {
+            cleanup.push(CleanupAction::Drop {
+                name: target_name.clone(),
+            });
+        }
     }
 
     /// The value a match arm ultimately yields: an arm may be a bare

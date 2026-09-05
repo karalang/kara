@@ -42386,6 +42386,76 @@ fn conditional_param_view_assign_keeps_the_targets_own_body() {
     }
 }
 
+/// B-2026-09-03-30 — the interpreter twin of B-2026-08-30-53's re-arm, for the
+/// DIRECT-param spelling the conditional test above does not cover.
+///
+/// `a = h;` where `h` is the by-value PARAM (not a match-arm payload view)
+/// takes `suppress_assign_move_user_drop`'s param branch, which retracts the
+/// TARGET `a`'s Drop slot and marks it a view. That branch had no re-arm
+/// counterpart, so when `a` was given a value of its OWN again (`a = R { .. }`,
+/// or `a = g;` for a local `g`) the retracted slot stayed gone and the fresh
+/// value's scope-exit body fired nowhere: `a = h; a = R{5}` printed
+/// `dR1 dR4 v5`, losing `dR5` against every compiled backend's
+/// `dR1 dR5 dR4 v5`. (The match-arm spelling `out = r; out = R{5}` retracts the
+/// SOURCE `r`'s slot instead, so the interpreter was always right there — it is
+/// the `refreshed`/"view-then-fresh-value" case above, which stays green.)
+///
+/// Parity twin of `codegen::test_e2e_direct_param_view_assign_then_fresh_value`.
+#[test]
+fn direct_param_view_assign_then_fresh_value_reruns_exit_body() {
+    const H: &str = "struct R { id: i64, tag: String }\n\
+         impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+         fn mk9() -> R { return R { id: 9, tag: f\"n\" } }\n\
+         fn refresh(h: R) -> i64 {\n\
+             let mut a: R = R { id: 1, tag: f\"a\" };\n\
+             a = h;\n\
+             a = R { id: 5, tag: f\"c\" };\n\
+             return a.id\n\
+         }\n\
+         fn refresh_twice(h: R) -> i64 {\n\
+             let mut a: R = R { id: 1, tag: f\"a\" };\n\
+             a = h;\n\
+             a = R { id: 5, tag: f\"c\" };\n\
+             a = R { id: 6, tag: f\"d\" };\n\
+             return a.id\n\
+         }\n\
+         fn local_source() -> i64 {\n\
+             let g: R = mk9();\n\
+             let mut a: R = R { id: 1, tag: f\"a\" };\n\
+             a = g;\n\
+             a = R { id: 5, tag: f\"c\" };\n\
+             return a.id\n\
+         }\n";
+    for (label, body, want) in [
+        // The row's repro: `dR1` displaces the initializer at `a = h`, `dR5` is
+        // the surviving fresh value's scope-exit body (the fire that was lost),
+        // then the caller drops the param `h` (`dR4`).
+        (
+            "refresh",
+            "println(f\"v{refresh(R { id: 4, tag: f\"b\" })}\")\n",
+            "dR1\ndR5\ndR4\nv5\n",
+        ),
+        // Discriminator: the DISPLACEMENT fire was always kept — only the
+        // exit fire was lost. `dR5` here fires as `R{6}` displaces it; `dR6`
+        // is the exit fire the re-arm restores.
+        (
+            "refresh-twice",
+            "println(f\"v{refresh_twice(R { id: 4, tag: f\"b\" })}\")\n",
+            "dR1\ndR5\ndR6\ndR4\nv6\n",
+        ),
+        // Boundary: a LOCAL source in place of the param view never marks `a`
+        // a view, so it was clean before and must stay clean after.
+        (
+            "local-source",
+            "println(f\"v{local_source()}\")\n",
+            "dR1\ndR9\ndR5\nv5\n",
+        ),
+    ] {
+        let src = format!("{H}fn main() {{ {body} }}\n");
+        assert_eq!(run(&src), want, "{label}");
+    }
+}
+
 /// B-2026-08-30-18 — the ORACLE half of the return-position aggregate
 /// literal. An aggregate literal built directly at an explicit `return`,
 /// carrying a `Vec` of `Drop` elements moved in from a named local, runs

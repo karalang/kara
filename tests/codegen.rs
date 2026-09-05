@@ -124185,6 +124185,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_direct_param_view_assign_then_fresh_value() {
+        // B-2026-09-03-30 — the DIRECT-param spelling of the re-arm above:
+        // `a = h;` where `h` is the by-value PARAM (not a match-arm payload
+        // view), then `a` is given a value of its OWN again. The compiled
+        // backends were ALWAYS right here — their `cond_move_drop_flags` re-arm
+        // (B-2026-08-30-53 second measurement) restores the target's body on any
+        // assignment whose RHS is not a param view — so this is the ORACLE the
+        // interpreter was moved onto: `karac run --interp` lost `dR5` because
+        // `suppress_assign_move_user_drop`'s param branch retracted `a`'s slot
+        // and had no re-arm counterpart. Pinned so a future "reconciliation"
+        // has to break this, not the interpreter twin.
+        //
+        // `dR1` displaces the initializer at `a = h`; `dR5` is the surviving
+        // fresh value's exit body (the lost fire); then the caller drops `h`
+        // (`dR4`). `refresh_twice` shows the displacement fire was always kept
+        // (`dR5` as `R{6}` displaces it) and only the exit fire (`dR6`) was at
+        // issue; `local_source` is the boundary a local RHS never marks a view.
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+
+fn mk9() -> R { return R { id: 9, tag: f"n" } }
+
+fn refresh(h: R) -> i64 {
+    let mut a: R = R { id: 1, tag: f"a" };
+    a = h;
+    a = R { id: 5, tag: f"c" };
+    return a.id
+}
+
+fn refresh_twice(h: R) -> i64 {
+    let mut a: R = R { id: 1, tag: f"a" };
+    a = h;
+    a = R { id: 5, tag: f"c" };
+    a = R { id: 6, tag: f"d" };
+    return a.id
+}
+
+fn local_source() -> i64 {
+    let g: R = mk9();
+    let mut a: R = R { id: 1, tag: f"a" };
+    a = g;
+    a = R { id: 5, tag: f"c" };
+    return a.id
+}
+
+fn main() {
+    println(f"v{refresh(R { id: 4, tag: f"b" })}");
+    println("-");
+    println(f"v{refresh_twice(R { id: 4, tag: f"b" })}");
+    println("-");
+    println(f"v{local_source()}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "dR1\ndR5\ndR4\nv5\n-\ndR1\ndR5\ndR6\ndR4\nv6\n-\ndR1\ndR9\ndR5\nv5"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_aggregate_literal_at_explicit_return_single_fire() {
         // B-2026-08-30-18 — an aggregate literal built DIRECTLY at an
         // explicit `return`, carrying a `Vec` of `Drop` elements moved in from
