@@ -179,11 +179,84 @@ fn restore_default_sigpipe() {
 #[cfg(not(unix))]
 fn restore_default_sigpipe() {}
 
+/// Exit when the process that spawned this runner goes away — B-2026-09-05-24.
+///
+/// `karac_jit_runner` is never a program in its own right: it exists only to
+/// execute one IR module on behalf of a parent `karac` that is waiting on it.
+/// Nothing in that arrangement made the child NOTICE the parent's death, and
+/// `std::process::Child` does not kill on drop, so killing the parent left the
+/// runner executing the JIT'd program forever. For a program that loops that
+/// means a core pinned at 100% with no obvious handle on it — the surviving
+/// process is named `karac_jit_runner`, not the program the user ran. Any
+/// harness that TIMES OUT a `karac run` (mutation testing, CI, the Mend loop)
+/// hits this on every timeout and silently accumulates orphans that contaminate
+/// every later timing measurement on the host. That is how it was found.
+///
+/// The parent forwards SIGINT/SIGTERM/SIGHUP to us (see
+/// `run_check_cmds::run_ir_via_jit_subprocess`), which covers the signals a
+/// parent can handle. SIGKILL it cannot, so the child has to notice on its own
+/// — and this watchdog is also the backstop for the parent dying of anything
+/// else at all (its own panic, an OOM kill, the terminal going away), including
+/// the few-instruction window between `spawn()` returning and the parent
+/// recording our pid.
+///
+/// POLLING `getppid()` rather than `prctl(PR_SET_PDEATHSIG)`: pdeathsig is
+/// Linux-only (macOS needs a whole kqueue `EVFILT_PROC`/`NOTE_EXIT` watch for
+/// the same effect) and it must be armed by the parent between fork and exec,
+/// so it would protect only the call sites that opt in. Reparenting is visible
+/// identically on both platforms with no parent-side cooperation at all, so one
+/// mechanism here covers the one-shot, `--repl-mode` and `--test-batch` entries
+/// and every current and future spawn site. The cost is a sleeping thread and
+/// up to one poll interval of latency, which is nothing against a run that was
+/// going to spin forever.
+///
+/// `KARAC_JIT_RUNNER_NO_PARENT_WATCH=1` disables it, for the deliberate case of
+/// running the runner detached from its spawner.
+#[cfg(unix)]
+fn watch_for_parent_death() {
+    if std::env::var_os("KARAC_JIT_RUNNER_NO_PARENT_WATCH").is_some() {
+        return;
+    }
+    // SAFETY: `getppid` is a pure read of process state and cannot fail.
+    let spawner = unsafe { libc::getppid() };
+    if spawner <= 1 {
+        // Already reparented to init (or no meaningful parent): there is
+        // nothing left to watch, and watching would fire immediately.
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("karac-parent-watch".to_string())
+        .stack_size(64 * 1024)
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // SAFETY: as above. A changed parent pid means the original
+            // spawner was reaped — pid reuse cannot fake this, because the
+            // process we get reparented to already existed under its own pid.
+            if unsafe { libc::getppid() } != spawner {
+                // `_exit`, not `exit`: skip atexit handlers (REPL mode
+                // registers one that writes a salvage frame to a parent that
+                // is by definition gone) and skip every destructor in a
+                // process whose JIT'd program is mid-flight on another thread.
+                //
+                // 129 is the shell's `128 + SIGHUP` — "the thing this process
+                // was attached to went away", which is exactly what happened.
+                unsafe { libc::_exit(129) };
+            }
+        });
+}
+
+#[cfg(not(unix))]
+fn watch_for_parent_death() {}
+
 fn main() -> ExitCode {
     // Before anything else, and before any path that runs user code: the
     // oneshot, `--repl-mode` and `--test-batch` entries all execute JIT'd
     // programs, so all three need the AOT signal disposition.
     restore_default_sigpipe();
+
+    // Same reasoning, same three entries: a runner whose spawner has died has
+    // nothing left to hand its result to, so none of them should outlive it.
+    watch_for_parent_death();
 
     // Belt-and-suspenders: ensure the runtime's `#[no_mangle]` symbol
     // graph is materialized in the process symbol table before the
@@ -220,7 +293,22 @@ fn main() -> ExitCode {
 
 /// One-shot mode (slice c.3 + W3.4). Loads `ir_path`, runs it, exits.
 fn oneshot_main(ir_path: &str) -> ExitCode {
-    let ir = match std::fs::read_to_string(ir_path) {
+    let read = std::fs::read_to_string(ir_path);
+
+    // B-2026-09-05-24: `karac run` hands the IR over through a temp file that
+    // IT removes once we exit — which never happens when it is killed before
+    // we do, so every interrupted run leaked a `/tmp/karac_run_<pid>_jit.ll`.
+    // The bytes are ours the moment the read returns, so unlink here instead
+    // and let the parent's own `remove_file` be the no-op it now is. Opt-in via
+    // the env var rather than unconditional: the other one-shot callers
+    // (`tests/codegen.rs::jit_dispatch`, `cmd_test`'s dispatch) pass paths they
+    // manage themselves, and a runner that deletes its caller's files would be
+    // a surprise in the other direction.
+    if std::env::var_os("KARAC_JIT_IR_UNLINK").is_some() {
+        let _ = std::fs::remove_file(ir_path);
+    }
+
+    let ir = match read {
         Ok(s) => s,
         Err(e) => {
             eprintln!("karac_jit_runner: read IR {ir_path}: {e}");

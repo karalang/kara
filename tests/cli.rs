@@ -4328,6 +4328,184 @@ fn jit_broken_pipe_stops_the_program_like_a_native_binary() {
     );
 }
 
+/// The pid/comm table, as `(pid, ppid, comm)`. `ps -A -o …` with the trailing
+/// `=` on each field suppresses the header and is the one spelling that works
+/// identically on Linux and macOS — `/proc` would be Linux-only.
+#[cfg(all(feature = "llvm", unix))]
+fn process_table() -> Vec<(u32, u32, String)> {
+    let out = match std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,comm="])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split_whitespace();
+            let pid = f.next()?.parse().ok()?;
+            let ppid = f.next()?.parse().ok()?;
+            Some((pid, ppid, f.collect::<Vec<_>>().join(" ")))
+        })
+        .collect()
+}
+
+/// Linux's `comm` is capped at 15 bytes, so `karac_jit_runner` shows up as
+/// `karac_jit_runne` there and in full on macOS. Match the common prefix.
+#[cfg(all(feature = "llvm", unix))]
+const RUNNER_COMM: &str = "karac_jit_runne";
+
+#[cfg(all(feature = "llvm", unix))]
+fn runner_child_of(parent: u32) -> Option<u32> {
+    process_table()
+        .into_iter()
+        .find(|(_, ppid, comm)| *ppid == parent && comm.contains(RUNNER_COMM))
+        .map(|(pid, _, _)| pid)
+}
+
+/// Whether `pid` is STILL the runner. Checking liveness alone would be a pid
+/// -reuse race in the one direction that matters (a recycled pid reported as a
+/// surviving orphan), so this checks the name too.
+#[cfg(all(feature = "llvm", unix))]
+fn runner_alive(pid: u32) -> bool {
+    process_table()
+        .into_iter()
+        .any(|(p, _, comm)| p == pid && comm.contains(RUNNER_COMM))
+}
+
+#[cfg(all(feature = "llvm", unix))]
+fn poll_until<F: FnMut() -> bool>(limit: std::time::Duration, mut done: F) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if done() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[cfg(all(feature = "llvm", unix))]
+#[test]
+fn signalling_karac_run_does_not_orphan_the_jit_runner() {
+    // B-2026-09-05-24 — `karac run` spawned `karac_jit_runner` and then blocked
+    // in `.status()`. Nothing tied the two lifetimes together, so SIGINT,
+    // SIGTERM and SIGKILL to the parent each killed `karac run` and left the
+    // runner spinning at 100% CPU indefinitely:
+    //
+    //     SIGINT  -> karac run dies, karac_jit_runner SURVIVES
+    //     SIGTERM -> karac run dies, karac_jit_runner SURVIVES
+    //     SIGKILL -> karac run dies, karac_jit_runner SURVIVES
+    //
+    // Interactively that means Ctrl-C returns the shell prompt while the
+    // program keeps running under a process name that is neither the program
+    // nor the command the user typed. For a harness it is quieter and worse: it
+    // was found because a mutation-testing run's `timeout=240` kills left one
+    // pinned core per timed-out mutant, and every later timing measurement in
+    // that session was wrong by an amount nothing in the logs explained.
+    //
+    // Two mechanisms, because no single one covers all three signals: the
+    // parent forwards the two it can catch, and the runner's own `getppid`
+    // watchdog covers SIGKILL, which no parent can handle. This test asserts
+    // the OUTCOME for all three rather than either mechanism, so it stays
+    // honest if the implementation of either half is replaced.
+    //
+    // THE PROGRAM MUST NOT TERMINATE ON ITS OWN, and getting that right takes
+    // more care than it looks. A finite program would exit while the test was
+    // still polling and pass with the bug fully present — the trap
+    // `jit_broken_pipe_stops_the_program_like_a_native_binary` documents. The
+    // row's own reproduction, `loop { x += 1; if x < 0 { break; } }`, is that
+    // trap: Kāra checks integer overflow, so it does not wrap around to a
+    // negative `x` — it PANICS at 2^31, about two seconds in under the JIT. An
+    // empty `loop {}` has the opposite problem, being exactly the shape an
+    // optimizer is allowed to delete.
+    //
+    // So: print without end into a stdout pipe nobody reads. The pipe buffer
+    // fills, the program blocks in `write` forever, and it neither terminates
+    // nor burns a core while this test polls. Blocking in a syscall is also the
+    // harder case for the fix — the watchdog runs on its own thread, and the
+    // forwarded signal has to interrupt a blocked write.
+    use std::process::{Command, Stdio};
+
+    let tmp = scratch_project("jit-orphan");
+    write(
+        &tmp.join("spin.kara"),
+        "fn main() {\n\
+         \x20   let mut i = 0;\n\
+         \x20   while true {\n\
+         \x20       println(f\"spin {i}\");\n\
+         \x20       i = i + 1;\n\
+         \x20   }\n\
+         }\n",
+    );
+
+    for sig in ["INT", "TERM", "KILL"] {
+        let mut child = match Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .args(["run", "spin.kara"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[jit-orphan] could not spawn karac: {e} — skipping");
+                return;
+            }
+        };
+        let karac_pid = child.id();
+
+        // Compiling to IR and spawning the runner takes a moment; a debug-build
+        // container under load can take several seconds.
+        let mut runner = None;
+        let appeared = poll_until(std::time::Duration::from_secs(60), || {
+            runner = runner_child_of(karac_pid);
+            runner.is_some()
+        });
+        if !appeared {
+            let _ = child.kill();
+            let _ = child.wait();
+            eprintln!("[jit-orphan] no karac_jit_runner child appeared — skipping {sig}");
+            continue;
+        }
+        let runner_pid = runner.expect("runner pid");
+        let ir = std::env::temp_dir().join(format!("karac_run_{karac_pid}_jit.ll"));
+
+        let killed = Command::new("kill")
+            .args(["-s", sig, &karac_pid.to_string()])
+            .status();
+        assert!(
+            matches!(killed, Ok(s) if s.success()),
+            "could not send SIG{sig} to karac run (pid {karac_pid}): {killed:?}"
+        );
+
+        // Reap the parent so the runner is definitely reparented before the
+        // survival check — otherwise a slow wait could be mistaken for the
+        // watchdog being slow.
+        let _ = child.wait();
+
+        assert!(
+            poll_until(std::time::Duration::from_secs(15), || !runner_alive(
+                runner_pid
+            )),
+            "SIG{sig} to `karac run` (pid {karac_pid}) left karac_jit_runner \
+             (pid {runner_pid}) alive — it is spinning at 100% CPU with no \
+             handle on it, which is B-2026-09-05-24"
+        );
+
+        assert!(
+            poll_until(std::time::Duration::from_secs(5), || !ir.exists()),
+            "SIG{sig} to `karac run` leaked the handoff IR file {} — the parent \
+             cannot unlink it on a path where it is killed outright, so the \
+             runner has to",
+            ir.display()
+        );
+    }
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_stdin_lines_run_and_build_parity() {

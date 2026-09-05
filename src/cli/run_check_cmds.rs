@@ -334,6 +334,132 @@ pub(super) fn try_build_run_super_program(filename: &str, no_manifest: bool) -> 
     Some(build_super_program_for_run(&tree))
 }
 
+/// Forward the signals `karac run` can catch to the `karac_jit_runner` child —
+/// B-2026-09-05-24.
+///
+/// `karac run` is the DEFAULT executor, so this is the path a user takes to run
+/// a program interactively — and until this guard existed, signalling `karac
+/// run` killed the wrapper and left the JIT'd program running. Ctrl-C on a Kāra
+/// program that loops forever returned the shell prompt while the program kept
+/// burning a core, under a process name (`karac_jit_runner`) that names neither
+/// the program nor the command the user typed.
+///
+/// Forwarding rather than killing: the child's death-by-signal is what
+/// [`exit_code_of`] turns into the shell's `128 + signal`, so an interrupted
+/// `karac run` reports the same status an interrupted AOT binary would. The
+/// parent then falls out of `wait()` naturally and its ordinary cleanup — the
+/// temp IR file — runs on the way out, which a handler that exited on the spot
+/// would have skipped.
+///
+/// Escalation, and why it is not optional: a child that does not die on the
+/// first delivery would otherwise leave the parent blocked in `wait()` with the
+/// user's Ctrl-C swallowed — strictly worse than the bug being fixed. So the
+/// SECOND delivery of the same signal (and any delivery with no child recorded)
+/// restores the default disposition and re-raises, which is also what makes the
+/// pre-spawn window safe: the handlers are armed BEFORE the fork so no signal
+/// is ever silently dropped, and until [`attach`](Forwarder::attach) records a
+/// pid they simply do what the kernel would have done anyway.
+///
+/// SIGKILL and SIGSTOP are absent because they cannot be caught. The child's
+/// own `getppid` watchdog covers those (see `karac_jit_runner`'s
+/// `watch_for_parent_death`), and covers the instructions between `spawn()`
+/// returning and `attach` storing the pid.
+#[cfg(all(feature = "llvm", unix))]
+mod jit_child_signals {
+    use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+
+    /// The signals a parent can act on that would otherwise strand the child.
+    /// All three default to terminating this process.
+    const FORWARDED: [i32; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+    /// The runner's pid, or 0 before the spawn / after the wait.
+    static CHILD_PID: AtomicI32 = AtomicI32::new(0);
+    /// One bit per signal number already forwarded once, so a repeat escalates.
+    static SEEN: AtomicU32 = AtomicU32::new(0);
+
+    /// Async-signal-safe: an atomic read-modify-write plus `kill`, `signal` and
+    /// `raise`, all three of which POSIX lists as safe to call from a handler.
+    extern "C" fn handler(sig: i32) {
+        let pid = CHILD_PID.load(Ordering::SeqCst);
+        let bit = 1u32 << (sig as u32 & 31);
+        let first = SEEN.fetch_or(bit, Ordering::SeqCst) & bit == 0;
+        if pid > 0 && first {
+            // SAFETY: `kill` on a pid we spawned and have not yet reaped.
+            unsafe { libc::kill(pid, sig) };
+            return;
+        }
+        // SAFETY: restoring the default disposition and re-raising is the
+        // documented way to take the default action from inside a handler.
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+    }
+
+    /// Armed for the lifetime of one child; restores the default dispositions
+    /// on drop so a later signal to `karac` is handled normally again.
+    pub(super) struct Forwarder;
+
+    impl Forwarder {
+        /// Install the handlers. Call BEFORE spawning, so the window in which a
+        /// signal would take the default action while a child already exists is
+        /// as short as the code between `spawn()` and [`Self::attach`].
+        pub(super) fn arm() -> Self {
+            CHILD_PID.store(0, Ordering::SeqCst);
+            SEEN.store(0, Ordering::SeqCst);
+            for sig in FORWARDED {
+                // SAFETY: a zeroed `sigaction` with an explicitly set handler,
+                // empty mask and `SA_RESTART` is the standard installation.
+                unsafe {
+                    let mut sa: libc::sigaction = std::mem::zeroed();
+                    sa.sa_sigaction = handler as *const () as libc::sighandler_t;
+                    libc::sigemptyset(&mut sa.sa_mask);
+                    // Restart interrupted syscalls: `Child::wait` retries on
+                    // EINTR anyway, but the JIT'd program is not yet running
+                    // and nothing here wants a spurious short read.
+                    sa.sa_flags = libc::SA_RESTART;
+                    libc::sigaction(sig, &sa, std::ptr::null_mut());
+                }
+            }
+            Forwarder
+        }
+
+        pub(super) fn attach(&self, child_pid: u32) {
+            CHILD_PID.store(child_pid as i32, Ordering::SeqCst);
+        }
+    }
+
+    impl Drop for Forwarder {
+        fn drop(&mut self) {
+            CHILD_PID.store(0, Ordering::SeqCst);
+            for sig in FORWARDED {
+                // SAFETY: restoring the default disposition of a standard signal.
+                unsafe { libc::signal(sig, libc::SIG_DFL) };
+            }
+        }
+    }
+}
+
+/// Non-Unix stand-in: there is no signal to forward, so the guard does nothing.
+#[cfg(all(feature = "llvm", not(unix)))]
+mod jit_child_signals {
+    pub(super) struct Forwarder;
+
+    impl Forwarder {
+        pub(super) fn arm() -> Self {
+            Forwarder
+        }
+        pub(super) fn attach(&self, _child_pid: u32) {}
+    }
+
+    // Present so the explicit `drop(forwarder)` at the call site reads as the
+    // deliberate scope marker it is on every platform, rather than tripping
+    // `clippy::drop_non_drop` here.
+    impl Drop for Forwarder {
+        fn drop(&mut self) {}
+    }
+}
+
 /// LLJIT Slice 6b: run a codegen-emitted IR module through the
 /// `karac_jit_runner` one-shot subprocess and return its exit code. The
 /// runner JIT-compiles the module and calls `main`; its stdio is INHERITED
@@ -379,15 +505,35 @@ pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i3
     // `KARAC_DBG_OUTPUT` (the JIT'd program's `dbg` output format) is INHERITED
     // from this process rather than set here — `cmd_run` sets it from
     // `--output` before reaching this helper, which has no view of the flag.
-    let status = std::process::Command::new(&runner)
+    //
+    // B-2026-09-05-24: spawn + wait rather than `.status()`, so the signals
+    // that would otherwise kill this wrapper and strand the runner can be
+    // forwarded to it. Armed BEFORE the spawn — see `jit_child_signals`.
+    // `KARAC_JIT_IR_UNLINK` hands the temp file's removal to the child, which
+    // is the only party still alive on the paths where this process is killed
+    // outright.
+    let forwarder = jit_child_signals::Forwarder::arm();
+    let child = std::process::Command::new(&runner)
         .arg(&ir_path)
         .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))
-        .status();
+        .env("KARAC_JIT_IR_UNLINK", "1")
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: could not spawn karac_jit_runner: {e}");
+            let _ = std::fs::remove_file(&ir_path);
+            return 1;
+        }
+    };
+    forwarder.attach(child.id());
+    let status = child.wait();
+    drop(forwarder);
     let _ = std::fs::remove_file(&ir_path);
     match status {
         Ok(s) => exit_code_of(&s),
         Err(e) => {
-            eprintln!("error: could not spawn karac_jit_runner: {e}");
+            eprintln!("error: could not wait for karac_jit_runner: {e}");
             1
         }
     }
