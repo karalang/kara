@@ -4129,6 +4129,61 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-27 — the memory gate on the container-element half of the
+    /// generic-`Drop` fix: running a per-monomorph body from a BODIES-ONLY
+    /// walker must add no free and lose none.
+    ///
+    /// The walkers this fix touches (`__karac_dropelems_*`, the slot primitive,
+    /// the `Map` half walks) free nothing by construction — element memory
+    /// stays with the scope-exit drain — so the risk is not the walker but the
+    /// body it now calls: `S.drop$<concrete>` is compiled as a whole function
+    /// from inside a half-built walker, and `Box3[i64]`'s body must read `tag`
+    /// at the `i64` layout's offset, not `String`'s. Get that wrong and the
+    /// failure is a read past the element that the E2E twin's stdout may not
+    /// show. Six cells over three iterations so a per-iteration imbalance
+    /// accumulates. Measured on this fixture: 126 malloc calls, exit 0, no
+    /// LeakSanitizer report. (LSan is Linux-only; see CLAUDE.md.)
+    #[test]
+    fn asan_generic_impl_drop_container_elements_are_balanced() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+fn cell_vec() { let v: Vec[Box3[String]] = [Box3 { v: f"e1111111", tag: f"a" }]; println(f"  n{v.len()}"); println("  after") }
+fn cell_two() { let a: Vec[Box3[String]] = [Box3 { v: f"aaaaaaaa", tag: f"tt" }]; println(f"  a{a.len()}"); let b: Vec[Box3[i64]] = [Box3 { v: 7, tag: f"uuu" }]; println(f"  b{b.len()}") }
+fn cell_nest() { let vv: Vec[Vec[Box3[String]]] = [[Box3 { v: f"e3333333", tag: f"cccc" }]]; println(f"  vv{vv.len()}") }
+fn cell_arr() { let a: Array[Box3[String], 2] = [Box3 { v: f"e4444444", tag: f"ddddd" }, Box3 { v: f"e5555555", tag: f"eeeeee" }]; println(f"  arr{a[1].tag.len()}") }
+fn cell_map() { let mut m: Map[String, Box3[String]] = Map.new(); m.insert(f"k", Box3 { v: f"e6666666", tag: f"fffffff" }); println(f"  m{m.len()}") }
+fn cell_plain() { let p: Vec[Pl] = [Pl { tag: f"pppppppp" }]; println(f"  p{p.len()}") }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println("vec"); cell_vec();
+        println("two"); cell_two();
+        println("nest"); cell_nest();
+        println("arr"); cell_arr();
+        println("map"); cell_map();
+        println("plain"); cell_plain();
+        i = i + 1;
+    }
+}
+"#,
+            &[
+                "vec", "  n1", "dB1", "  after", "two", "  a1", "dB2", "  b1", "dB3", "nest",
+                "  vv1", "dB4", "arr", "  arr6", "dB5", "dB6", "map", "  m1", "dB7", "plain",
+                "  p1", "dP8", "vec", "  n1", "dB1", "  after", "two", "  a1", "dB2", "  b1",
+                "dB3", "nest", "  vv1", "dB4", "arr", "  arr6", "dB5", "dB6", "map", "  m1", "dB7",
+                "plain", "  p1", "dP8", "vec", "  n1", "dB1", "  after", "two", "  a1", "dB2",
+                "  b1", "dB3", "nest", "  vv1", "dB4", "arr", "  arr6", "dB5", "dB6", "map",
+                "  m1", "dB7", "plain", "  p1", "dP8",
+            ],
+            "generic_impl_drop_container_elems",
+            90,
+        );
+    }
+
     /// its `Drop` body; this is the memory gate on that hand-off.
     ///
     /// The fix moves BODIES ONLY and deliberately never takes the memory, which

@@ -7474,24 +7474,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Forward order (`0..len`), matching the drain's own element walk and the
     /// interpreter's. Struct FIELDS drop in reverse declaration order; container
     /// ELEMENTS do not, and both backends agree on that split.
-    pub(super) fn emit_vec_elem_user_drop_bodies_fn(
-        &mut self,
-        elem_name: &str,
-        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
-    ) -> Option<FunctionValue<'ctx>> {
-        self.emit_vec_elem_user_drop_bodies_fn_mono(
-            elem_name,
-            elem_ty,
-            &std::collections::HashMap::new(),
-        )
-    }
-
-    /// Subst-aware sibling (B-2026-08-02-14): a GENERIC element
-    /// (`Vec[Box2[Res]]`) needs its field-bodies walk resolved through the
-    /// instantiation's subst — the name-keyed walker saw `item: T` and
-    /// declined, so the element's Drop-bearing field was silent at owner
-    /// death. The mono suffix keeps `Box2[Res]` / `Box2[i64]` walkers
-    /// distinct symbols. Empty subst reproduces the name-keyed behavior.
+    ///
+    /// Subst-aware since B-2026-08-02-14: a GENERIC element (`Vec[Box2[Res]]`)
+    /// needs its field-bodies walk resolved through the instantiation's subst
+    /// — the name-keyed walker saw `item: T` and declined, so the element's
+    /// Drop-bearing field was silent at owner death. The mono suffix keeps
+    /// `Box2[Res]` / `Box2[i64]` walkers distinct symbols. An empty subst is
+    /// the name-keyed behaviour for a non-generic element. (The bare-name
+    /// entry point that forwarded an empty subst went with B-2026-09-04-27,
+    /// when its last caller — the nested-Vec struct arm — started deriving a
+    /// subst of its own.)
     pub(super) fn emit_vec_elem_user_drop_bodies_fn_mono(
         &mut self,
         elem_name: &str,
@@ -7501,10 +7493,6 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.type_decls.shared_types.contains_key(elem_name) {
             return None;
         }
-        let owns_body = self
-            .program_snapshot
-            .as_deref()
-            .is_some_and(|p| p.drop_method_keys.contains_key(elem_name));
         let field_bodies = self.emit_user_drop_field_bodies_fn(elem_name, subst);
         // B-2026-08-28-55 — an ENUM element's live-variant PAYLOAD bodies.
         // `emit_user_drop_field_bodies_fn` is struct-shaped and answers `None`
@@ -7524,11 +7512,11 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         };
-        let body_fn = if owns_body {
-            self.module.get_function(&format!("{elem_name}.drop"))
-        } else {
-            None
-        };
+        // B-2026-09-04-27 — the element's own body, per monomorph. Resolved
+        // here, before the builder is positioned inside the walker, so the
+        // nested compile of `S.drop$<concrete>` runs against a settled
+        // position — the same order `emit_user_drop_wrapper_mono` keeps.
+        let body_fn = self.user_drop_body_fn_mono(elem_name, subst);
         if body_fn.is_none() && field_bodies.is_none() && enum_payload.is_none() {
             return None;
         }
@@ -7635,7 +7623,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// B-2026-08-01-23 — te-driven wrapper over
-    /// [`Self::emit_vec_elem_user_drop_bodies_fn`] that RECURSES through
+    /// [`Self::emit_vec_elem_user_drop_bodies_fn_mono`] that RECURSES through
     /// nested containers: given the ELEMENT TypeExpr of a Vec/VecDeque,
     /// return a walker over a vec header of such elements. A plain struct
     /// element delegates to the existing per-name walker; a Vec/VecDeque
@@ -7679,7 +7667,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let head = p.segments.first()?.clone();
         if self.type_decls.struct_types.contains_key(&head) {
             let ty = self.llvm_type_for_type_expr(elem_te);
-            return self.emit_vec_elem_user_drop_bodies_fn(&head, ty);
+            // B-2026-09-04-27 — a GENERIC innermost element (`Vec[Vec[Box3[
+            // String]]]`): thread the instantiation's subst so its own body
+            // and its field bodies resolve per monomorph, as the direct
+            // `Vec[Box3[String]]` let-site already does. Empty subst for a
+            // non-generic element keeps the name-keyed walker unchanged.
+            let subst = self.generic_struct_subst_from_inst(&head, elem_te);
+            return self.emit_vec_elem_user_drop_bodies_fn_mono(&head, ty, &subst);
         }
         // B-2026-08-03-1 — an `Option[P]` / `Result[O, E]` ELEMENT
         // (`Vec[Option[Res]]`): stride by the Option/Result LLVM type and run
@@ -7812,7 +7806,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// run the user `impl Drop` BODY of each tuple element that has one, in
     /// FORWARD element order. `None` when no element runs a body.
     ///
-    /// The tuple sibling of [`Self::emit_vec_elem_user_drop_bodies_fn`], and
+    /// The tuple sibling of [`Self::emit_vec_elem_user_drop_bodies_fn_mono`], and
     /// the same contract: BODIES ONLY. Element memory is still freed by the
     /// `synthesize_tuple_drop_fn_te` walk on the scope-exit channel, so this
     /// frees nothing, cannot double-free, and moves no existing free. It rides
@@ -8348,18 +8342,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     return;
                 }
-                let owns_body = self
-                    .program_snapshot
-                    .as_deref()
-                    .is_some_and(|p| p.drop_method_keys.contains_key(&head));
-                if owns_body {
-                    if let Some(f) = self.module.get_function(&format!("{head}.drop")) {
-                        self.builder.build_call(f, &[ep.into()], "").unwrap();
-                    }
+                // B-2026-09-04-27 — a GENERIC struct in this slot (an
+                // `Array[Box3[String], N]` element, a tuple element): its
+                // own body and its field bodies per monomorph, from the slot's
+                // own `TypeExpr`. Empty subst for a non-generic head is the
+                // bare lookup this arm always made.
+                let subst = self.generic_struct_subst_from_inst(&head, te);
+                if let Some(f) = self.user_drop_body_fn_mono(&head, &subst) {
+                    self.builder.build_call(f, &[ep.into()], "").unwrap();
                 }
-                if let Some(f) =
-                    self.emit_user_drop_field_bodies_fn(&head, &std::collections::HashMap::new())
-                {
+                if let Some(f) = self.emit_user_drop_field_bodies_fn(&head, &subst) {
                     self.builder.build_call(f, &[ep.into()], "").unwrap();
                 }
             }
@@ -8370,7 +8362,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// run the user `impl Drop` BODY of the LIVE variant's Drop-bearing payload
     /// fields. `None` when no variant of `E` carries one.
     ///
-    /// The enum sibling of [`Self::emit_vec_elem_user_drop_bodies_fn`] and
+    /// The enum sibling of [`Self::emit_vec_elem_user_drop_bodies_fn_mono`] and
     /// [`Self::emit_tuple_elem_user_drop_bodies_fn`], with the same contract:
     /// BODIES ONLY. Payload MEMORY is still freed by the unchanged
     /// `emit_enum_drop_switch` (`__karac_drop_<E>`) on the scope-exit channel —
@@ -9147,6 +9139,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.type_decls.shared_types.contains_key(&vname) {
             return None;
         }
+        // B-2026-09-04-27 — a GENERIC struct value (`Map[String, Box3[String]]`):
+        // the instantiation's subst, so the per-value body and field-bodies
+        // calls below resolve per monomorph. Empty for a non-generic `V`.
+        let val_subst = self.generic_struct_subst_from_inst(&vname, &val_te);
         // B-2026-08-01-23 — a Vec/VecDeque-valued V: the per-value blob is a
         // vec header; run the te-driven recursive element walker on it
         // instead of the struct body/field calls.
@@ -9340,18 +9336,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(nw) = nested_val_walker {
                 self.builder.build_call(nw, &[tptr.into()], "").unwrap();
             } else {
-                let owns_body = self
-                    .program_snapshot
-                    .as_deref()
-                    .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
-                if owns_body {
-                    if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
-                        self.builder.build_call(f, &[tptr.into()], "").unwrap();
-                    }
+                if let Some(f) = self.user_drop_body_fn_mono(&vname, &val_subst) {
+                    self.builder.build_call(f, &[tptr.into()], "").unwrap();
                 }
-                if let Some(f) =
-                    self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
-                {
+                if let Some(f) = self.emit_user_drop_field_bodies_fn(&vname, &val_subst) {
                     self.builder.build_call(f, &[tptr.into()], "").unwrap();
                 }
             }
@@ -9491,18 +9479,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(nw) = nested_val_walker {
             self.builder.build_call(nw, &[vptr.into()], "").unwrap();
         } else {
-            let owns_body = self
-                .program_snapshot
-                .as_deref()
-                .is_some_and(|prog| prog.drop_method_keys.contains_key(&vname));
-            if owns_body {
-                if let Some(f) = self.module.get_function(&format!("{vname}.drop")) {
-                    self.builder.build_call(f, &[vptr.into()], "").unwrap();
-                }
+            if let Some(f) = self.user_drop_body_fn_mono(&vname, &val_subst) {
+                self.builder.build_call(f, &[vptr.into()], "").unwrap();
             }
-            if let Some(f) =
-                self.emit_user_drop_field_bodies_fn(&vname, &std::collections::HashMap::new())
-            {
+            if let Some(f) = self.emit_user_drop_field_bodies_fn(&vname, &val_subst) {
                 self.builder.build_call(f, &[vptr.into()], "").unwrap();
             }
         }
@@ -9548,6 +9528,63 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         self.emit_struct_drop_synthesis(type_name)
+    }
+
+    /// B-2026-09-04-27 — a type's OWN `impl Drop` body, resolved PER MONOMORPH
+    /// when `subst` binds the type's generic params, for the BODIES-ONLY
+    /// container walkers (`__karac_dropelems_*`, the slot primitive behind the
+    /// tuple and `Array` walks, and the `Map`/`Set` half walks).
+    ///
+    /// Every one of those walkers found the body with
+    /// `module.get_function("{T}.drop")` — the bare symbol. For a generic
+    /// `impl[T] Drop for S[T]` that symbol never exists: the declaration pass
+    /// parks the method in `generic_fns` and waits for a call site, and `drop`
+    /// is the one impl method a program never calls (B-2026-09-04-4's finding,
+    /// which fixed the two BINDING sites through `emit_user_drop_wrapper_mono`
+    /// and left the container element walks on the bare lookup). So the
+    /// element's body was `None`, and with no Drop-bearing field beside it the
+    /// walker declined outright: `Vec[Box3[String]]` printed `dB4` under
+    /// `--interp` and nothing on any compiled backend. Measured the same on a
+    /// `Map` value, an `Array[T, N]` element and a `Vec[Vec[..]]` element — all
+    /// five cells the row and its follow-up list — with the element's MEMORY
+    /// balanced throughout (valgrind: every alloc freed), so this is the body
+    /// alone.
+    ///
+    /// The instantiation is driven from the container's element `TypeExpr`,
+    /// exactly as `emit_user_drop_wrapper_mono` drives it from a binding's,
+    /// and lands on the same `S.drop$<concrete>` symbol, so a value that is
+    /// bound once and held in a container elsewhere runs one body compiled at
+    /// one `T`. A non-generic type (no mono suffix) takes the bare lookup it
+    /// always took, byte-for-byte; a generic one whose method the mono
+    /// pipeline declines (method-own params, const/effect axes) falls to the
+    /// same bare lookup and so to the prior silence rather than a guess.
+    ///
+    /// Safe to call while positioned inside a half-built walker:
+    /// `ensure_mono_generated` saves and restores the insert block, the
+    /// current fn, the variable tables, the cleanup frames and all four subst
+    /// axes around the nested compile. The Vec walker still resolves it before
+    /// positioning, matching the wrapper's discipline; the slot primitive
+    /// cannot, and relies on that restore.
+    pub(super) fn user_drop_body_fn_mono(
+        &mut self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(type_name));
+        if !owns_body {
+            return None;
+        }
+        if self.struct_drop_mono_suffix(type_name, subst).is_some() {
+            if let Some(f) =
+                self.ensure_generic_impl_method_mono(&format!("{type_name}.drop"), subst)
+            {
+                return Some(f);
+            }
+        }
+        self.module.get_function(&format!("{type_name}.drop"))
     }
 
     /// B-2026-09-04-4 — the PER-MONOMORPH `karac_drop_<T>$<concrete>`, for a

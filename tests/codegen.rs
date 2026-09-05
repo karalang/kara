@@ -4125,6 +4125,127 @@ done
         );
     }
 
+    /// B-2026-09-04-27 — the CONTAINER-ELEMENT half of B-2026-09-04-4: a
+    /// generic `impl[T] Drop for S[T]` ran no body when the value sat in a
+    /// container rather than a binding.
+    ///
+    /// B-2026-09-04-4 fixed the two BINDING sites by instantiating `S.drop$<T>`
+    /// from the binding's recorded type and wrapping it. A container element
+    /// is reached by a different family — the BODIES-ONLY walkers
+    /// (`__karac_dropelems_*`) armed on the `ContainerElemBodies` channel —
+    /// and every one of those found the element's body with
+    /// `module.get_function("S.drop")`, the bare symbol that a generic impl
+    /// never has. So the body was `None`; with no Drop-bearing field beside it
+    /// the walker declined, and nothing was armed at all.
+    ///
+    /// MEASURED PRE-FIX on this fixture's shapes: `--interp` printed every
+    /// `dB*`; all three compiled backends printed NONE of them — the `Vec`
+    /// element the row reports, and the `Map` value, `Array[T, N]` element and
+    /// `Vec[Vec[..]]` element the row listed as unmeasured, all five silent for
+    /// the same reason. `dP8`, the non-generic control, survived on all four,
+    /// which is what isolated the lookup rather than the channel. The
+    /// only line missing on every compiled backend was the body's; the
+    /// walkers this fix touches free nothing by construction, and the row's
+    /// own program runs 13 allocs / 13 frees, 0 errors under valgrind with
+    /// the body now firing — so this was the body alone: `run-vs-build`,
+    /// not a leak.
+    ///
+    /// The fix resolves the body per monomorph from the container's element
+    /// `TypeExpr` — the same `S.drop$<concrete>` the binding-site wrapper
+    /// instantiates — at the four walker sites: the `Vec` walker, the
+    /// nested-`Vec` struct arm, the slot primitive behind the `Array` and tuple
+    /// walks, and the `Map`/`Set` half walks. Each site also threads that
+    /// subst into the field-bodies walk it used to call with an empty map.
+    ///
+    /// `two` decides the design here as it did for the binding half:
+    /// `Vec[Box3[String]]` and `Vec[Box3[i64]]` are live in one function and
+    /// print `dB2` / `dB3` from `tag` at two different offsets, so one
+    /// name-shared walker cannot serve both. `vec` pins PLACEMENT: `dB1` lands
+    /// between `n1` and `after` — the binding's NLL last use, where `--interp`
+    /// fires it — not at scope exit. `arr` pins the forward `0..n` element
+    /// order (`dB5` then `dB6`) that both backends agree on for containers.
+    #[test]
+    fn e2e_generic_impl_drop_runs_its_body_for_container_elements() {
+        let Some(out) = run_program(
+            r#"struct Box3[T] { v: T, tag: String }
+impl[T] Drop for Box3[T] { fn drop(mut ref self) { println(f"dB{self.tag.len()}") } }
+struct Pl { tag: String }
+impl Drop for Pl { fn drop(mut ref self) { println(f"dP{self.tag.len()}") } }
+
+fn cell_vec() {
+    let v: Vec[Box3[String]] = [Box3 { v: f"e1111111", tag: f"a" }];
+    println(f"  n{v.len()}");
+    println("  after");
+}
+fn cell_two() {
+    let a: Vec[Box3[String]] = [Box3 { v: f"aaaaaaaa", tag: f"tt" }];
+    println(f"  a{a.len()}");
+    let b: Vec[Box3[i64]] = [Box3 { v: 7, tag: f"uuu" }];
+    println(f"  b{b.len()}");
+}
+fn cell_nest() {
+    let vv: Vec[Vec[Box3[String]]] = [[Box3 { v: f"e3333333", tag: f"cccc" }]];
+    println(f"  vv{vv.len()}");
+}
+fn cell_arr() {
+    let a: Array[Box3[String], 2] = [Box3 { v: f"e4444444", tag: f"ddddd" }, Box3 { v: f"e5555555", tag: f"eeeeee" }];
+    println(f"  arr{a[1].tag.len()}");
+}
+fn cell_map() {
+    let mut m: Map[String, Box3[String]] = Map.new();
+    m.insert(f"k", Box3 { v: f"e6666666", tag: f"fffffff" });
+    println(f"  m{m.len()}");
+}
+fn cell_plain() {
+    let p: Vec[Pl] = [Pl { tag: f"pppppppp" }];
+    println(f"  p{p.len()}");
+}
+fn main() {
+    println("vec");   cell_vec();
+    println("two");   cell_two();
+    println("nest");  cell_nest();
+    println("arr");   cell_arr();
+    println("map");   cell_map();
+    println("plain"); cell_plain();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"vec
+  n1
+dB1
+  after
+two
+  a1
+dB2
+  b1
+dB3
+nest
+  vv1
+dB4
+arr
+  arr6
+dB5
+dB6
+map
+  m1
+dB7
+plain
+  p1
+dP8
+done
+"#,
+            "a generic `impl[T] Drop for S[T]` lost its body when the value was \
+             a container element — B-2026-09-04-27. `dP8` alone surviving is \
+             the pre-fix signature; `dB1` after `after` is the NLL-placement \
+             half; `dB2`/`dB3` swapped is the two-monomorph offset half."
+        );
+    }
+
     /// The error text codegen declines a program with. Runs the FULL pipeline
     /// (ownership included) so the span-keyed display tables the diagnostic
     /// reads are populated exactly as `karac build` populates them.
