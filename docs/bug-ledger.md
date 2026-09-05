@@ -163,7 +163,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-18 | 2026-09-05 | codegen | high | A GENERIC CALLEE'S TUPLE ELEMENT HANDED BACK TO A PLACE ARGUMENT DOUBLE-FREES UNDER `karac run` and runs two `Drop` bodies under `karac build`, against a correct interpreter -- `fn kEsc[T](p: (T, i64)) -> T { let (r, z) = p; return r; }` called as `let g = (mk(95), 9); let out = kEsc(g);` aborts with `free(): double free detected in tcache 2` (exit 134, no output) under the JIT, prints `in dR95 got95 dR95` under `karac build` and `KARAC_AUTO_PAR=0`, and prints the due `in got95 dR95` under `--interp`; the NON-generic spelling of the same call is correct on all four | — |
 | B-2026-09-05-22 | 2026-09-05 | runtime | medium | THE AUTO-PAR WORKER POOL AT N=2 IS SLOWER THAN AT N=1 AND BURNS 3.6x THE CPU -- kata:282 under HOMOGENEOUS all-E placement: N=1 4329.73ms/4272ms user, N=2 7710.74ms/15191ms user, sd 38% of mean; N=4 recovers, so the N>=2 general dispatch path has a degenerate TWO-WORKER case | none |
 | B-2026-09-05-23 | 2026-09-05 | runtime | medium | kata:288's AUTO-PAR LANE GENERATES SYSTEM TIME LINEAR IN WORKER COUNT -- 1.11ms at N=1 rising to 1267.64ms at N=18 (~70ms of kernel time per added worker, 11.7 cores' worth against a 108.71ms wall), while kata:282 stays FLAT at 3.81 -> 9.41ms across the identical sweep | none |
-| B-2026-09-05-24 | 2026-09-05 | cli | medium | `karac run` LEAVES ITS `karac_jit_runner` CHILD ALIVE WHEN THE PARENT IS SIGNALLED -- SIGINT (Ctrl-C), SIGTERM and SIGKILL each kill `karac run` and leave the spawned runner spinning at 100% CPU indefinitely, so a hung Kara program cannot be stopped by interrupting the command that started it, and any harness that TIMES OUT a `karac run` (mutation testing, CI, the Mend loop) silently accumulates orphans that contaminate every later timing measurement on the host | — |
 
 ### Relocated
 
@@ -2255,6 +2254,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-19 | codegen | high | A PARAM-VIEW ASSIGNMENT WHOSE TARGET STRUCT ONLY *CARRIES* A `Drop` FIELD DOUBLE-FREES THE MOVED-IN HEAP -- `h2 = h` over `struct Holder { r: Res }`… | d7e3b44c |
 | B-2026-09-05-20 | codegen | medium | A NON-GENERIC NESTED BY-VALUE PARAM DESTRUCTURE LEAF THAT IS READ RUNS ITS FIELD'S `Drop` BODY TWICE ON THE COMPILED BACKENDS -- `fn hLive(h: Hn) ->… | e2486f5 |
 | B-2026-09-05-21 | codegen | high | A GENERIC-INSTANTIATION LEAF BOUND OUT OF A BY-VALUE PARAM DESTRUCTURE AND MOVED INTO A LOCAL DOUBLE-FREES -- `fn gLiveLocal[T](h: Gn2[T]) -> i64 { l… | e2486f5 |
+| B-2026-09-05-24 | cli | medium | `karac run` LEAVES ITS `karac_jit_runner` CHILD ALIVE WHEN THE PARENT IS SIGNALLED -- SIGINT (Ctrl-C), SIGTERM and SIGKILL each kill `karac run` and… | 4446d63 |
 
 </details>
 
