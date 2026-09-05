@@ -72144,4 +72144,60 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-09-05-1 — the memory side of `e2e_shared_field_into_literal_and_push_aliases_source`
+    /// (tests/codegen.rs): a `shared` field copied into a struct literal, a
+    /// shared-holder literal, a deeper-place literal and a `push`, with the
+    /// source read afterwards (each was a null dereference), plus the
+    /// caller-retains param returns that must NOT be double-inc'd (each was a
+    /// 40 B leak mid-fix). ASAN + LSan, clean exit, exact stdout.
+    #[test]
+    fn asan_shared_field_into_literal_and_push_clean() {
+        let label = "shared_field_into_literal_and_push";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+shared struct S { id: i64, tag: String }
+impl Drop for S { fn drop(mut ref self) { println(f"dS{self.id}") } }
+struct W { s: S }
+struct H { s: S }
+shared struct Sh { s: S }
+struct G { w: W }
+fn pick(w: W) -> S { return w.s }
+fn pick2(w: W) -> S { w.s }
+fn pickr(w: ref W) -> S { return w.s }
+fn main() {
+    { let w: W = W { s: S { id: 1, tag: "a" } }; let h: H = H { s: w.s }; println(f"v{h.s.id}{w.s.id}"); }
+    { let w: W = W { s: S { id: 2, tag: "a" } }; let h: Sh = Sh { s: w.s }; println(f"v{h.s.id}{w.s.id}"); }
+    { let g: G = G { w: W { s: S { id: 3, tag: "a" } } }; let h: H = H { s: g.w.s }; println(f"v{h.s.id}{g.w.s.id}"); }
+    { let w: W = W { s: S { id: 4, tag: "a" } }; let mut v: Vec[S] = []; v.push(w.s); println(f"v{v[0].id}{w.s.id}"); }
+    { let w: W = W { s: S { id: 5, tag: "a" } }; let s: S = pick(w); println(f"v{s.id}"); }
+    { let w: W = W { s: S { id: 6, tag: "a" } }; let s: S = pick2(w); println(f"v{s.id}"); }
+    { let w: W = W { s: S { id: 7, tag: "a" } }; let s: S = pickr(w); println(f"v{s.id}{w.s.id}"); }
+    { let w: W = W { s: S { id: 8, tag: "a" } }; let W { s } = w; println(f"v{s.id}"); }
+    println("end");
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported an error (exit {:?}); stdout:\n{stdout}",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "v11", "dS1", "v22", "dS2", "v33", "dS3", "v44", "dS4", "v5", "dS5", "v6", "dS6",
+                "v77", "dS7", "v8", "dS8", "end",
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

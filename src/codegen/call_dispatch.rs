@@ -9074,8 +9074,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // is only reached from `return` when the fn returns `Option[shared]`),
             // and an over-inc is a silent leak. Nulling is one arm, on the path
             // every move-out already goes through.
-            let ptr_ty = self.context.ptr_type(AddressSpace::default());
-            let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+            //
+            // B-2026-09-05-1 — NO LONGER A NULL-STORE. The null made every
+            // destination that reaches this arm a MOVE, and the language says
+            // a `shared` field read is a COPY of the handle: `let s = w.s`
+            // incs and leaves `w.s` readable, the interpreter agrees, and so
+            // does `karac check`. Two destinations reach here with the source
+            // struct still ALIVE — an owned struct literal `H { s: w.s }` and
+            // `v.push(w.s)` — and both then read `w.s` through a nulled slot:
+            // `Address 0x8 is not stack'd, malloc'd or (recently) free'd`,
+            // SIGSEGV before the first print, on all three compiled surfaces.
+            //
+            // The inc IS "one arm, on the path every move-out goes through" —
+            // the same argument, made at the neutralizer instead of at each
+            // destination. It is balanced at every destination this arm
+            // serves, because each registers its own dec: the returned handle
+            // (its caller's binding), the destructured leaf (measured clean at
+            // -O0 before and after), a literal's field drop, a Vec's element
+            // drain, a whole-struct move's destination drop. The source keeps
+            // its ref and its own dec releases it: one inc, one extra dec, net
+            // zero — and the slot stays readable. Null-guarded, since a slot
+            // that WAS moved by an older path may already hold null.
+            if let Some(info) = self.type_decls.shared_types.get(fname.as_str()) {
+                self.rc_inc_shared_handle_at_slot(field_ptr, info.heap_type);
+            }
         } else if fname == "Array" {
             // B-2026-09-04-34 — a moved-out fixed `Array[E, N]` field. `fname`
             // is `"Array"`, which matches no arm above and is neither an enum
@@ -9618,10 +9640,48 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.variables.get(s).copied(),
                     self.var_types.var_type_names.get(s).cloned(),
                 ) {
-                    if !self
-                        .type_decls
-                        .shared_types
-                        .contains_key(struct_name.as_str())
+                    // B-2026-09-05-1 — a bare `shared` field handed out of a
+                    // CALLER-RETAINS param (`fn f(w: W) -> S { return w.s }`,
+                    // and the tail spelling) is not neutralized here at all.
+                    // The callee registered no drop for such a param
+                    // (B-2026-08-05-32: a struct owning a shared field stays
+                    // caller-retains), so there is nothing to disarm — and
+                    // `share_direct_shared_field_ref_for_return` already
+                    // gives the returned alias its +1. The direct-shared arm
+                    // of `zero_struct_field_move_cap_impl` now INCS rather
+                    // than nulling (it serves destinations whose source stays
+                    // live), which here would be a second inc against a
+                    // single dec: measured 40 B lost at -O0, body never run.
+                    // The null it replaced was a dead store on this path.
+                    // Same predicate as the return helper, so the two agree.
+                    let caller_retains_shared_field = self
+                        .fn_ctx
+                        .current_fn_param_names
+                        .contains(s)
+                        && !self
+                            .type_decls
+                            .shared_types
+                            .contains_key(struct_name.as_str())
+                        && self.struct_owns_shared_field(&struct_name, &mut Vec::new())
+                        && self
+                            .type_decls
+                            .struct_field_names
+                            .get(struct_name.as_str())
+                            .and_then(|names| names.iter().position(|n| n == field))
+                            .and_then(|idx| {
+                                self.type_decls
+                                    .struct_field_type_exprs
+                                    .get(struct_name.as_str())
+                                    .and_then(|v| v.get(idx))
+                                    .cloned()
+                            })
+                            .map(|te| self.subst_monomorph_type_params(&te))
+                            .is_some_and(|te| self.shared_heap_type_for_type_expr(&te).is_some());
+                    if !caller_retains_shared_field
+                        && !self
+                            .type_decls
+                            .shared_types
+                            .contains_key(struct_name.as_str())
                     {
                         let gep_st = self
                             .mono_struct_type_from_active_subst(struct_name.as_str())

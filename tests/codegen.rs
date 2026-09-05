@@ -8247,6 +8247,51 @@ fn main() {
         );
     }
 
+    /// B-2026-09-05-1 — a `shared` FIELD read into an owning destination is a
+    /// COPY of the handle, not a move: the source struct stays alive and
+    /// readable, exactly as `let s = w.s` (which incs) and the interpreter say.
+    ///
+    /// Before: the direct-shared arm of `zero_struct_field_move_cap_impl`
+    /// NULLED the source slot (B-2026-08-06-8, chosen for a returned handle,
+    /// whose source dies). Two destinations reach it with the source still
+    /// live — an owned or shared struct literal `H { s: w.s }` and
+    /// `v.push(w.s)` — and every later read of `w.s` dereferenced null:
+    /// SIGSEGV before the first print on all three compiled surfaces. The arm
+    /// now incs, null-guarded, and the source's own dec balances it. The
+    /// caller-retains param returns are the regression guard for the fix
+    /// itself: they already inc at the return, so the funnel must not
+    /// neutralize them a second time (measured 40 B lost at -O0 mid-fix).
+    #[test]
+    fn e2e_shared_field_into_literal_and_push_aliases_source() {
+        let Some(out) = run_program(
+            "shared struct S { id: i64 }\n\
+             impl Drop for S { fn drop(mut ref self) { println(f\"dS{self.id}\"); } }\n\
+             struct W { s: S }\n\
+             struct H { s: S }\n\
+             shared struct Sh { s: S }\n\
+             struct G { w: W }\n\
+             fn pick(w: W) -> S { return w.s }\n\
+             fn pick2(w: W) -> S { w.s }\n\
+             fn pickr(w: ref W) -> S { return w.s }\n\
+             fn main() {\n\
+             \x20   { let w: W = W { s: S { id: 1 } }; let h: H = H { s: w.s }; println(f\"v{h.s.id}{w.s.id}\"); println(\"one\"); }\n\
+             \x20   { let w: W = W { s: S { id: 2 } }; let h: Sh = Sh { s: w.s }; println(f\"v{h.s.id}{w.s.id}\"); println(\"two\"); }\n\
+             \x20   { let g: G = G { w: W { s: S { id: 3 } } }; let h: H = H { s: g.w.s }; println(f\"v{h.s.id}{g.w.s.id}\"); println(\"three\"); }\n\
+             \x20   { let w: W = W { s: S { id: 4 } }; let mut v: Vec[S] = []; v.push(w.s); println(f\"v{v[0].id}{w.s.id}\"); println(\"four\"); }\n\
+             \x20   { let w: W = W { s: S { id: 5 } }; let s: S = pick(w); println(f\"v{s.id}\"); println(\"five\"); }\n\
+             \x20   { let w: W = W { s: S { id: 6 } }; let s: S = pick2(w); println(f\"v{s.id}\"); println(\"six\"); }\n\
+             \x20   { let w: W = W { s: S { id: 7 } }; let s: S = pickr(w); println(f\"v{s.id}{w.s.id}\"); println(\"seven\"); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "v11\none\ndS1\nv22\ntwo\ndS2\nv33\nthree\ndS3\nv44\nfour\ndS4\nv5\nfive\ndS5\nv6\nsix\ndS6\nv77\nseven\ndS7\nend\n"
+        );
+    }
+
     /// B-2026-08-02-25 — displacing an `Option[T]` binding runs the DISPLACED
     /// payload's user `impl Drop` body.
     ///
