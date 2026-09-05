@@ -2225,11 +2225,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-27 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop` RUNS NO BODY WHEN THE VALUE IS A `Vec` ELEMENT -- `let v: Vec[Box3[String]] = [Box3 { . | dab1e71 |
 | B-2026-09-04-28 | codegen | medium | AN `Array[T, N]` READ OUT OF A STRUCT FIELD LOSES ITS ELEMENT TYPE FOR CODEGEN, so a field access through one of its elements fails to lower -- `let… | 54103c9 |
 | B-2026-09-04-29 | codegen | high | A BY-VALUE PARAM DESTRUCTURE'S `Result` LEAF IS WRONG THREE WAYS ON THE PARAM SOURCE ITSELF -- `fn f(h: HoRes) { let HoRes { a, b } = h; . | 481a5b0 |
-| B-2026-09-04-30 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self)… | 66c59f6 |
+| B-2026-09-04-30 | interp+codegen | high | A BY-VALUE `self` RECEIVER ON A TEMP NEVER RUNS ITS `Drop` BODIES ON ANY SURFACE -- `HoRes { a: mk(1), b: Result.Ok(mk(101)) }.m()` with `fn m(self)… | e8f393c |
 | B-2026-09-04-31 | codegen | high | A TUPLE-HELD `shared` ELEMENT IS RELEASED BEFORE THE TUPLE'S FIRST READ on all three compiled surfaces -- `let a = (S{id:14, tag:"alpha"}, 3); printl… | f82a99b |
 | B-2026-09-04-33 | codegen | medium | AN `Option` TUPLE ELEMENT WHOSE PAYLOAD IS A LITERAL IS UNTYPED, so `tuple_elem_optres_drop_ok` declines the element, the tuple `let` falls to the en… | bb2b7b8 |
 | B-2026-09-04-34 | codegen | high | A MOVED-OUT `Array[E, N]` FIELD DISARMS NOTHING, so the source struct's drop keeps freeing element buffers the binding now owns -- `struct Ha { a: Ar… | 54103c9 |
-| B-2026-09-04-35 | codegen | high | A FRESH-TEMP RECEIVER'S FIELD-BODIES WALK RUNS OVER FREED STORAGE -- `NoOwn { a: mk(1) }.br()` on a struct that carries `Drop` FIELDS but has no `imp… | 66c59f6 |
+| B-2026-09-04-35 | codegen | high | A FRESH-TEMP RECEIVER'S FIELD-BODIES WALK RUNS OVER FREED STORAGE -- `NoOwn { a: mk(1) }.br()` on a struct that carries `Drop` FIELDS but has no `imp… | e8f393c |
 | B-2026-09-05-2 | interp | medium | A `shared struct` REACHED THROUGH A `Vec` ELEMENT RAN NO `Drop` BODY UNDER `--interp` -- bare `Vec[S]`, `Vec[(S, i64)]` and `Vec[Holder { s: S }]` al… | f82a99b |
 
 </details>
