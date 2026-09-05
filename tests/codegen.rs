@@ -4208,6 +4208,183 @@ done
         );
     }
 
+    /// B-2026-09-05-4 — a GENERIC struct with its OWN `impl[T] Drop` registered
+    /// NOTHING as a temp-literal argument: not its body, not its Drop-bearing
+    /// field's, and not the memory either.
+    ///
+    /// The caller's own-`Drop` arm asked
+    /// `emit_user_drop_wrapper_skipping` for a wrapper keyed by NAME, and all
+    /// three of its steps were name-keyed. A generic `impl[T] Drop for S[T]`
+    /// has no bare `S.drop` symbol and never will — the declaration pass parks
+    /// a generic impl's methods in `generic_fns` awaiting a call site, and
+    /// `drop` is the one method a program never calls (B-2026-09-04-4's
+    /// finding) — so the lookup's `?` returned `None` for the whole wrapper.
+    /// The arm's `None` fallback is `track_user_drop_var`, which no-ops for
+    /// precisely that class, so the slot was materialized and then abandoned.
+    ///
+    /// MEASURED PRE-FIX, in the IR: `gTemp` stored into `%__owned_agg_tmp` and
+    /// emitted NO cleanup call whatsoever, where the non-generic twin `nTemp`
+    /// emitted `karac_dropsk_Gn___karac_dropbodies_Gn$keep0$s1` and the
+    /// named-local `gLocal` emitted the PER-MONOMORPH `karac_drop_Go$R`. That
+    /// last one is the argument that this belongs caller-side: `gLocal` and
+    /// `gTemp` reach the SAME callee monomorph `gOwn$R`, so the callee cannot
+    /// be the one that differs, and the caller demonstrably runs the wrapper
+    /// for the generic parent already — just not for the temp spelling.
+    ///
+    /// Two controls sit on the other side of the defect and are load-bearing,
+    /// because each one falsifies a simpler story:
+    ///  * `nTemp` / `nLocal` — the NON-generic twin is correct in both
+    ///    spellings, so it is not the temp form alone;
+    ///  * `gLocal` — the same generic type as a NAMED LOCAL is correct, so it
+    ///    is not the generic parent alone. It is the combination.
+    ///
+    /// A third discriminator is not in this fixture but was measured: the same
+    /// generic parent whose only field is PRIMITIVE (`Gp[i64] { v: i64, z: i64 }`)
+    /// printed its body correctly pre-fix, as did this fixture with a heap-free
+    /// `R { id: i64 }`. So the shape needs a HEAP-BEARING field to be reachable
+    /// at all, and a heap-free `R` here would silently stop testing anything.
+    /// Why the two part company was NOT run down: it is not the base
+    /// copy-support check, which reads the declared field types and bails on
+    /// `Go`'s bare `T` regardless of `R`.
+    ///
+    /// This was a LEAK as well as a run-vs-build divergence, which the row did
+    /// not record: the abandoned slot's field was never freed either. Measured
+    /// on this fixture, pre-fix 22 allocs / 20 frees with 10 bytes definitely
+    /// lost in 2 blocks; post-fix 24 allocs / 24 frees, 0 errors, nothing lost.
+    #[test]
+    fn e2e_generic_own_drop_struct_temp_arg_runs_its_body_and_its_fields() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Go[T] { r: T, z: i64 }
+impl[T] Drop for Go[T] { fn drop(mut ref self) { println(f"dGo{self.z}") } }
+struct Gn { r: R, z: i64 }
+impl Drop for Gn { fn drop(mut ref self) { println(f"dGn{self.z}") } }
+fn gOwn[T](h: Go[T]) -> i64 { println("  in"); return h.z; }
+fn nOwn(h: Gn) -> i64 { println("  in"); return h.z; }
+fn gTemp()  { let _ = gOwn(Go[R] { r: mk(3), z: 9 }); }
+fn gLocal() { let h = Go[R] { r: mk(4), z: 10 }; let _ = gOwn(h); }
+fn nTemp()  { let _ = nOwn(Gn { r: mk(5), z: 11 }); }
+fn nLocal() { let h = Gn { r: mk(6), z: 12 }; let _ = nOwn(h); }
+fn main() {
+    println("gTemp");  gTemp();
+    println("gLocal"); gLocal();
+    println("nTemp");  nTemp();
+    println("nLocal"); nLocal();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"gTemp
+  in
+dGo9
+dR3
+gLocal
+  in
+dGo10
+dR4
+nTemp
+  in
+dGn11
+dR5
+nLocal
+  in
+dGn12
+dR6
+done
+"#,
+            "a generic struct with its own `impl[T] Drop` registered nothing as \
+             a temp-literal argument — B-2026-09-05-4. `gTemp` missing BOTH \
+             `dGo9` and `dR3`, with the other three cells intact, is the exact \
+             pre-fix signature; either line appearing TWICE would mean the \
+             caller and the callee are now both registering it."
+        );
+    }
+
+    /// B-2026-09-05-4, widened — the same defect across the shapes the base
+    /// fixture leaves out, all of which were measured silent on the compiled
+    /// backends before the fix and correct after it.
+    ///
+    /// `a1`/`a2` are two MONOMORPHS of one generic own-`Drop` struct in a
+    /// single program: the mask symbol folds in the bodies fn's own monomorph
+    /// suffix (`karac_dropsk_Go___karac_dropbodies_Go$R$keep0$s1`), so the two
+    /// instantiations must not share a wrapper — the check is that `dR1` and
+    /// `dQ2` each fire, against their own field type. `c` gives the parent TWO
+    /// Drop-bearing fields, which is what distinguishes a per-field mask from
+    /// the all-or-nothing `karac_dropnf_<T>`; the fields run in reverse
+    /// declaration order after the parent's own body, per design.md § Drop
+    /// ordering. `d` takes two generic params, so the mangled suffix carries
+    /// both bindings.
+    ///
+    /// MEASURED PRE-FIX: `a1 a2 c d` all printed their marker and NOTHING
+    /// else, with 21 allocs / 15 frees and 24 bytes definitely lost in 6
+    /// blocks. Post-fix 31 allocs / 31 frees, 0 errors, nothing lost. (The
+    /// alloc counts differ because the recovered `println` bodies allocate.)
+    #[test]
+    fn e2e_generic_own_drop_struct_temp_arg_across_monomorphs_and_field_counts() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Q { qid: i64, s: String }
+impl Drop for Q { fn drop(mut ref self) { println(f"dQ{self.qid}") } }
+fn mq(i: i64) -> Q { return Q { qid: i, s: f"q{i}" }; }
+struct Go[T] { r: T, z: i64 }
+impl[T] Drop for Go[T] { fn drop(mut ref self) { println(f"dGo{self.z}") } }
+fn gOwn[T](h: Go[T]) -> i64 { return h.z; }
+struct Gp[T] { v: T, z: i64 }
+impl[T] Drop for Gp[T] { fn drop(mut ref self) { println(f"dGp{self.z}") } }
+fn pOwn[T](h: Gp[T]) -> i64 { return h.z; }
+struct Gt[T] { a: T, b: Q, z: i64 }
+impl[T] Drop for Gt[T] { fn drop(mut ref self) { println(f"dGt{self.z}") } }
+fn tOwn[T](h: Gt[T]) -> i64 { return h.z; }
+struct Gd[A, B] { a: A, b: B, z: i64 }
+impl[A, B] Drop for Gd[A, B] { fn drop(mut ref self) { println(f"dGd{self.z}") } }
+fn dOwn[A, B](h: Gd[A, B]) -> i64 { return h.z; }
+fn main() {
+    println("a1"); let _ = gOwn(Go[R] { r: mk(1), z: 41 });
+    println("a2"); let _ = gOwn(Go[Q] { r: mq(2), z: 42 });
+    println("b");  let _ = pOwn(Gp[i64] { v: 7, z: 43 });
+    println("c");  let _ = tOwn(Gt[R] { a: mk(3), b: mq(4), z: 44 });
+    println("d");  let _ = dOwn(Gd[R, Q] { a: mk(5), b: mq(6), z: 45 });
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"a1
+dGo41
+dR1
+a2
+dGo42
+dQ2
+b
+dGp43
+c
+dGt44
+dQ4
+dR3
+d
+dGd45
+dQ6
+dR5
+done
+"#,
+            "a generic own-`Drop` parent lost its bodies as a temp argument \
+             across monomorphs and field counts — B-2026-09-05-4. `b` is the \
+             control: an all-primitive generic parent printed `dGp43` correctly \
+             even PRE-fix, so a run where only `b` survives is the unfixed tree."
+        );
+    }
+
     /// B-2026-09-04-24 — a by-value STRUCT temp literal at a GENERIC call site
     /// lost its tuple element's `Drop` body.
     ///

@@ -7261,15 +7261,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// for a multi-field one it under-drops, which the ledger's own bar puts on
     /// the correct side of the trade ("an under-suppressed field drop
     /// double-frees; an over-suppressed one leaks").
+    ///
+    /// B-2026-09-05-4 — `subst` resolves the body and the memory step per
+    /// monomorph, and is folded into the symbol so two instantiations never
+    /// alias. An EMPTY subst reproduces the name-keyed symbol and lookups
+    /// exactly, which is what every pre-existing caller passes.
     pub(super) fn emit_user_drop_wrapper_without_field_bodies(
         &mut self,
         type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
-        let fn_name = format!("karac_dropnf_{type_name}");
+        let suffix = self
+            .struct_drop_mono_suffix(type_name, subst)
+            .unwrap_or_default();
+        let fn_name = format!("karac_dropnf_{type_name}{suffix}");
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
-        let user_drop_fn = self.module.get_function(&format!("{type_name}.drop"))?;
+        let user_drop_fn = self.user_drop_body_fn_mono(type_name, subst)?;
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let saved_bb = self.builder.get_insert_block();
         let wrapper_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
@@ -7282,7 +7291,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(user_drop_fn, &[self_ptr.into()], "")
             .unwrap();
-        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn(type_name) {
+        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn_mono(type_name, subst) {
             self.builder
                 .build_call(field_drop_fn, &[self_ptr.into()], "")
                 .unwrap();
@@ -7315,20 +7324,35 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// The symbol folds in the surviving indices (through the walker's own
     /// `$keep…` suffix), so a masked wrapper never aliases the full one.
+    ///
+    /// B-2026-09-05-4 — every one of the three steps was keyed by NAME alone,
+    /// which a GENERIC parent's own `impl[T] Drop for S[T]` cannot satisfy: the
+    /// declaration pass parks a generic impl's methods in `generic_fns` awaiting
+    /// a call site, and `drop` is the one method a program never calls, so
+    /// `module.get_function("S.drop")` never resolves. The `?` on that lookup
+    /// returned `None` for the whole wrapper, and the caller's fallback
+    /// (`track_user_drop_var`) no-ops for a type with no bare wrapper — so a
+    /// generic own-`Drop` struct passed as a temp argument registered NOTHING:
+    /// not its own body, not its field's, and not the memory either.
+    ///
+    /// `subst` threads the temp's instantiation through all three steps, and is
+    /// folded into the symbol by way of the bodies fn's own monomorph suffix so
+    /// two instantiations never alias. An EMPTY subst — what every other caller
+    /// passes — reproduces today's name-keyed symbol and lookups exactly.
     pub(super) fn emit_user_drop_wrapper_skipping(
         &mut self,
         type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
         skip: &FieldSkipTree,
     ) -> Option<FunctionValue<'ctx>> {
         if skip.is_empty() {
-            return self.emit_user_drop_wrapper(type_name);
+            return self.emit_user_drop_wrapper_mono(type_name, subst);
         }
-        let bodies_fn =
-            self.emit_user_drop_field_bodies_fn_skipping(type_name, &Default::default(), skip);
+        let bodies_fn = self.emit_user_drop_field_bodies_fn_skipping(type_name, subst, skip);
         // Nothing survives the mask — that IS `karac_dropnf_<T>`, already built
         // and cached for the moved-out-field shape.
         let Some(bodies_fn) = bodies_fn else {
-            return self.emit_user_drop_wrapper_without_field_bodies(type_name);
+            return self.emit_user_drop_wrapper_without_field_bodies(type_name, subst);
         };
         let fn_name = format!(
             "karac_dropsk_{type_name}_{}",
@@ -7337,7 +7361,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
-        let user_drop_fn = self.module.get_function(&format!("{type_name}.drop"))?;
+        let user_drop_fn = self.user_drop_body_fn_mono(type_name, subst)?;
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let saved_bb = self.builder.get_insert_block();
         let wrapper_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
@@ -7356,7 +7380,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(bodies_fn, &[self_ptr.into()], "")
             .unwrap();
-        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn(type_name) {
+        if let Some(field_drop_fn) = self.user_drop_wrapper_field_drop_fn_mono(type_name, subst) {
             self.builder
                 .build_call(field_drop_fn, &[self_ptr.into()], "")
                 .unwrap();
@@ -7400,7 +7424,9 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         skip: &FieldSkipTree,
     ) {
-        let Some(replacement) = self.emit_user_drop_wrapper_skipping(struct_name, skip) else {
+        let Some(replacement) =
+            self.emit_user_drop_wrapper_skipping(struct_name, &Default::default(), skip)
+        else {
             return;
         };
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
@@ -7516,7 +7542,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(struct_name));
         let replacement = if owns_body {
-            self.emit_user_drop_wrapper_without_field_bodies(struct_name)
+            self.emit_user_drop_wrapper_without_field_bodies(struct_name, &Default::default())
         } else {
             None
         };
@@ -9640,6 +9666,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         self.emit_struct_drop_synthesis(type_name)
+    }
+
+    /// B-2026-09-05-4 — the wrapper's MEMORY step, resolved per monomorph when
+    /// `subst` binds the type's generic params.
+    ///
+    /// An empty `subst` delegates to the name-keyed form above rather than
+    /// reimplementing it, so every existing caller keeps its current symbol
+    /// byte-for-byte; only a caller that actually has an instantiation in hand
+    /// reaches the mono arm. That arm mirrors `emit_user_drop_wrapper_mono`'s
+    /// own choice between the shared-field walker and the plain synthesizer,
+    /// with the name-keyed fall-through preserved.
+    fn user_drop_wrapper_field_drop_fn_mono(
+        &mut self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> Option<FunctionValue<'ctx>> {
+        if subst.is_empty() {
+            return self.user_drop_wrapper_field_drop_fn(type_name);
+        }
+        if self.struct_owns_shared_field_subst(type_name, &mut Vec::new(), Some(subst)) {
+            if let Some(f) =
+                self.emit_vec_elem_struct_with_shared_drop_fn_mono(type_name, Some(subst))
+            {
+                return Some(f);
+            }
+        }
+        self.emit_struct_drop_synthesis_mono(type_name, subst)
     }
 
     /// B-2026-09-04-27 — a type's OWN `impl Drop` body, resolved PER MONOMORPH

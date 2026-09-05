@@ -72491,4 +72491,59 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-09-05-4 — the LEAK half. A generic struct with its own
+    /// `impl[T] Drop`, passed as a temp-literal argument, registered no
+    /// cleanup at all: the caller materialized `%__owned_agg_tmp`, stored the
+    /// value into it and emitted nothing against it, so the Drop-bearing
+    /// field's heap was never released.
+    ///
+    /// The run-vs-build half (the two missing `Drop` bodies) is covered by
+    /// `e2e_generic_own_drop_struct_temp_arg_runs_its_body_and_its_fields` in
+    /// `tests/codegen.rs`. This is the memory half, which the row itself did
+    /// not record. Measured under valgrind on THIS fixture's shape, isolated
+    /// into its own program: pre-fix 12 allocs / 10 frees with 10 bytes
+    /// definitely lost in 2 blocks. (The four-cell program in the codegen twin
+    /// ran 22 / 20 pre-fix with those same 10 bytes and 24 / 24 post-fix; its
+    /// three control cells are individually balanced, which is what pins the
+    /// loss on this cell rather than on the program.)
+    ///
+    /// LSan is the gate that sees this — it runs on Linux and NOT on macOS, so
+    /// a green local Mac run does not clear it (CLAUDE.md § Leak detection).
+    ///
+    /// TWO THINGS IN THIS FIXTURE ARE LOAD-BEARING FOR THE LEAK, both found by
+    /// measuring a simplified draft that reported 8 allocs / 8 frees and no
+    /// leak at all:
+    ///  * the callee must have a SIDE EFFECT (`println("in")`). With
+    ///    `fn gOwn[T](h: Go[T]) -> i64 { return h.z; }` the same program is
+    ///    balanced pre-fix; adding the `println` back takes it to 12 allocs /
+    ///    10 frees with 10 bytes definitely lost in 2 blocks;
+    ///  * the field type must be HEAP-BEARING. With a heap-free
+    ///    `R { id: i64 }` all four surfaces agree pre-fix, so the fixture would
+    ///    assert nothing. (Not the base copy-support check, which reads the
+    ///    DECLARED field types and bails on `Go`'s bare `T` either way — the
+    ///    two spellings part company further in. Measured, not diagnosed.)
+    ///
+    /// Simplify either one away and this fixture goes quietly vacuous rather
+    /// than failing, which is why they are spelled out here.
+    #[test]
+    fn asan_generic_own_drop_struct_temp_arg_frees_its_field() {
+        assert_clean_asan_run_min_allocs(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Go[T] { r: T, z: i64 }
+impl[T] Drop for Go[T] { fn drop(mut ref self) { println(f"dGo{self.z}") } }
+fn gOwn[T](h: Go[T]) -> i64 { println("in"); return h.z; }
+fn gTemp() { let _ = gOwn(Go[R] { r: mk(3), z: 9 }); }
+fn main() {
+    gTemp();
+    println("done");
+}
+"#,
+            &["in", "dGo9", "dR3", "done"],
+            "B-2026-09-05-4 generic own-Drop temp arg",
+            4,
+        );
+    }
 }

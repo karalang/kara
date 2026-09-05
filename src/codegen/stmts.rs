@@ -19411,7 +19411,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .as_deref()
             .is_some_and(|p| p.drop_method_keys.contains_key(root_tn.as_str()))
         {
-            self.emit_user_drop_wrapper_without_field_bodies(&root_tn)
+            self.emit_user_drop_wrapper_without_field_bodies(&root_tn, &Default::default())
         } else {
             None
         };

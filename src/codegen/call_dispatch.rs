@@ -4535,8 +4535,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             let masked = if is_struct {
                                 let skip =
                                     self.escaping_field_skip_tree(&ret_ty_name, escaping_paths);
-                                self.emit_user_drop_wrapper_skipping(&ret_ty_name, &skip)
-                                    .filter(|_| !skip.is_empty())
+                                self.emit_user_drop_wrapper_skipping(
+                                    &ret_ty_name,
+                                    &Default::default(),
+                                    &skip,
+                                )
+                                .filter(|_| !skip.is_empty())
                             } else {
                                 None
                             };
@@ -4989,7 +4993,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         // mask reaching the frees would trade the double body for
                         // a leak.
                         let skip = self.escaping_field_skip_tree(&name, escaping_paths);
-                        match self.emit_user_drop_wrapper_skipping(&name, &skip) {
+                        // B-2026-09-05-4 — the temp's INSTANTIATION, taken from
+                        // the same `mono_inst` the SHAPE-2 arm below already
+                        // uses for its own bodies half (B-2026-09-04-24). Keyed
+                        // by name alone this branch asked for the bare `S.drop`
+                        // of a generic `impl[T] Drop for S[T]`, which never
+                        // exists, and the whole wrapper came back `None` — the
+                        // `None` arm's `track_user_drop_var` then no-ops for
+                        // exactly that class, so the slot below was materialized
+                        // and abandoned. Measured on `gOwn(Go[R] { r: mk(3), z: 9 })`:
+                        // no body, no field body, and the field's 10 bytes leaked.
+                        //
+                        // `None` (a concrete callee, or a span carrying no
+                        // annotation) yields an empty subst, which is today's
+                        // name-keyed behaviour unchanged.
+                        let subst = mono_inst
+                            .as_ref()
+                            .map(|inst| self.generic_struct_subst_from_inst(&name, inst))
+                            .unwrap_or_default();
+                        match self.emit_user_drop_wrapper_skipping(&name, &subst, &skip) {
                             Some(f) => self.track_user_drop_var_with_fn(
                                 &name,
                                 "__owned_agg_tmp",
