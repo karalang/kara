@@ -58826,6 +58826,41 @@ fn main() {
     );
 }
 
+/// B-2026-09-05-9 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_agg_leaf_boxed_payload_moving_arm_frees_envelope`, same program and
+/// string. The interpreter was the correct reference throughout.
+#[test]
+fn test_agg_leaf_boxed_payload_moving_arm_frees_envelope() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+struct HoW { a: R, b: Result[W, String] }
+fn mkw(k: i64) -> W { return W { id: k, x: f"x{k}", y: f"y{k}" } }
+fn pickr(k: i64) -> W { let t: (R, Result[W, String]) = (R { id: k }, Result.Ok(mkw(k * 11))); let (a, b) = t; match b { Result.Ok(w) => w, Result.Err(e) => mkw(0) } }
+fn picko(k: i64) -> W { let t: (R, Option[W]) = (R { id: k }, Option.Some(mkw(k * 11))); let (a, b) = t; match b { Option.Some(w) => w, Option.None => mkw(0) } }
+fn pickboth(ok: bool) -> W { let t: (R, Result[W, W]) = (R { id: 13 }, if ok { Result.Ok(mkw(1313)) } else { Result.Err(mkw(1331)) }); let (a, b) = t; match b { Result.Ok(w) => w, Result.Err(w) => w } }
+fn main() {
+    { let t: (R, Result[W, String]) = (R { id: 1 }, Result.Ok(mkw(11))); let (a, b) = t; match b { Result.Ok(w) => { let g: W = w; println(f"g{g.id}") }, Result.Err(e) => println("err") } println("one") }
+    { let w: W = pickr(2); println(f"got{w.id}"); println("two") }
+    { let t: (R, Result[W, String]) = (R { id: 3 }, Result.Ok(mkw(33))); let (a, b) = t; if let Result.Ok(w) = b { let g: W = w; println(f"g{g.id}") } println("three") }
+    { let t: (R, Option[W]) = (R { id: 4 }, Option.Some(mkw(44))); let (a, b) = t; match b { Option.Some(w) => { let g: W = w; println(f"g{g.id}") }, Option.None => println("none") } println("four") }
+    { let w: W = picko(5); println(f"got{w.id}"); println("five") }
+    { let t: (R, Option[W]) = (R { id: 6 }, Option.Some(mkw(66))); let (a, b) = t; if let Option.Some(w) = b { let g: W = w; println(f"g{g.id}") } println("six") }
+    { let t: (R, Result[String, W]) = (R { id: 7 }, Result.Err(mkw(77))); let (a, b) = t; match b { Result.Ok(s) => println(f"ok{s}"), Result.Err(w) => { let g: W = w; println(f"g{g.id}") } } println("seven") }
+    { let h: HoW = HoW { a: R { id: 8 }, b: Result.Ok(mkw(88)) }; let HoW { a, b } = h; match b { Result.Ok(w) => { let g: W = w; println(f"g{g.id}") }, Result.Err(e) => println("err") } println("eight") }
+    { let t: (R, Result[W, String]) = (R { id: 9 }, Result.Err("e9")); let (a, b) = t; match b { Result.Ok(w) => { let g: W = w; println(f"g{g.id}") }, Result.Err(e) => println(f"err{e}") } println("nine") }
+    { let t: (R, Option[W]) = (R { id: 10 }, Option.None); let (a, b) = t; match b { Option.Some(w) => { let g: W = w; println(f"g{g.id}") }, Option.None => println("none") } println("ten") }
+    { let t: (R, Result[R, String]) = (R { id: 12 }, Result.Ok(R { id: 1212 })); let (a, b) = t; match b { Result.Ok(r) => { let g: R = r; println(f"g{g.id}") }, Result.Err(e) => println("err") } println("twelve") }
+    { let w: W = pickboth(true); let v: W = pickboth(false); println(f"got{w.id}{v.id}"); println("thirteen") }
+    println("end")
+}
+"#),
+        "dR1\ng11\ndW11/x11y11\none\ndR2\ngot22\ndW22/x22y22\ntwo\ndR3\ng33\ndW33/x33y33\nthree\ndR4\ng44\ndW44/x44y44\nfour\ndR5\ngot55\ndW55/x55y55\nfive\ndR6\ng66\ndW66/x66y66\nsix\ndR7\ng77\ndW77/x77y77\nseven\ndR8\ng88\ndW88/x88y88\neight\ndR9\nerre9\nnine\ndR10\nnone\nten\ndR12\ng1212\ndR1212\ntwelve\ndR13\ndR13\ngot13131331\ndW1331/x1331y1331\ndW1313/x1313y1313\nthirteen\nend\n"
+    );
+}
+
 /// B-2026-09-03-25 — A WILDCARD TUPLE LEAF OVER AN `Option`/`Result`
 /// ELEMENT OWNS ITS PAYLOAD'S `Drop` BODY.
 ///

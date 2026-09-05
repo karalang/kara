@@ -17324,8 +17324,9 @@ done
     /// sites never called the `Result` suppressor at all, so a MOVING
     /// `if let Ok(w) = b { let g = w }` left the leaf armed while `g` owned
     /// the contents — `free(): double free detected in tcache 2`. It now
-    /// prints once; its envelope still leaks, which is the open row split out
-    /// for every moving arm over a boxed agg payload.
+    /// prints once. Its envelope leaked until B-2026-09-05-9, whose fixture
+    /// (`e2e_agg_leaf_boxed_payload_moving_arm_frees_envelope`) covers every
+    /// moving arm over a boxed agg payload.
     #[test]
     fn e2e_result_agg_leaf_boxed_payload_by_value_call_keeps_body() {
         let Some(out) = run_program(
@@ -17351,6 +17352,66 @@ done
             return;
         };
         assert_eq!(out, "dR1\neat11\ndW11/x11y11\none\ndR2\neat22\ndW22/x22y22\ntwo\ndR3\neat33\ndW33/x33y33\nthree\ndR4\nerre4\nfour\ndR5\neat55\ndW55/x55y55\nfive\neat66\ndW66/x66y66\nsix\ndR7\ng77\ndW77/x77y77\nseven\nend\n");
+    }
+
+    /// B-2026-09-05-9 — EVERY MOVING ARM over a heap-BOXED agg destructure
+    /// leaf payload prints correctly AND frees the box envelope, on the
+    /// `Option` and `Result` families alike. The memory half is the ASAN
+    /// twin (`asan_agg_leaf_boxed_payload_moving_arm_frees_envelope`); this
+    /// pins the output on every compiled surface against the interpreter's.
+    ///
+    /// A moving arm hands the payload's CONTENTS to the binding, so the
+    /// leaf's own drop must not free them. The agg suppressors did that by
+    /// neutralizing the SLOT at runtime (`None` tag / zeroed payload words),
+    /// and for a boxed payload the box pointer went with the contents: the
+    /// leaf's tag-dispatch drop skipped the envelope and 56 B leaked per
+    /// arm, at -O0 and -O2. The plain-local family never had this because
+    /// its `BoxedEnumDrop` retracts only the INNER drop at compile time.
+    /// The agg families now do the same: when the leaf's payload is boxed,
+    /// the suppressor swaps the leaf's `EnumDrop` fn for a variant-masked
+    /// synthesis (`emit_{option,result}_drop_fn_envelope_only`) whose moved
+    /// variant frees only the box, and leaves the slot untouched.
+    ///
+    /// `one`/`two`/`three` are the `Result` block-move, escape and `if let`
+    /// cells; `four`/`five`/`six` the same over `Option`; `seven` moves the
+    /// `Err` side (the other mask); `eight` is a struct-field leaf; `nine`
+    /// and `ten` take the NON-moved variant through the masked fn (its
+    /// other arm must still drop in full); `twelve` is the inline four-word
+    /// control that never boxed; `thirteen` moves BOTH sides of a
+    /// `Result[W, W]`, so the two arms' masks must compose (`OkErr`) — a
+    /// second swap that replaced the first would double-free the `Ok` arm.
+    #[test]
+    fn e2e_agg_leaf_boxed_payload_moving_arm_frees_envelope() {
+        let Some(out) = run_program(
+            "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct W { id: i64, x: String, y: String }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}/{self.x}{self.y}\") } }\n\
+             struct HoW { a: R, b: Result[W, String] }\n\
+             fn mkw(k: i64) -> W { return W { id: k, x: f\"x{k}\", y: f\"y{k}\" } }\n\
+             fn pickr(k: i64) -> W { let t: (R, Result[W, String]) = (R { id: k }, Result.Ok(mkw(k * 11))); let (a, b) = t; match b { Result.Ok(w) => w, Result.Err(e) => mkw(0) } }\n\
+             fn picko(k: i64) -> W { let t: (R, Option[W]) = (R { id: k }, Option.Some(mkw(k * 11))); let (a, b) = t; match b { Option.Some(w) => w, Option.None => mkw(0) } }\n\
+             fn pickboth(ok: bool) -> W { let t: (R, Result[W, W]) = (R { id: 13 }, if ok { Result.Ok(mkw(1313)) } else { Result.Err(mkw(1331)) }); let (a, b) = t; match b { Result.Ok(w) => w, Result.Err(w) => w } }\n\
+             fn main() {\n\
+             \x20   { let t: (R, Result[W, String]) = (R { id: 1 }, Result.Ok(mkw(11))); let (a, b) = t; match b { Result.Ok(w) => { let g: W = w; println(f\"g{g.id}\") }, Result.Err(e) => println(\"err\") } println(\"one\") }\n\
+             \x20   { let w: W = pickr(2); println(f\"got{w.id}\"); println(\"two\") }\n\
+             \x20   { let t: (R, Result[W, String]) = (R { id: 3 }, Result.Ok(mkw(33))); let (a, b) = t; if let Result.Ok(w) = b { let g: W = w; println(f\"g{g.id}\") } println(\"three\") }\n\
+             \x20   { let t: (R, Option[W]) = (R { id: 4 }, Option.Some(mkw(44))); let (a, b) = t; match b { Option.Some(w) => { let g: W = w; println(f\"g{g.id}\") }, Option.None => println(\"none\") } println(\"four\") }\n\
+             \x20   { let w: W = picko(5); println(f\"got{w.id}\"); println(\"five\") }\n\
+             \x20   { let t: (R, Option[W]) = (R { id: 6 }, Option.Some(mkw(66))); let (a, b) = t; if let Option.Some(w) = b { let g: W = w; println(f\"g{g.id}\") } println(\"six\") }\n\
+             \x20   { let t: (R, Result[String, W]) = (R { id: 7 }, Result.Err(mkw(77))); let (a, b) = t; match b { Result.Ok(s) => println(f\"ok{s}\"), Result.Err(w) => { let g: W = w; println(f\"g{g.id}\") } } println(\"seven\") }\n\
+             \x20   { let h: HoW = HoW { a: R { id: 8 }, b: Result.Ok(mkw(88)) }; let HoW { a, b } = h; match b { Result.Ok(w) => { let g: W = w; println(f\"g{g.id}\") }, Result.Err(e) => println(\"err\") } println(\"eight\") }\n\
+             \x20   { let t: (R, Result[W, String]) = (R { id: 9 }, Result.Err(\"e9\")); let (a, b) = t; match b { Result.Ok(w) => { let g: W = w; println(f\"g{g.id}\") }, Result.Err(e) => println(f\"err{e}\") } println(\"nine\") }\n\
+             \x20   { let t: (R, Option[W]) = (R { id: 10 }, Option.None); let (a, b) = t; match b { Option.Some(w) => { let g: W = w; println(f\"g{g.id}\") }, Option.None => println(\"none\") } println(\"ten\") }\n\
+             \x20   { let t: (R, Result[R, String]) = (R { id: 12 }, Result.Ok(R { id: 1212 })); let (a, b) = t; match b { Result.Ok(r) => { let g: R = r; println(f\"g{g.id}\") }, Result.Err(e) => println(\"err\") } println(\"twelve\") }\n\
+             \x20   { let w: W = pickboth(true); let v: W = pickboth(false); println(f\"got{w.id}{v.id}\"); println(\"thirteen\") }\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR1\ng11\ndW11/x11y11\none\ndR2\ngot22\ndW22/x22y22\ntwo\ndR3\ng33\ndW33/x33y33\nthree\ndR4\ng44\ndW44/x44y44\nfour\ndR5\ngot55\ndW55/x55y55\nfive\ndR6\ng66\ndW66/x66y66\nsix\ndR7\ng77\ndW77/x77y77\nseven\ndR8\ng88\ndW88/x88y88\neight\ndR9\nerre9\nnine\ndR10\nnone\nten\ndR12\ng1212\ndR1212\ntwelve\ndR13\ndR13\ngot13131331\ndW1331/x1331y1331\ndW1313/x1313y1313\nthirteen\nend\n");
     }
 
     /// B-2026-09-03-12 — a tuple bound out of a PLACE (`let x = h.pe;`) records its

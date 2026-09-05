@@ -2325,6 +2325,34 @@ impl<'ctx> super::Codegen<'ctx> {
         ok_te: &TypeExpr,
         err_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_result_drop_fn_impl(ok_te, err_te, None)
+    }
+
+    /// B-2026-09-05-9 — the ENVELOPE-ONLY twin of `emit_result_drop_fn`.
+    /// `moved` is a MASK naming the variant(s) whose BOXED payload a
+    /// destructuring arm has moved out by value — `"Ok"`, `"Err"`, or
+    /// `"OkErr"` when a `match` moves both sides: a masked variant frees the
+    /// box envelope (the `malloc` the pack made) but must not run the
+    /// payload's own drop, which now belongs to the move target. An
+    /// unmasked variant is dropped exactly as the full synthesizer would.
+    /// An agg-destructure leaf whose arm moves the payload swaps its
+    /// `EnumDrop` to this fn at compile time instead of neutralizing the
+    /// slot at runtime (which hid the box word and leaked the envelope).
+    pub(super) fn emit_result_drop_fn_envelope_only(
+        &mut self,
+        ok_te: &TypeExpr,
+        err_te: &TypeExpr,
+        moved: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_result_drop_fn_impl(ok_te, err_te, Some(moved))
+    }
+
+    fn emit_result_drop_fn_impl(
+        &mut self,
+        ok_te: &TypeExpr,
+        err_te: &TypeExpr,
+        envelope_only: Option<&str>,
+    ) -> Option<FunctionValue<'ctx>> {
         let (result_ty, ok_tag, err_tag) = {
             let layout = self.type_decls.enum_layouts.get("Result")?;
             (
@@ -2333,11 +2361,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 layout.tags.get("Err").copied().unwrap_or(1),
             )
         };
-        let type_name = format!(
+        let mut type_name = format!(
             "Result_{}_{}",
             Self::display_mangle_te(ok_te),
             Self::display_mangle_te(err_te)
         );
+        if let Some(v) = envelope_only {
+            type_name.push_str(&format!("_envonly_{v}"));
+        }
+        let ok_masked = envelope_only.is_some_and(|m| m.contains("Ok"));
+        let err_masked = envelope_only.is_some_and(|m| m.contains("Err"));
         if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return Some(f);
         }
@@ -2427,11 +2460,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_null, exit_bb, free_bb)
                     .unwrap();
                 self.builder.position_at_end(free_bb);
-                self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                if !ok_masked {
+                    self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                }
                 self.builder
                     .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                     .unwrap();
-            } else {
+            } else if !ok_masked {
                 self.builder
                     .build_call(f, &[payload_base.into()], "")
                     .unwrap();
@@ -2480,11 +2515,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(is_null, exit_bb, free_bb)
                     .unwrap();
                 self.builder.position_at_end(free_bb);
-                self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                if !err_masked {
+                    self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                }
                 self.builder
                     .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                     .unwrap();
-            } else {
+            } else if !err_masked {
                 self.builder
                     .build_call(f, &[payload_base.into()], "")
                     .unwrap();
@@ -2521,6 +2558,25 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         payload_te: &TypeExpr,
     ) -> Option<FunctionValue<'ctx>> {
+        self.emit_option_drop_fn_impl(payload_te, false)
+    }
+
+    /// B-2026-09-05-9 — the ENVELOPE-ONLY twin of `emit_option_drop_fn`:
+    /// on `Some` it frees the BOXED payload's box envelope but skips the
+    /// payload's own drop, because a destructuring arm has moved the
+    /// payload out by value. See `emit_result_drop_fn_envelope_only`.
+    pub(super) fn emit_option_drop_fn_envelope_only(
+        &mut self,
+        payload_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        self.emit_option_drop_fn_impl(payload_te, true)
+    }
+
+    fn emit_option_drop_fn_impl(
+        &mut self,
+        payload_te: &TypeExpr,
+        envelope_only: bool,
+    ) -> Option<FunctionValue<'ctx>> {
         let (option_ty, some_tag) = {
             let layout = self.type_decls.enum_layouts.get("Option")?;
             (
@@ -2529,7 +2585,11 @@ impl<'ctx> super::Codegen<'ctx> {
             )
         };
         let payload_name = Self::display_mangle_te(payload_te);
-        let type_name = format!("Option_{payload_name}");
+        let type_name = if envelope_only {
+            format!("Option_{payload_name}_envonly_Some")
+        } else {
+            format!("Option_{payload_name}")
+        };
         if let Some(&f) = self.drop_rc.drop_fn_cache.get(&type_name) {
             return Some(f);
         }
@@ -2633,13 +2693,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(is_null, exit_bb, free_bb)
                 .unwrap();
             self.builder.position_at_end(free_bb);
-            self.builder
-                .build_call(payload_drop, &[box_ptr.into()], "")
-                .unwrap();
+            if !envelope_only {
+                self.builder
+                    .build_call(payload_drop, &[box_ptr.into()], "")
+                    .unwrap();
+            }
             self.builder
                 .build_call(self.runtime_fns.free_fn, &[box_ptr.into()], "")
                 .unwrap();
-        } else {
+        } else if !envelope_only {
             self.builder
                 .build_call(payload_drop, &[payload_base.into()], "")
                 .unwrap();

@@ -12486,8 +12486,127 @@ impl<'ctx> super::Codegen<'ctx> {
             .all(|v| super::consume_class::binding_only_borrowed_block(v, block))
     }
 
+    /// B-2026-09-05-9 — swap the leaf's `EnumDrop` drop fn in place, keyed
+    /// on the slot, the way `suppress_boxed_payload_view_move` swaps a
+    /// `BoxedEnumDrop`'s inner drop: a compile-time retraction on the action
+    /// the scope-exit drain will run, so no runtime store has to be sequenced
+    /// against the arm body's bit-copy. Returns whether one was found.
+    fn swap_agg_leaf_enum_drop_fn(
+        &mut self,
+        slot: PointerValue<'ctx>,
+        new_fn: inkwell::values::FunctionValue<'ctx>,
+    ) -> bool {
+        let mut swapped = false;
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut() {
+            for action in frame.iter_mut() {
+                if let super::state::CleanupAction::EnumDrop {
+                    enum_alloca,
+                    drop_fn,
+                } = action
+                {
+                    if *enum_alloca == slot {
+                        *drop_fn = new_fn;
+                        swapped = true;
+                    }
+                }
+            }
+        }
+        swapped
+    }
+
+    /// B-2026-09-05-9 — for a consuming arm over an agg leaf whose CONSUMED
+    /// variant is a heap-BOXED payload: retract the leaf's drop to an
+    /// envelope-only synthesis and report `true`, so the caller skips the
+    /// runtime slot neutralization. The contents now belong to the arm
+    /// binding; the box itself belongs to nobody else, and the slot has to
+    /// stay live for the leaf's drop to reach it. Storing the `None` tag /
+    /// zeroing the words hid the box word along with the contents, so the
+    /// envelope leaked — 56 B per moving arm, both families, `-O2` and `-O0`
+    /// alike. The bodies walk is untouched: it runs under its own per-path
+    /// flag (`optres_payload_bodies_flag_for`), which the arm already clears.
+    /// An INLINE payload has no envelope and keeps the slot neutralization.
+    /// The mask already on the leaf's drop fn, if an earlier arm of the same
+    /// `match` retracted it: read back from the synthesized fn's name
+    /// (`karac_drop_Result_.._envonly_<mask>`), so a `match` that moves BOTH
+    /// `Ok` and `Err` composes `"OkErr"` rather than letting the second
+    /// arm's swap un-mask the first's — which would double-free the first
+    /// arm's payload.
+    fn agg_leaf_envelope_mask(&self, slot: PointerValue<'ctx>) -> Option<String> {
+        self.drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .flatten()
+            .find_map(|action| match action {
+                super::state::CleanupAction::EnumDrop {
+                    enum_alloca,
+                    drop_fn,
+                } if *enum_alloca == slot => {
+                    let name = drop_fn.get_name().to_str().ok()?.to_string();
+                    name.rsplit_once("_envonly_").map(|(_, m)| m.to_string())
+                }
+                _ => None,
+            })
+    }
+
+    fn retract_boxed_agg_leaf_drop_to_envelope(
+        &mut self,
+        name: &str,
+        slot: PointerValue<'ctx>,
+        variant: &str,
+    ) -> bool {
+        let Some(te) = self.var_types.optres_var_payload_tes.get(name).cloned() else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let args: Vec<TypeExpr> = p
+            .generic_args
+            .iter()
+            .flatten()
+            .filter_map(|a| match a {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        let head = p.segments.last().map(|s| s.as_str());
+        let (moved_te, thresh) = match (head, variant) {
+            (Some("Option"), "Some") => (args.first().cloned(), 3usize),
+            (Some("Result"), "Ok") => (args.first().cloned(), 5usize),
+            (Some("Result"), "Err") => (args.get(1).cloned(), 5usize),
+            _ => return false,
+        };
+        let Some(moved_te) = moved_te else {
+            return false;
+        };
+        let words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(&moved_te));
+        if words <= thresh {
+            return false;
+        }
+        let env_fn = match head {
+            Some("Option") => self.emit_option_drop_fn_envelope_only(&moved_te),
+            _ => match (args.first(), args.get(1)) {
+                (Some(ok), Some(err)) => {
+                    let (ok, err) = (ok.clone(), err.clone());
+                    let prior = self.agg_leaf_envelope_mask(slot);
+                    let mask = match prior.as_deref() {
+                        Some(m) if m.contains(variant) => m.to_string(),
+                        Some(_) => "OkErr".to_string(),
+                        None => variant.to_string(),
+                    };
+                    self.emit_result_drop_fn_envelope_only(&ok, &err, &mask)
+                }
+                _ => None,
+            },
+        };
+        let Some(env_fn) = env_fn else {
+            return false;
+        };
+        self.swap_agg_leaf_enum_drop_fn(slot, env_fn)
+    }
+
     pub(super) fn suppress_inline_option_agg_payload_cleanup(
-        &self,
+        &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
@@ -12510,9 +12629,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if !patterns.iter().any(pattern_consumes_field) {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()) else {
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return;
         };
+        // B-2026-09-05-9 — a boxed payload keeps its slot live and hands the
+        // leaf an envelope-only drop instead.
+        if self.retract_boxed_agg_leaf_drop_to_envelope(name, slot.ptr, "Some") {
+            return;
+        }
         let Some(layout) = self.type_decls.enum_layouts.get("Option") else {
             return;
         };
@@ -12547,7 +12671,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// double free — the safe side, and the convention the `Option` twin and
     /// the `match`-payload retractions already follow.
     pub(super) fn suppress_inline_result_agg_payload_cleanup(
-        &self,
+        &mut self,
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
@@ -12564,15 +12688,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
             return;
         };
-        if !matches!(path.last().map(|s| s.as_str()), Some("Ok") | Some("Err")) {
+        let Some(variant) = path.last().map(|s| s.as_str()) else {
+            return;
+        };
+        if !matches!(variant, "Ok" | "Err") {
             return;
         }
         if !patterns.iter().any(pattern_consumes_field) {
             return;
         }
-        let Some(slot) = self.variables.get(name.as_str()) else {
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
             return;
         };
+        // B-2026-09-05-9 — a boxed payload keeps its slot live and hands the
+        // leaf an envelope-only drop instead (see the Option twin).
+        let variant = variant.to_string();
+        if self.retract_boxed_agg_leaf_drop_to_envelope(name, slot.ptr, &variant) {
+            return;
+        }
         let Some(layout) = self.type_decls.enum_layouts.get("Result") else {
             return;
         };
