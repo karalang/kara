@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 341 |
 | leak | 264 |
 | missing-feature | 194 |
-| double-free | 182 |
+| double-free | 183 |
 | codegen-gap | 166 |
 | diagnostics | 123 |
 | false-positive | 106 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1468 |
+| codegen | 1469 |
 | interp | 357 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -2247,6 +2247,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-9 | codegen | medium | EVERY MOVING ARM OVER A HEAP-BOXED AGG DESTRUCTURE LEAF PAYLOAD LEAKS THE BOX ENVELOPE, on the `Option` and `Result` families alike -- `let (a, b) =… | 86a00b9 |
 | B-2026-09-05-10 | interp+codegen | medium | AN UNCONDITIONAL `return Option.Some(r)` (and the `Result.Ok(r)` spelling) OF A BY-VALUE PARAM RUNS THE `Drop` BODY TWICE -- the caller's fresh-temp… | 3000056 |
 | B-2026-09-05-12 | other | medium | THE NIGHTLY `Fuzz` WORKFLOW'S THREE libFuzzer LEGS HAVE NEVER RUN -- `fuzz/` is named by neither `workspace.members` nor `workspace.exclude`, so carg… | 20cc27f |
+| B-2026-09-05-19 | codegen | high | A PARAM-VIEW ASSIGNMENT WHOSE TARGET STRUCT ONLY *CARRIES* A `Drop` FIELD DOUBLE-FREES THE MOVED-IN HEAP -- `h2 = h` over `struct Holder { r: Res }`… | d7e3b44c |
 
 </details>
 
