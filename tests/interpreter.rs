@@ -58861,6 +58861,37 @@ fn main() {
     );
 }
 
+/// B-2026-09-05-20 / B-2026-09-05-21 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_nested_param_destructure_leaf_read_and_moved_one_body_each`, same
+/// program and string. The interpreter was the correct reference throughout.
+#[test]
+fn test_nested_param_destructure_leaf_read_and_moved_one_body_each() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Gd[T] { r: T, z: i64 }
+struct Gn2[T] { inner: Gd[T], z: i64 }
+struct Hd { r: R, z: i64 }
+struct Hn { inner: Hd, z: i64 }
+fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
+fn hLive(h: Hn) -> i64 { let Hn { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
+fn hLiveLocal(h: Hn) -> i64 { let Hn { inner, z } = h; println("in"); let g: Hd = inner; println("moved"); return z + g.z }
+fn gLive[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
+fn gLiveLocal[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let g: Gd[T] = inner; println("moved"); return z + g.z }
+fn main() {
+    { let a: i64 = hLive(Hn { inner: Hd { r: mk(1), z: 1 }, z: 9 }); println(f"one{a}") }
+    { let n: Hn = Hn { inner: Hd { r: mk(2), z: 1 }, z: 9 }; let a: i64 = hLive(n); println(f"two{a}") }
+    { let a: i64 = gLiveLocal(Gn2[R] { inner: Gd[R] { r: mk(3), z: 1 }, z: 9 }); println(f"three{a}") }
+    { let n: Gn2[R] = Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 }; let a: i64 = gLiveLocal(n); println(f"four{a}") }
+    { let a: i64 = gLive(Gn2[R] { inner: Gd[R] { r: mk(5), z: 1 }, z: 9 }); println(f"five{a}") }
+    { let a: i64 = hLiveLocal(Hn { inner: Hd { r: mk(6), z: 1 }, z: 9 }); println(f"six{a}") }
+    println("end")
+}
+"#),
+        "in\ndR1\none10\nin\ndR2\ntwo10\nin\nmoved\ndR3\nthree10\nin\nmoved\ndR4\nfour10\nin\ndR5\nfive10\nin\nmoved\ndR6\nsix10\nend\n"
+    );
+}
+
 /// B-2026-09-03-25 — A WILDCARD TUPLE LEAF OVER AN `Option`/`Result`
 /// ELEMENT OWNS ITS PAYLOAD'S `Drop` BODY.
 ///

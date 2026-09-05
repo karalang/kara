@@ -17475,6 +17475,62 @@ done
         assert_eq!(out, "dR1\ng11\ndW11/x11y11\none\ndR2\ngot22\ndW22/x22y22\ntwo\ndR3\ng33\ndW33/x33y33\nthree\ndR4\ng44\ndW44/x44y44\nfour\ndR5\ngot55\ndW55/x55y55\nfive\ndR6\ng66\ndW66/x66y66\nsix\ndR7\ng77\ndW77/x77y77\nseven\ndR8\ng88\ndW88/x88y88\neight\ndR9\nerre9\nnine\ndR10\nnone\nten\ndR12\ng1212\ndR1212\ntwelve\ndR13\ndR13\ngot13131331\ndW1331/x1331y1331\ndW1313/x1313y1313\nthirteen\nend\n");
     }
 
+    /// B-2026-09-05-20 / B-2026-09-05-21 — the two defects on the cells next to
+    /// B-2026-09-05-7's: a nested by-value param destructured in the callee,
+    /// with the leaf `inner` READ or MOVED INTO A LOCAL.
+    ///
+    /// `one`/`two` (-20): the NON-generic `Hn { inner: Hd { r: R } }` is
+    /// entry-copied, so its field bodies are the CALLER's (its walk runs after
+    /// the call returns). Reading `inner.z` went through the field-move
+    /// disarm, which re-arms a binding's walk under a wider mask — and MINTED
+    /// one for a param view that had none: `r`'s body twice on every compiled
+    /// backend. A view that owns no walk now has nothing to disarm.
+    ///
+    /// `three`/`four` (-21): the generic `Gn2[T] { inner: Gd[T] }` reaches the
+    /// callee by transfer; the destructure's memory transfer tracked the leaf
+    /// as the erased `Gd` (nothing synthesized) and zeroed the source field
+    /// with the erased walker (nothing zeroed), so `inner` was a memory-less
+    /// alias and `let g: Gd[T] = inner` freed buffers `h` freed again:
+    /// `free(): double free detected in tcache 2`. Three pieces: the leaf is
+    /// tracked under its instantiation, the source field is zeroed under the
+    /// field's subst, and the instantiation a binding records inside a
+    /// monomorph is the SUBSTITUTED one — a declared `Gd[T]` is `Gd[R]` there,
+    /// which is what lets the rebind take `inner`'s walk over to `g` (`moved`
+    /// before `dR3`, the interpreter's order) instead of firing it at the move.
+    ///
+    /// `five` and `six` are the controls that were always right: the generic
+    /// leaf read (the callee owns the bodies under transfer), and the
+    /// non-generic leaf moved (the rebind off a param view mints nothing).
+    #[test]
+    fn e2e_nested_param_destructure_leaf_read_and_moved_one_body_each() {
+        let Some(out) = run_program(
+            "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct Gd[T] { r: T, z: i64 }\n\
+             struct Gn2[T] { inner: Gd[T], z: i64 }\n\
+             struct Hd { r: R, z: i64 }\n\
+             struct Hn { inner: Hd, z: i64 }\n\
+             fn mk(k: i64) -> R { return R { id: k, tag: f\"t{k}\", xs: [k] } }\n\
+             fn hLive(h: Hn) -> i64 { let Hn { inner, z } = h; println(\"in\"); let q: i64 = inner.z; return z + q }\n\
+             fn hLiveLocal(h: Hn) -> i64 { let Hn { inner, z } = h; println(\"in\"); let g: Hd = inner; println(\"moved\"); return z + g.z }\n\
+             fn gLive[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println(\"in\"); let q: i64 = inner.z; return z + q }\n\
+             fn gLiveLocal[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println(\"in\"); let g: Gd[T] = inner; println(\"moved\"); return z + g.z }\n\
+             fn main() {\n\
+             \x20   { let a: i64 = hLive(Hn { inner: Hd { r: mk(1), z: 1 }, z: 9 }); println(f\"one{a}\") }\n\
+             \x20   { let n: Hn = Hn { inner: Hd { r: mk(2), z: 1 }, z: 9 }; let a: i64 = hLive(n); println(f\"two{a}\") }\n\
+             \x20   { let a: i64 = gLiveLocal(Gn2[R] { inner: Gd[R] { r: mk(3), z: 1 }, z: 9 }); println(f\"three{a}\") }\n\
+             \x20   { let n: Gn2[R] = Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 }; let a: i64 = gLiveLocal(n); println(f\"four{a}\") }\n\
+             \x20   { let a: i64 = gLive(Gn2[R] { inner: Gd[R] { r: mk(5), z: 1 }, z: 9 }); println(f\"five{a}\") }\n\
+             \x20   { let a: i64 = hLiveLocal(Hn { inner: Hd { r: mk(6), z: 1 }, z: 9 }); println(f\"six{a}\") }\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "in\ndR1\none10\nin\ndR2\ntwo10\nin\nmoved\ndR3\nthree10\nin\nmoved\ndR4\nfour10\nin\ndR5\nfive10\nin\nmoved\ndR6\nsix10\nend\n");
+    }
+
     /// B-2026-09-03-12 — a tuple bound out of a PLACE (`let x = h.pe;`) records its
     /// element types, so the binding runs the element's `Drop` body and can be
     /// projected.

@@ -2192,6 +2192,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `let` site does; the guard is what keeps that fallback from recording a
     /// bare `Box2`.
     pub(super) fn record_generic_struct_inst(&mut self, var_name: &str, te: &TypeExpr) {
+        // B-2026-09-05-21 — inside a monomorph the declared `Gd[T]` IS
+        // `Gd[R]`: record the substituted instantiation, or every subst-aware
+        // gate reading it back (`has_field_user_drop`, the drop synthesis)
+        // sees an erased `T` and declines — a rebound leaf got memory and no
+        // bodies walk, so the source leaf's walk fired at the move instead.
+        let te = &self.subst_monomorph_type_params(te);
         if !self.te_is_instantiated_generic_struct(te) {
             return;
         }

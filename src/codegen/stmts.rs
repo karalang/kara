@@ -4665,6 +4665,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // not the base-layout drop that SIGSEGVs.
                         .or_else(|| self.field_move_out_struct_inst(value));
                     if let Some(inst) = inst {
+                        // B-2026-09-05-21 — a declared `Gd[T]` inside a
+                        // monomorph is `Gd[R]`: `concrete_generic_struct_inst`
+                        // binds only the name/type-expr substs, not the
+                        // call-site one a generic fn's instantiation carries,
+                        // so a rebound leaf recorded an erased `T` and every
+                        // subst-aware gate reading it back declined.
+                        let inst = self.subst_monomorph_type_params(&inst);
                         self.type_decls
                             .enum_inst_var_types
                             .insert(var_name.clone(), inst);
@@ -16629,7 +16636,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.type_decls.struct_types.contains_key(seg.as_str())
                     && !self.type_decls.shared_types.contains_key(seg.as_str())
                 {
-                    self.track_struct_var(seg, alloca);
+                    // B-2026-09-05-21 — a GENERIC-INSTANTIATION leaf
+                    // (`inner: Gd[T]` resolved to `Gd[R]` by the caller) must
+                    // be tracked under that instantiation: the erased tracker
+                    // synthesizes nothing for `r: T`, leaving the leaf a
+                    // memory-less alias of the source's field, and a later
+                    // `let g = inner` then moves buffers the source still
+                    // frees — a double free.
+                    let inst = p
+                        .generic_args
+                        .as_ref()
+                        .filter(|a| !a.is_empty())
+                        .map(|_| te.clone());
+                    self.track_struct_var_inst(seg, alloca, inst);
                 }
             }
         }

@@ -72724,4 +72724,61 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-09-05-21 — the memory half of
+    /// `e2e_nested_param_destructure_leaf_read_and_moved_one_body_each`: the
+    /// generic leaf moved into a local (`three`/`four`) double-freed on every
+    /// compiled backend, and the fix hands the leaf its field's memory (the
+    /// source zeroed under the field's subst), so this pins that every buffer
+    /// is freed exactly once; the -20 cells are bodies-only and ride along.
+    #[test]
+    fn asan_nested_param_destructure_leaf_read_and_moved_clean() {
+        let label = "nested_param_destructure_leaf_read_and_moved";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Gd[T] { r: T, z: i64 }
+struct Gn2[T] { inner: Gd[T], z: i64 }
+struct Hd { r: R, z: i64 }
+struct Hn { inner: Hd, z: i64 }
+fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
+fn hLive(h: Hn) -> i64 { let Hn { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
+fn hLiveLocal(h: Hn) -> i64 { let Hn { inner, z } = h; println("in"); let g: Hd = inner; println("moved"); return z + g.z }
+fn gLive[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let q: i64 = inner.z; return z + q }
+fn gLiveLocal[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; println("in"); let g: Gd[T] = inner; println("moved"); return z + g.z }
+fn main() {
+    { let a: i64 = hLive(Hn { inner: Hd { r: mk(1), z: 1 }, z: 9 }); println(f"one{a}") }
+    { let n: Hn = Hn { inner: Hd { r: mk(2), z: 1 }, z: 9 }; let a: i64 = hLive(n); println(f"two{a}") }
+    { let a: i64 = gLiveLocal(Gn2[R] { inner: Gd[R] { r: mk(3), z: 1 }, z: 9 }); println(f"three{a}") }
+    { let n: Gn2[R] = Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 }; let a: i64 = gLiveLocal(n); println(f"four{a}") }
+    { let a: i64 = gLive(Gn2[R] { inner: Gd[R] { r: mk(5), z: 1 }, z: 9 }); println(f"five{a}") }
+    { let a: i64 = hLiveLocal(Hn { inner: Hd { r: mk(6), z: 1 }, z: 9 }); println(f"six{a}") }
+    println("end")
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported an error (exit {:?}); stdout:\n{stdout}",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "in", "dR1", "one10", "in", "dR2", "two10", "in", "moved", "dR3", "three10", "in",
+                "moved", "dR4", "four10", "in", "dR5", "five10", "in", "moved", "dR6", "six10",
+                "end",
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

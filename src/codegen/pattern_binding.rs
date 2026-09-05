@@ -714,6 +714,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             // Same rule as the `let` site and the receiver side —
                             // a record is only useful if its params are CONCRETE.
                             // B-2026-08-27-36.
+                            // B-2026-09-05-21 — record the leaf under the
+                            // ACTIVE monomorph's substitution: inside
+                            // `gDes$R` the declared `Gd[T]` is `Gd[R]`, and a
+                            // rebind off this leaf reads the entry back
+                            // through subst-aware gates that decline an
+                            // erased `T`.
+                            let full_te = self.subst_monomorph_type_params(&full_te);
                             let inst = self
                                 .concrete_generic_struct_inst(&full_te)
                                 .unwrap_or(full_te);

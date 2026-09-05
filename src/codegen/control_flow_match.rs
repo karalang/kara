@@ -9415,6 +9415,18 @@ impl<'ctx> super::Codegen<'ctx> {
             self.disarm_user_drop_field_bodies_masked(slot.ptr, &struct_name, &skip);
             return;
         }
+        // B-2026-09-05-20 — a param VIEW that owns no walk has nothing to
+        // disarm, and re-arming it masked below would MINT one: the field
+        // bodies of an entry-copied param are the CALLER's (its walk runs
+        // after the call returns), so a destructure leaf of that param that
+        // reads one of its fields (`let q = inner.z`) ran `r`'s body from
+        // here and again from the caller. Only a binding that already holds
+        // a walk gets it re-registered under the wider mask.
+        if !self.var_owns_struct_field_bodies(var_name)
+            && self.payload_vars.param_view_locals.contains(var_name)
+        {
+            return;
+        }
         self.suppress_struct_field_bodies_for_var(var_name);
         if let Some(bodies) =
             self.emit_user_drop_field_bodies_fn_skipping(&struct_name, &subst, &skip)

@@ -9542,7 +9542,21 @@ impl<'ctx> super::Codegen<'ctx> {
             } else if self.type_decls.struct_types.contains_key(fname.as_str())
                 && !self.type_decls.shared_types.contains_key(fname.as_str())
             {
-                self.zero_struct_move_caps(field_ptr, &fname);
+                // B-2026-09-05-21 — a nested GENERIC-INSTANTIATION field
+                // (`inner: Gd[T]` under `T = R`) zeroes under its own subst:
+                // the erased walk finds no heap in `r: T` and leaves the
+                // source's buffers live behind the moved-out leaf.
+                let field_subst = field_te
+                    .as_ref()
+                    .filter(|te| {
+                        matches!(&te.kind, TypeKind::Path(p)
+                            if p.generic_args.as_ref().is_some_and(|a| !a.is_empty()))
+                    })
+                    .map(|te| self.generic_struct_subst_from_inst(&fname, te));
+                match field_subst {
+                    Some(subst) => self.zero_struct_move_caps_mono(field_ptr, &fname, Some(&subst)),
+                    None => self.zero_struct_move_caps(field_ptr, &fname),
+                }
             }
         }
     }
