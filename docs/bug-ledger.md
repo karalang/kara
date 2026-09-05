@@ -161,7 +161,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-26 | 2026-09-04 | codegen | medium | A `Result.Ok` CTOR ELEMENT OF A TUPLE TEMP ARGUMENT LOSES ITS PAYLOAD'S `Drop` BODY, and the B-2026-09-03-21 fix cannot simply be widened to it -- filling the erased element type makes the body run and LEAKS the boxed payload's 56 B envelope, because the `Result` cell is memory-CLEAN pre-fix where the `Option` cell leaks 11 B, so something already owns that box | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
 | B-2026-09-04-36 | 2026-09-04 | interp+codegen | low | A RECEIVER TEMP NESTED IN A LARGER EXPRESSION DRAINS AT THE STATEMENT'S `;` ON THE COMPILED BACKENDS AND AT THE CALL RETURN IN THE INTERPRETER -- `println(f"  {mk(1).peek()}")` prints `dR1/t1` BEFORE the value under `--interp` and AFTER it on jit/aot. Statement position agrees, which is why it hides: `let v = mk(1).peek()` is byte-identical on all four. This is B-2026-08-29-55's drain-point question one row over -- that row moved the three ARGUMENT registrars to a per-call window and deliberately left the fresh-temp RECEIVER (`__urecv_drop_tmp`) on the statement drain, on the grounds that a receiver has its own position-table row with a different end | — |
-| B-2026-09-05-1 | 2026-09-05 | codegen | high | AN OWNED STRUCT LITERAL WHOSE `shared` FIELD IS INITIALISED FROM ANOTHER STRUCT'S FIELD CRASHES BEFORE ITS FIRST READ on all three compiled surfaces -- `let h: H = H { s: w.s }; println(h.s.id, w.s.id)` prints NOTHING (valgrind: `Invalid read of size 8`) against `v1919 post dS19` under `--interp`; no tuple involved, reproduces on the clean tree | — |
 
 ### Relocated
 
@@ -2230,6 +2229,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-33 | codegen | medium | AN `Option` TUPLE ELEMENT WHOSE PAYLOAD IS A LITERAL IS UNTYPED, so `tuple_elem_optres_drop_ok` declines the element, the tuple `let` falls to the en… | bb2b7b8 |
 | B-2026-09-04-34 | codegen | high | A MOVED-OUT `Array[E, N]` FIELD DISARMS NOTHING, so the source struct's drop keeps freeing element buffers the binding now owns -- `struct Ha { a: Ar… | 54103c9 |
 | B-2026-09-04-35 | codegen | high | A FRESH-TEMP RECEIVER'S FIELD-BODIES WALK RUNS OVER FREED STORAGE -- `NoOwn { a: mk(1) }.br()` on a struct that carries `Drop` FIELDS but has no `imp… | e8f393c |
+| B-2026-09-05-1 | codegen | high | AN OWNED STRUCT LITERAL WHOSE `shared` FIELD IS INITIALISED FROM ANOTHER STRUCT'S FIELD CRASHES BEFORE ITS FIRST READ on all three compiled surfaces… | 3212b6d |
 | B-2026-09-05-2 | interp | medium | A `shared struct` REACHED THROUGH A `Vec` ELEMENT RAN NO `Drop` BODY UNDER `--interp` -- bare `Vec[S]`, `Vec[(S, i64)]` and `Vec[Holder { s: S }]` al… | f82a99b |
 
 </details>
