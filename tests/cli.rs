@@ -4670,6 +4670,118 @@ fn test_rc_promoted_param_reached_through_a_let_rebind_frees_once() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// B-2026-09-05-13 — the param-view assignment target whose struct does NOT
+/// implement `Drop` itself but CARRIES a `Drop`-bearing field. Sibling of the
+/// two fixtures above, and the shape B-2026-09-02-5's fix double-freed.
+///
+/// That fix gives the flag-`false` edge the memory half of the target's drop,
+/// on the premise that "for a type with an `impl Drop` the body and the field
+/// walk are ONE registered action", so withholding the body withheld the free.
+/// The premise holds only when the type implements `Drop` ITSELF. A struct that
+/// merely CARRIES one — `struct Holder { r: Res }` with `impl Drop for Res` —
+/// registers `UserDropKind::StructFieldBodies` instead, which is bodies-only
+/// ("it frees nothing", per that variant's own doc) and leaves its `StructDrop`
+/// live alongside. Withholding a bodies-only fn withholds no free, so the else
+/// edge was not replacing one — it was a SECOND walk over buffers `StructDrop`
+/// already frees. Valgrind: `Invalid free()` on the moved-in `String`, freed
+/// twice from two adjacent sites in `take`.
+///
+/// WHY THE TWELVE PROBE SHAPES OF THAT ROW MISSED IT: every one of them used a
+/// type with its own `impl Drop`, which is the half the premise covers. The two
+/// neighbouring shapes bound this cell on both sides and are both clean before
+/// and after — `impl Drop` on the assigned struct itself, and no `Drop`
+/// anywhere — so the discriminator is neither "has a Drop" nor "carries heap"
+/// but which of the two REGISTRATIONS the target took.
+///
+/// SAME PLACEMENT RATIONALE as its two neighbours, and for once it is the whole
+/// reason the regression reached `main`: the duplicate free is dead code to
+/// LLVM at `-O1` and above, so the AOT default is clean and only `karac run`
+/// (LLJIT, `OptimizationLevel::None`) and `KARAC_OPT_LEVEL=0 karac build` show
+/// it. CI caught it solely through the `Codegen E2E via LLJIT (run==build
+/// parity)` step, as a bare `free(): double free detected in tcache 2` with the
+/// buffered stdout lost to the abort — which is why the Linux job reported
+/// `left: ""` and macOS a truncated prefix of the same run.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_param_view_assign_to_a_carrier_struct_frees_once() {
+    use std::process::Command;
+
+    let tmp = scratch_project("param-view-carrier-struct");
+    let src = "struct Res { id: i64, name: String }\n\
+               impl Drop for Res {\n\
+               \x20   fn drop(mut ref self) { println(f\"drop {self.id} {self.name}\") }\n\
+               }\n\
+               struct Holder { r: Res }\n\
+               fn take(h: Holder) {\n\
+               \x20   let mut h2 = Holder { r: Res { id: 9, name: f\"z{9}\" } };\n\
+               \x20   h2 = h;\n\
+               \x20   println(f\"held {h2.r.id}\");\n\
+               }\n\
+               fn main() {\n\
+               \x20   let x = Holder { r: Res { id: 5, name: f\"y{5}\" } };\n\
+               \x20   take(x);\n\
+               \x20   println(\"end\");\n\
+               }\n";
+    write(&tmp.join("carrier.kara"), src);
+
+    // The interpreter is the oracle: it has no slot layout to corrupt.
+    let want = {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .args(["run", "--interp", "carrier.kara"])
+            .output()
+            .expect("spawn karac run --interp");
+        assert!(
+            out.status.success(),
+            "interpreter run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_eq!(
+        want, "drop 9 z9\nheld 5\ndrop 5 y5\nend\n",
+        "oracle drifted — the fixture, not the compiler, needs re-measuring"
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "carrier.kara"])
+        .output()
+        .expect("spawn karac run");
+    assert!(
+        out.status.success(),
+        "karac run (JIT) died: status {:?}, stderr {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        want,
+        "JIT lane must match the interpreter"
+    );
+
+    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .env("KARAC_OPT_LEVEL", "0")
+        .args(["build", "carrier.kara"])
+        .output();
+    let exe = tmp.join("carrier");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let out = Command::new(&exe).output().expect("run -O0 binary");
+        assert!(
+            out.status.success(),
+            "-O0 binary died: status {:?}",
+            out.status.code()
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want,
+            "KARAC_OPT_LEVEL=0 build must match the interpreter"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_eprintln_under_par_replays_in_source_order_run_and_build() {

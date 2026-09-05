@@ -655,6 +655,38 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
+        // THE TARGET'S DROP MUST ACTUALLY BE THE ONE-ACTION KIND, which is the
+        // premise this whole registration rests on and the one it did not
+        // check (B-2026-09-05-13).
+        //
+        // The doc above argues that withholding the body withholds the free
+        // "for a type with an `impl Drop`", because `karac_drop_<T>` runs the
+        // body and the field walk together and is mutually exclusive with
+        // `StructDrop`. That is true only when the type implements `Drop`
+        // ITSELF. A struct that merely CARRIES a `Drop`-bearing field —
+        // `struct Holder { r: Res }` with `impl Drop for Res` — registers
+        // `UserDropKind::StructFieldBodies` instead, which is bodies-only ("it
+        // frees nothing", per that variant's own doc), and its `StructDrop`
+        // stays live alongside. Withholding a bodies-only fn withholds no
+        // free, so the else edge below is not a replacement for one — it is a
+        // SECOND walk over buffers `StructDrop` already frees.
+        //
+        // Measured on `fn take(h: Holder) { let mut h2 = Holder { .. }; h2 = h; }`:
+        // valgrind reports `Invalid free()` on the moved-in `String`, freed
+        // twice from two adjacent sites in `take`. It reproduces on the JIT
+        // lane and at `KARAC_OPT_LEVEL=0` and is invisible at `-O1`/`-O2`,
+        // where LLVM deletes the second free as dead — the same masking this
+        // registration's own commit message describes, which is why its twelve
+        // probe shapes did not catch it. The two neighbouring shapes are both
+        // clean and pin the boundary: `impl Drop` on the assigned struct
+        // itself, and no `Drop` anywhere.
+        let target_has_own_drop_impl = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(type_name));
+        if !target_has_own_drop_impl {
+            return;
+        }
         // THE SOURCE: see [`Self::source_carries_callee_owned_param_memory`] for
         // why this is an induction rather than a question about the type.
         if !self.source_carries_callee_owned_param_memory(source_name) {
