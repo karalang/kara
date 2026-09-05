@@ -4125,6 +4125,76 @@ done
         );
     }
 
+    /// B-2026-09-04-24 — a by-value STRUCT temp literal at a GENERIC call site
+    /// lost its tuple element's `Drop` body.
+    ///
+    /// The argument FORM is the whole discriminator, which is why all three
+    /// controls here sit on the other side of it: the same generic callee handed
+    /// a NAMED LOCAL is correct, and the non-generic twin is correct with either
+    /// form. So it is neither the generic callee nor the temp literal alone.
+    ///
+    /// In the IR the caller emitted, `gLocal` ends with the pair
+    /// `__karac_dropbodies_G$R` + `__karac_drop_struct_G$R`, and `nTemp` with
+    /// `__karac_dropbodies_Gn` + `__karac_drop_struct_Gn` — but `gTemp` had ONLY
+    /// `__karac_drop_struct_G$R`. The memory half has resolved the temp's
+    /// instantiation since B-2026-08-06-2 (defect B), so the buffer was always
+    /// freed — valgrind reported no leaks pre-fix, which is exactly why the
+    /// memory-sanitizer suite could not see this. The BODIES half was still
+    /// name-keyed, so it read `G[T] { pe: (T, i64) }`, found the element erased
+    /// to a bare `T`, declined, and emitted no call at all.
+    ///
+    /// Both cells reach the SAME monomorph `gfn$R`, so a callee-body explanation
+    /// cannot distinguish them — and call ORDER does not change the result
+    /// (`gTemp` alone still loses it, `gLocal` alone is still correct). That is
+    /// what places the defect caller-side rather than in the mono.
+    #[test]
+    fn e2e_generic_call_struct_temp_arg_runs_its_tuple_element_drop_body() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct G[T] { pe: (T, i64), z: i64 }
+struct Gn { pe: (R, i64), z: i64 }
+fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
+fn nfn(h: Gn) -> i64 { let (r, k) = h.pe; println("  in"); return k; }
+fn gLocal() { let h = G[R] { pe: (mk(80), 5), z: 9 }; let _ = gfn(h); }
+fn gTemp()  { let _ = gfn(G[R] { pe: (mk(81), 5), z: 9 }); }
+fn nLocal() { let h = Gn   { pe: (mk(82), 5), z: 9 }; let _ = nfn(h); }
+fn nTemp()  { let _ = nfn(Gn   { pe: (mk(83), 5), z: 9 }); }
+fn main() {
+    println("gLocal"); gLocal();
+    println("gTemp");  gTemp();
+    println("nLocal"); nLocal();
+    println("nTemp");  nTemp();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"gLocal
+  in
+dR80/t80/1
+gTemp
+  in
+dR81/t81/1
+nLocal
+  in
+dR82/t82/1
+nTemp
+  in
+dR83/t83/1
+done
+"#,
+            "a struct temp literal at a generic call site lost its tuple \
+             element's `Drop` body — B-2026-09-04-24. A missing `dR81` with the \
+             other three cells intact is the exact pre-fix signature: the three \
+             controls are what prove it is the generic-plus-temp COMBINATION."
+        );
+    }
+
     /// B-2026-09-04-27 — the CONTAINER-ELEMENT half of B-2026-09-04-4: a
     /// generic `impl[T] Drop for S[T]` ran no body when the value sat in a
     /// container rather than a binding.

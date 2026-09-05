@@ -4045,16 +4045,40 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         skip: &super::synth_drop::FieldSkipTree,
     ) -> Option<FunctionValue<'ctx>> {
-        if !self.type_decls.struct_types.contains_key(type_name)
-            || !self.type_runs_user_drop(type_name, &mut Vec::new())
-        {
-            return None;
-        }
-        self.emit_user_drop_field_bodies_fn_skipping(
+        self.field_bodies_fn_for_owned_temp_mono_skipping(
             type_name,
             &std::collections::HashMap::new(),
             skip,
         )
+    }
+
+    /// The subst-aware form both siblings above delegate to: the temp's
+    /// recorded INSTANTIATION *and* an escaping-field mask, which is the pair
+    /// B-2026-09-04-24 needed and neither entry point could express alone.
+    ///
+    /// A generic parent declares its fields at bare type params, so the
+    /// name-keyed gate sees no `Drop` field in `G[T] { pe: (T, i64) }` and
+    /// declines. B-2026-09-04-30 fixed that for a METHOD RECEIVER temp with
+    /// `field_bodies_fn_for_owned_temp_mono`; a CALL ARGUMENT temp needs the
+    /// same resolution, but it also carries the escaping-field mask
+    /// (B-2026-08-28-17), and the `_mono` form hardcodes an empty one. Rather
+    /// than a third near-copy, both existing entry points now delegate here.
+    ///
+    /// An empty subst routes `type_runs_user_drop_mono` straight to the
+    /// name-keyed `type_runs_user_drop`, so every non-generic caller keeps its
+    /// behaviour byte-for-byte.
+    pub(super) fn field_bodies_fn_for_owned_temp_mono_skipping(
+        &mut self,
+        type_name: &str,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+        skip: &super::synth_drop::FieldSkipTree,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.type_decls.struct_types.contains_key(type_name)
+            || !self.type_runs_user_drop_mono(type_name, subst)
+        {
+            return None;
+        }
+        self.emit_user_drop_field_bodies_fn_skipping(type_name, subst, skip)
     }
 
     /// [`Self::field_bodies_fn_for_owned_temp`] keyed by the temp's recorded
@@ -4075,12 +4099,7 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> Option<FunctionValue<'ctx>> {
-        if !self.type_decls.struct_types.contains_key(type_name)
-            || !self.type_runs_user_drop_mono(type_name, subst)
-        {
-            return None;
-        }
-        self.emit_user_drop_field_bodies_fn_skipping(
+        self.field_bodies_fn_for_owned_temp_mono_skipping(
             type_name,
             subst,
             &super::synth_drop::FieldSkipTree::default(),
@@ -4964,7 +4983,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     // needs `b`'s body and not `a`'s. Interp twin:
                     // `run_fresh_temp_arg_drops`' masked-value call.
                     let skip = self.escaping_field_skip_tree(&name, escaping_paths);
-                    self.field_bodies_fn_for_owned_temp_skipping(&name, &skip)
+                    // B-2026-09-04-24 — resolve the walk through the temp's
+                    // INSTANTIATION when the call path handed one down.
+                    //
+                    // This arm's MEMORY sibling below has taken `mono_inst`
+                    // since B-2026-08-06-2 (defect B), which is why
+                    // `gfn(G[R] { pe: (mk(81), 5), z: 9 })` already emitted the
+                    // per-monomorph `__karac_drop_struct_G$R` and freed its
+                    // buffer — valgrind clean. The BODIES half stayed name-keyed,
+                    // so `emit_user_drop_field_bodies_fn_skipping` read
+                    // `G[T] { pe: (T, i64) }`, found the tuple element erased to
+                    // a bare `T`, and declined: NO `__karac_dropbodies_G$R` call
+                    // was emitted at all and the element's user `Drop` body was
+                    // silent on all three compiled backends against a clean
+                    // `--interp`.
+                    //
+                    // The three controls that localize it all sit on the other
+                    // side of exactly this line: the same generic callee handed a
+                    // NAMED LOCAL resolves through the `let` path's recorded type
+                    // (`__karac_dropbodies_G$R`, present), and the non-generic
+                    // twin needs no subst at all (`__karac_dropbodies_Gn`,
+                    // present with either argument form). So it is neither the
+                    // generic callee nor the temp literal alone, but the one
+                    // combination whose subst never reached the bodies walk.
+                    //
+                    // A non-generic `name`, or a call path that derived no
+                    // instantiation, yields an empty subst and the byte-identical
+                    // prior behaviour.
+                    let subst = mono_inst
+                        .as_ref()
+                        .map(|inst| self.generic_struct_subst_from_inst(&name, inst))
+                        .unwrap_or_default();
+                    self.field_bodies_fn_for_owned_temp_mono_skipping(&name, &subst, &skip)
                 };
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);
                 let src_heap_copyable = !llvm_heap

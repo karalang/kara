@@ -4233,6 +4233,64 @@ fn main() {
         );
     }
 
+    /// B-2026-09-04-24 — the memory gate on the generic-call temp-arg fix.
+    ///
+    /// This one is specifically a DOUBLE-FREE watch rather than a leak watch,
+    /// because the pre-fix state was already leak-free: the memory half of this
+    /// registration has resolved the temp's instantiation since B-2026-08-06-2,
+    /// so `__karac_drop_struct_G$R` ran and valgrind reported no leaks while the
+    /// body was silent. The fix adds a BODIES walk beside that existing free, on
+    /// the same cleanup frame — so the risk it introduces is the mirror image:
+    /// a walk that frees something the memory half also frees, or one that reads
+    /// a field after it. The frame drains LIFO and the memory action is pushed
+    /// first, which is what keeps the body ahead of the free it reads through.
+    ///
+    /// Both argument forms and both genericities, three iterations, so an
+    /// imbalance accumulates rather than cancelling.
+    #[test]
+    fn asan_generic_call_struct_temp_arg_bodies_are_balanced() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.tag}/{self.xs.len()}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct G[T] { pe: (T, i64), z: i64 }
+struct Gn { pe: (R, i64), z: i64 }
+fn gfn[T](h: G[T]) -> i64 { let (r, k) = h.pe; return k; }
+fn nfn(h: Gn) -> i64 { let (r, k) = h.pe; return k; }
+fn gLocal() { let h = G[R] { pe: (mk(80), 5), z: 9 }; let _ = gfn(h); }
+fn gTemp()  { let _ = gfn(G[R] { pe: (mk(81), 5), z: 9 }); }
+fn nLocal() { let h = Gn   { pe: (mk(82), 5), z: 9 }; let _ = nfn(h); }
+fn nTemp()  { let _ = nfn(Gn   { pe: (mk(83), 5), z: 9 }); }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        gLocal(); gTemp(); nLocal(); nTemp();
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "dR80/t80/1",
+                "dR81/t81/1",
+                "dR82/t82/1",
+                "dR83/t83/1",
+                "dR80/t80/1",
+                "dR81/t81/1",
+                "dR82/t82/1",
+                "dR83/t83/1",
+                "dR80/t80/1",
+                "dR81/t81/1",
+                "dR82/t82/1",
+                "dR83/t83/1",
+                "done",
+            ],
+            "b0904-24-generic-call-struct-temp-arg",
+            24,
+        );
+    }
+
     /// B-2026-09-04-27 — the memory gate on the container-element half of the
     /// generic-`Drop` fix: running a per-monomorph body from a BODIES-ONLY
     /// walker must add no free and lose none.
