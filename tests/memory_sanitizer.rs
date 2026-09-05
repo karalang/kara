@@ -71430,6 +71430,113 @@ fn main() {
             "b28-tuple-shape-keyed-drop-walker",
         );
     }
+
+    /// B-2026-09-04-33 — AN `Option` TUPLE ELEMENT WHOSE PAYLOAD IS AN F-STRING
+    /// IS UNTYPED, so the tuple falls to the enum-blind LLVM-type walker and the
+    /// payload is never freed. `let t = (mkD(9), Option.Some(f"p{9}"))` strands
+    /// its `String` on every compiled surface while the `Drop` body fires
+    /// exactly once — nothing in the output says anything is wrong.
+    ///
+    /// Split out of B-2026-09-03-28, which filed it as a second victim of the
+    /// memo-key collision. It is not: the layout-keyed walker cleared that row's
+    /// 90 bytes and left these exactly as they were. The chain is one namer
+    /// short — `infer_arg_elem_te` resolves an f-string through
+    /// `enum_name_of_expr` / `type_name_of` / `scalar_type_name_of_expr`, every
+    /// one of which declines a literal, so the payload derives as the EMPTY path,
+    /// `tuple_elem_optres_drop_ok` refuses `Option[<empty>]`, and the `let`
+    /// takes `aggregate_has_heap_field`'s walker, which steps over the `Option`'s
+    /// payload words.
+    ///
+    /// THREE SHAPES, ALL MEASURED, pre-fix 8 B in 3 allocations at `-O2`:
+    ///
+    ///   * `ctlOptStr` — the row's `let … ; let t2 = t;` rebind, 2 B.
+    ///   * `ctlNoReb`  — the same `let` with NO rebind, 3 B. The rebind in the
+    ///     row's title is incidental; a plain tuple `let` leaks on its own.
+    ///   * `argOptStr` — the tuple ARGUMENT path, 3 B. `tuple_arg_elem_type_exprs`
+    ///     maps each element straight through the same namer, so one fix covers
+    ///     the `let` and the call alike.
+    ///
+    /// The parent row's "only when other tuple shapes are DEFINED" framing was
+    /// OPTIMIZER DCE, not a shape dependence: `ctlOptStr` as a one-function
+    /// program leaks the same 2 B at `KARAC_OPT_LEVEL=0` and is clean at `-O2`
+    /// only because the lone `malloc` is provably dead. This fixture keeps the
+    /// population of shapes so `-O2` cannot hide the allocation.
+    ///
+    /// CONTROLS that pin the axis to "literal vs call", all clean at `-O0`:
+    /// `Option.Some(mkS(9))` with `fn mkS -> String` (the fn-return arm names
+    /// it, and the SAME downstream walk frees it — proof the admit gate already
+    /// takes `Option[String]`); a plain `Option.Some("p9")` (rodata, `cap = 0`,
+    /// so the walker's `cap > 0` guard makes the drop a no-op rather than a
+    /// wild free — and why a static literal was never a leak); an annotated
+    /// `let t: (D, Option[String])` (the declared type takes the deep walk); and
+    /// a bare non-tuple `let o = Option.Some(f"p{9}")` (a different path
+    /// entirely). `ctlScalar`'s `(0, Option.Some(mkD(8)))` is clean since
+    /// B-2026-09-03-28 and is kept here as the reason the INTEGER half of the
+    /// parent's "in the same breath" suggestion is deliberately not taken: it
+    /// buys nothing measurable and risks a width the typechecker inferred.
+    ///
+    /// The fix asks `span_tables.string_typed_exprs` — the typechecker's own
+    /// `Type::Str` spans, the same source `concrete_type_expr_of_expr` reads —
+    /// LAST in the namer chain, so it changes only elements that mangled empty
+    /// before. The output assertion is the other half: every body exactly once,
+    /// in order, which is what fails if naming the payload ever double-frees it.
+    #[test]
+    fn asan_untyped_option_tuple_elem_frees_its_fstring_payload() {
+        assert_clean_asan_run(
+            "struct D { id: i64, xs: Vec[i64], name: String }\n\
+             impl Drop for D { fn drop(mut ref self) { println(f\"  dD{self.id}:{self.xs.len()}:{self.name}\") } }\n\
+             fn mkD(id: i64) -> D {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return D { id: id, xs: v, name: f\"n{id}\" }\n\
+             }\n\
+             struct Q { id: i64, xs: Vec[i64], name: String }\n\
+             fn mkQ(id: i64) -> Q {\n\
+             \x20   let mut v: Vec[i64] = Vec.new();\n\
+             \x20   v.push(id);\n\
+             \x20   return Q { id: id, xs: v, name: f\"q{id}\" }\n\
+             }\n\
+             fn takes(t: (D, Option[String])) { println(\"  tk\") }\n\
+             fn optHeap()   { let t = (mkD(1), Option.Some(mkD(2))); let t2 = t; println(\"  oh\") }\n\
+             fn noDrop()    { let t = (mkQ(3), Option.Some(mkQ(4))); let t2 = t; println(\"  nd\") }\n\
+             fn strElem0()  { let t = (f\"s{5}\", Option.Some(mkD(5))); let t2 = t; println(\"  se\") }\n\
+             fn ctlPlain()  { let t = (mkD(6), mkD(7)); let t2 = t; println(\"  cp\") }\n\
+             fn ctlScalar() { let t = (0, Option.Some(mkD(8))); let t2 = t; println(\"  cs\") }\n\
+             fn ctlOptStr() { let t = (mkD(9), Option.Some(f\"p{9}\")); let t2 = t; println(\"  co\") }\n\
+             fn ctlNoReb()  { let t = (mkD(10), Option.Some(f\"p{10}\")); println(\"  cn\") }\n\
+             fn argOptStr() { takes((mkD(11), Option.Some(f\"p{11}\"))); println(\"  ao\") }\n\
+             fn ctlNone()   { let t: (D, Option[D]) = (mkD(12), Option.None); let t2 = t; println(\"  cz\") }\n\
+             fn main() {\n\
+             \x20   optHeap(); noDrop(); strElem0(); ctlPlain();\n\
+             \x20   ctlScalar(); ctlOptStr(); ctlNoReb(); argOptStr(); ctlNone();\n\
+             \x20   println(\"end\")\n\
+             }\n",
+            &[
+                "dD1:1:n1",
+                "  dD2:1:n2",
+                "  oh",
+                "  nd",
+                "  dD5:1:n5",
+                "  se",
+                "  dD6:1:n6",
+                "  dD7:1:n7",
+                "  cp",
+                "  dD8:1:n8",
+                "  cs",
+                "  dD9:1:n9",
+                "  co",
+                "  dD10:1:n10",
+                "  cn",
+                "  tk",
+                "  dD11:1:n11",
+                "  ao",
+                "  dD12:1:n12",
+                "  cz",
+                "end",
+            ],
+            "b33-untyped-option-tuple-elem-payload",
+        );
+    }
     /// B-2026-09-03-6 — A BY-VALUE `Result[Option[H], E]` PARAM DOUBLE-FREES ITS
     /// INNER PAYLOAD. `karac run` aborted with
     /// `free(): double free detected in tcache 2` on a SINGLE call; the AOT

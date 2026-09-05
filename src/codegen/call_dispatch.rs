@@ -5824,6 +5824,43 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .or_else(|| self.type_name_of(e))
             .or_else(|| self.scalar_type_name_of_expr(e))
+            // B-2026-09-04-33 — a `String` the TYPECHECKER already resolved but
+            // none of the namers above can see: an f-string (`(mkD(9),
+            // Option.Some(f"p{9}"))`), and any other `Type::Str` expression that
+            // is neither a local, a call, nor a scalar spelling. Every namer
+            // declined it, so the element mangled to the EMPTY path, the
+            // `Option` payload came back unnameable, `tuple_elem_optres_drop_ok`
+            // refused it, and the tuple `let` / tuple ARGUMENT fell to the
+            // enum-blind LLVM-type walker — which steps over the `Option`'s
+            // payload words and never frees the buffer. Measured 2 B on both the
+            // `let` and the argument path, at `-O0` and in any module large
+            // enough that `-O2` cannot prove the `malloc` dead; the one-function
+            // probe is clean ONLY because DCE deletes the allocation.
+            //
+            // Asked of `span_tables.string_typed_exprs` — the typechecker's own
+            // `Type::Str` spans — rather than pattern-matched on the literal
+            // kinds, for two reasons. It is the same source of truth
+            // `concrete_type_expr_of_expr` consults, so the two derivations agree
+            // by construction; and it is exactly as wide as the typechecker's
+            // verdict, no wider: an unsuffixed INTEGER literal stays an empty
+            // path, deliberately. `(0, Option.Some(mkD(8)))` is memory-CLEAN
+            // since the layout-keyed memo (B-2026-09-03-28), so enriching it
+            // would buy nothing and risk a width the typechecker inferred from
+            // context.
+            //
+            // LAST in the chain on purpose: it fires only where every namer
+            // above has already declined, so the only elements it changes are
+            // the ones that mangled empty before. A `String` this names reaches
+            // `option_payload_inline_recursive_drop_ok`, whose walker guards on
+            // `cap > 0` — a static `"p9"` (rodata, `cap = 0`) is a no-op there,
+            // which is why a plain literal was never a leak and is not a
+            // double free now.
+            .or_else(|| {
+                self.span_tables
+                    .string_typed_exprs
+                    .contains(&(e.span.offset, e.span.length))
+                    .then(|| "String".to_string())
+            })
             .unwrap_or_default();
         TypeExpr {
             kind: TypeKind::Path(crate::ast::PathExpr {
