@@ -33,7 +33,21 @@ members = [
 # the Rust reference impl ("comparator") for the ws-idle-holder workload,
 # benched via `examples/ws_idle_holder/bench/` for direct apples-to-apples
 # comparison vs. the Kāra demo at `examples/ws_idle_holder/src/main.kara`.
+#
+# `fuzz/` is the cargo-fuzz package (three libFuzzer front-end targets).
+# It was neither a member nor excluded, which is not a neutral omission:
+# cargo refuses to build a package that sits under a workspace root and
+# is named by neither list ("current package believes it's in a workspace
+# when it's not"), so all three `Front-end panic-freedom (fuzz_*)` jobs in
+# `.github/workflows/fuzz.yml` failed at manifest resolution — before any
+# fuzzing — from the day that workflow landed (2026-07-28). Excluded
+# rather than made a member because `libfuzzer-sys` wants a nightly
+# toolchain and `-Zsanitizer=address`; as a member it would join
+# `cargo build --all` / `cargo test --all` on stable and break those
+# instead. `cargo fuzz` builds it as its own workspace root, which is
+# what the exclusion restores.
 exclude = [
+    "fuzz",
     "examples/parallax/bench/rust",
     "examples/ws_idle_holder/bench",
     "examples/ws_idle_holder/rust",

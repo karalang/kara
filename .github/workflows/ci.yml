@@ -546,6 +546,14 @@ jobs:
         # the mechanism that hid it. Measured 577/577 green in 41–45 s warm on
         # a Linux container, in line with the ~55 s the -44 sweep added.
         #
+        # B-2026-09-04-5's guard (stdlib_span_table_isolation) is the fifth,
+        # appended 2026-09-05: the guard landed with its functional half
+        # `#[cfg(feature = "llvm")]` and no job running it, so
+        # `dark-llvm-tests.py` failed the lint job on arrival — exactly the
+        # "a fifth ever appears" case the paragraph above anticipates. One
+        # e2e compile; the file's other test is a static scan that the plain
+        # `cargo test --all` job already runs.
+        #
         # B-2026-08-08-27 closed the loop: instead of a third manual sweep,
         # `scripts/dark-llvm-tests.py` derives the dark set mechanically and
         # now runs in the `lint` job. Its first run found a THIRD pocket that
@@ -555,7 +563,7 @@ jobs:
         # found by a dark test being RED, which is luck that only pays out
         # after a regression has already landed. The four are appended below,
         # unfiltered, and the guard fails the build if a fifth ever appears.
-        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold
+        run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer --test lljit_prototype --test http_server --test par_codegen --test drop_differential --test repl --test repl_jit --test coro_e2e --test disjoint_differential --test tls_codegen --test lljit_e2e --test ws_framing --test http_client_codegen --test parallax --test test_main_synth --test parallax_lite --test karac_jit_runner_repl --test extern_keep_list --test shared_ownership_matrix --test tangle_corpus --test cli --test example_packages --test safety_design --test safety_design_loop --test scaffold --test stdlib_span_table_isolation
 
       # AArch64 `#[repr(C)]` struct-by-value ABI signature match (B-2026-07-09-2).
       # Forces the arm64 target-ABI classifier via KARAC_FORCE_TARGET_ARCH and
