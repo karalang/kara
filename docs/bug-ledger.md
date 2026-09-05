@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 368 |
+| miscompile | 369 |
 | run-vs-build | 341 |
 | leak | 264 |
 | missing-feature | 194 |
-| double-free | 181 |
+| double-free | 182 |
 | codegen-gap | 166 |
 | diagnostics | 123 |
 | false-positive | 106 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1466 |
-| interp | 356 |
+| codegen | 1468 |
+| interp | 357 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 73 |
@@ -154,13 +154,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-23 | 2026-09-04 | codegen | low | A DISCARDED FIELD AND AN UNUSED LEAF DROPPED AT THE SAME DESTRUCTURE RUN THEIR BODIES IN OPPOSITE ORDER ON THE TWO BACKENDS -- `let HoRes { a: _, b: b5 } = h5;` with `b5` never read runs `a`'s body then `b5`'s payload body under `--interp` and `b5`'s then `a`'s on jit/aot/AUTO_PAR=0; both at the statement, sequence only | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
 | B-2026-09-04-36 | 2026-09-04 | interp+codegen | low | A RECEIVER TEMP NESTED IN A LARGER EXPRESSION DRAINS AT THE STATEMENT'S `;` ON THE COMPILED BACKENDS AND AT THE CALL RETURN IN THE INTERPRETER -- `println(f"  {mk(1).peek()}")` prints `dR1/t1` BEFORE the value under `--interp` and AFTER it on jit/aot. Statement position agrees, which is why it hides: `let v = mk(1).peek()` is byte-identical on all four. This is B-2026-08-29-55's drain-point question one row over -- that row moved the three ARGUMENT registrars to a per-call window and deliberately left the fresh-temp RECEIVER (`__urecv_drop_tmp`) on the statement drain, on the grounds that a receiver has its own position-table row with a different end | — |
-| B-2026-09-05-6 | 2026-09-05 | interp+codegen | medium | A NAMED-LOCAL ARGUMENT WHOSE CALLEE DESTRUCTURES IT AND RETURNS THE LEAF RUNS THAT LEAF'S `Drop` BODY TWICE ON ALL FOUR SURFACES -- `let g = Cd { r: mk(13), z: 9 }; let out = cEsc(g);` where `fn cEsc(h: Cd) -> R { let Cd { r, z } = h; return r; }` prints `in dR13 got13 dR13` under `--interp`, `karac run`, `karac build` and `KARAC_AUTO_PAR=0` alike, against one `R` ever constructed; the TEMP-LITERAL spelling of the same call (`cEsc(Cd { r: mk(7), z: 9 })`) prints `in got7 dR7`, once, on all four | — |
 | B-2026-09-05-7 | 2026-09-05 | codegen | medium | A GENERIC-INSTANTIATION LEAF BOUND OUT OF A BY-VALUE PARAM DESTRUCTURE RUNS NO `Drop` BODY -- `fn gDes[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; .. }` with `inner: Gd[R] { r: R }` prints nothing on all three compiled backends against `--interp`'s `dR12`, while the UNDESTRUCTURED twin (`fn gNest[T](h: Gn2[T]) -> i64 { h.z }`) is correct after B-2026-09-05-5. So the source's field-bodies walk is (correctly) move-suppressed for `inner`, and the LEAF binding that now owns it registers no bodies of its own | — |
 | B-2026-09-05-11 | 2026-09-05 | interp+codegen | medium | A NESTED `let o = Option.Some(r)` OVER A BY-VALUE PARAM RUNS `r`'s `Drop` BODY TWICE ON THE TAKEN PATH -- on every compiled surface for BOTH the free and the method spelling, and under `--interp` for the METHOD spelling only. `fn fl(r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }` prints `drop 4 / held / drop 4` compiled against `held / drop 4` interpreted | — |
 | B-2026-09-05-13 | 2026-09-05 | interp+codegen | medium | A REBOUND BY-VALUE PARAM RETURNED WRAPPED IN AN `Option`/`Result` CTOR (`let m = r; return Option.Some(m)`) RUNS THE `Drop` BODY TWICE -- the passthrough family is name-keyed and blind to the `let m = r` alias, so the caller never stands down. AGREED on all four surfaces (no A/B gate sees it). B-2026-09-05-10 fixed the DIRECT spelling and split this one out because a one-predicate alias fix LOSES the non-escaping body: the callee flip drops the param by name while the value lives in the rebound local, so the alias must be followed through the flip in both backends | — |
 | B-2026-09-05-14 | 2026-09-05 | codegen | medium | A DISCARDED `Option`/`Result` TEMPORARY WHOSE PAYLOAD IS AN AGGREGATE CARRYING A `Drop` TYPE (`let _ = f();` where `f -> Option[(R, i64)]`) LOSES THE NESTED `Drop` BODY ON THE COMPILED BACKENDS -- the discard-drop walker descends one payload level but not into a tuple/struct nested inside the ctor; `--interp` runs it, so it is a run-vs-build divergence | — |
 | B-2026-09-05-15 | 2026-09-05 | codegen | medium | A NESTED GENERIC-INSTANTIATION FIELD WITH ITS OWN `impl[T] Drop` LOSES THAT FIELD'S BODY UNDER AN OWN-`Drop` PARENT -- `oOwn(Gouter[R] { inner: Go[R] { r: mk(1), z: 51 }, z: 52 })` prints `in dOut52 dR1` on all three compiled backends against `--interp`'s `in dOut52 dGo51 dR1`. The grandchild `dR1` still fires, so the walk reaches THROUGH the nested field and fails only to run the body AT it; the fully non-generic nesting is correct on all four surfaces. Sibling of B-2026-09-05-16, which is the LLJIT double free the same shape shows under a non-generic parent | — |
 | B-2026-09-05-16 | 2026-09-05 | codegen | high | A NESTED GENERIC-INSTANTIATION FIELD UNDER A NON-GENERIC OWN-`Drop` PARENT DOUBLE-FREES UNDER LLJIT ONLY -- `nOwn(Nouter { inner: Go[R] { r: mk(3), z: 55 }, z: 56 })` aborts with `free(): double free detected in tcache 2` under `karac run`, while the SAME program built AOT is valgrind-clean at 10 allocs / 10 frees and merely under-drops the nested body. The generic-parent spelling does not crash, so the crash needs a non-generic parent holding a generic-instantiation field. Sibling of B-2026-09-05-15 | — |
+| B-2026-09-05-17 | 2026-09-05 | interp+codegen | medium | A FORWARDING CALLEE DEFEATS THE ESCAPING-FIELD MASK, so a place struct argument whose field is handed back THROUGH ANOTHER CALL still runs that field's `Drop` body TWICE -- `fn fwd(g: Cd) -> R { return cEsc(g); }` over `fn cEsc(h: Cd) -> R { let Cd { r, z } = h; return r; }`, called as `let g = Cd { r: mk(61), z: 9 }; let out = fwd(g);`, prints `in dR61 got61 dR61` on `--interp`, `karac run`, `karac build` and `KARAC_AUTO_PAR=0` alike, against one `R` ever constructed; calling `cEsc(g)` DIRECTLY prints `in got61 dR61`, once, on all four | — |
+| B-2026-09-05-18 | 2026-09-05 | codegen | high | A GENERIC CALLEE'S TUPLE ELEMENT HANDED BACK TO A PLACE ARGUMENT DOUBLE-FREES UNDER `karac run` and runs two `Drop` bodies under `karac build`, against a correct interpreter -- `fn kEsc[T](p: (T, i64)) -> T { let (r, z) = p; return r; }` called as `let g = (mk(95), 9); let out = kEsc(g);` aborts with `free(): double free detected in tcache 2` (exit 134, no output) under the JIT, prints `in dR95 got95 dR95` under `karac build` and `KARAC_AUTO_PAR=0`, and prints the due `in got95 dR95` under `--interp`; the NON-generic spelling of the same call is correct on all four | — |
 
 ### Relocated
 
@@ -2241,6 +2242,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-3 | codegen | high | A GENERIC CALLEE THAT RETURNS A DESTRUCTURED FIELD DOUBLE-FREES WHEN THE ARGUMENT IS A TEMP LITERAL -- `gEsc(Gd[R] { r: mk(5), z: 9 })` where `fn gEs… | c5bb054 |
 | B-2026-09-05-4 | codegen | medium | A GENERIC STRUCT WITH ITS OWN `impl[T] Drop` RUNS NEITHER ITS BODY NOR ITS FIELD'S AS A TEMP-LITERAL ARGUMENT -- `gOwn(Go[R] { r: mk(3), z: 9 })` pri… | ad1b837 |
 | B-2026-09-05-5 | codegen | medium | A NESTED GENERIC STRUCT LOSES ITS INNER FIELD'S `Drop` BODY AS A TEMP-LITERAL ARGUMENT -- `gNest(Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 })` p… | 51368a1 |
+| B-2026-09-05-6 | interp+codegen | medium | A NAMED-LOCAL ARGUMENT WHOSE CALLEE DESTRUCTURES IT AND RETURNS THE LEAF RUNS THAT LEAF'S `Drop` BODY TWICE ON ALL FOUR SURFACES -- `let g = Cd { r:… | 0b1c415 |
 | B-2026-09-05-8 | codegen | high | A MOVING `if let` OVER A `Result` AGG DESTRUCTURE LEAF DOUBLE-FREES THE PAYLOAD -- `let (a, b) = t; if let Result.Ok(w) = b { let g: W = w }` aborts… | d8c709d |
 | B-2026-09-05-9 | codegen | medium | EVERY MOVING ARM OVER A HEAP-BOXED AGG DESTRUCTURE LEAF PAYLOAD LEAKS THE BOX ENVELOPE, on the `Option` and `Result` families alike -- `let (a, b) =… | 86a00b9 |
 | B-2026-09-05-10 | interp+codegen | medium | AN UNCONDITIONAL `return Option.Some(r)` (and the `Result.Ok(r)` spelling) OF A BY-VALUE PARAM RUNS THE `Drop` BODY TWICE -- the caller's fresh-temp… | 3000056 |
