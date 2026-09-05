@@ -94,9 +94,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 367 |
 | run-vs-build | 337 |
-| leak | 263 |
+| leak | 264 |
 | missing-feature | 194 |
-| double-free | 179 |
+| double-free | 180 |
 | codegen-gap | 166 |
 | diagnostics | 123 |
 | false-positive | 106 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1458 |
+| codegen | 1460 |
 | interp | 353 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -153,13 +153,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-6 | 2026-09-04 | other | low | design.md CONTRADICTS ITSELF ON `#[derive(Copy)]` WITHOUT `Clone`, and the half that is wrong is the one a reader looking up `Copy` will find -- § Derive says "`Copy` without `Clone` is never a compile error, because the compiler fills in the missing dependency" (line 2970, and this is what karac implements) while § Copy says "Writing `#[derive(Copy)]` without `Clone` is an error" (line 9146) | — |
 | B-2026-09-04-11 | 2026-09-04 | codegen | low | THE TWO `uam_*` SPAN SETS STILL LEAK FROM THE USER PROGRAM INTO THE BAKED-STDLIB BODY PASS -- `Span` carries no file identity, so `uam_consume_sites` (seeded from the USER program's ownership result and read during expression compilation) can mark a stdlib expression as a `UseAfterMove` consume site purely because their byte offsets coincide; B-2026-09-04-5 fixed the fourteen PROGRAM-DERIVED tables and its source-scan guard cannot see these two, because they are never on the install list it scans | — |
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
-| B-2026-09-04-22 | 2026-09-04 | codegen | medium | A HEAP-BOXED `Result` PAYLOAD BOUND OUT OF AN AGG DESTRUCTURE LEAF AND MOVED INTO A BY-VALUE CALL LOSES ITS `Drop` BODY -- `let (a, b) = t; match b { Result.Ok(w) => eatw(w), .. }` over `Result[W, String]` (seven-word `W`) prints `eat7` and never `dW7` on jit/aot/AUTO_PAR=0, where `--interp` runs the body after the call; the same arm over a plain `let` local, over `Option[W]`, or over the four-word inline `R`, is correct | — |
 | B-2026-09-04-23 | 2026-09-04 | codegen | low | A DISCARDED FIELD AND AN UNUSED LEAF DROPPED AT THE SAME DESTRUCTURE RUN THEIR BODIES IN OPPOSITE ORDER ON THE TWO BACKENDS -- `let HoRes { a: _, b: b5 } = h5;` with `b5` never read runs `a`'s body then `b5`'s payload body under `--interp` and `b5`'s then `a`'s on jit/aot/AUTO_PAR=0; both at the statement, sequence only | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
 | B-2026-09-04-36 | 2026-09-04 | interp+codegen | low | A RECEIVER TEMP NESTED IN A LARGER EXPRESSION DRAINS AT THE STATEMENT'S `;` ON THE COMPILED BACKENDS AND AT THE CALL RETURN IN THE INTERPRETER -- `println(f"  {mk(1).peek()}")` prints `dR1/t1` BEFORE the value under `--interp` and AFTER it on jit/aot. Statement position agrees, which is why it hides: `let v = mk(1).peek()` is byte-identical on all four. This is B-2026-08-29-55's drain-point question one row over -- that row moved the three ARGUMENT registrars to a per-call window and deliberately left the fresh-temp RECEIVER (`__urecv_drop_tmp`) on the statement drain, on the grounds that a receiver has its own position-table row with a different end | — |
 | B-2026-09-05-4 | 2026-09-05 | codegen | medium | A GENERIC STRUCT WITH ITS OWN `impl[T] Drop` RUNS NEITHER ITS BODY NOR ITS FIELD'S AS A TEMP-LITERAL ARGUMENT -- `gOwn(Go[R] { r: mk(3), z: 9 })` prints nothing on all three compiled backends against `--interp`'s `dGo9 dR3`. The sibling arm one branch over was fixed by B-2026-09-04-24; this is the `has_user_drop` branch, which reaches the name-keyed `emit_user_drop_wrapper_skipping` and finds no `Go.drop` symbol because a generic impl's methods are deferred to the mono pipeline | — |
 | B-2026-09-05-6 | 2026-09-05 | interp+codegen | medium | A NAMED-LOCAL ARGUMENT WHOSE CALLEE DESTRUCTURES IT AND RETURNS THE LEAF RUNS THAT LEAF'S `Drop` BODY TWICE ON ALL FOUR SURFACES -- `let g = Cd { r: mk(13), z: 9 }; let out = cEsc(g);` where `fn cEsc(h: Cd) -> R { let Cd { r, z } = h; return r; }` prints `in dR13 got13 dR13` under `--interp`, `karac run`, `karac build` and `KARAC_AUTO_PAR=0` alike, against one `R` ever constructed; the TEMP-LITERAL spelling of the same call (`cEsc(Cd { r: mk(7), z: 9 })`) prints `in got7 dR7`, once, on all four | — |
 | B-2026-09-05-7 | 2026-09-05 | codegen | medium | A GENERIC-INSTANTIATION LEAF BOUND OUT OF A BY-VALUE PARAM DESTRUCTURE RUNS NO `Drop` BODY -- `fn gDes[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; .. }` with `inner: Gd[R] { r: R }` prints nothing on all three compiled backends against `--interp`'s `dR12`, while the UNDESTRUCTURED twin (`fn gNest[T](h: Gn2[T]) -> i64 { h.z }`) is correct after B-2026-09-05-5. So the source's field-bodies walk is (correctly) move-suppressed for `inner`, and the LEAF binding that now owns it registers no bodies of its own | — |
+| B-2026-09-05-9 | 2026-09-05 | codegen | medium | EVERY MOVING ARM OVER A HEAP-BOXED AGG DESTRUCTURE LEAF PAYLOAD LEAKS THE BOX ENVELOPE, on the `Option` and `Result` families alike -- `let (a, b) = t; match b { Ok(w) => { let g: W = w; .. } }` (and `=> w`, and the `if let` spelling) prints correctly on every surface and loses 56 B at -O0 AND -O2, because the slot neutralization hides the box from the leaf's drop together with the moved contents | — |
 
 ### Relocated
 
@@ -2221,6 +2221,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-19 | codegen | high | B-2026-09-03-22's CONSUMING-ARM SUPPRESSOR ZEROES ONE WORD OF THE LEAF'S PAYLOAD, NOT THE PAYLOAD -- `suppress_inline_result_agg_payload_cleanup` GEP… | bfa5876 |
 | B-2026-09-04-20 | codegen | medium | A `Result` FIELD OF A FRESH DESTRUCTURE SOURCE HAS NO OWNER -- `let HoStr { a, b } = mkhs(9);` over `b: Result[String, String]` leaks the payload's b… | bfa5876 |
 | B-2026-09-04-21 | codegen | high | A STRUCT-FIELD DESTRUCTURE OVER A PROJECTION SOURCE (`let HoRes { a, b } = w.inner;`) IS WRONG THREE WAYS -- a `Result[R, String]` leaf CONSUMED by a… | 9a97efa |
+| B-2026-09-04-22 | codegen | medium | A HEAP-BOXED `Result` PAYLOAD BOUND OUT OF AN AGG DESTRUCTURE LEAF AND MOVED INTO A BY-VALUE CALL LOSES ITS `Drop` BODY -- `let (a, b) = t; match b {… | d8c709d |
 | B-2026-09-04-24 | codegen | medium | A GENERIC FUNCTION'S BY-VALUE STRUCT PARAM LOSES THE TUPLE ELEMENT'S `Drop` BODY WHEN THE ARGUMENT IS A TEMP LITERAL -- `gfn(G[R] { pe: (mk(81), 5),… | 18c0b63 |
 | B-2026-09-04-25 | codegen | high | A STRUCT DESTRUCTURED OUT OF A PROJECTION OF A BY-VALUE PARAM RUNS THE `Result` LEAF'S PAYLOAD BODY TWICE ON AOT AND DOUBLE-FREES ON JIT -- `fn takew… | e084cf9 |
 | B-2026-09-04-26 | codegen | medium | A `Result.Ok` CTOR ELEMENT OF A TUPLE TEMP ARGUMENT LOSES ITS PAYLOAD'S `Drop` BODY, and the B-2026-09-03-21 fix cannot simply be widened to it -- fi… | 3399f7c |
@@ -2236,6 +2237,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-2 | interp | medium | A `shared struct` REACHED THROUGH A `Vec` ELEMENT RAN NO `Drop` BODY UNDER `--interp` -- bare `Vec[S]`, `Vec[(S, i64)]` and `Vec[Holder { s: S }]` al… | f82a99b |
 | B-2026-09-05-3 | codegen | high | A GENERIC CALLEE THAT RETURNS A DESTRUCTURED FIELD DOUBLE-FREES WHEN THE ARGUMENT IS A TEMP LITERAL -- `gEsc(Gd[R] { r: mk(5), z: 9 })` where `fn gEs… | c5bb054 |
 | B-2026-09-05-5 | codegen | medium | A NESTED GENERIC STRUCT LOSES ITS INNER FIELD'S `Drop` BODY AS A TEMP-LITERAL ARGUMENT -- `gNest(Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 })` p… | 51368a1 |
+| B-2026-09-05-8 | codegen | high | A MOVING `if let` OVER A `Result` AGG DESTRUCTURE LEAF DOUBLE-FREES THE PAYLOAD -- `let (a, b) = t; if let Result.Ok(w) = b { let g: W = w }` aborts… | d8c709d |
 
 </details>
 
