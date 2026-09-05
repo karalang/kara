@@ -1480,6 +1480,29 @@ pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
 ///  * any GENERIC path — `Result[R, String]`, `Option[R]`, `Vec[R]`;
 ///  * `Self`, which names the receiver's own type and so always can;
 ///  * a tuple, array, pointer, `ref`/`mut ref`, or `Fn` return.
+pub fn owned_self_return_is_opaque_to_receiver(
+    f: &Function,
+    type_runs_user_drop: &mut dyn FnMut(&str) -> bool,
+) -> bool {
+    let Some(rt) = f.return_type.as_ref() else {
+        // Unit return: there is no value to carry anything back in.
+        return true;
+    };
+    let crate::ast::TypeKind::Path(p) = &rt.kind else {
+        return false;
+    };
+    if p.generic_args.is_some() {
+        return false;
+    }
+    match p.segments.last() {
+        // `Self` is the receiver's own type by definition, so it can always
+        // carry it — and it resolves to no entry in either backend's Drop
+        // table, which would read as "clean" if it reached the lookup.
+        Some(name) if name != "Self" => !type_runs_user_drop(name),
+        _ => false,
+    }
+}
+
 /// B-2026-09-04-30 — does `f`'s body BIND A PART OF `self` OUT: a `let` (or
 /// `let…else`) initialized from `self` or a `self`-rooted place, or a
 /// `match` / `if let` / `while let` whose scrutinee is one?
@@ -1574,29 +1597,6 @@ pub fn fn_binds_self_part_out(f: &Function) -> bool {
         }) || b.final_expr.as_deref().is_some_and(walk_expr)
     }
     walk_block(&f.body)
-}
-
-pub fn owned_self_return_is_opaque_to_receiver(
-    f: &Function,
-    type_runs_user_drop: &mut dyn FnMut(&str) -> bool,
-) -> bool {
-    let Some(rt) = f.return_type.as_ref() else {
-        // Unit return: there is no value to carry anything back in.
-        return true;
-    };
-    let crate::ast::TypeKind::Path(p) = &rt.kind else {
-        return false;
-    };
-    if p.generic_args.is_some() {
-        return false;
-    }
-    match p.segments.last() {
-        // `Self` is the receiver's own type by definition, so it can always
-        // carry it — and it resolves to no entry in either backend's Drop
-        // table, which would read as "clean" if it reached the lookup.
-        Some(name) if name != "Self" => !type_runs_user_drop(name),
-        _ => false,
-    }
 }
 
 /// B-2026-08-28-70 — does `f` hand parameter `arg_index` back to its caller on
