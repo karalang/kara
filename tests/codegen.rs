@@ -17130,6 +17130,52 @@ done
         );
     }
 
+    /// B-2026-09-04-22 — a heap-BOXED `Result` payload bound out of an agg
+    /// destructure leaf (tuple element or struct field) and handed to a
+    /// by-value call keeps its `Drop` body, which runs AFTER the call — the
+    /// interpreter's order, and the plain-local twin's (`six`).
+    ///
+    /// The borrow gate both agg suppressors sit behind consulted only the
+    /// `Option` membership set, so a `Result` leaf never read as borrow-only
+    /// and its suppressor zeroed the payload under `Ok(w) => eatw(w)`: no
+    /// body on any compiled surface and, for a boxed payload, a 56-byte
+    /// envelope leak at -O0 that -O2 hid (the row called it balanced).
+    /// `five` is the `Option` leaf that was always right; `four` the `Err`
+    /// side; `three` the `if let` spelling of the same borrow.
+    ///
+    /// `seven` is a different defect fixed at the same time: the `if let`
+    /// sites never called the `Result` suppressor at all, so a MOVING
+    /// `if let Ok(w) = b { let g = w }` left the leaf armed while `g` owned
+    /// the contents — `free(): double free detected in tcache 2`. It now
+    /// prints once; its envelope still leaks, which is the open row split out
+    /// for every moving arm over a boxed agg payload.
+    #[test]
+    fn e2e_result_agg_leaf_boxed_payload_by_value_call_keeps_body() {
+        let Some(out) = run_program(
+            "struct R { id: i64 }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct W { id: i64, x: String, y: String }\n\
+             impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}/{self.x}{self.y}\") } }\n\
+             struct HoW { a: R, b: Result[W, String] }\n\
+             fn eatw(w: W) { println(f\"eat{w.id}\") }\n\
+             fn mkw(k: i64) -> W { return W { id: k, x: f\"x{k}\", y: f\"y{k}\" } }\n\
+             fn main() {\n\
+                 { let t: (R, Result[W, String]) = (R { id: 1 }, Result.Ok(mkw(11))); let (a, b) = t; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println(\"err\") } println(\"one\") }\n\
+                 { let h: HoW = HoW { a: R { id: 2 }, b: Result.Ok(mkw(22)) }; let HoW { a, b } = h; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println(\"err\") } println(\"two\") }\n\
+                 { let t: (R, Result[W, String]) = (R { id: 3 }, Result.Ok(mkw(33))); let (a, b) = t; if let Result.Ok(w) = b { eatw(w) } println(\"three\") }\n\
+                 { let t: (R, Result[W, String]) = (R { id: 4 }, Result.Err(\"e4\")); let (a, b) = t; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println(f\"err{e}\") } println(\"four\") }\n\
+                 { let t: (R, Option[W]) = (R { id: 5 }, Option.Some(mkw(55))); let (a, b) = t; match b { Option.Some(w) => eatw(w), Option.None => println(\"none\") } println(\"five\") }\n\
+                 { let r: Result[W, String] = Result.Ok(mkw(66)); match r { Result.Ok(w) => eatw(w), Result.Err(e) => println(\"err\") } println(\"six\") }\n\
+                 { let t: (R, Result[W, String]) = (R { id: 7 }, Result.Ok(mkw(77))); let (a, b) = t; if let Result.Ok(w) = b { let g: W = w; println(f\"g{g.id}\") } println(\"seven\") }\n\
+                 println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR1\neat11\ndW11/x11y11\none\ndR2\neat22\ndW22/x22y22\ntwo\ndR3\neat33\ndW33/x33y33\nthree\ndR4\nerre4\nfour\ndR5\neat55\ndW55/x55y55\nfive\neat66\ndW66/x66y66\nsix\ndR7\ng77\ndW77/x77y77\nseven\nend\n");
+    }
+
     /// B-2026-09-03-12 — a tuple bound out of a PLACE (`let x = h.pe;`) records its
     /// element types, so the binding runs the element's `Drop` body and can be
     /// projected.

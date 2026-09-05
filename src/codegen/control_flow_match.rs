@@ -12370,17 +12370,48 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(name) = &scrutinee.kind else {
             return None;
         };
-        if !self
+        // B-2026-09-04-22 — the `Result` peer (`inline_result_agg_payload_vars`,
+        // B-2026-09-03-22) is admitted here too. This helper is the borrow
+        // gate BOTH agg suppressors sit behind (`if !arm_only_borrows_option_
+        // agg_payload(..)` guards the Option and the Result call alike), and
+        // it answered `None` for a Result leaf, so the gate read "not
+        // borrow-only" and the Result suppressor zeroed the leaf's payload
+        // under an arm that only borrows it — `Ok(w) => eatw(w)`, a by-value
+        // call the callee entry-copies. The leaf's own walkers stayed armed
+        // and found nothing: the payload's `Drop` body ran on no compiled
+        // surface, and for a boxed payload the envelope leaked (56 B at -O0,
+        // hidden at -O2). The `Option` twin was correct on the identical
+        // program because its leaf IS in the set this helper consulted.
+        let is_option = self
             .payload_vars
             .inline_option_agg_payload_vars
-            .contains(name.as_str())
-        {
+            .contains(name.as_str());
+        let is_result = self
+            .payload_vars
+            .inline_result_agg_payload_vars
+            .contains(name.as_str());
+        if !is_option && !is_result {
             return None;
         }
         let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
             return None;
         };
-        if path.last().map(|s| s.as_str()) != Some("Some") {
+        let head = path.last().map(|s| s.as_str());
+        if (is_option && head != Some("Some"))
+            || (is_result && !matches!(head, Some("Ok") | Some("Err")))
+        {
+            return None;
+        }
+        // A `Result` binding that REGISTERS ITS OWN DROP — an INLINE payload,
+        // bit-copied into the binding — is not eligible: its leaf must be
+        // neutralized whether the arm borrows or moves, or the leaf and the
+        // binding both free one buffer (B-2026-09-04-19's fixture, `Ok(r) =>
+        // eat(r)` over a four-word `R`: ASAN double-free of the payload's
+        // String the moment this gate admitted `Result` without this line).
+        // A heap-BOXED payload's binding is a VIEW with no drop of its own —
+        // the -22 shape — and stays eligible. Same predicate the plain-local
+        // `Result` loop consults for the same distinction.
+        if is_result && self.inline_result_payload_binding_registers_own_drop(pattern) {
             return None;
         }
         if !patterns.iter().any(pattern_consumes_field) {

@@ -416,6 +416,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // source must free it, else it leaks.
         if !self.block_only_borrows_option_agg_payload(value, pattern, then_block) {
             self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+            // B-2026-09-04-22 — the `Result` peer, which the `match` loop has
+            // called beside the Option one since B-2026-09-03-22 and these
+            // `if let` sites never did: a moving `if let Ok(w) = b { let g = w }`
+            // over a Result agg leaf left the leaf armed while `g` owned the
+            // contents — `free(): double free detected in tcache 2` on every
+            // compiled surface.
+            self.suppress_inline_result_agg_payload_cleanup(value, pattern);
         }
         // B-2026-08-29-2 — the `if let` twin of the match site's leaf-drop
         // retraction: an arm that binds the leaf out already owns it, so the
@@ -1135,6 +1142,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // must free it, else it leaks.
         if !self.block_only_borrows_option_agg_payload(value, pattern, body) {
             self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+            // B-2026-09-04-22 — the `Result` peer, which the `match` loop has
+            // called beside the Option one since B-2026-09-03-22 and these
+            // `if let` sites never did: a moving `if let Ok(w) = b { let g = w }`
+            // over a Result agg leaf left the leaf armed while `g` owned the
+            // contents — `free(): double free detected in tcache 2` on every
+            // compiled surface.
+            self.suppress_inline_result_agg_payload_cleanup(value, pattern);
         }
         // Slice 3t: boxed-payload struct-destructure field suppression — zero
         // the consumed fields inside the box so the binding owns them and the
@@ -1778,6 +1792,13 @@ impl<'ctx> super::Codegen<'ctx> {
         self.consume_freshtemp_field_scrutinee(value, pattern, optres_bindings_owned);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
         self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+        // B-2026-09-04-22 — the `Result` peer, which the `match` loop has
+        // called beside the Option one since B-2026-09-03-22 and these
+        // `if let` sites never did: a moving `if let Ok(w) = b { let g = w }`
+        // over a Result agg leaf left the leaf armed while `g` owned the
+        // contents — `free(): double free detected in tcache 2` on every
+        // compiled surface.
+        self.suppress_inline_result_agg_payload_cleanup(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression — zero
         // the consumed fields inside the box so the binding owns them and the
         // box's inner walk frees only what the pattern left unbound.

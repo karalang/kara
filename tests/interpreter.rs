@@ -58716,6 +58716,34 @@ fn main() {
     );
 }
 
+/// B-2026-09-04-22 — interpreter twin of `tests/codegen.rs`'s
+/// `e2e_result_agg_leaf_boxed_payload_by_value_call_keeps_body`, same program
+/// and string. The interpreter was the correct reference throughout.
+#[test]
+fn test_result_agg_leaf_boxed_payload_by_value_call_keeps_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+struct HoW { a: R, b: Result[W, String] }
+fn eatw(w: W) { println(f"eat{w.id}") }
+fn mkw(k: i64) -> W { return W { id: k, x: f"x{k}", y: f"y{k}" } }
+fn main() {
+    { let t: (R, Result[W, String]) = (R { id: 1 }, Result.Ok(mkw(11))); let (a, b) = t; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println("err") } println("one") }
+    { let h: HoW = HoW { a: R { id: 2 }, b: Result.Ok(mkw(22)) }; let HoW { a, b } = h; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println("err") } println("two") }
+    { let t: (R, Result[W, String]) = (R { id: 3 }, Result.Ok(mkw(33))); let (a, b) = t; if let Result.Ok(w) = b { eatw(w) } println("three") }
+    { let t: (R, Result[W, String]) = (R { id: 4 }, Result.Err("e4")); let (a, b) = t; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println(f"err{e}") } println("four") }
+    { let t: (R, Option[W]) = (R { id: 5 }, Option.Some(mkw(55))); let (a, b) = t; match b { Option.Some(w) => eatw(w), Option.None => println("none") } println("five") }
+    { let r: Result[W, String] = Result.Ok(mkw(66)); match r { Result.Ok(w) => eatw(w), Result.Err(e) => println("err") } println("six") }
+    { let t: (R, Result[W, String]) = (R { id: 7 }, Result.Ok(mkw(77))); let (a, b) = t; if let Result.Ok(w) = b { let g: W = w; println(f"g{g.id}") } println("seven") }
+    println("end")
+}
+"#),
+        "dR1\neat11\ndW11/x11y11\none\ndR2\neat22\ndW22/x22y22\ntwo\ndR3\neat33\ndW33/x33y33\nthree\ndR4\nerre4\nfour\ndR5\neat55\ndW55/x55y55\nfive\neat66\ndW66/x66y66\nsix\ndR7\ng77\ndW77/x77y77\nseven\nend\n"
+    );
+}
+
 /// B-2026-09-03-25 — A WILDCARD TUPLE LEAF OVER AN `Option`/`Result`
 /// ELEMENT OWNS ITS PAYLOAD'S `Drop` BODY.
 ///

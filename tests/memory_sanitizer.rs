@@ -72416,4 +72416,79 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-09-04-22 — the memory half of
+    /// `e2e_result_agg_leaf_boxed_payload_by_value_call_keeps_body`, for the
+    /// borrow-only arms: with the leaf left armed, its drop frees the boxed
+    /// payload's contents AND envelope after the call. The row measured the
+    /// pre-fix cell as balanced at -O2; at -O0 it lost 56 B (15 allocs / 12
+    /// frees), and LSan here runs the default level, so this pins the real
+    /// state. The MOVING arms are deliberately absent: they still leak the
+    /// envelope on both agg families and are the split-out row's subject.
+    #[test]
+    fn asan_result_agg_leaf_boxed_payload_by_value_call_clean() {
+        let label = "result_agg_leaf_boxed_payload_by_value_call";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct W { id: i64, x: String, y: String }
+impl Drop for W { fn drop(mut ref self) { println(f"dW{self.id}/{self.x}{self.y}") } }
+struct HoW { a: R, b: Result[W, String] }
+fn eatw(w: W) { println(f"eat{w.id}") }
+fn mkw(k: i64) -> W { return W { id: k, x: f"x{k}", y: f"y{k}" } }
+fn main() {
+    { let t: (R, Result[W, String]) = (R { id: 1 }, Result.Ok(mkw(11))); let (a, b) = t; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println("err") } println("one") }
+    { let h: HoW = HoW { a: R { id: 2 }, b: Result.Ok(mkw(22)) }; let HoW { a, b } = h; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println("err") } println("two") }
+    { let t: (R, Result[W, String]) = (R { id: 3 }, Result.Ok(mkw(33))); let (a, b) = t; if let Result.Ok(w) = b { eatw(w) } println("three") }
+    { let t: (R, Result[W, String]) = (R { id: 4 }, Result.Err("e4")); let (a, b) = t; match b { Result.Ok(w) => eatw(w), Result.Err(e) => println(f"err{e}") } println("four") }
+    { let t: (R, Option[W]) = (R { id: 5 }, Option.Some(mkw(55))); let (a, b) = t; match b { Option.Some(w) => eatw(w), Option.None => println("none") } println("five") }
+    { let r: Result[W, String] = Result.Ok(mkw(66)); match r { Result.Ok(w) => eatw(w), Result.Err(e) => println("err") } println("six") }
+    println("end")
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported an error (exit {:?}); stdout:\n{stdout}",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "dR1",
+                "eat11",
+                "dW11/x11y11",
+                "one",
+                "dR2",
+                "eat22",
+                "dW22/x22y22",
+                "two",
+                "dR3",
+                "eat33",
+                "dW33/x33y33",
+                "three",
+                "dR4",
+                "erre4",
+                "four",
+                "dR5",
+                "eat55",
+                "dW55/x55y55",
+                "five",
+                "eat66",
+                "dW66/x66y66",
+                "six",
+                "end"
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }
