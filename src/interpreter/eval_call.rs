@@ -2402,7 +2402,7 @@ impl<'a> super::Interpreter<'a> {
                 // guard (`fn_returns_param`) — an arg the callee can RETURN
                 // flows out to the result's consumer and must not also drop
                 // here.
-                self.run_fresh_temp_arg_drops(&fn_name, args, &arg_vals);
+                self.run_fresh_temp_arg_drops(&fn_name, None, args, &arg_vals);
                 // B-2026-08-02-23 leg 2 — the IDENTIFIER-arg sibling of the
                 // guard above: `run_fresh_temp_arg_drops` skips named bindings
                 // on the "their own NLL drop covers it" rule, which duplicates
@@ -2671,6 +2671,17 @@ impl<'a> super::Interpreter<'a> {
             ) {
                 continue;
             }
+            // B-2026-09-03-7 — the caller's fresh-temp arg walk fires this one
+            // after the call returns, so registering it here as well ran the
+            // body TWICE (measured: `dR2` and `dR3` doubled the moment the
+            // caller-side hook landed). The set this frame owns is now exactly
+            // "owned params nobody else fires", which is what its own doc
+            // claimed before a caller-side fire existed on this path.
+            if args.get(i).is_some_and(|a| {
+                self.caller_fires_fresh_temp_arg(method, Some(type_name), i, &a.value)
+            }) {
+                continue;
+            }
             // B-2026-08-30-28 — `fn_always_...` rather than `fn_moves_...`,
             // exactly the split the `fn_always_returns_param` comment below
             // draws and for the same reason: the MAY-predicate answers true for
@@ -2798,10 +2809,19 @@ impl<'a> super::Interpreter<'a> {
             ) {
                 return true;
             }
-            matches!(
+            // B-2026-09-03-7 — a FRESH TEMP now reaches a caller-side fire too
+            // (`run_fresh_temp_arg_drops` runs on this path), so it joins the
+            // identifier case rather than forcing the frame to claim the
+            // argument. Before this the shape answered false here, the whole
+            // frame bailed, and the leaf owned the body — which placed it at
+            // the leaf's NLL death against every compiled backend's
+            // after-the-call.
+            (matches!(
                 args.get(i).map(|a| &a.value.kind),
                 Some(ExprKind::Identifier(_))
-            ) && !crate::ast::fn_always_returns_param(f, i)
+            ) || args.get(i).is_some_and(|a| {
+                self.caller_fires_fresh_temp_arg(method, Some(type_name), i, &a.value)
+            })) && !crate::ast::fn_always_returns_param(f, i)
                 && !crate::ast::fn_conditionally_returns_param_bare(f, i)
         })
     }
@@ -3077,8 +3097,21 @@ impl<'a> super::Interpreter<'a> {
     fn callee_returned_param_parts(
         &self,
         callee_name: &str,
+        method_owner: Option<&str>,
         arg_index: usize,
     ) -> Vec<crate::ast::ParamPath> {
+        // B-2026-09-03-7 — an INSTANCE method resolves by (type, name), not by
+        // the bare-name scan below: that scan reads `Item::Function` only, so
+        // for a method it answered "nothing escapes" for every argument. The
+        // caller-side arg walk now runs on the method path too, and an
+        // unconditional "nothing escapes" there would fire a body the callee
+        // hands back.
+        if let Some(ty) = method_owner {
+            return self
+                .impl_method_ast(ty, callee_name)
+                .map(|f| crate::ast::fn_returns_param_part_paths(f, arg_index))
+                .unwrap_or_default();
+        }
         self.program
             .items
             .iter()
@@ -3094,8 +3127,13 @@ impl<'a> super::Interpreter<'a> {
     /// The FIELD paths of parameter `i` that `callee_name` hands back to its
     /// caller (B-2026-08-28-17 / -21 / -23). A path whose head is a tuple index
     /// is the tuple arm's business, not this one's.
-    fn escaping_field_paths(&self, callee_name: &str, i: usize) -> Vec<Vec<String>> {
-        self.callee_returned_param_parts(callee_name, i)
+    fn escaping_field_paths(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        i: usize,
+    ) -> Vec<Vec<String>> {
+        self.callee_returned_param_parts(callee_name, method_owner, i)
             .into_iter()
             .filter_map(|path| {
                 path.into_iter()
@@ -3223,6 +3261,22 @@ impl<'a> super::Interpreter<'a> {
         self.callee_fn_by_bare_name(name, /* assoc_only = */ false)
     }
 
+    /// B-2026-09-03-7 — the same guard resolution for a call whose callee is
+    /// already known EXACTLY, as it is on the method path: `(type, method)`
+    /// names one AST, so the bare-name scan's fail-closed ambiguity handling
+    /// (two types defining `apick`) cannot mis-answer here. Falls back to the
+    /// bare-name resolution for a free call.
+    fn callee_fn_for_ownership_guard_of(
+        &self,
+        name: &str,
+        method_owner: Option<&str>,
+    ) -> Option<&crate::ast::Function> {
+        match method_owner {
+            Some(ty) => self.impl_method_ast(ty, name),
+            None => self.callee_fn_for_ownership_guard(name),
+        }
+    }
+
     /// The one bare-name callee resolution both of the above share: a free
     /// function first — a bare `apick(...)` call would resolve that way too —
     /// then a single unambiguous INHERENT impl method. `assoc_only` drops the
@@ -3262,9 +3316,17 @@ impl<'a> super::Interpreter<'a> {
         found
     }
 
-    fn run_fresh_temp_arg_drops(
+    /// `method_owner` is `Some(type)` when the call being walked is an INSTANCE
+    /// METHOD call (B-2026-09-03-7). It selects exact `(type, method)` callee
+    /// resolution for the guards below, and nothing else: the walk itself is
+    /// identical for a method and a free function, which is the point — before
+    /// this the method path had no caller-side arg fire at all, so a method's
+    /// fresh-temp argument ran its body at the callee's NLL death while every
+    /// compiled backend ran it after the call returned.
+    pub(crate) fn run_fresh_temp_arg_drops(
         &mut self,
         callee_name: &str,
+        method_owner: Option<&str>,
         args: &[CallArg],
         arg_vals: &[Value],
     ) {
@@ -3292,45 +3354,15 @@ impl<'a> super::Interpreter<'a> {
         // `take(a, R { id: 2 })` is sequenced by the two owners' relative
         // program order and was already correct.
         for (i, arg) in args.iter().enumerate().rev() {
-            // B-2026-07-01-7 passthrough guard — mirrored with codegen's
-            // `call_arg_flows_into_return`: when the callee can return
-            // this parameter, the temp flows out and the RESULT's consumer
-            // owns the drop; firing here too double-ran the body
-            // (`let x = pass(Guard { id: 7 })` printed twice, probe f6).
-            // B-2026-08-30-22 — resolved through `callee_fn_for_ownership_guard`
-            // rather than an inline `Item::Function` scan, so an ASSOCIATED
-            // callee is seen too. `H.id(a: R) -> R` is a passthrough exactly as
-            // its free-function twin is, and missing it here is what ran the
-            // body twice.
-            if self
-                .callee_fn_for_ownership_guard(callee_name)
-                .is_some_and(|f| {
-                    crate::ast::fn_returns_param(f, i)
-                        // B-2026-08-28-62 — the FORWARDING route, the twin of
-                        // codegen's `call_arg_flows_into_return`: the callee
-                        // hands the argument to another call whose result it
-                        // returns, so the value is still travelling out when
-                        // this walk would fire its body.
-                        || crate::ast::fn_returns_param_via_call(self.program, f, i)
-                })
-            {
-                continue;
-            }
-            // B-2026-08-26-9 escape guard — the twin of codegen's
-            // `call_arg_moves_into_outliving_place`, kept here for the same
-            // reason the passthrough guard above is mirrored: when the callee
-            // STORES this argument into `self` or into one of its own
-            // `ref`/`mut ref` params, the value is still alive in the caller
-            // when the call returns and its new home owns the drop. Firing
-            // here too ran the body twice — `fn add(v: mut ref Vec[Item], x:
-            // Item) { v.push(x); }` printed `drop 7` at the call AND again at
-            // the container's drain, on this backend and on AOT alike (both
-            // wrong, so unlike the `PriorityQueue` method shape it produced no
-            // run-vs-build divergence to notice).
-            if self
-                .callee_fn_for_ownership_guard(callee_name)
-                .is_some_and(|f| crate::ast::fn_moves_param_into_outliving_place(f, i))
-            {
+            // B-2026-07-01-7 passthrough guard + B-2026-08-26-9 escape guard,
+            // both now asked through `callee_owns_arg_beyond_call` so the two
+            // method-frame consumers get the SAME answer this walk acts on
+            // (B-2026-09-03-7). When the callee returns the parameter, returns
+            // it via a forwarded call (B-2026-08-28-62), or stores it into
+            // `self` or a `ref` param, the value is still travelling when this
+            // walk would fire — the RESULT's consumer or the new home owns it.
+            // B-2026-08-30-22's associated-callee resolution is inside.
+            if self.callee_owns_arg_beyond_call(callee_name, method_owner, i) {
                 continue;
             }
             // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose
@@ -3352,7 +3384,7 @@ impl<'a> super::Interpreter<'a> {
             // skip cannot express (B-2026-08-28-23).
             if let ExprKind::Identifier(src) = &arg.value.kind {
                 if matches!(arg_vals.get(i), Some(Value::Tuple(_))) {
-                    for path in self.callee_returned_param_parts(callee_name, i) {
+                    for path in self.callee_returned_param_parts(callee_name, method_owner, i) {
                         if let [crate::ast::ParamPart::TupleIndex(idx)] = path.as_slice() {
                             self.moved_out_tuple_elem_bodies.insert((src.clone(), *idx));
                         }
@@ -3389,7 +3421,8 @@ impl<'a> super::Interpreter<'a> {
                         // Unrolling the tuple here is otherwise identical to the
                         // `Value::Tuple` arm of `run_discarded_value_user_drops`,
                         // which is exactly this loop without the filter.
-                        let escaping = self.callee_returned_param_parts(callee_name, i);
+                        let escaping =
+                            self.callee_returned_param_parts(callee_name, method_owner, i);
                         for (idx, item) in items.iter().enumerate() {
                             // TOP-LEVEL elements only: a deeper path names
                             // something inside an element, which this walk's
@@ -3437,7 +3470,7 @@ impl<'a> super::Interpreter<'a> {
                 // read the field it is about to hand back, so it sees the whole
                 // value. Split into the two halves the helper is already made of
                 // rather than masking its input.
-                let escaping = self.escaping_field_paths(callee_name, i);
+                let escaping = self.escaping_field_paths(callee_name, method_owner, i);
                 self.run_user_drop_body_only(&tn, v.clone());
                 self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
@@ -3474,7 +3507,7 @@ impl<'a> super::Interpreter<'a> {
                 // other callers are untouched. Codegen twin: the struct arm of
                 // `track_inline_owned_aggregate_arg_inst` re-emits the walker
                 // with the same field indices masked.
-                let escaping = self.escaping_field_paths(callee_name, i);
+                let escaping = self.escaping_field_paths(callee_name, method_owner, i);
                 self.drop_user_drop_fields_of_value(&Self::mask_struct_fields(v, &escaping));
             }
         }
@@ -3553,6 +3586,96 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Identifier(v) => self.fresh_bare_unit_variant_enum(v),
             _ => None,
         }
+    }
+
+    /// B-2026-09-03-7 — will the CALLER's fresh-temp arg walk fire this
+    /// argument's body?
+    ///
+    /// The single predicate behind three consumers that must agree exactly or
+    /// a body is lost or doubled: this walk (which fires), the method frame's
+    /// `method_param_drop_names` (which must not register what the caller
+    /// fires), and `method_frame_caller_retains_args` (whose bail exists
+    /// precisely for arguments nobody else fires). Keeping one predicate for
+    /// all three is what stops them drifting apart, the same reason
+    /// B-2026-08-30-55 gives for sharing its own gate across two spellings.
+    ///
+    /// SHAPE only. The walk additionally declines on value-level tests
+    /// (`drop_method_keys`, `value_runs_user_drop`), and those are deliberately
+    /// NOT mirrored here: they suppress a body that does not exist, so a
+    /// disagreement about them can neither lose nor double one. The
+    /// return/escape guards are mirrored, because those decline a body that
+    /// very much does exist — its owner is just somewhere else.
+    fn caller_fires_fresh_temp_arg(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        i: usize,
+        e: &Expr,
+    ) -> bool {
+        // Mirrors the walk's own gate EXACTLY, wrapper tails included
+        // (B-2026-08-30-38): an `if`/`match`/block argument resolves through
+        // its tails, and recognising only the producer shapes here left the
+        // callee registering an argument the walk went on to fire — `dR21`
+        // twice in `mixed-wrapper-arg-method-call`.
+        (matches!(&e.kind, ExprKind::Tuple(_))
+            || self.fresh_temp_arg_type_name(e).is_some()
+            || self.wrapper_tail_arg_type_name(e).is_some())
+            && !self.callee_owns_arg_beyond_call(callee_name, method_owner, i)
+    }
+
+    /// The two ownership guards the caller's fresh-temp walk applies, as ONE
+    /// question: does this argument outlive the call because the CALLEE hands
+    /// it back or stores it somewhere that outlives the frame?
+    ///
+    /// Extracted (B-2026-09-03-7) so the walk and the two method-frame
+    /// consumers cannot drift: gating those on argument SHAPE alone skipped a
+    /// registration for a CONDITIONALLY-RETURNED param that the walk then
+    /// declined to fire, and the body was lost outright —
+    /// `test_method_owned_param_user_drop_body_runs_once`'s `cond-return-dies`
+    /// cell went from `drop 41 / 99 / drop 99` to `99 / drop 99`. Shape says
+    /// "the caller COULD fire this"; this says "and nothing else claims it".
+    fn callee_owns_arg_beyond_call(
+        &self,
+        callee_name: &str,
+        method_owner: Option<&str>,
+        i: usize,
+    ) -> bool {
+        // B-2026-09-03-7 — on the METHOD path, also ask the question by RETURN
+        // TYPE, exactly as B-2026-09-04-30's receiver gate does and through the
+        // same shared predicate. The structural walks below recognise a bare
+        // identifier and an aggregate LITERAL, but not a CONSTRUCTOR wrap
+        // (`return Option.Some(r)` — B-2026-08-31-46's open shape), and five
+        // method cells double-fired on exactly that: once from this new walk,
+        // once from the RESULT binding that received the value. A return type
+        // that cannot carry the argument out (unit, or a named non-`Drop`
+        // type) is the licence this walk needs; anything that could carry it
+        // — a generic path, `Self`, a tuple — stands the walk down.
+        //
+        // METHOD path only. The free path reaches its escapes through the
+        // per-element `escaping` filters below, and widening it to a
+        // type-level test would move cells this row never measured.
+        if method_owner.is_some()
+            && self
+                .callee_fn_for_ownership_guard_of(callee_name, method_owner)
+                .is_some_and(|f| {
+                    let probe = &mut |n: &str| self.type_name_runs_user_drop(n, &mut Vec::new());
+                    !crate::ast::owned_self_return_is_opaque_to_receiver(f, probe)
+                        // The one shape the compiled backends keep INSIDE the
+                        // callee: the parameter handed to a local aggregate,
+                        // which owns it from there. Firing caller-side as well
+                        // ran `dR4` twice against compiled's once.
+                        || crate::ast::fn_moves_param_into_local_aggregate(f, i)
+                })
+        {
+            return true;
+        }
+        self.callee_fn_for_ownership_guard_of(callee_name, method_owner)
+            .is_some_and(|f| {
+                crate::ast::fn_returns_param(f, i)
+                    || crate::ast::fn_returns_param_via_call(self.program, f, i)
+                    || crate::ast::fn_returns_param_payload(f, i)
+                    || crate::ast::fn_moves_param_into_outliving_place(f, i)
+            })
     }
 
     /// B-2026-08-30-38 — [`Self::fresh_temp_arg_type_name`] reached through a

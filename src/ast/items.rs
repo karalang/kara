@@ -3204,6 +3204,84 @@ mod outliving_store {
     }
 }
 
+/// B-2026-09-03-7 — does `f` move parameter `arg_index` into a LOCAL aggregate?
+///
+/// `fn take(r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }` hands
+/// the parameter to a local struct, which owns it from there; a field moved
+/// back out lands in another local and dies in this frame. That is the ONE
+/// shape where the compiled backends keep the body inside the callee rather
+/// than firing it after the call returns — measured across a six-cell method
+/// matrix, where the other five (bare death, a rebind, a move into another
+/// call, and both destructure spellings) all fire caller-side:
+///
+/// ```text
+/// fn m1(ref self, r: R)        { .. }                     compiled: end / dR
+/// fn m2(ref self, r: R)        { let m = r; .. }          compiled: end / dR
+/// fn m3(ref self, r: R)        { let m = r; read(m); .. } compiled: end / dR
+/// fn m4(ref self, r: R) -> i64 { let s = S1 { r: r };
+///                                let x = s.r; return 7; } compiled: dR / v=7
+/// ```
+///
+/// Distinct from [`fn_moves_param_into_outliving_place`], which asks about a
+/// place that OUTLIVES the frame (`self`, a `ref` param). This one is about a
+/// place that does not: the value still dies here, just under a local's
+/// ownership rather than the argument temp's.
+pub fn fn_moves_param_into_local_aggregate(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(name) = &param.pattern.kind else {
+        return false;
+    };
+    /// Is the param handed to this aggregate literal, at any nesting depth?
+    fn aggregate_takes(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|f| is_named(&f.value, name) || aggregate_takes(&f.value, name)),
+            ExprKind::Tuple(elems) => elems
+                .iter()
+                .any(|el| is_named(el, name) || aggregate_takes(el, name)),
+            _ => false,
+        }
+    }
+    fn is_named(e: &Expr, name: &str) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+    }
+    fn walk_block(b: &Block, name: &str) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                aggregate_takes(value, name)
+            }
+            StmtKind::Expr(e) => walk_expr(e, name),
+            _ => false,
+        }) || b.final_expr.as_deref().is_some_and(|e| walk_expr(e, name))
+    }
+    fn walk_expr(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
+                walk_block(b, name)
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk_block(then_block, name)
+                    || else_branch.as_deref().is_some_and(|e| walk_expr(e, name))
+            }
+            ExprKind::Match { arms, .. } => arms.iter().any(|a| walk_expr(&a.body, name)),
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body, name),
+            _ => false,
+        }
+    }
+    walk_block(&f.body, name)
+}
+
 pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
     let Some(param) = f.params.get(arg_index) else {
         return false;

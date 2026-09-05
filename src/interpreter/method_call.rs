@@ -869,6 +869,24 @@ impl<'a> super::Interpreter<'a> {
                 // (statement end). Owned-`self` consumed the value and
                 // borrow-returning methods alias it — both stay silent.
                 self.run_fresh_recv_temp_drop(object, method, &type_name, obj);
+                // B-2026-09-03-7 — and the ARG sibling of that receiver hook,
+                // which this path was missing entirely. Without it a method's
+                // fresh-temp argument reached no caller-side fire at all, so
+                // the callee frame had to claim it
+                // (`method_frame_caller_retains_args`' bail) and the body ran
+                // at the leaf's NLL death — before the callee's remaining
+                // statements — while every compiled backend ran it after the
+                // call returned. design.md's temporary-lifetime table gives
+                // "Function/method call argument | After the call returns", and
+                // the interpreter's OWN free-function path already fired here,
+                // so the method path was the outlier against both.
+                //
+                // `arg_vals[0]` is the receiver on this path, so the value
+                // slice is offset to align with `args` — the same `recv_off`
+                // correction the writeback loop above makes.
+                let recv_off = arg_vals.len().saturating_sub(args.len());
+                let owner = type_name.clone();
+                self.run_fresh_temp_arg_drops(method, Some(&owner), args, &arg_vals[recv_off..]);
                 return Some(match result {
                     Ok(v) => v,
                     Err(ControlFlow::Return(v)) => v,

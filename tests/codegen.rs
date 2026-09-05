@@ -17119,6 +17119,67 @@ done
     /// Twin of `tests/interpreter.rs`'s
     /// `test_struct_pattern_destructure_of_owned_param_is_a_view`, pinned to the
     /// same string.
+    /// B-2026-09-03-7 — WHERE a method's fresh-temp argument runs its `Drop` body.
+    ///
+    /// The row's fixture note says its own cells "deliberately carry NO method
+    /// cell, since they are pinned to one string across all four surfaces and this
+    /// shape cannot be". It can now, which is the whole content of the fix: the
+    /// interpreter fired a method's fresh-temp argument at the leaf's NLL DEATH
+    /// while every compiled backend fired it after the call returned. Six cells,
+    /// one string, all four surfaces.
+    ///
+    /// `m1`-`m3`, `m5`, `m6` place the body AFTER the callee's `end` — design.md's
+    /// temporary-lifetime table, "Function/method call argument | After the call
+    /// returns". `m4` is the one shape that keeps it inside: the parameter is
+    /// handed to a LOCAL aggregate, which owns it from there
+    /// (`fn_moves_param_into_local_aggregate`). The count is one everywhere, and it
+    /// is PLACEMENT that this pin exists to hold — a body count cannot see this
+    /// bug at all, which is how it survived B-2026-09-02-25/-40/-38.
+    ///
+    /// `m3`/`m5` (a move into another call) and `m6` (a destructure leaf that just
+    /// dies) are the cells that separate this from the neighbouring rows: all
+    /// three fire caller-side, so a fix that made the callee own its parameter
+    /// outright would move them and is not what this row asked for.
+    #[test]
+    fn e2e_method_fresh_temp_arg_drop_body_placement() {
+        assert_eq!(
+            run_program(
+                r#"struct R { id: i64 }
+impl Drop for R { fn drop(mut ref self) { println(f"  dR{self.id}") } }
+struct S1 { r: R }
+struct H  { n: i64 }
+fn mk(n: i64) -> R { return R { id: n }; }
+fn read(x: R) -> i64 { return x.id; }
+
+impl H {
+    fn m1(ref self, r: R)        { println("  end") }
+    fn m2(ref self, r: R)        { let m = r; println("  end") }
+    fn m3(ref self, r: R)        { let m = r; read(m); println("  end") }
+    fn m4(ref self, r: R) -> i64 { let s = S1 { r: r }; let x = s.r; return 7; }
+    fn m5(ref self, t: (R, i64)) { let (a, b) = t; let m = a; read(m); println("  end") }
+    fn m6(ref self, t: (R, i64)) { let (a, b) = t; println("  end") }
+}
+
+fn main() {
+    let h = H { n: 0 };
+    println("m1 bare-die");       h.m1(mk(1))
+    println("m2 rebind-die");     h.m2(mk(2))
+    println("m3 into-call");      h.m3(mk(3))
+    println("m4 wrap-moveout");   let v = h.m4(mk(4)); println(f"  v={v}")
+    println("m5 destr-intocall"); h.m5((mk(5), 9))
+    println("m6 destr-die");      h.m6((mk(6), 9))
+    println("done")
+}
+"#
+            ),
+            Some(
+                "m1 bare-die\n  end\n  dR1\nm2 rebind-die\n  end\n  dR2\nm3 into-call\n  end\n  dR3\nm4 wrap-moveout\n  dR4\n  v=7\nm5 destr-intocall\n  end\n  dR5\nm6 destr-die\n  end\n  dR6\ndone\n"
+                    .to_string()
+            ),
+            "a method's fresh-temp arg body belongs after the call returns"
+        );
+    }
+
     #[test]
     fn e2e_struct_pattern_destructure_of_owned_param_is_a_view() {
         let Some(out) = run_program(
