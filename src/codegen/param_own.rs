@@ -151,6 +151,58 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`arg_is_entry_copied_heap_enum` and the Option/Result family) still
     /// reason from "the callee's copy is independent" and are not part of this
     /// slice.
+    /// B-2026-09-05-5 — the FIELD-BODIES half of a transferred param whose type
+    /// declares no `Drop` of its own.
+    ///
+    /// Under transfer the callee owns the value outright (B-2026-08-29-63), and
+    /// the two arms that register its drop chose between the type's OWN wrapper
+    /// (body + fields + memory, when one exists) and `track_struct_var_inst`
+    /// (memory alone). A parent that has no `impl Drop` but holds a Drop-bearing
+    /// field therefore got memory alone, and the field's body was lost: measured
+    /// on `Gn2[R] { inner: Gd[R] { r: R } }` and on the non-generic
+    /// `Gn3 { inner: Gd[R] }` as `--interp` `dR4` / `dR6` against nothing on any
+    /// compiled backend, with memory balanced throughout. Both reach transfer
+    /// because a generic-instantiation field is not copy-supported, which is
+    /// also why the one-level and non-generic-nested controls — entry-copied,
+    /// bodies run caller-side — never showed it.
+    ///
+    /// BODIES ONLY, registered AFTER the memory action so the LIFO drain runs
+    /// them first — the same pairing the fresh-temp argument (call_dispatch,
+    /// SHAPE 2) and the fresh-temp receiver (method_call) already make. Skipped
+    /// outright when the type has a `Drop` of its own: that wrapper carries the
+    /// fields, and registering both would double-walk them.
+    pub(super) fn register_transferred_param_field_bodies(
+        &mut self,
+        type_name: &str,
+        param_name: &str,
+        slot: PointerValue<'ctx>,
+        inst: Option<&TypeExpr>,
+    ) {
+        let owns_body = self
+            .program_snapshot
+            .as_deref()
+            .is_some_and(|p| p.drop_method_keys.contains_key(type_name));
+        if owns_body || self.drop_rc.user_drop_wrapper_fns.contains_key(type_name) {
+            return;
+        }
+        let subst = match inst {
+            Some(i) => self.generic_struct_subst_from_inst(type_name, i),
+            None => std::collections::HashMap::new(),
+        };
+        if !self.type_runs_user_drop_mono(type_name, &subst) {
+            return;
+        }
+        if let Some(f) = self.emit_user_drop_field_bodies_fn(type_name, &subst) {
+            self.track_user_drop_var_with_fn(
+                type_name,
+                param_name,
+                slot,
+                f,
+                crate::codegen::state::UserDropKind::StructFieldBodies,
+            );
+        }
+    }
+
     pub(super) fn make_aggregate_param_callee_owned_transfer(
         &mut self,
         type_name: &str,
@@ -264,7 +316,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         return true;
                     }
-                    self.track_struct_var_inst(type_name, slot, inst);
+                    // B-2026-09-05-5 — memory FIRST, field bodies SECOND (the
+                    // frame drains LIFO, so the bodies run before the free
+                    // they read through). See the helper for why this arm
+                    // needed a bodies half at all.
+                    self.track_struct_var_inst(type_name, slot, inst.clone());
+                    self.register_transferred_param_field_bodies(
+                        type_name,
+                        param_name,
+                        slot,
+                        inst.as_ref(),
+                    );
                     return true;
                 }
                 return false;
@@ -326,7 +388,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     return true;
                 }
             }
-            self.track_struct_var_inst(type_name, slot, inst);
+            self.track_struct_var_inst(type_name, slot, inst.clone());
+            // B-2026-09-05-5 — under TRANSFER only: the callee owns the value
+            // outright, so a parent with no wrapper of its own still owes its
+            // Drop-bearing FIELDS their bodies. Off the transfer path the
+            // caller keeps that half, and registering it here would double it.
+            if let Some(pname) = transfer_param {
+                self.register_transferred_param_field_bodies(type_name, pname, slot, inst.as_ref());
+            }
             return true;
         }
         // Non-shared user ENUM (NOT the type-erased Option/Result, whose

@@ -4992,7 +4992,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // whose own drop runs it. Registering both would print the body
                 // twice for `let p = pass(Holder { .. })`. Memory follows the
                 // buffer; bodies follow the value.
-                let field_bodies_fn = if arg_escapes_frame || clone_temp {
+                // B-2026-09-05-5 — hoisted from the memory gate below so the
+                // BODIES half is gated on it too. Under transfer the callee owns
+                // the value outright and now registers its field bodies itself
+                // (`register_transferred_param_field_bodies`); memory follows
+                // the buffer and bodies follow the value, and under transfer
+                // both are the callee's. Measured as `dR6 dR6` — the caller's
+                // walk here and the callee's, on one `take3(Gn3 { .. })` — once
+                // the gate stopped declining a nested-generic field.
+                let callee_owns_by_transfer =
+                    self.struct_param_owned_by_transfer(&name, callee_entry_copies_mono);
+                let field_bodies_fn = if arg_escapes_frame || clone_temp || callee_owns_by_transfer
+                {
                     None
                 } else {
                     // B-2026-08-28-17 — per-FIELD, the struct twin of the
@@ -5136,8 +5147,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the span map carrying the instantiation, so it reads `None`
                 // for an entry-copying callee whose span has no annotation, and
                 // suppressing there would trade this corruption for a leak.
-                let callee_owns_by_transfer =
-                    self.struct_param_owned_by_transfer(&name, callee_entry_copies_mono);
                 let needs_memory_drop = !callee_owns_by_transfer
                     && (llvm_heap || src_heap_copyable || src_shared_owning);
                 if needs_memory_drop || field_bodies_fn.is_some() {

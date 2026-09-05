@@ -4125,6 +4125,89 @@ done
         );
     }
 
+    /// B-2026-09-05-5 — a field that is a GENERIC STRUCT INSTANTIATION
+    /// (`inner: Gd[R]`) was invisible to the Drop-field gate, so the parent's
+    /// bodies walker was never emitted and the inner field's body never ran.
+    ///
+    /// Filed as a temp-argument bug, because that is where the widening probe
+    /// for B-2026-09-04-24 found it. It is not one: the four cells here — temp
+    /// literal and NAMED LOCAL, generic and NON-GENERIC parent — were all
+    /// silent on every compiled backend against a clean `--interp`, which is
+    /// what moved the defect from a registration path into the one gate every
+    /// path consults, `user_drop_field_indices_mono`. Its `direct` leg resolved
+    /// the field's head through the subst and then asked the NAME-KEYED
+    /// `type_runs_user_drop("Gd")`, which reads `Gd[T] { r: T }` unresolved and
+    /// answers false. The walker's own recursion resolves `Gd[R]` correctly
+    /// (`nested_struct_field_subst`) — it was simply never reached, because the
+    /// module never contained `__karac_dropbodies_Gn2$R` at all.
+    ///
+    /// Memory was balanced throughout (valgrind: every block freed), so this is
+    /// bodies-only. The one-level control (`Gd[R]` held directly) is what
+    /// localized it to the nesting.
+    #[test]
+    fn e2e_nested_generic_struct_field_runs_its_drop_body_on_every_spelling() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Gd[T]  { r: T, z: i64 }
+struct Gn3    { inner: Gd[R], z: i64 }
+struct Gn2[T] { inner: Gd[T], z: i64 }
+fn take3(h: Gn3) -> i64 { println("  in"); return h.z; }
+fn gNest[T](h: Gn2[T]) -> i64 { println("  in"); return h.z; }
+fn gDir[T](h: Gd[T]) -> i64 { println("  in"); return h.z; }
+fn c_conc_temp()  { let _ = take3(Gn3 { inner: Gd[R] { r: mk(6), z: 1 }, z: 9 }); }
+fn c_conc_local() { let h = Gn3 { inner: Gd[R] { r: mk(7), z: 1 }, z: 9 }; let _ = take3(h); }
+fn c_gen_local()  { let h = Gn2[R] { inner: Gd[R] { r: mk(8), z: 1 }, z: 9 }; let _ = gNest(h); }
+fn c_gen_temp()   { let _ = gNest(Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 }); }
+fn c_one_level()  { let _ = gDir(Gd[R] { r: mk(2), z: 9 }); }
+struct Hd { r: R, z: i64 }
+struct Hn { inner: Hd, z: i64 }
+fn takeH(h: Hn) -> i64 { println("  in"); return h.z; }
+fn c_plain_nested()    { let _ = takeH(Hn { inner: Hd { r: mk(11), z: 1 }, z: 9 }); }
+fn main() {
+    println("conc_temp");  c_conc_temp();
+    println("conc_local"); c_conc_local();
+    println("gen_local");  c_gen_local();
+    println("gen_temp");   c_gen_temp();
+    println("one_level");  c_one_level();
+    println("plain_nested"); c_plain_nested();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"conc_temp
+  in
+dR6
+conc_local
+  in
+dR7
+gen_local
+  in
+dR8
+gen_temp
+  in
+dR4
+one_level
+  in
+dR2
+plain_nested
+  in
+dR11
+done
+"#,
+            "a generic-struct-instantiation FIELD was invisible to the Drop-field \
+             gate — B-2026-09-05-5. All four nested cells silent with `dR2` (the \
+             one-level control) intact is the pre-fix signature; any cell \
+             printing its body TWICE means the gate now admits a field whose body \
+             a callee also runs."
+        );
+    }
+
     /// B-2026-09-04-24 — a by-value STRUCT temp literal at a GENERIC call site
     /// lost its tuple element's `Drop` body.
     ///

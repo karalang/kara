@@ -4233,6 +4233,50 @@ fn main() {
         );
     }
 
+    /// B-2026-09-05-5 — the memory gate on the nested-generic-field fix.
+    ///
+    /// The fix widens the Drop-field GATE, so the risk is not a missed free
+    /// but a walker now emitted for a parent that never had one — running a
+    /// nested body over a field the callee also owns, or over one already
+    /// freed by the parent's memory drop (the frame is LIFO and memory is
+    /// pushed first, so bodies read before frees). Both parents, both argument
+    /// forms, three iterations, so any imbalance accumulates.
+    #[test]
+    fn asan_nested_generic_struct_field_bodies_are_balanced() {
+        let mut expected: Vec<&str> = Vec::new();
+        for _ in 0..3 {
+            expected.extend(["dR6", "dR7", "dR8", "dR4"]);
+        }
+        expected.push("done");
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Gd[T]  { r: T, z: i64 }
+struct Gn3    { inner: Gd[R], z: i64 }
+struct Gn2[T] { inner: Gd[T], z: i64 }
+fn take3(h: Gn3) -> i64 { return h.z; }
+fn gNest[T](h: Gn2[T]) -> i64 { return h.z; }
+fn c_conc_temp()  { let _ = take3(Gn3 { inner: Gd[R] { r: mk(6), z: 1 }, z: 9 }); }
+fn c_conc_local() { let h = Gn3 { inner: Gd[R] { r: mk(7), z: 1 }, z: 9 }; let _ = take3(h); }
+fn c_gen_local()  { let h = Gn2[R] { inner: Gd[R] { r: mk(8), z: 1 }, z: 9 }; let _ = gNest(h); }
+fn c_gen_temp()   { let _ = gNest(Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 }); }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        c_conc_temp(); c_conc_local(); c_gen_local(); c_gen_temp();
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &expected,
+            "b0905-5-nested-generic-struct-field",
+            24,
+        );
+    }
+
     /// B-2026-09-04-24 — the memory gate on the generic-call temp-arg fix.
     ///
     /// This one is specifically a DOUBLE-FREE watch rather than a leak watch,

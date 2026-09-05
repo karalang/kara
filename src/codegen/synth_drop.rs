@@ -3402,6 +3402,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             break 'tes;
                         }
                     }
+                    // B-2026-09-05-5 — a field that is a GENERIC STRUCT
+                    // INSTANTIATION (`inner: Gd[R]`). The head-name walk above
+                    // asks `type_runs_user_drop("Gd")`, which reads
+                    // `Gd[T] { r: T }` with `T` unresolved and answers false,
+                    // so `Gn3 { inner: Gd[R] }` was classified drop-free and
+                    // no walker was ever built for it. The declared field type
+                    // carries the binding: derive `Gd`'s subst from it and ask
+                    // the subst-aware twin. Terminates because a struct cannot
+                    // transitively contain itself by value.
+                    if let TypeKind::Path(fp) = &te.kind {
+                        if let Some(head) = fp.segments.first() {
+                            if fp.generic_args.as_ref().is_some_and(|a| !a.is_empty())
+                                && self.type_decls.struct_types.contains_key(head)
+                                && !seen.iter().any(|s| s == head)
+                            {
+                                let sub = self.generic_struct_subst_from_inst(head, te);
+                                if !sub.is_empty() && self.type_runs_user_drop_mono(head, &sub) {
+                                    found = true;
+                                    break 'tes;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3601,7 +3624,44 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.type_runs_user_drop(&resolved, &mut Vec::new())
                     })
                 });
-                (direct || vec_elem || map_val || tuple_elem || optres_payload).then_some(idx)
+                // B-2026-09-05-5 — a field that is itself a GENERIC STRUCT
+                // INSTANTIATION: `inner: Gd[T]` under `T -> R`, or a concrete
+                // `inner: Gd[R]` inside a non-generic parent. `direct` above
+                // resolves the field's HEAD (`Gd`) through the subst and then
+                // asks the name-keyed walk, which reads `Gd[T] { r: T }` with
+                // `T` unresolved and answers false. So the field never entered
+                // the walk set, the parent's walker was never emitted at all
+                // (no `__karac_dropbodies_Gn2$R` in the module), and the
+                // recursion that resolves `Gd[R]` correctly
+                // (`nested_struct_field_subst`, one level down in the walker)
+                // was never reached.
+                //
+                // Measured silent on ALL FOUR spellings — temp literal and
+                // named local, generic and non-generic parent — against a
+                // clean `--interp`, with memory balanced throughout. That is
+                // what places it here, in the gate, rather than on any one
+                // registration path: every path consults this set. Resolve
+                // the field's instantiation exactly as the recursion does and
+                // ask the subst-aware question. Terminates because a struct
+                // cannot transitively contain itself by value — the same
+                // argument the walker's own recursion rests on.
+                let nested_generic = name.as_deref().is_some_and(|n| {
+                    let head = self.resolve_field_head_mono(n, subst);
+                    self.type_decls.struct_types.contains_key(&head)
+                        && self
+                            .type_decls
+                            .struct_generic_params
+                            .get(&head)
+                            .is_some_and(|ps| !ps.is_empty())
+                        && {
+                            let parent = (!subst.is_empty()).then_some(subst);
+                            let nsub =
+                                self.nested_struct_field_subst(struct_name, idx, parent, &head);
+                            !nsub.is_empty() && self.type_runs_user_drop_mono(&head, &nsub)
+                        }
+                });
+                (direct || vec_elem || map_val || tuple_elem || optres_payload || nested_generic)
+                    .then_some(idx)
             })
             .collect()
     }
