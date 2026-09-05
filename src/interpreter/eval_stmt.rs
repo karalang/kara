@@ -5560,6 +5560,16 @@ impl<'a> super::Interpreter<'a> {
                     Self::collect_aggregate_literal_sources(el, out);
                 }
             }
+            // B-2026-08-31-46 — an `Option`/`Result` CONSTRUCTOR wrapping a
+            // source (`return Option.Some(r)`) hands it out exactly as an
+            // aggregate literal does, one level deeper than the arms above.
+            // Recognised through the shape test the admission predicate uses
+            // (`option_result_ctor_payload`), so the two cannot drift.
+            ExprKind::Call { .. } => {
+                if let Some(payload) = crate::ast::option_result_ctor_payload(e) {
+                    Self::collect_aggregate_literal_sources(payload, out);
+                }
+            }
             _ => {}
         }
     }
@@ -5684,8 +5694,15 @@ impl<'a> super::Interpreter<'a> {
                 // no return site and `fn_returns_param` is blind to it while
                 // the value still leaves the frame. Codegen's twin is
                 // `callee_returns_enum_arg_payload`.
+                // B-2026-08-31-46 — and the CONDITIONAL hand-back, which the
+                // two predicates above are blind to when the return is wrapped
+                // in a constructor. Without it this gate short-circuited before
+                // `callee_owns_body` below could ever ask the conditional
+                // predicate, and the named binding kept firing.
                 let is_passthrough = callee.is_some_and(|f| {
-                    crate::ast::fn_returns_param(f, i) || crate::ast::fn_returns_param_payload(f, i)
+                    crate::ast::fn_returns_param(f, i)
+                        || crate::ast::fn_returns_param_payload(f, i)
+                        || crate::ast::fn_conditionally_returns_param_bare(f, i)
                 });
                 if !is_passthrough && !escapes_into_outliving_place {
                     return None;

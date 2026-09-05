@@ -2071,8 +2071,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // entry-copy passthrough specifically; what the REGISTRAR needs is
             // the union, since its bodies-vs-memory split turns on "does this
             // value outlive the call" and not on which exit it took.
-            let escapes_frame =
-                flows_into_return || self.call_arg_moves_into_outliving_place(&name, i, false);
+            // B-2026-08-31-46 — plus the hand-off routes the method and mono
+            // legs already OR in here; see `callee_hands_arg_off`.
+            let escapes_frame = flows_into_return
+                || self.callee_hands_arg_off(&name, i)
+                || self.call_arg_moves_into_outliving_place(&name, i, false);
             // B-2026-08-05-7 — the TENSOR sibling of the `#20` arm above. A
             // tensor is a bare `ptr` to one `[rank][dims][data]` block, so
             // `llvm_ty_is_vec_struct` never admits it and the fresh-temp
@@ -2283,6 +2286,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // and the container fired again at its drain.
             if !borrow_skip
                 && (flows_into_return
+                    // B-2026-08-31-46 — the hand-off routes, so a NAMED
+                    // binding reaches `callee_takes_over_arg_drop_body` below
+                    // for a constructor-wrapped conditional return too.
+                    || self.callee_hands_arg_off(&name, i)
                     || self.callee_returns_enum_arg_payload(&name, i)
                     || self.call_arg_moves_into_outliving_place(&name, i, false))
             {
@@ -3409,6 +3416,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         // caller-side Drop-BODY question alone.
                         || crate::ast::fn_returns_param_via_call(program, f, arg_index)))
         })
+    }
+
+    /// B-2026-08-31-46 — the FREE-call twin of the `handed_off` term the method
+    /// (`method_call.rs`) and mono (`mono.rs`) argument registrars already carry:
+    /// does the callee hand argument `arg_index` back on EVERY exit, or on SOME
+    /// exits by a route the per-path flag clears?
+    ///
+    /// The free leg computed `escapes_frame` from `call_arg_flows_into_return`
+    /// alone, which is the `fn_returns_param` union — blind to a constructor
+    /// wrap — so a fresh temp handed into `fn f(r: R, keep: bool) -> Option[R]
+    /// { if keep { return Option.Some(r); } .. }` was registered caller-side
+    /// with nothing standing it down, and the result binding fired the body
+    /// again. The named-binding gate below had the same hole. Both now ask this,
+    /// exactly as the other two legs do, and resolve through `find_function_ast`
+    /// so a free function and a `Type.method` key answer by one route.
+    pub(super) fn callee_hands_arg_off(&self, callee_name: &str, arg_index: usize) -> bool {
+        self.program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .is_some_and(|f| {
+                crate::ast::fn_always_returns_param(f, arg_index)
+                    || crate::ast::fn_conditionally_returns_param_bare(f, arg_index)
+            })
     }
 
     /// B-2026-08-29-15, widened by B-2026-08-29-50 — is SOME OTHER FRAME
@@ -6838,9 +6868,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // ran the body a second time over the moved-from slot. Interp
             // twin: the ctor arm of `record_ctor_arg_moves` inserting into
             // `moved_out_user_drop_bindings`.
+            //
+            // B-2026-08-31-46 — but only STATICALLY where the source's action
+            // lives in THIS frame. The identifier RETURN arm (B-2026-08-28-65)
+            // and the aggregate-literal arm (B-2026-09-03-10) already prefer
+            // the runtime bit when the action lives in an ENCLOSING frame,
+            // because a move nested in a branch happens on one path only; this
+            // is that rule one CONSTRUCTOR deeper. `if keep { return
+            // Option.Some(r); }` reached here with `r`'s flag-guarded prologue
+            // registration in the enclosing frame, and the frame-wide
+            // retraction deleted it on the path that never built the variant
+            // — measured as the non-escaping calls' bodies (`drop 3`, `drop
+            // 23`) vanishing on every compiled surface while `--interp`,
+            // per-path by construction, ran them. A top-level constructor
+            // finds the action in the innermost frame, the guard declines, and
+            // the static removal stands exactly as before. Bodies only: the
+            // memory-side `suppress_source_vec_cleanup_for_arg` above is
+            // untouched.
             if let ExprKind::Identifier(n) = &arg.value.kind {
                 let n = n.clone();
-                self.suppress_user_drop_for_var(&n);
+                if !self.guard_user_drop_for_nested_return(&n) {
+                    self.suppress_user_drop_for_var(&n);
+                }
             }
             // Boxed / inline-heap `Option`/`Result` binding moved whole into
             // this non-shared tuple-variant payload — see the shared-enum
@@ -7247,7 +7296,8 @@ impl<'ctx> super::Codegen<'ctx> {
             if matches!(
                 &expr.kind,
                 ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)
-            ) {
+            ) || crate::ast::option_result_ctor_payload(expr).is_some()
+            {
                 let mut sources = Vec::new();
                 Self::collect_aggregate_literal_sources(expr, &mut sources);
                 for n in sources {

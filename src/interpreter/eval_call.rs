@@ -3004,9 +3004,15 @@ impl<'a> super::Interpreter<'a> {
                 // of it, or stores it somewhere that outlives the frame (`self`,
                 // a `ref` parameter) — B-2026-08-29-11's own repro, `add(r)`
                 // pushing into `self.xs`, is the third.
+                // B-2026-08-31-46 — the conditional hand-back joins the escape
+                // routes, for the reason `record_passthrough_arg_moves` gives:
+                // a constructor-wrapped conditional return is invisible to the
+                // three above, and the gate declined before the per-path owner
+                // below was consulted.
                 let escapes = crate::ast::fn_returns_param(f, i)
                     || crate::ast::fn_returns_param_payload(f, i)
-                    || crate::ast::fn_moves_param_into_outliving_place(f, i);
+                    || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    || crate::ast::fn_conditionally_returns_param_bare(f, i);
                 if !escapes {
                     return None;
                 }
@@ -3675,6 +3681,10 @@ impl<'a> super::Interpreter<'a> {
                     || crate::ast::fn_returns_param_via_call(self.program, f, i)
                     || crate::ast::fn_returns_param_payload(f, i)
                     || crate::ast::fn_moves_param_into_outliving_place(f, i)
+                    // B-2026-08-31-46 — a conditional hand-back the callee
+                    // frame owns per path; `fn_returns_param`'s union used to
+                    // cover the bare form, but not a constructor wrap.
+                    || crate::ast::fn_conditionally_returns_param_bare(f, i)
             })
     }
 

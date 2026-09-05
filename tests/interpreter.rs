@@ -54723,6 +54723,55 @@ fn test_no_else_if_arm_owns_the_value_it_mints() {
     }
 }
 
+/// B-2026-08-31-46 — a fresh-temp or named argument escaping inside a returned
+/// `Option`/`Result` CONSTRUCTOR runs its `Drop` body exactly once, on every
+/// surface, in every spelling.
+///
+/// Before this the compiled backends ran the escaping call's body TWICE in all
+/// four spellings (method/free × fresh-temp/named) while `--interp` was right
+/// only for the method+fresh-temp one; the named and free spellings doubled on
+/// both backends. The three-call control in `S1` (`false`, `true`, `false`) is
+/// the load-bearing cell: the row's own analysis said the obvious fix — seeing
+/// through the ctor in `fn_returns_param` — would skip the caller-side drop on
+/// the two `false` calls too, turning one doubled body into two LOST ones. This
+/// pin holds all three at exactly one.
+///
+/// `Rok`/`Rer` cover `Result.Ok` and `Result.Err` (the latter takes the
+/// error-path drain); `tail` is the arm-tail spelling, which reaches the
+/// per-path flag through `arm_conditional_move_tail_flag` rather than the
+/// `return` handler. One string across all four surfaces.
+#[test]
+fn test_ctor_wrapped_conditional_return_runs_one_body() {
+    assert_eq!(
+        run(r#"struct R { id: i64, name: String }
+impl Drop for R { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn mk(i: i64) -> R { return R { id: i, name: f"h{i}" }; }
+struct K { n: i64 }
+impl K {
+    fn f(ref self, r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
+    fn ok(ref self, r: R, keep: bool) -> Result[R, i64] { if keep { return Result.Ok(r); } return Result.Err(0); }
+    fn er(ref self, r: R, keep: bool) -> Result[i64, R] { if keep { return Result.Err(r); } return Result.Ok(0); }
+    fn t(ref self, r: R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
+}
+fn freefn_opt(r: R, keep: bool) -> Option[R] { if keep { return Option.Some(r); } return Option.None; }
+fn ft(r: R, keep: bool) -> Option[R] { if keep { Option.Some(r) } else { Option.None } }
+fn main() {
+    let k = K { n: 0 };
+    println("S1"); let _ = k.f(mk(3), false); let _ = k.f(mk(4), true); let _ = k.f(mk(5), false);
+    println("S2"); let a1 = mk(14); let _ = k.f(a1, true);
+    println("S3"); let _ = freefn_opt(mk(24), true);
+    println("S4"); let a2 = mk(34); let _ = freefn_opt(a2, true);
+    println("Rok"); let _ = k.ok(mk(41), false); let _ = k.ok(mk(42), true);
+    println("Rer"); let _ = k.er(mk(43), false); let _ = k.er(mk(44), true);
+    println("tail"); let _ = k.t(mk(51), false); let _ = k.t(mk(52), true); let _ = ft(mk(53), false); let _ = ft(mk(54), true);
+    println("done")
+}
+"#),
+        "S1\ndrop 3 h3\ndrop 4 h4\ndrop 5 h5\nS2\ndrop 14 h14\nS3\ndrop 24 h24\nS4\ndrop 34 h34\nRok\ndrop 41 h41\ndrop 42 h42\nRer\ndrop 43 h43\ndrop 44 h44\ntail\ndrop 51 h51\ndrop 52 h52\ndrop 53 h53\ndrop 54 h54\ndone\n",
+        "one body per call, every spelling, ctor-wrapped conditional return"
+    );
+}
+
 /// B-2026-08-29-31 — the INTERPRETER twin of
 /// `e2e_wildcard_let_discard_owns_what_its_arm_hands_out`, landed in the same
 /// commit with the SAME shapes in the same order, so the two backends cannot
@@ -54891,11 +54940,11 @@ fn test_method_fresh_temp_arg_handed_back_runs_one_body() {
              let _ = k.f(mk(4), true);  println(\"b\");\n\
              let _ = k.f(mk(5), false); println(\"c\");\n}}\n"
         )),
-        // THIS backend is the CORRECT one here — one body per call. Codegen
-        // doubles the escaping call; the twin pins each side's own answer so
-        // the divergence is visible from both.
+        // One body per call. This backend was always right here; codegen
+        // doubled the escaping call until B-2026-08-31-46, and the twin now
+        // pins the SAME string on both sides.
         "drop 3 h3\na\ndrop 4 h4\nb\ndrop 5 h5\nc\n",
-        "[pinned DIVERGENCE (a): temp escaping inside a returned Option ctor]"
+        "[(a) temp escaping inside a returned Option ctor — agreed since B-2026-08-31-46]"
     );
     assert_eq!(
         run(&format!(

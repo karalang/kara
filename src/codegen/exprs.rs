@@ -1390,7 +1390,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // INNERMOST frame, the guard declines, and the static removal
                     // stands exactly as before -- so this is the identifier arm's
                     // rule applied one aggregate deeper, not a new one.
-                    if matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_)) {
+                    // B-2026-08-31-46 — and a CONSTRUCTOR wrap (`return
+                    // Option.Some(r)`) takes the same arm: the source walk
+                    // below sees through it, and the nested-return guard then
+                    // mints the per-path flag exactly as for an aggregate.
+                    if matches!(&e.kind, ExprKind::StructLiteral { .. } | ExprKind::Tuple(_))
+                        || crate::ast::option_result_ctor_payload(e).is_some()
+                    {
                         let mut sources = Vec::new();
                         Self::collect_aggregate_literal_sources(e, &mut sources);
                         for n in sources {

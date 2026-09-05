@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 367 |
-| run-vs-build | 337 |
+| miscompile | 368 |
+| run-vs-build | 338 |
 | leak | 264 |
 | missing-feature | 194 |
 | double-free | 180 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1460 |
-| interp | 353 |
+| codegen | 1462 |
+| interp | 355 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 72 |
@@ -160,6 +160,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-6 | 2026-09-05 | interp+codegen | medium | A NAMED-LOCAL ARGUMENT WHOSE CALLEE DESTRUCTURES IT AND RETURNS THE LEAF RUNS THAT LEAF'S `Drop` BODY TWICE ON ALL FOUR SURFACES -- `let g = Cd { r: mk(13), z: 9 }; let out = cEsc(g);` where `fn cEsc(h: Cd) -> R { let Cd { r, z } = h; return r; }` prints `in dR13 got13 dR13` under `--interp`, `karac run`, `karac build` and `KARAC_AUTO_PAR=0` alike, against one `R` ever constructed; the TEMP-LITERAL spelling of the same call (`cEsc(Cd { r: mk(7), z: 9 })`) prints `in got7 dR7`, once, on all four | — |
 | B-2026-09-05-7 | 2026-09-05 | codegen | medium | A GENERIC-INSTANTIATION LEAF BOUND OUT OF A BY-VALUE PARAM DESTRUCTURE RUNS NO `Drop` BODY -- `fn gDes[T](h: Gn2[T]) -> i64 { let Gn2 { inner, z } = h; .. }` with `inner: Gd[R] { r: R }` prints nothing on all three compiled backends against `--interp`'s `dR12`, while the UNDESTRUCTURED twin (`fn gNest[T](h: Gn2[T]) -> i64 { h.z }`) is correct after B-2026-09-05-5. So the source's field-bodies walk is (correctly) move-suppressed for `inner`, and the LEAF binding that now owns it registers no bodies of its own | — |
 | B-2026-09-05-9 | 2026-09-05 | codegen | medium | EVERY MOVING ARM OVER A HEAP-BOXED AGG DESTRUCTURE LEAF PAYLOAD LEAKS THE BOX ENVELOPE, on the `Option` and `Result` families alike -- `let (a, b) = t; match b { Ok(w) => { let g: W = w; .. } }` (and `=> w`, and the `if let` spelling) prints correctly on every surface and loses 56 B at -O0 AND -O2, because the slot neutralization hides the box from the leaf's drop together with the moved contents | — |
+| B-2026-09-05-10 | 2026-09-05 | interp+codegen | medium | AN UNCONDITIONAL `return Option.Some(r)` OF A BY-VALUE PARAM, AND A REBOUND LOCAL RETURNED THE SAME WAY, RUN THE `Drop` BODY TWICE -- AGREED on all four surfaces, so no A/B gate sees it. `fn top(r: R) -> Option[R] { return Option.Some(r); }` called with a fresh temp prints the body twice everywhere; the CONDITIONAL spelling was fixed by B-2026-08-31-46 and this is what that fix deliberately left where it was | — |
+| B-2026-09-05-11 | 2026-09-05 | interp+codegen | medium | A NESTED `let o = Option.Some(r)` OVER A BY-VALUE PARAM RUNS `r`'s `Drop` BODY TWICE ON THE TAKEN PATH -- on every compiled surface for BOTH the free and the method spelling, and under `--interp` for the METHOD spelling only. `fn fl(r: R, keep: bool) -> i64 { if keep { let o = Option.Some(r); println("held"); } return 7; }` prints `drop 4 / held / drop 4` compiled against `held / drop 4` interpreted | — |
 
 ### Relocated
 

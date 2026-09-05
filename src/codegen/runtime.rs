@@ -11081,6 +11081,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     Self::collect_aggregate_literal_sources(el, out);
                 }
             }
+            // B-2026-08-31-46 — an `Option`/`Result` CONSTRUCTOR wrapping a
+            // source (`return Option.Some(r)`) hands it out exactly as an
+            // aggregate literal does, one level deeper than the arms above.
+            // Recognised through the shape test the admission predicate uses
+            // (`option_result_ctor_payload`), so the two cannot drift.
+            ExprKind::Call { .. } => {
+                if let Some(payload) = crate::ast::option_result_ctor_payload(e) {
+                    Self::collect_aggregate_literal_sources(payload, out);
+                }
+            }
             _ => {}
         }
     }

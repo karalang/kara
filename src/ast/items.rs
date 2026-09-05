@@ -1855,6 +1855,52 @@ pub fn fn_always_returns_param(f: &Function, arg_index: usize) -> bool {
     !any_bad_return
 }
 
+/// B-2026-08-31-46 — is `e` an `Option`/`Result` CONSTRUCTOR around exactly one
+/// operand? Returns that operand.
+///
+/// `return Option.Some(r)` hands `r` out of the frame exactly as `return r`
+/// does, one constructor deeper. The conditional-move family recognised the
+/// bare identifier and an aggregate LITERAL (`H { r: r }`, `(r, 9)`) but not
+/// this, so a param escaping inside a returned `Some`/`Ok`/`Err` was claimed by
+/// nobody: the caller's fresh-temp walk fired the body AND the result binding
+/// fired it — two bodies on every compiled surface, one under `--interp` for
+/// the method spelling only, and two on both backends for the named-binding
+/// and free-function spellings.
+///
+/// ONE shape test, shared by the admission predicate
+/// (`fn_conditionally_returns_param_bare`) and both backends' tail-source
+/// walkers (`collect_aggregate_literal_sources`), so the three cannot drift on
+/// what counts as a constructor. Mirrors `is_error_exit_value`'s idiom: a
+/// qualified `Path` whose last segment is the variant, or the bare identifier
+/// spelling.
+///
+/// Deliberately NOT folded into `fn_returns_param`: that predicate is the UNION
+/// over return sites and is documented as turning a leak into corruption if its
+/// answer moves. Recognising the wrap there would skip the caller-side drop on
+/// EVERY call to such a callee — including the ones that take the non-escaping
+/// path and print their body correctly today — trading one doubled body for two
+/// lost ones and a leak. The conditional predicate is the right home because
+/// per-path ownership is its whole job.
+pub fn option_result_ctor_payload(e: &Expr) -> Option<&Expr> {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return None;
+    };
+    let is_ctor = match &callee.kind {
+        ExprKind::Path { segments, .. } => segments
+            .last()
+            .is_some_and(|s| matches!(s.as_str(), "Some" | "Ok" | "Err")),
+        ExprKind::Identifier(n) => matches!(n.as_str(), "Some" | "Ok" | "Err"),
+        _ => false,
+    };
+    if !is_ctor {
+        return None;
+    }
+    match args.as_slice() {
+        [only] => Some(&only.value),
+        _ => None,
+    }
+}
+
 /// B-2026-08-28-22 — is `f`'s positional parameter `arg_index` returned on SOME
 /// tail paths and not others, by a route the conditional-move drop flag can
 /// actually clear?
@@ -1983,6 +2029,14 @@ pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bo
             ExprKind::MethodCall { object, args, .. } => {
                 may_mention(object, name) || args.iter().any(|a| may_mention(&a.value, name))
             }
+            // B-2026-08-31-46 — a bare PATH (`Option.None`, `Sig.B`, `H.zero`)
+            // names a type, variant or associated item and can never name a
+            // local binding, so it cannot mention the parameter. Without this
+            // arm the catch-all declined every callee whose NON-escaping exit
+            // was a qualified unit variant — which is the canonical partner of
+            // a `return Option.Some(r)` exit — so the constructor widening
+            // above never admitted the row's own reproducer.
+            ExprKind::Path { .. } => false,
             _ => true,
         }
     }
@@ -2099,7 +2153,12 @@ pub fn fn_conditionally_returns_param_bare(f: &Function, arg_index: usize) -> bo
     let mut yields_bare = false;
     let mut yields_nothing = false;
     for leaf in leaves {
-        if is_bare(leaf, name) {
+        // B-2026-08-31-46 — a leaf that is the param wrapped in an
+        // `Option`/`Result` constructor yields it too: the value crosses the
+        // frame boundary inside the ctor exactly as it does bare, and the
+        // per-path flag clears it through the same source walk.
+        if is_bare(leaf, name) || option_result_ctor_payload(leaf).is_some_and(|p| is_bare(p, name))
+        {
             yields_bare = true;
         } else if may_mention(leaf, name) {
             // Condition 3 — an escape route the flag cannot clear.
