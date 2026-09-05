@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 106 |
 | soundness | 95 |
 | perf | 90 |
-| other | 76 |
+| other | 77 |
 | crash | 73 |
 | use-after-free | 31 |
 
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 355 |
 | typecheck | 293 |
 | ownership | 74 |
-| other | 72 |
+| other | 73 |
 | cli | 70 |
 | autopar | 55 |
 | parser | 46 |
@@ -2240,6 +2240,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-3 | codegen | high | A GENERIC CALLEE THAT RETURNS A DESTRUCTURED FIELD DOUBLE-FREES WHEN THE ARGUMENT IS A TEMP LITERAL -- `gEsc(Gd[R] { r: mk(5), z: 9 })` where `fn gEs… | c5bb054 |
 | B-2026-09-05-5 | codegen | medium | A NESTED GENERIC STRUCT LOSES ITS INNER FIELD'S `Drop` BODY AS A TEMP-LITERAL ARGUMENT -- `gNest(Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 })` p… | 51368a1 |
 | B-2026-09-05-8 | codegen | high | A MOVING `if let` OVER A `Result` AGG DESTRUCTURE LEAF DOUBLE-FREES THE PAYLOAD -- `let (a, b) = t; if let Result.Ok(w) = b { let g: W = w }` aborts… | d8c709d |
+| B-2026-09-05-12 | other | medium | THE NIGHTLY `Fuzz` WORKFLOW'S THREE libFuzzer LEGS HAVE NEVER RUN -- `fuzz/` is named by neither `workspace.members` nor `workspace.exclude`, so carg… | 20cc27f |
 
 </details>
 
