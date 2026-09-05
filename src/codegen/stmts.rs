@@ -13255,6 +13255,40 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = val else {
             return Ok(());
         };
+        // B-2026-09-05-3 — resolve the declared field types under the SOURCE's
+        // instantiation before any leaf is classified. `struct_field_type_exprs`
+        // holds the declaration's spelling, so for `Gd[T] { r: T, z: i64 }`
+        // destructured inside a monomorph (`fn gEsc[T](h: Gd[T]) -> T { let Gd
+        // { r, z } = h; return r }`) every leaf predicate below saw a bare `T`:
+        // nothing was transferable, the leaf `r` got no cleanup of its own and
+        // the source's `r` cap was never zeroed. `h`'s scope-exit drain then
+        // freed the buffers the returned `r` still owned — `free(): double
+        // free detected in tcache 2` on all three compiled surfaces, valgrind
+        // 2x invalid free, against a clean interpreter. The concrete twin was
+        // clean because its `r` reads as `R` straight off the declaration.
+        //
+        // `resolve_generic_field_te` maps the struct's own params through the
+        // source expression's instantiation (which also covers a fn param
+        // named differently from the struct's, `fn g[U](h: Gd[U])`), and the
+        // trailing `subst_monomorph_type_params` folds the fn-level
+        // substitution over whatever that leaves (`Gd[U]` at `U = R`). A
+        // concrete struct is untouched: neither step finds a param to bind.
+        let field_tes: Vec<TypeExpr> = field_tes
+            .iter()
+            .map(|te| {
+                let te = self.resolve_generic_field_te(value, &struct_name, te);
+                self.subst_monomorph_type_params(&te)
+            })
+            .collect();
+        // The source's concrete instantiation and its ACTUAL LLVM layout, for
+        // the cap-zeroing below: name-keyed, the zeroer would GEP through
+        // `mono_struct_type_from_active_subst`, which resolves only a struct
+        // param spelled like the fn's, else the base layout. `sv`'s own type
+        // is the layout the value was built with, on every path.
+        let src_inst: Option<TypeExpr> = self
+            .receiver_struct_inst(value)
+            .map(|t| self.subst_monomorph_type_params(&t));
+        let src_st = sv.get_type();
         // B-2026-08-04-10 — `let S { a, b } = f()?;`. A `?` is not a `Call`, so
         // `expr_yields_fresh_owned_temp` said no and the leaf bindings never
         // registered their cleanup: both heap fields leaked, silently, with
@@ -14073,7 +14107,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // invisible to it and only a write into the box's own words
                     // moves the field's ownership. B-2026-08-06-31.
                     if let Some(box_ptr) = boxed_view_box_ptr {
-                        self.zero_struct_field_move_cap(box_ptr, &struct_name, fname);
+                        self.zero_struct_field_move_cap_inst(
+                            box_ptr,
+                            &struct_name,
+                            fname,
+                            Some(src_st),
+                            src_inst.as_ref(),
+                        );
                     }
                 } else if let Some(src_ptr) = optres_owned_src {
                     // Callee-owned place source (see `callee_owned_src` above):
@@ -14124,7 +14164,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
                             leaf_cleanup_registered = true;
                         }
-                        self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
+                        self.zero_struct_field_move_cap_inst(
+                            src_ptr,
+                            &struct_name,
+                            fname,
+                            Some(src_st),
+                            src_inst.as_ref(),
+                        );
                     }
                 } else if view_src {
                     // B-2026-07-09-12 clone-on-extract — the source is a shared-enum
@@ -14293,7 +14339,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         // leaf's own `Option` drop (B-27/B-31 exit-133). A fresh-temp
                         // source has no lingering struct-drop, so nothing to disarm.
                         if let Some(src_ptr) = optres_owned_src {
-                            self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
+                            self.zero_struct_field_move_cap_inst(
+                                src_ptr,
+                                &struct_name,
+                                fname,
+                                Some(src_st),
+                                src_inst.as_ref(),
+                            );
                         }
                     }
                 }

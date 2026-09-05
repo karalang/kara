@@ -4291,6 +4291,63 @@ fn main() {
         );
     }
 
+    /// B-2026-09-05-3 — A GENERIC CALLEE THAT RETURNS A DESTRUCTURED FIELD
+    /// DOUBLE-FREES WHEN THE ARGUMENT IS A TEMP LITERAL.
+    ///
+    /// `fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; return r }` over a
+    /// `Gd[R] { r: mk(5), z: 9 }` temp aborted with `free(): double free
+    /// detected in tcache 2` on all three compiled surfaces (valgrind: 2x
+    /// invalid free) against a clean interpreter. The row's discriminator was
+    /// wrong in an instructive way: neither the temp literal nor `Drop` selects
+    /// it — `Gd[String]` double-freed too, and `return h.r` without a
+    /// destructure was clean. The trigger is the destructuring `let` of a
+    /// by-value param inside a MONOMORPH with the leaf handed out: the leaf
+    /// predicates in `finish_owned_struct_destructure` read the declaration's
+    /// `r: T`, found nothing transferable, registered no leaf cleanup and never
+    /// zeroed the source's `r` cap, so `h`'s scope-exit drain freed the buffers
+    /// the returned `r` still owned. The fix resolves the field types under the
+    /// source's instantiation first.
+    ///
+    /// Four shapes, three rounds: the row's temp, the differently-named fn
+    /// param (`gEsc2[U]`, whose AOT was clean only because the transfer path
+    /// happened to cancel the miss, and whose JIT double-freed), a `T` with no
+    /// `Drop` anywhere, and the leaf dropped inside the callee (the control
+    /// whose order must not move). Every body once, in the interpreter's order.
+    #[test]
+    fn asan_generic_callee_destructured_escaping_leaf_frees_once() {
+        assert_clean_asan_run_min_allocs(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Gd[T] { r: T, z: i64 }
+fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; println("in"); return r; }
+fn gEsc2[U](h: Gd[U]) -> U { let Gd { r, z } = h; println("in2"); return r; }
+fn gZ[T](h: Gd[T]) -> i64 { let Gd { r, z } = h; println("inZ"); return z; }
+fn c_esc()  { let out = gEsc(Gd[R] { r: mk(5), z: 9 }); println(f"got{out.id}"); }
+fn c_u()    { let out = gEsc2(Gd[R] { r: mk(11), z: 9 }); println(f"got{out.id}"); }
+fn c_str()  { let out = gEsc(Gd[String] { r: f"s{8}", z: 9 }); println(f"got{out}"); }
+fn c_z()    { let out = gZ(Gd[R] { r: mk(12), z: 9 }); println(f"got{out}"); }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        c_esc(); c_u(); c_str(); c_z();
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "in", "got5", "dR5", "in2", "got11", "dR11", "in", "gots8", "inZ", "dR12", "got9",
+                "in", "got5", "dR5", "in2", "got11", "dR11", "in", "gots8", "inZ", "dR12", "got9",
+                "in", "got5", "dR5", "in2", "got11", "dR11", "in", "gots8", "inZ", "dR12", "got9",
+                "done",
+            ],
+            "b0905-3-generic-callee-destructured-escaping-leaf",
+            24,
+        );
+    }
+
     /// B-2026-09-04-27 — the memory gate on the container-element half of the
     /// generic-`Drop` fix: running a per-monomorph body from a BODIES-ONLY
     /// walker must add no free and lose none.

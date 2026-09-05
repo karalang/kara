@@ -4618,6 +4618,38 @@ fn main() {
         }
     }
 
+    /// B-2026-09-05-3 — the exact-output twin of the memory_sanitizer pin: a
+    /// generic callee that destructures its by-value param and returns the
+    /// leaf runs each body ONCE, in the interpreter's order, on the compiled
+    /// build. Pre-fix this program aborted in `free()`.
+    #[test]
+    fn test_e2e_generic_callee_destructured_escaping_leaf_once() {
+        let out = run_program(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}", xs: [i] }; }
+struct Gd[T] { r: T, z: i64 }
+fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; println("in"); return r; }
+fn gEsc2[U](h: Gd[U]) -> U { let Gd { r, z } = h; println("in2"); return r; }
+fn gZ[T](h: Gd[T]) -> i64 { let Gd { r, z } = h; println("inZ"); return z; }
+fn c_esc()  { let out = gEsc(Gd[R] { r: mk(5), z: 9 }); println(f"got{out.id}"); }
+fn c_u()    { let out = gEsc2(Gd[R] { r: mk(11), z: 9 }); println(f"got{out.id}"); }
+fn c_str()  { let out = gEsc(Gd[String] { r: f"s{8}", z: 9 }); println(f"got{out}"); }
+fn c_z()    { let out = gZ(Gd[R] { r: mk(12), z: 9 }); println(f"got{out}"); }
+fn main() { c_esc(); c_u(); c_str(); c_z(); println("end"); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "in\ngot5\ndR5\nin2\ngot11\ndR11\nin\ngots8\ninZ\ndR12\ngot9\nend\n",
+                "each destructured-and-returned leaf dies exactly once, at its \
+                 owner in the caller; the leaf dropped inside the callee keeps \
+                 its place; got {out:?}"
+            );
+        }
+    }
+
     /// B-2026-08-08-30 — mapping a BORROWED SCALAR payload.
     ///
     /// `Vec[T].first()` / `.get(i)` are typed `Option[ref T]` (`Map.get` is owned
