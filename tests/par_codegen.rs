@@ -12808,6 +12808,67 @@ fn main() {
             );
         }
     }
+
+    /// B-2026-09-01-16 — A STRUCT WHOSE FIELD IS PASSED BY VALUE FROM INSIDE AN
+    /// INTERPOLATED-STRING ARGUMENT HAS ITS `Drop` DEFERRED TO SCOPE EXIT ON THE
+    /// COMPILED SURFACES — the default auto-par column.
+    ///
+    /// `h`'s last use is the `readf(h.r)` call inside the `println` f-string, so
+    /// design.md § Drop ("Destructors fire at each binding's live-range end, not
+    /// at lexical scope end") puts `drop 40` after `field=43` and BEFORE `end`.
+    /// The row measured every compiled column printing `field=43 end drop 40`
+    /// while the interpreter had the order above; hoisting the call into its own
+    /// `let` made all four agree, which is what localized it to the admission of
+    /// the binding rather than the existence of the early-fire pass.
+    ///
+    /// The row closed without a change of its own. Probed at its filing commit
+    /// (`7717d75`) the default build printed `field=43 end drop 40` while
+    /// `KARAC_AUTO_PAR=0` was ALREADY the interpreter's order — the same `np`
+    /// mismeasurement the class row's fix corrected — and `aa21ffb` (the
+    /// B-2026-08-31-4 / B-2026-08-31-6 fix: an auto-par group no longer swallows
+    /// a covered NLL drop point) took the divergence. So the row's distinction
+    /// from its class ("neither a `ref` arg nor a heap return") was drawn against
+    /// the misattributed mechanism; what selected this program was a group
+    /// covering the f-string statement. This pin exists so it stays gone — a
+    /// position-only drift like this is invisible to every count-based drop
+    /// gate.
+    #[test]
+    fn test_e2e_auto_par_nll_drop_point_at_a_by_value_field_arg_inside_an_fstring() {
+        let out = run_program(
+            r#"
+struct Res { id: i64, buf: Vec[i64] }
+impl Drop for Res { fn drop(mut ref self) { println(f"drop {self.id}") } }
+struct Holder { r: Res }
+
+fn mk(n: i64) -> Res {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 { v.push(n + i); i = i + 1; }
+    return Res { id: n, buf: v }
+}
+
+fn hand(r: Res) -> Res { return r }
+fn readf(r: Res) -> i64 { return r.buf[3] }
+
+fn main() {
+    let b = mk(20);
+    let hb = hand(b);
+    println(f"hand={hb.buf[1]}");
+    let h = Holder { r: mk(40) };
+    println(f"field={readf(h.r)}");
+    println("end");
+}
+    "#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "hand=21\ndrop 20\nfield=43\ndrop 40\nend\n",
+                "`h` must die at the f-string statement that last uses it on the \
+                 auto-par column too; the row measured `field=43 end drop 40`; \
+                 got {out:?}"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
