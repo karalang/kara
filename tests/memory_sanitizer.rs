@@ -72258,4 +72258,61 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-09-04-26 — the memory half of
+    /// `e2e_result_ctor_tuple_temp_arg_keeps_its_payload_drop_body`
+    /// (tests/codegen.rs), and the cell that decides the row.
+    ///
+    /// The row was filed believing the `Result` element was memory-CLEAN and
+    /// that enriching its type would trade a lost `Drop` body for a 56-byte
+    /// leak. Both halves of that were a `-O2` artifact: the cell reports 17
+    /// allocs / 15 frees at `KARAC_OPT_LEVEL=0` pre-fix, and at `-O2` only 11
+    /// allocs, because dead-allocation elimination deletes a `malloc` nothing
+    /// reads. LSan here runs the default optimization level, so this asserts
+    /// the balanced state directly rather than the reading that hid it.
+    #[test]
+    fn asan_result_ctor_tuple_temp_arg_clean() {
+        let label = "result_ctor_tuple_temp_arg";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}/{self.xs.len()}") } }
+fn mk(k: i64) -> R { return R { id: k, tag: "t", xs: [1, 2, 3] } }
+fn resArg(t: (R, Result[R, i64])) { println(f"rd{t.0.id}") }
+fn resStr(t: (R, Result[R, String])) { println(f"rs{t.0.id}") }
+fn both(a: (R, Result[R, i64]), b: (R, Option[R])) { println(f"bo{a.0.id}{b.0.id}") }
+fn main() {
+    resArg((mk(2), Result.Ok(mk(22))));
+    resArg((mk(3), Result.Ok(mk(33))));
+    both((mk(4), Result.Ok(mk(44))), (mk(5), Option.Some(mk(55))));
+    resStr((mk(6), Result.Ok(mk(66))));
+    resArg((mk(7), Result.Err(9)));
+    { let t: (R, Result[R, i64]) = (mk(8), Result.Ok(mk(88))); resArg(t); }
+    println("end")
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported an error (exit {:?}); stdout:\n{stdout}",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "rd2", "dR2/3", "dR22/3", "rd3", "dR3/3", "dR33/3", "bo45", "dR5/3", "dR55/3",
+                "dR4/3", "dR44/3", "rs6", "dR6/3", "dR66/3", "rd7", "dR7/3", "rd8", "dR8/3",
+                "dR88/3", "end",
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
 }

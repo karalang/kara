@@ -2178,11 +2178,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.arg_is_entry_copied_heap_tuple(&a.value, &name, i))
             {
                 let escaping_parts = self.callee_returned_param_parts(&name, i);
+                let declared_tes = self.callee_tuple_param_elem_type_exprs(&name, i);
                 self.track_inline_owned_aggregate_arg_parts(
                     val,
                     &a.value,
                     escapes_frame,
                     &escaping_parts,
+                    declared_tes.as_deref(),
                 );
             }
             // B-2026-08-28-16 — a PLACE tuple argument (`take(q)`) whose
@@ -4197,7 +4199,15 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         arg_escapes_frame: bool,
     ) {
-        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_escapes_frame, None, false, &[])
+        self.track_inline_owned_aggregate_arg_inst(
+            val,
+            arg,
+            arg_escapes_frame,
+            None,
+            false,
+            &[],
+            None,
+        )
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] carrying the callee's
@@ -4212,6 +4222,7 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &Expr,
         arg_escapes_frame: bool,
         escaping_paths: &[crate::ast::ParamPath],
+        declared_elem_tes: Option<&[TypeExpr]>,
     ) {
         self.track_inline_owned_aggregate_arg_inst(
             val,
@@ -4220,6 +4231,7 @@ impl<'ctx> super::Codegen<'ctx> {
             None,
             false,
             escaping_paths,
+            declared_elem_tes,
         )
     }
 
@@ -4364,6 +4376,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// annotation. Only the first of those may suppress the caller's drop
     /// (B-2026-08-07-17), so `struct_param_owned_by_transfer` is asked with the
     /// flag rather than with `mono_inst.is_none()`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn track_inline_owned_aggregate_arg_inst(
         &mut self,
         val: BasicValueEnum<'ctx>,
@@ -4372,6 +4385,7 @@ impl<'ctx> super::Codegen<'ctx> {
         mono_inst: Option<TypeExpr>,
         callee_entry_copies_mono: bool,
         escaping_paths: &[crate::ast::ParamPath],
+        declared_elem_tes: Option<&[TypeExpr]>,
     ) {
         let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
             return;
@@ -4412,6 +4426,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 mono_inst,
                 callee_entry_copies_mono,
                 escaping_paths,
+                declared_elem_tes,
             );
             return;
         }
@@ -4752,6 +4767,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         } else if let Some(elem_tes) = self.tuple_arg_elem_type_exprs(arg) {
+            // B-2026-09-04-26 — fill what the caller's view could not name from
+            // the callee's DECLARED param type, so a `Result.Ok(..)` element
+            // reaches the drop machinery as `Result[R, i64]` rather than
+            // `Result[R, <empty>]`. Without it the bodies walker admits the
+            // element (it only tests that generic args exist) while
+            // `tuple_elem_optres_drop_ok` declines the memory drop on the
+            // unresolved `E`, so the payload's body runs and its 56-byte
+            // envelope leaks.
+            let elem_tes = Self::fill_unresolved_elem_tes(&elem_tes, declared_elem_tes);
             // #21 — a tuple-shaped arg. The callee entry-copies a heap-bearing
             // tuple param (`make_tuple_param_callee_owned`), so this caller temp
             // is an INDEPENDENT buffer that must free its own heap. The
@@ -5524,7 +5548,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// fill-in silently missed on exactly the monomorph path this row is about.
     /// `mono_state.generic_fns` carries every generic callee, stdlib included —
     /// the same two-map lookup `mono_call_arg_moves_into_self` already performs.
-    fn callee_tuple_param_elem_type_exprs(
+    pub(super) fn callee_tuple_param_elem_type_exprs(
         &self,
         callee: &str,
         idx: usize,
@@ -5602,6 +5626,104 @@ impl<'ctx> super::Codegen<'ctx> {
             && resolved
                 .iter()
                 .all(|e| self.field_copy_supported(e, &mut Vec::new()))
+    }
+
+    /// B-2026-09-04-26 — fill the positions `infer_arg_elem_te` could not
+    /// resolve from the callee's DECLARED tuple-param element types.
+    ///
+    /// The same idiom [`Self::arg_is_entry_copied_heap_tuple`] already applies,
+    /// promoted from a predicate's private fill-in to the element types the
+    /// registrar actually builds a drop from — and extended one level down,
+    /// which is what this row needs: `Result.Ok(mk(22))` yields
+    /// `Result[R, <empty>]`, whose unresolved position is a GENERIC ARG, not
+    /// the element itself, so the top-level-only test saw nothing to fill.
+    ///
+    /// `E` is not recoverable from the expression (`Result.Ok(x)` says nothing
+    /// about it) and it does not have to be: an unannotated `let` of a
+    /// `Result.Ok` does not typecheck at all ("cannot infer type parameter
+    /// `E`"), so every well-typed occurrence has a declared `E` somewhere — the
+    /// annotation on a `let`, the parameter type at a call. This reads the
+    /// second.
+    ///
+    /// The INFERRED view stays authoritative wherever it resolves, for the
+    /// reason its sibling records: at a generic call site the caller carries
+    /// the concrete instantiation and the declared `(Bag[T], i64)` does not.
+    /// Only positions the caller could not name are taken from the callee, so a
+    /// declared bare `T` can replace an empty path but never a resolved type.
+    /// Fail-CLOSED: when neither view resolves a position it stays empty, which
+    /// reads as no-drop downstream — the pre-existing miss, never a double free.
+    pub(super) fn fill_unresolved_elem_tes(
+        inferred: &[TypeExpr],
+        declared: Option<&[TypeExpr]>,
+    ) -> Vec<TypeExpr> {
+        let Some(declared) = declared else {
+            return inferred.to_vec();
+        };
+        inferred
+            .iter()
+            .enumerate()
+            .map(|(j, e)| match declared.get(j) {
+                Some(d) => Self::fill_unresolved_te(e, d),
+                None => e.clone(),
+            })
+            .collect()
+    }
+
+    /// One position of [`Self::fill_unresolved_elem_tes`], recursing through
+    /// generic args and tuple elements so a nested unresolved slot is reached.
+    fn fill_unresolved_te(inferred: &TypeExpr, declared: &TypeExpr) -> TypeExpr {
+        let is_empty_path = |te: &TypeExpr| match &te.kind {
+            TypeKind::Path(p) => p.segments.iter().all(|s| s.is_empty()),
+            _ => false,
+        };
+        if is_empty_path(inferred) {
+            return declared.clone();
+        }
+        match (&inferred.kind, &declared.kind) {
+            (TypeKind::Tuple(ie), TypeKind::Tuple(de)) => TypeExpr {
+                kind: TypeKind::Tuple(
+                    ie.iter()
+                        .enumerate()
+                        .map(|(j, e)| match de.get(j) {
+                            Some(d) => Self::fill_unresolved_te(e, d),
+                            None => e.clone(),
+                        })
+                        .collect(),
+                ),
+                span: inferred.span,
+            },
+            (TypeKind::Path(ip), TypeKind::Path(dp))
+                if ip.segments.last() == dp.segments.last() =>
+            {
+                // Same head. Adopt the declared generic args when the caller
+                // named none at all, else fill only the unresolved ones.
+                let args = match (&ip.generic_args, &dp.generic_args) {
+                    (None, Some(da)) => Some(da.clone()),
+                    (Some(ia), Some(da)) => Some(
+                        ia.iter()
+                            .enumerate()
+                            .map(|(j, a)| match (a, da.get(j)) {
+                                (
+                                    crate::ast::GenericArg::Type(it),
+                                    Some(crate::ast::GenericArg::Type(dt)),
+                                ) => crate::ast::GenericArg::Type(Self::fill_unresolved_te(it, dt)),
+                                _ => a.clone(),
+                            })
+                            .collect(),
+                    ),
+                    (ia, _) => ia.clone(),
+                };
+                TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: ip.segments.clone(),
+                        generic_args: args,
+                        span: ip.span,
+                    }),
+                    span: inferred.span,
+                }
+            }
+            _ => inferred.clone(),
+        }
     }
 
     /// #21 — best-effort `TypeExpr` for a tuple-literal arg ELEMENT, so its
@@ -5838,6 +5960,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     // predicate here.
                     let filled = match (segments[0].as_str(), segments[1].as_str()) {
                         ("Option", "Some") => Some(vec![crate::ast::GenericArg::Type(payload())]),
+                        // B-2026-09-04-26 — `Result.Ok(x)` names its OK type the
+                        // same way. `E` is not knowable from the expression, so
+                        // it is left an empty path here and filled from the
+                        // callee's DECLARED param type at the registrar
+                        // (`fill_unresolved_elem_tes`). Both halves are needed:
+                        // this one alone yields `Result[R, ]`, whose unresolved
+                        // `E` makes `tuple_elem_optres_drop_ok` decline the
+                        // MEMORY drop while the bodies walker (which only tests
+                        // that generic args exist) admits it — body runs, 56 B
+                        // envelope leaks, which is the trade B-2026-09-03-21
+                        // measured and split this row out for.
+                        ("Result", "Ok") => Some(vec![
+                            crate::ast::GenericArg::Type(payload()),
+                            crate::ast::GenericArg::Type(unknown()),
+                        ]),
                         _ => None,
                     };
                     if let Some(generic_args) = filled {

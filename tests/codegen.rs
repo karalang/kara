@@ -16889,10 +16889,15 @@ done
     /// `nonetemp` pins `Option.None` (nothing to run), `destr` the destructured
     /// spelling of the same call, `errtemp` a `Result` whose payload is a scalar.
     ///
-    /// A `Result.Ok` element carrying a Drop payload is NOT covered here and is
-    /// filed separately: enriching its type the same way makes the body run but
-    /// LEAKS the boxed payload's 56-byte envelope, measured — a straight trade of a
-    /// lost body for a leak, where the `Option` side is a pure win. Every cell in
+    /// A `Result.Ok` element carrying a Drop payload is covered by
+    /// `e2e_result_ctor_tuple_temp_arg_keeps_its_payload_drop_body` below.
+    /// It was split out (B-2026-09-04-26) on the reading that enriching its
+    /// type traded a lost body for a 56-byte leak; that reading was an
+    /// artifact. The leak was already there at `KARAC_OPT_LEVEL=0` — pre-fix
+    /// the cell reports 17 allocs / 15 frees — and `-O2` hid it by deleting a
+    /// `malloc` nothing reads, the same dead-allocation elimination that made
+    /// B-2026-09-04-3 look "balanced". Filling `E` from the callee's declared
+    /// parameter type closes the body and the leak together. Every cell in
     /// this fixture is valgrind-clean ("All heap blocks were freed").
     ///
     /// Twin of `tests/interpreter.rs`'s
@@ -16961,6 +16966,52 @@ dR88/t88/1
 localonly end
 done
 "#
+        );
+    }
+
+    /// B-2026-09-04-26 — the `Result` head of the same erasure, which
+    /// B-2026-09-03-21 measured and deliberately declined.
+    ///
+    /// `Result.Ok(mk(22))` as a tuple-temp argument named its element the bare
+    /// `Result`, so `emit_optres_payload_user_drop_bodies_fn` (which needs
+    /// generic args) declined and the payload's body was lost on all three
+    /// compiled surfaces. Filling only the OK type is not enough and is the
+    /// trap the sibling row hit: `Result[R, <empty>]` satisfies the bodies
+    /// walker but not `tuple_elem_optres_drop_ok`, which tests BOTH arms, so
+    /// the body runs and the 56-byte envelope leaks. `E` is unknowable from
+    /// the expression, so it comes from the callee's declared parameter type.
+    ///
+    /// Cells, in order: the row's own repro; two calls (the leak scaled per
+    /// call, 112 B in 2 blocks); `Result` and `Option` in ONE call, which the
+    /// sibling row recorded as a separate cross-cell leak and which this closes
+    /// too; a heap `E` (`Result[R, String]`), where a wrong `E` would be a
+    /// double free rather than a leak; `Result.Err`, correct before and after;
+    /// and the annotated `let`, which always worked and is what fixes the
+    /// argument form to the same answer.
+    #[test]
+    fn e2e_result_ctor_tuple_temp_arg_keeps_its_payload_drop_body() {
+        let Some(out) = run_program(
+            "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}/{self.xs.len()}\"); } }\n\
+             fn mk(k: i64) -> R { return R { id: k, tag: \"t\", xs: [1, 2, 3] } }\n\
+             fn resArg(t: (R, Result[R, i64])) { println(f\"rd{t.0.id}\") }\n\
+             fn resStr(t: (R, Result[R, String])) { println(f\"rs{t.0.id}\") }\n\
+             fn both(a: (R, Result[R, i64]), b: (R, Option[R])) { println(f\"bo{a.0.id}{b.0.id}\") }\n\
+             fn main() {\n\
+             \x20   resArg((mk(2), Result.Ok(mk(22))));\n\
+             \x20   resArg((mk(3), Result.Ok(mk(33))));\n\
+             \x20   both((mk(4), Result.Ok(mk(44))), (mk(5), Option.Some(mk(55))));\n\
+             \x20   resStr((mk(6), Result.Ok(mk(66))));\n\
+             \x20   resArg((mk(7), Result.Err(9)));\n\
+             \x20   { let t: (R, Result[R, i64]) = (mk(8), Result.Ok(mk(88))); resArg(t); }\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "rd2\ndR2/3\ndR22/3\nrd3\ndR3/3\ndR33/3\nbo45\ndR5/3\ndR55/3\ndR4/3\ndR44/3\nrs6\ndR6/3\ndR66/3\nrd7\ndR7/3\nrd8\ndR8/3\ndR88/3\nend\n"
         );
     }
 
