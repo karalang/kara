@@ -93,10 +93,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total |
 |---|---|
 | miscompile | 366 |
-| run-vs-build | 334 |
+| run-vs-build | 336 |
 | leak | 263 |
 | missing-feature | 194 |
-| double-free | 178 |
+| double-free | 179 |
 | codegen-gap | 166 |
 | diagnostics | 123 |
 | false-positive | 106 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1453 |
+| codegen | 1456 |
 | interp | 352 |
 | typecheck | 293 |
 | ownership | 74 |
@@ -157,10 +157,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-12 | 2026-09-04 | codegen | low | A BOXED TWO-`String` TUPLE PAYLOAD LOSES ITS INTERIOR ON BOTH THE GENERIC AND NON-GENERIC PATHS -- 54 B in 6 blocks over three calls, IDENTICAL for `generic[T](x: Option[T])` and `plainT(x: Option[(String, String)])`, so this is the boxed-payload interior rather than anything monomorph-specific; the `Array[String, 2]` payload through the same generic fn is clean, and that asymmetry is the thing to explain | — |
 | B-2026-09-04-22 | 2026-09-04 | codegen | medium | A HEAP-BOXED `Result` PAYLOAD BOUND OUT OF AN AGG DESTRUCTURE LEAF AND MOVED INTO A BY-VALUE CALL LOSES ITS `Drop` BODY -- `let (a, b) = t; match b { Result.Ok(w) => eatw(w), .. }` over `Result[W, String]` (seven-word `W`) prints `eat7` and never `dW7` on jit/aot/AUTO_PAR=0, where `--interp` runs the body after the call; the same arm over a plain `let` local, over `Option[W]`, or over the four-word inline `R`, is correct | — |
 | B-2026-09-04-23 | 2026-09-04 | codegen | low | A DISCARDED FIELD AND AN UNUSED LEAF DROPPED AT THE SAME DESTRUCTURE RUN THEIR BODIES IN OPPOSITE ORDER ON THE TWO BACKENDS -- `let HoRes { a: _, b: b5 } = h5;` with `b5` never read runs `a`'s body then `b5`'s payload body under `--interp` and `b5`'s then `a`'s on jit/aot/AUTO_PAR=0; both at the statement, sequence only | — |
-| B-2026-09-04-24 | 2026-09-04 | codegen | medium | A GENERIC FUNCTION'S BY-VALUE STRUCT PARAM LOSES THE TUPLE ELEMENT'S `Drop` BODY WHEN THE ARGUMENT IS A TEMP LITERAL -- `gfn(G[R] { pe: (mk(81), 5), z: 9 })` runs NO body on all three compiled surfaces against a clean `--interp`, while the same callee handed a NAMED LOCAL is correct, and the non-generic twin is correct with either argument form. Memory is balanced (valgrind clean), so only the user body is lost | — |
 | B-2026-09-04-26 | 2026-09-04 | codegen | medium | A `Result.Ok` CTOR ELEMENT OF A TUPLE TEMP ARGUMENT LOSES ITS PAYLOAD'S `Drop` BODY, and the B-2026-09-03-21 fix cannot simply be widened to it -- filling the erased element type makes the body run and LEAKS the boxed payload's 56 B envelope, because the `Result` cell is memory-CLEAN pre-fix where the `Option` cell leaks 11 B, so something already owns that box | — |
 | B-2026-09-04-32 | 2026-09-04 | codegen+other | low | EVERY COMPILED BACKEND RELEASES AN AGGREGATE-HELD `shared` FIELD AT LEXICAL SCOPE EXIT while design.md pins RC decrements at the binding's LIVE-RANGE END -- one holder splits, `struct Mx { r: R, s: S }` giving `v2 dR1 post dS2`, so the plain field obeys the spec and the shared one does not; a BARE shared binding is unaffected | — |
 | B-2026-09-04-36 | 2026-09-04 | interp+codegen | low | A RECEIVER TEMP NESTED IN A LARGER EXPRESSION DRAINS AT THE STATEMENT'S `;` ON THE COMPILED BACKENDS AND AT THE CALL RETURN IN THE INTERPRETER -- `println(f"  {mk(1).peek()}")` prints `dR1/t1` BEFORE the value under `--interp` and AFTER it on jit/aot. Statement position agrees, which is why it hides: `let v = mk(1).peek()` is byte-identical on all four. This is B-2026-08-29-55's drain-point question one row over -- that row moved the three ARGUMENT registrars to a per-call window and deliberately left the fresh-temp RECEIVER (`__urecv_drop_tmp`) on the statement drain, on the grounds that a receiver has its own position-table row with a different end | — |
+| B-2026-09-05-3 | 2026-09-05 | codegen | high | A GENERIC CALLEE THAT RETURNS A DESTRUCTURED FIELD DOUBLE-FREES WHEN THE ARGUMENT IS A TEMP LITERAL -- `gEsc(Gd[R] { r: mk(5), z: 9 })` where `fn gEsc[T](h: Gd[T]) -> T { let Gd { r, z } = h; return r; }` aborts with `free(): double free detected in tcache 2` on all three compiled backends (valgrind: 2x `Invalid free() / delete / delete[] / realloc()`), against a clean `--interp` that prints the returned value's body exactly once. The NAMED-LOCAL spelling of the same call is clean, so the argument form is the discriminator, as in B-2026-09-04-24 | — |
+| B-2026-09-05-4 | 2026-09-05 | codegen | medium | A GENERIC STRUCT WITH ITS OWN `impl[T] Drop` RUNS NEITHER ITS BODY NOR ITS FIELD'S AS A TEMP-LITERAL ARGUMENT -- `gOwn(Go[R] { r: mk(3), z: 9 })` prints nothing on all three compiled backends against `--interp`'s `dGo9 dR3`. The sibling arm one branch over was fixed by B-2026-09-04-24; this is the `has_user_drop` branch, which reaches the name-keyed `emit_user_drop_wrapper_skipping` and finds no `Go.drop` symbol because a generic impl's methods are deferred to the mono pipeline | — |
+| B-2026-09-05-5 | 2026-09-05 | codegen | medium | A NESTED GENERIC STRUCT LOSES ITS INNER FIELD'S `Drop` BODY AS A TEMP-LITERAL ARGUMENT -- `gNest(Gn2[R] { inner: Gd[R] { r: mk(4), z: 1 }, z: 9 })` prints nothing on all three compiled backends against `--interp`'s `dR4`, while the ONE-LEVEL spelling of the same shape is correct after B-2026-09-04-24. So the instantiation reaches the outer field-bodies walk and is lost on the recursion into the nested generic field | — |
 
 ### Relocated
 
@@ -2220,6 +2222,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-04-19 | codegen | high | B-2026-09-03-22's CONSUMING-ARM SUPPRESSOR ZEROES ONE WORD OF THE LEAF'S PAYLOAD, NOT THE PAYLOAD -- `suppress_inline_result_agg_payload_cleanup` GEP… | bfa5876 |
 | B-2026-09-04-20 | codegen | medium | A `Result` FIELD OF A FRESH DESTRUCTURE SOURCE HAS NO OWNER -- `let HoStr { a, b } = mkhs(9);` over `b: Result[String, String]` leaks the payload's b… | bfa5876 |
 | B-2026-09-04-21 | codegen | high | A STRUCT-FIELD DESTRUCTURE OVER A PROJECTION SOURCE (`let HoRes { a, b } = w.inner;`) IS WRONG THREE WAYS -- a `Result[R, String]` leaf CONSUMED by a… | 9a97efa |
+| B-2026-09-04-24 | codegen | medium | A GENERIC FUNCTION'S BY-VALUE STRUCT PARAM LOSES THE TUPLE ELEMENT'S `Drop` BODY WHEN THE ARGUMENT IS A TEMP LITERAL -- `gfn(G[R] { pe: (mk(81), 5),… | 18c0b63 |
 | B-2026-09-04-25 | codegen | high | A STRUCT DESTRUCTURED OUT OF A PROJECTION OF A BY-VALUE PARAM RUNS THE `Result` LEAF'S PAYLOAD BODY TWICE ON AOT AND DOUBLE-FREES ON JIT -- `fn takew… | e084cf9 |
 | B-2026-09-04-27 | codegen | medium | A GENERIC STRUCT'S `impl[T] Drop` RUNS NO BODY WHEN THE VALUE IS A `Vec` ELEMENT -- `let v: Vec[Box3[String]] = [Box3 { . | dab1e71 |
 | B-2026-09-04-28 | codegen | medium | AN `Array[T, N]` READ OUT OF A STRUCT FIELD LOSES ITS ELEMENT TYPE FOR CODEGEN, so a field access through one of its elements fails to lower -- `let… | 54103c9 |
