@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 123 |
 | false-positive | 106 |
 | soundness | 95 |
-| perf | 90 |
+| perf | 94 |
 | other | 77 |
 | crash | 73 |
 | use-after-free | 31 |
@@ -110,15 +110,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1471 |
+| codegen | 1472 |
 | interp | 357 |
 | typecheck | 293 |
 | ownership | 74 |
 | other | 73 |
 | cli | 70 |
-| autopar | 55 |
+| autopar | 56 |
 | parser | 46 |
-| runtime | 38 |
+| runtime | 40 |
 | effect | 29 |
 | resolver | 29 |
 | lexer | 8 |
@@ -130,6 +130,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
+| B-2026-08-28-76 | 2026-08-28 | autopar | high | AUTO-PAR RETURNS 1.08x FOR 15.7 CORES on the M5 (kata:288) and 3.09x (kata:282), against 3.06x/3.87x on 4 HOMOGENEOUS container cores -- the parallel lane burns 3.1-5.1x the sequential lane's USER CPU where the container burned 1.00x, and NO KARAC_PAR_WORKERS setting recovers it | kata:288-README |
+| B-2026-08-28-77 | 2026-08-28 | codegen | medium | kata:895 IS THE ONLY CORPUS ROW THAT GOT SLOWER ON THE FASTER HOST -- 26.50ms on 4 x86 container cores -> 29.63ms on the M5, while rust_ovf went 34.71 -> 16.49 (2.10x faster), go 1.68x and c 1.75x; kara falls from 1.31x AHEAD of checked Rust to 1.80x behind. Prime suspect: the map hash-tag probe is DISABLED on aarch64 for primitive keys | kata:895-README |
 | B-2026-08-31-43 | 2026-08-31 | interp+codegen | medium | A `self`-ROOTED PROJECTION SCRUTINEE IS UNMASKED AT EVERY DEPTH, SO A MATERIALIZING ARM'S PAYLOAD `Drop` BODY RUNS TWICE -- `match self.e { E.A(r) => { let m = r; return m.id; } .. }` inside a `mut ref self` method prints `dR1` twice on all three backends, and the two-hop `self.s.e` doubles identically; the same code with the receiver bound to a LOCAL first runs one body | — |
 | B-2026-08-31-50 | 2026-08-31 | interp+codegen | medium | AN ENUM-CONSTRUCTOR MIXED WRAP LOSES ITS SLOT MASK ACROSS A WHOLE-VALUE REBIND, AND CODEGEN CANNOT INHERIT IT BECAUSE IT STORES NOTHING PER VARIABLE -- `let w = W2.Two(r, mk(2)); let w2 = w;` prints `dR1 dR2 dR1` where `dR2 dR1` is due, on all three backends; the STRUCT and TUPLE spellings of the same rebind were fixed by B-2026-08-29-44 and this one could not be, because `enum_ctor_param_view_payload_slots` derives the masked slots from the ctor EXPRESSION at the `let` and keeps no per-var record for a rebind to copy | — |
 | B-2026-09-01-1 | 2026-09-01 | codegen | low | A SELF-ASSIGNMENT WHOSE RHS IS AN `if`/`match` LEAKS THE OVERWRITTEN VALUE -- `e = if c { pass(e) } else { pass(e) }` loses a block (12 allocs / 11 frees at -O0), the same shape B-2026-08-29-51 fixed for blocks and measured UNTOUCHED by it; MIXED arms leak identically, and like its sibling the leak is clean at -O2 | — |
@@ -161,6 +163,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-05-16 | 2026-09-05 | codegen | high | A NESTED GENERIC-INSTANTIATION FIELD UNDER A NON-GENERIC OWN-`Drop` PARENT DOUBLE-FREES UNDER LLJIT ONLY -- `nOwn(Nouter { inner: Go[R] { r: mk(3), z: 55 }, z: 56 })` aborts with `free(): double free detected in tcache 2` under `karac run`, while the SAME program built AOT is valgrind-clean at 10 allocs / 10 frees and merely under-drops the nested body. The generic-parent spelling does not crash, so the crash needs a non-generic parent holding a generic-instantiation field. Sibling of B-2026-09-05-15 | — |
 | B-2026-09-05-17 | 2026-09-05 | interp+codegen | medium | A FORWARDING CALLEE DEFEATS THE ESCAPING-FIELD MASK, so a place struct argument whose field is handed back THROUGH ANOTHER CALL still runs that field's `Drop` body TWICE -- `fn fwd(g: Cd) -> R { return cEsc(g); }` over `fn cEsc(h: Cd) -> R { let Cd { r, z } = h; return r; }`, called as `let g = Cd { r: mk(61), z: 9 }; let out = fwd(g);`, prints `in dR61 got61 dR61` on `--interp`, `karac run`, `karac build` and `KARAC_AUTO_PAR=0` alike, against one `R` ever constructed; calling `cEsc(g)` DIRECTLY prints `in got61 dR61`, once, on all four | — |
 | B-2026-09-05-18 | 2026-09-05 | codegen | high | A GENERIC CALLEE'S TUPLE ELEMENT HANDED BACK TO A PLACE ARGUMENT DOUBLE-FREES UNDER `karac run` and runs two `Drop` bodies under `karac build`, against a correct interpreter -- `fn kEsc[T](p: (T, i64)) -> T { let (r, z) = p; return r; }` called as `let g = (mk(95), 9); let out = kEsc(g);` aborts with `free(): double free detected in tcache 2` (exit 134, no output) under the JIT, prints `in dR95 got95 dR95` under `karac build` and `KARAC_AUTO_PAR=0`, and prints the due `in got95 dR95` under `--interp`; the NON-generic spelling of the same call is correct on all four | — |
+| B-2026-09-05-22 | 2026-09-05 | runtime | medium | THE AUTO-PAR WORKER POOL AT N=2 IS SLOWER THAN AT N=1 AND BURNS 3.6x THE CPU -- kata:282 under HOMOGENEOUS all-E placement: N=1 4329.73ms/4272ms user, N=2 7710.74ms/15191ms user, sd 38% of mean; N=4 recovers, so the N>=2 general dispatch path has a degenerate TWO-WORKER case | none |
+| B-2026-09-05-23 | 2026-09-05 | runtime | medium | kata:288's AUTO-PAR LANE GENERATES SYSTEM TIME LINEAR IN WORKER COUNT -- 1.11ms at N=1 rising to 1267.64ms at N=18 (~70ms of kernel time per added worker, 11.7 cores' worth against a 108.71ms wall), while kata:282 stays FLAT at 3.81 -> 9.41ms across the identical sweep | none |
 
 ### Relocated
 
