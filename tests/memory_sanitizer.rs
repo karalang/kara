@@ -4685,6 +4685,11 @@ fn main() {
     /// `Err` half, which never husked because it has no payload to walk.
     /// Three iterations, so a per-iteration imbalance accumulates rather than
     /// hiding in a single pass.
+    ///
+    /// B-2026-09-03-32 — the `awild` cells (`dR2 dR3`, `dR12 dR13`, `dR22 dR23`)
+    /// pinned codegen's old order, leaf before discard; the discard is now
+    /// destroyed inside the statement, ahead of the unread leaf, on every
+    /// surface, and the strings here carry that one order.
     #[test]
     fn asan_struct_field_destructure_result_leaf_frees_its_payload_once() {
         assert_clean_asan_run_min_allocs(
@@ -4714,8 +4719,8 @@ fn main() {
                 "dR1/tag-value-1",
                 "rd0",
                 "dR0/tag-value-0",
-                "dR3/tag-value-3",
                 "dR2/tag-value-2",
+                "dR3/tag-value-3",
                 "rb0",
                 "got5/tag-value-5",
                 "dR5/tag-value-5",
@@ -4726,8 +4731,8 @@ fn main() {
                 "dR11/tag-value-11",
                 "rd10",
                 "dR10/tag-value-10",
-                "dR13/tag-value-13",
                 "dR12/tag-value-12",
+                "dR13/tag-value-13",
                 "rb10",
                 "got15/tag-value-15",
                 "dR15/tag-value-15",
@@ -4738,8 +4743,8 @@ fn main() {
                 "dR21/tag-value-21",
                 "rd20",
                 "dR20/tag-value-20",
-                "dR23/tag-value-23",
                 "dR22/tag-value-22",
+                "dR23/tag-value-23",
                 "rb20",
                 "got25/tag-value-25",
                 "dR25/tag-value-25",
@@ -72854,6 +72859,63 @@ fn main() {
             ],
             "asan_copy_unsupported_own_drop_by_value_arg_has_one_owner",
             8,
+        );
+    }
+
+    /// B-2026-09-03-32 / B-2026-09-05-25 — the memory half of
+    /// `e2e_destructure_discard_dies_in_the_statement_and_masks_die_with_the_block`:
+    /// the inline residual walk fires BEFORE the source's memory drop and
+    /// touches no memory of its own, and the block-exit mask purge changes only
+    /// which bodies run, so this pins that moving the walk earlier freed nothing
+    /// twice and leaked nothing (valgrind: every block freed at -O0 and -O2).
+    #[test]
+    fn asan_destructure_discard_dies_in_the_statement_clean() {
+        let label = "destructure_discard_dies_in_the_statement";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Two { a: R, b: R }
+struct Ho2 { a: R, b: Option[R] }
+fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
+fn pDes(h: Two) { let Two { a, b: _ } = h; println("in") }
+fn main() {
+    { let h: Two = Two { a: mk(1), b: mk(101) }; let Two { a, b: _ } = h; println("one") }
+    { let h: Two = Two { a: mk(2), b: mk(102) }; let Two { a: _, b } = h; println("two") }
+    { let h: Two = Two { a: mk(3), b: mk(103) }; let Two { a: _, b: _ } = h; println("three") }
+    { let h: Two = Two { a: mk(4), b: mk(104) }; let Two { a, b: _ } = h; println(f"use{a.id}"); println("four") }
+    { let h: Two = Two { a: mk(5), b: mk(105) }; let Two { a, b } = h; println("five") }
+    { let h: Two = Two { a: mk(6), b: mk(106) }; println("six") }
+    { pDes(Two { a: mk(7), b: mk(107) }); println("seven") }
+    { let h: Two = Two { a: mk(8), b: mk(108) }; let Two { a, b: _ } = h; let q: Two = Two { a: mk(9), b: mk(109) }; println("eight") }
+    { let h: Ho2 = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a, b: _ } = h; println("nine") }
+    { let h: Two = Two { a: mk(11), b: mk(111) }; let Two { a: _, b } = h; println("ten") }
+    println("end")
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported an error (exit {:?}); stdout:\n{stdout}",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "dR101", "dR1", "one", "dR2", "dR102", "two", "dR103", "dR3", "three", "dR104",
+                "use4", "dR4", "four", "dR105", "dR5", "five", "dR106", "dR6", "six", "in",
+                "dR107", "dR7", "seven", "dR108", "dR8", "dR109", "dR9", "eight", "dR110", "dR10",
+                "nine", "dR11", "dR111", "ten", "end",
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
 }

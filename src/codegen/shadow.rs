@@ -411,6 +411,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shadowed outer bindings (name + metadata together) return. See
     /// [`VarEnvSnapshot`] for the cleanup-safety and ordering contract.
     pub(super) fn restore_var_env(&mut self, snap: VarEnvSnapshot<'ctx>) {
+        // B-2026-09-05-25 — the per-NAME move masks are not part of the
+        // snapshot, so a name declared in this block carried its masks into a
+        // LATER sibling block that reused it: `let h = ..; let Two { a, b: _ }
+        // = h` then, in the next block, `let h = ..; let Two { a: _, b } = h`
+        // composed both blocks' masks on the second `h` and its residual walk
+        // skipped every field — the wildcard's body was lost outright. A
+        // block's names die with the block.
+        let declared: Vec<String> = self
+            .variables
+            .keys()
+            .filter(|n| !snap.variables.contains_key(n.as_str()))
+            .cloned()
+            .collect();
+        for n in &declared {
+            self.type_decls.struct_moved_field_bodies.remove(n);
+            self.type_decls.struct_moved_field_payload_bodies.remove(n);
+            self.type_decls.struct_moved_nested_field_bodies.remove(n);
+            self.tuple_moved_elem_bodies.remove(n);
+            self.tuple_moved_elem_payload_bodies.remove(n);
+        }
         self.variables = snap.variables;
         self.borrow_vars.owned_vecstr_params = snap.owned_vecstr_params;
         self.borrow_vars.for_loop_borrow_vars = snap.for_loop_borrow_vars;

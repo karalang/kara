@@ -16259,9 +16259,11 @@ done
     /// source shape here (`loc`, `box`, `awild`, `nest`, `call`, `lit` each gain
     /// their `dR1xx` line, at the destructure — the unused leaf's last use). The
     /// phantom this fixture was written for stays gone, which is what `wild` and
-    /// `param` (unchanged) still pin. `awild` is pinned per backend: both run `a`'s
-    /// discard body and `b5`'s body at the same statement, in opposite sequence —
-    /// filed as its own row, see `test_struct_field_destructure_result_leaf_leaves_no_husk_body`.
+    /// `param` (unchanged) still pin. `awild` was pinned per backend (B-2026-09-04-23):
+    /// both ran `a`'s discard body and `b5`'s body at the same statement, in
+    /// opposite sequence. B-2026-09-03-32 settled the tie — the discard is the
+    /// destructure's own destruction and precedes an unread leaf's NLL death —
+    /// so codegen now prints the interpreter's `dR5 dR105` and the cell is one string.
     #[test]
     fn e2e_struct_field_destructure_result_leaf_leaves_no_husk_body() {
         let Some(out) = run_program(
@@ -16345,8 +16347,8 @@ dR104/t104
   rd4
 dR4/t4
 awild
-dR105/t105
 dR5/t5
+dR105/t105
   rb5
 nest
 dR106/t106
@@ -17654,6 +17656,58 @@ done
             return;
         };
         assert_eq!(out, "in\ndR1\none10\nin\ndR2\ntwo10\nin\nmoved\ndR3\nthree10\nin\nmoved\ndR4\nfour10\nin\ndR5\nfive10\nin\nmoved\ndR6\nsix10\nend\n");
+    }
+
+    /// B-2026-09-03-32 / B-2026-09-04-23 / B-2026-09-05-25 — a destructure
+    /// DESTROYS THE FIELDS IT DISCARDS INSIDE THE STATEMENT, before an unread
+    /// leaf's NLL death; several discards die in reverse declaration order;
+    /// and a block's per-name move masks die with the block.
+    ///
+    /// `one` is -32's cell: the wildcard `b` and the never-read `a` both fall
+    /// due at the destructure, and the frame's LIFO drain ran the leaf first
+    /// (registered later) where the interpreter destroys the discard while
+    /// binding the pattern — `dR42 dR142` against `dR142 dR42`. Codegen now
+    /// fires the consumed source's residual walk inline
+    /// (`fire_struct_field_bodies_now`) and retracts it. `two` is the mirror
+    /// (`a: _`), `three` both wildcards (the INTERPRETER's half: it ran them in
+    /// pattern order, now reverse declaration like the whole-value drop),
+    /// `four` the later-use control that was always agreed, `five` the
+    /// binding spelling, `six` the undestructured control, `seven` the
+    /// by-value param whose walk stays at the callee's exit on every surface,
+    /// `nine` the `Option`-typed face (-04-23's cell shape).
+    ///
+    /// `eight` and `ten` are -22: every block here reuses `h`, and the
+    /// per-name move masks were never dropped at block exit, so a later block
+    /// destructuring `h` with the OPPOSITE wildcard composed both masks and its
+    /// residual walk skipped every field — `dR11` was lost outright (clean in
+    /// isolation, which is how it hid).
+    #[test]
+    fn e2e_destructure_discard_dies_in_the_statement_and_masks_die_with_the_block() {
+        let Some(out) = run_program(
+            "struct R { id: i64, tag: String, xs: Vec[i64] }\n\
+             impl Drop for R { fn drop(mut ref self) { println(f\"dR{self.id}\") } }\n\
+             struct Two { a: R, b: R }\n\
+             struct Ho2 { a: R, b: Option[R] }\n\
+             fn mk(k: i64) -> R { return R { id: k, tag: f\"t{k}\", xs: [k] } }\n\
+             fn pDes(h: Two) { let Two { a, b: _ } = h; println(\"in\") }\n\
+             fn main() {\n\
+             \x20   { let h: Two = Two { a: mk(1), b: mk(101) }; let Two { a, b: _ } = h; println(\"one\") }\n\
+             \x20   { let h: Two = Two { a: mk(2), b: mk(102) }; let Two { a: _, b } = h; println(\"two\") }\n\
+             \x20   { let h: Two = Two { a: mk(3), b: mk(103) }; let Two { a: _, b: _ } = h; println(\"three\") }\n\
+             \x20   { let h: Two = Two { a: mk(4), b: mk(104) }; let Two { a, b: _ } = h; println(f\"use{a.id}\"); println(\"four\") }\n\
+             \x20   { let h: Two = Two { a: mk(5), b: mk(105) }; let Two { a, b } = h; println(\"five\") }\n\
+             \x20   { let h: Two = Two { a: mk(6), b: mk(106) }; println(\"six\") }\n\
+             \x20   { pDes(Two { a: mk(7), b: mk(107) }); println(\"seven\") }\n\
+             \x20   { let h: Two = Two { a: mk(8), b: mk(108) }; let Two { a, b: _ } = h; let q: Two = Two { a: mk(9), b: mk(109) }; println(\"eight\") }\n\
+             \x20   { let h: Ho2 = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a, b: _ } = h; println(\"nine\") }\n\
+             \x20   { let h: Two = Two { a: mk(11), b: mk(111) }; let Two { a: _, b } = h; println(\"ten\") }\n\
+             \x20   println(\"end\")\n\
+             }\n\
+             ",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "dR101\ndR1\none\ndR2\ndR102\ntwo\ndR103\ndR3\nthree\ndR104\nuse4\ndR4\nfour\ndR105\ndR5\nfive\ndR106\ndR6\nsix\nin\ndR107\ndR7\nseven\ndR108\ndR8\ndR109\ndR9\neight\ndR110\ndR10\nnine\ndR11\ndR111\nten\nend\n");
     }
 
     /// B-2026-09-03-12 — a tuple bound out of a PLACE (`let x = h.pe;`) records its

@@ -14456,6 +14456,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.track_owned_destructure_field_cleanup(&synth, alloca, &field_te);
             }
         }
+        // B-2026-09-03-32 — the DISCARDED fields of a consumed LOCAL source
+        // are destroyed by the destructure itself, not at the source's NLL
+        // death. Both the source's residual walk (the wildcard fields) and an
+        // unread leaf fall due at this statement, and the frame's LIFO drain
+        // ran the leaf first — registered later — where the interpreter
+        // destroys the discards while binding the pattern and the leaf at the
+        // statement's end. So fire the residual walk here, inside the
+        // statement, and retract the action: the source is consumed, nothing
+        // of it is read again, and the memory half stays where it was. A
+        // by-value PARAM root keeps its walk (its bodies run at the callee's
+        // exit on every surface); a projection source is untouched.
+        if let Some(src) = place_body_src.as_deref() {
+            if !owner_runs_bodies {
+                self.fire_struct_field_bodies_now(src);
+            }
+        }
         Ok(())
     }
 

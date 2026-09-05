@@ -3232,17 +3232,36 @@ impl<'a> super::Interpreter<'a> {
                 }
                 collect(pats, items, &mut discarded);
             }
-            (PatternKind::Struct { fields, .. }, Value::Struct { fields: vals, .. }) => {
+            (
+                PatternKind::Struct { fields, .. },
+                Value::Struct {
+                    name: sname,
+                    fields: vals,
+                },
+            ) => {
+                // B-2026-09-03-32 — discarded fields die in REVERSE
+                // declaration order, the field drop order design.md pins
+                // for a whole value and the order codegen's residual walk
+                // already runs; pattern order is not declaration order.
+                let order = crate::interpreter::type_order::current()
+                    .and_then(|reg| reg.struct_field_order(sname).cloned());
+                let mut picked: Vec<(u32, Value)> = Vec::new();
                 for fp in fields {
                     // `W { r: _, n }` — only the RENAMED form can carry a
                     // wildcard; the shorthand `W { r, n }` is a binding.
                     let Some(inner) = &fp.pattern else { continue };
                     if matches!(inner.kind, PatternKind::Wildcard) {
                         if let Some(v) = vals.get(&fp.name) {
-                            discarded.push(v.clone());
+                            let idx = order
+                                .as_ref()
+                                .and_then(|o| o.get(&fp.name).copied())
+                                .unwrap_or(picked.len() as u32);
+                            picked.push((idx, v.clone()));
                         }
                     }
                 }
+                picked.sort_by(|a, b| b.0.cmp(&a.0));
+                discarded.extend(picked.into_iter().map(|(_, v)| v));
             }
             _ => return,
         }

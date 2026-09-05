@@ -35352,9 +35352,11 @@ done
 /// source shape here (`loc`, `box`, `awild`, `nest`, `call`, `lit` each gain
 /// their `dR1xx` line, at the destructure — the unused leaf's last use). The
 /// phantom this fixture was written for stays gone, which is what `wild` and
-/// `param` (unchanged) still pin. `awild` is pinned per backend: both run `a`'s
-/// discard body and `b5`'s body at the same statement, in opposite sequence —
-/// the interpreter runs the discard first; filed as its own row (the codegen twin pins the other sequence).
+/// `param` (unchanged) still pin. `awild` was pinned per backend (B-2026-09-04-23):
+/// both ran `a`'s discard body and `b5`'s body at the same statement, in opposite
+/// sequence. B-2026-09-03-32 settled the tie in this backend's favour — the
+/// discard is the destructure's own destruction and precedes an unread leaf's
+/// NLL death — so the codegen twin now carries this same string.
 #[test]
 fn test_struct_field_destructure_result_leaf_leaves_no_husk_body() {
     assert_eq!(
@@ -58959,6 +58961,39 @@ fn main() {
 }
 "#),
         "in\ndR1\none10\nin\ndR2\ntwo10\nin\nmoved\ndR3\nthree10\nin\nmoved\ndR4\nfour10\nin\ndR5\nfive10\nin\nmoved\ndR6\nsix10\nend\n"
+    );
+}
+
+/// B-2026-09-03-32 / B-2026-09-04-23 / B-2026-09-05-25 — interpreter twin of
+/// `tests/codegen.rs`'s
+/// `e2e_destructure_discard_dies_in_the_statement_and_masks_die_with_the_block`,
+/// same program and string. The interpreter was the reference for every cell
+/// but `three`, where its discards ran in pattern order and now run in reverse
+/// declaration order (design.md's field drop order).
+#[test]
+fn test_destructure_discard_dies_in_the_statement_and_masks_die_with_the_block() {
+    assert_eq!(
+        run(r#"struct R { id: i64, tag: String, xs: Vec[i64] }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+struct Two { a: R, b: R }
+struct Ho2 { a: R, b: Option[R] }
+fn mk(k: i64) -> R { return R { id: k, tag: f"t{k}", xs: [k] } }
+fn pDes(h: Two) { let Two { a, b: _ } = h; println("in") }
+fn main() {
+    { let h: Two = Two { a: mk(1), b: mk(101) }; let Two { a, b: _ } = h; println("one") }
+    { let h: Two = Two { a: mk(2), b: mk(102) }; let Two { a: _, b } = h; println("two") }
+    { let h: Two = Two { a: mk(3), b: mk(103) }; let Two { a: _, b: _ } = h; println("three") }
+    { let h: Two = Two { a: mk(4), b: mk(104) }; let Two { a, b: _ } = h; println(f"use{a.id}"); println("four") }
+    { let h: Two = Two { a: mk(5), b: mk(105) }; let Two { a, b } = h; println("five") }
+    { let h: Two = Two { a: mk(6), b: mk(106) }; println("six") }
+    { pDes(Two { a: mk(7), b: mk(107) }); println("seven") }
+    { let h: Two = Two { a: mk(8), b: mk(108) }; let Two { a, b: _ } = h; let q: Two = Two { a: mk(9), b: mk(109) }; println("eight") }
+    { let h: Ho2 = Ho2 { a: mk(10), b: Option.Some(mk(110)) }; let Ho2 { a, b: _ } = h; println("nine") }
+    { let h: Two = Two { a: mk(11), b: mk(111) }; let Two { a: _, b } = h; println("ten") }
+    println("end")
+}
+"#),
+        "dR101\ndR1\none\ndR2\ndR102\ntwo\ndR103\ndR3\nthree\ndR104\nuse4\ndR4\nfour\ndR105\ndR5\nfive\ndR106\ndR6\nsix\nin\ndR107\ndR7\nseven\ndR108\ndR8\ndR109\ndR9\neight\ndR110\ndR10\nnine\ndR11\ndR111\nten\nend\n"
     );
 }
 

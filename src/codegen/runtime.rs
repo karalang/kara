@@ -10823,6 +10823,46 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-09-03-32 — fire a binding's `StructFieldBodies` walk NOW and
+    /// retract the action, for a source a destructure has just consumed: the
+    /// discards it still holds are destroyed as part of the statement rather
+    /// than at the frame's LIFO drain, which would run a leaf registered by
+    /// the same statement first. Emits through the field-view-selected path
+    /// so a viewed field's runtime flag is honoured exactly as at NLL.
+    pub(super) fn fire_struct_field_bodies_now(&mut self, name: &str) {
+        let found = self
+            .drop_rc
+            .scope_cleanup_actions
+            .iter()
+            .rev()
+            .find_map(|frame| {
+                frame.iter().find_map(|a| match a {
+                    CleanupAction::UserDrop {
+                        binding_name,
+                        binding_ptr,
+                        drop_fn,
+                        type_name,
+                        kind,
+                    } if binding_name == name && *kind == UserDropKind::StructFieldBodies => {
+                        Some((*binding_ptr, *drop_fn, type_name.clone(), *kind))
+                    }
+                    _ => None,
+                })
+            });
+        let Some((ptr, drop_fn, type_name, kind)) = found else {
+            return;
+        };
+        self.suppress_struct_field_bodies_for_var(name);
+        self.emit_user_drop_bodies_call_field_view_selected(
+            name,
+            &type_name,
+            kind,
+            drop_fn,
+            ptr,
+            "destructure.residual",
+        );
+    }
+
     pub(super) fn suppress_struct_field_bodies_for_var(&mut self, name: &str) {
         for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
             frame.retain(|action| match action {
