@@ -4306,6 +4306,131 @@ done
         );
     }
 
+    /// B-2026-09-05-16 — a struct that is NOT copy-supported AND declares its
+    /// own `impl Drop`, passed BY VALUE, was owned by BOTH frames.
+    ///
+    /// The callee takes such a param OWN BY TRANSFER (B-2026-08-05-33: no entry
+    /// copy is possible, so it keeps the caller's buffers and registers the
+    /// drop), and that arm's safety argument is an explicit lockstep with the
+    /// caller giving its cleanup up. B-2026-08-07-15 closed the lockstep for the
+    /// plain class, on BOTH caller spellings. Neither half reached a type with
+    /// an `impl Drop`: the named binding because
+    /// `move_declined_copy_struct_arg`'s retraction was gated on the bare
+    /// wrapper being ABSENT (B-2026-09-04-4 narrowed it to the generic-`Drop`
+    /// class on purpose), and the fresh temp because its cleanup is registered
+    /// on the `UserDrop` channel by a different arm than the memory gate
+    /// `struct_param_owned_by_transfer` guards.
+    ///
+    /// So the callee freed the caller's buffers through its own param alloca
+    /// and the caller then freed them again through the aggregate it had copied
+    /// from — two allocas holding the same pointers, so neither one's
+    /// cap-zeroing makes the other no-op.
+    ///
+    /// THE OPT LEVEL IS WHAT HID IT, not the backend. The row was filed as
+    /// LLJIT-only against a `karac build` that was clean, which reads as the two
+    /// compiled backends disagreeing. They do not: `KARAC_OPT_LEVEL=0 karac
+    /// build` aborts identically, so it is one latent defect in the IR both
+    /// share, masked at `-O2` exactly as B-2026-09-02-20 and B-2026-08-04-19
+    /// were. A JIT-vs-AOT split is worth one `KARAC_OPT_LEVEL=0` build before it
+    /// is believed.
+    ///
+    /// `mo*` are the failing rows — a `Map` field makes `field_copy_supported`
+    /// decline, and `R`'s own `impl Drop` puts the parent's cleanup on the
+    /// `UserDrop` channel. BOTH caller spellings fail, and they fail
+    /// differently: pre-fix the whole fixture reported 8 invalid frees and 28
+    /// invalid reads, 18 invalid operations from each `mo` cell alone, with
+    /// stdout empty because the abort precedes the flush.
+    ///
+    /// TWO CONTROLS, each a way this fix could have been too broad:
+    ///   * `cs*` — a plain `String` field, i.e. COPY-SUPPORTED. It takes the
+    ///     other branch entirely (the callee entry-copies, so the two frames own
+    ///     distinct heap) and must be untouched. Correct pre- and post-fix.
+    ///   * `ao*` — an `Array[i64, 2]` field. Filed against the non-`Drop` class
+    ///     (B-2026-08-07-15's `ig_arr`) as a way to close copy-support WITHOUT a
+    ///     collection, so it was expected to fail here too. MEASURED CORRECT
+    ///     pre-fix, 0 invalid operations, and correct after — kept as the
+    ///     control it turned out to be rather than the second failing row it was
+    ///     drafted as.
+    ///
+    /// Both spellings of the argument are exercised for each type, because the
+    /// two caller sites are different code and only one of them had a
+    /// retraction to widen.
+    ///
+    /// The `Map` cells leave 48 bytes "possibly lost" under valgrind. That is a
+    /// one-time `Map` runtime artifact, not this fixture's: a four-line program
+    /// that inserts one key and prints `len()` reports the same 48 bytes, and
+    /// two maps still report 48. Post-fix this fixture has 0 invalid operations
+    /// and 0 bytes DEFINITELY lost.
+    #[test]
+    fn e2e_copy_unsupported_own_drop_by_value_arg_has_one_owner() {
+        let Some(out) = run_program(
+            r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+
+struct Mo { m: Map[i64, String], r: R, z: i64 }
+impl Drop for Mo { fn drop(mut ref self) { println(f"dMo{self.z}") } }
+fn moOwn(h: Mo) -> i64 { println("  in"); return h.z; }
+
+struct Ao { a: Array[i64, 2], r: R, z: i64 }
+impl Drop for Ao { fn drop(mut ref self) { println(f"dAo{self.z}") } }
+fn aoOwn(h: Ao) -> i64 { println("  in"); return h.z; }
+
+struct Cs { s: String, r: R, z: i64 }
+impl Drop for Cs { fn drop(mut ref self) { println(f"dCs{self.z}") } }
+fn csOwn(h: Cs) -> i64 { println("  in"); return h.z; }
+
+fn moTemp()  { let mut m: Map[i64, String] = Map.new(); m.insert(1, f"v1"); let _ = moOwn(Mo { m: m, r: mk(3), z: 21 }); }
+fn moLocal() { let mut m: Map[i64, String] = Map.new(); m.insert(2, f"v2"); let h = Mo { m: m, r: mk(4), z: 22 }; let _ = moOwn(h); }
+fn aoTemp()  { let _ = aoOwn(Ao { a: [7, 8], r: mk(5), z: 23 }); }
+fn aoLocal() { let h = Ao { a: [7, 8], r: mk(6), z: 24 }; let _ = aoOwn(h); }
+fn csTemp()  { let _ = csOwn(Cs { s: f"s7", r: mk(7), z: 25 }); }
+fn csLocal() { let h = Cs { s: f"s8", r: mk(8), z: 26 }; let _ = csOwn(h); }
+
+fn main() {
+    println("moTemp");  moTemp();
+    println("moLocal"); moLocal();
+    println("aoTemp");  aoTemp();
+    println("aoLocal"); aoLocal();
+    println("csTemp");  csTemp();
+    println("csLocal"); csLocal();
+    println("done");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            r#"moTemp
+  in
+dMo21
+dR3
+moLocal
+  in
+dMo22
+dR4
+aoTemp
+  in
+dAo23
+dR5
+aoLocal
+  in
+dAo24
+dR6
+csTemp
+  in
+dCs25
+dR7
+csLocal
+  in
+dCs26
+dR8
+done
+"#
+        );
+    }
+
     /// B-2026-09-05-4, widened — the same defect across the shapes the base
     /// fixture leaves out, all of which were measured silent on the compiled
     /// backends before the fix and correct after it.

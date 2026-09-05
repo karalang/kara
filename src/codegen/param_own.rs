@@ -316,6 +316,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         return true;
                     }
+                    // B-2026-09-05-16 — the BARE-WRAPPER twin of the arm
+                    // directly above, and the half its "left byte-for-byte"
+                    // narrowing left behind.
+                    //
+                    // Own-by-transfer means the callee took the caller's own
+                    // buffers, and the arm's whole safety argument is that the
+                    // caller retracts in lockstep. For a type with its own
+                    // `impl Drop` the caller's action is a `UserDrop` — body,
+                    // field bodies AND memory — so registering the MEMORY half
+                    // here left the memory owned twice: the callee's
+                    // `__karac_drop_struct_<T>` over its param slot and the
+                    // caller's wrapper over the aggregate it copied from. Two
+                    // allocas, same pointers, so neither one's cap-zeroing
+                    // makes the other no-op.
+                    //
+                    // Registering the WRAPPER instead makes the callee the sole
+                    // owner of all three steps, which is exactly what the
+                    // `transfer_param` arm further below already does for the
+                    // types that reach it (`if user_drop_wrapper_fns
+                    // .contains_key(..) { track_user_drop_var(..) }`); this arm
+                    // could not reach it because a `Drop`-bearing struct is
+                    // never `struct_param_transfer_eligible`. The two caller
+                    // sites drop their halves in the same commit — the named
+                    // binding in `move_declined_copy_struct_arg`, the fresh
+                    // temp in the `has_user_drop` arm of
+                    // `track_inline_owned_aggregate_arg_inst`.
+                    //
+                    // Measured on `nOwn(Nouter { inner: Go[R] { r: mk(3), z: 55 },
+                    // z: 56 })`, a non-generic own-`Drop` parent holding a
+                    // generic-instantiation field: `free(): double free detected
+                    // in tcache 2`, and on the `Map`-field spelling of the same
+                    // shape a use-after-free in the parent's own body.
+                    if self.drop_rc.user_drop_wrapper_fns.contains_key(type_name) {
+                        self.track_user_drop_var(type_name, param_name, slot);
+                        return true;
+                    }
                     // B-2026-09-05-5 — memory FIRST, field bodies SECOND (the
                     // frame drains LIFO, so the bodies run before the free
                     // they read through). See the helper for why this arm

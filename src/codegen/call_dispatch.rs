@@ -5092,6 +5092,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap_or(false);
                 if has_user_drop && !clone_temp && !self.type_decls.shared_types.contains_key(&name)
                 {
+                    // B-2026-09-05-16 — …unless the callee OWNS this temp
+                    // outright. The comment above ("a not-copy-supported struct
+                    // … stays caller-retains in the callee … leave it a (safe)
+                    // leak") describes the world before B-2026-08-05-33, which
+                    // made exactly that class own-by-transfer. The non-`Drop`
+                    // half of this site was brought back into lockstep by
+                    // B-2026-08-07-15 (`struct_param_owned_by_transfer`, the
+                    // memory gate further below); this arm registers on a
+                    // different channel and so was never reached by it.
+                    //
+                    // Register NOTHING and return: the callee now runs the
+                    // body, the field bodies and the frees off its own param
+                    // slot. Falling through instead would re-register the
+                    // memory on the SHAPE-2 path below, which is the same
+                    // double free one arm over.
+                    //
+                    // Measured on `nOwn(Nouter { inner: Go[R] { r: mk(3),
+                    // z: 55 }, z: 56 })` — a non-generic own-`Drop` parent whose
+                    // field is a generic instantiation, so copy-support declines
+                    // on `Go`'s bare `T` and the callee takes the transfer arm:
+                    // `free(): double free detected in tcache 2` under `karac
+                    // run` and under `KARAC_OPT_LEVEL=0 karac build`, two
+                    // invalid frees at 12 allocs / 14 frees.
+                    if self.struct_param_owned_by_transfer(&name, callee_entry_copies_mono) {
+                        return;
+                    }
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
                     if arg_escapes_frame {
@@ -8397,17 +8423,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // because the binding's registration had changed from `StructDrop` to the
         // per-monomorph `UserDrop` wrapper and only the former was retracted.
         //
-        // Gated on the bare-name wrapper being ABSENT so it reaches exactly that
-        // class. A non-generic `Drop` type has its bare `karac_drop_<T>` and keeps
-        // today's behaviour untouched — narrowing this to the shape it was written
-        // for rather than changing an ownership rule for every type at once.
-        if !self
-            .drop_rc
-            .user_drop_wrapper_fns
-            .contains_key(type_name.as_str())
-        {
-            self.suppress_user_drop_for_var(&var);
-        }
+        // B-2026-09-05-16 — and for the bare-wrapper class too, which that
+        // narrowing deliberately left out ("rather than changing an ownership
+        // rule for every type at once"). The rule it declined to change was
+        // already changed, by B-2026-08-05-33: every type reaching this point
+        // is own-by-transfer, so the callee holds body, fields and memory, and
+        // a retained `UserDrop` here is a second owner of all three. The
+        // callee's half lands in the same commit
+        // (`make_aggregate_param_callee_owned_transfer` now registers the
+        // wrapper, not the memory walk, for exactly this class), so the two
+        // sides move together rather than one of them widening alone.
+        //
+        // Measured on `let a = Nouter { inner: Go[R] { .. }, z: 56 }; nOwn(a)`:
+        // `karac_drop_Nouter(ptr %a)` in the caller against
+        // `__karac_drop_struct_Nouter(ptr %h)` in the callee, over two allocas
+        // holding the same pointers — `free(): double free detected in tcache
+        // 2`, identical to the fresh-temp spelling.
+        self.suppress_user_drop_for_var(&var);
     }
 
     /// Zero the handle word of a `GpuBuffer` binding that has just been MOVED,

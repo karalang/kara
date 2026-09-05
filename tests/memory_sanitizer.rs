@@ -72781,4 +72781,79 @@ fn main() {
             "[{label}] unexpected stdout (ASAN passed, output mismatched)"
         );
     }
+
+    /// B-2026-09-05-16 — a struct that is NOT copy-supported AND declares its
+    /// own `impl Drop`, passed BY VALUE, was owned by BOTH frames: the callee
+    /// freed the caller's buffers through its own param alloca (own by
+    /// transfer, B-2026-08-05-33) and the caller freed them again through the
+    /// aggregate it had copied from. Two allocas holding the same pointers, so
+    /// neither one's cap-zeroing makes the other no-op. Output parity for the
+    /// same class is
+    /// `e2e_copy_unsupported_own_drop_by_value_arg_has_one_owner`.
+    ///
+    /// THE `Map` SPELLING IS HERE, NOT THE GENERIC-INSTANTIATION ONE THE ROW
+    /// WAS FILED ON, and that choice is the fixture. The filed shape is
+    /// `nOwn(Nouter { inner: Go[R] { .. }, z: 56 })` — a NON-generic parent
+    /// holding a generic-instantiation field, where copy-support recurses into
+    /// `Go` BY NAME and declines on its declared bare `T`. It aborts under
+    /// `karac run` and under `KARAC_OPT_LEVEL=0 karac build`, and it is CLEAN at
+    /// the default `-O2`: 10 allocs / 10 frees, 0 valgrind errors. `-O2` is what
+    /// this harness builds at, so an ASAN test written on that shape would have
+    /// passed BEFORE the fix and asserted nothing. A `Map` field closes
+    /// copy-support the same way and fails at every opt level — 18 invalid
+    /// operations per cell pre-fix, stdout empty because the abort precedes the
+    /// flush.
+    ///
+    /// The opt level is not a detail of the harness here; it is why the row read
+    /// as LLJIT-only. One latent defect in the IR both compiled backends share,
+    /// masked at `-O2` exactly as B-2026-09-02-20 and B-2026-08-04-19 were —
+    /// not two backends disagreeing about ownership.
+    ///
+    /// BOTH CALLER SPELLINGS, because they are different code and only one had a
+    /// retraction to widen: `moLocal` moves a NAMED BINDING
+    /// (`move_declined_copy_struct_arg`, whose `UserDrop` retraction was gated
+    /// on the bare wrapper being ABSENT) and `moTemp` passes a FRESH LITERAL
+    /// (registered on a channel `struct_param_owned_by_transfer` did not guard).
+    ///
+    /// `cs*` is the COPY-SUPPORTED control — a plain `String` field takes the
+    /// other branch entirely, where the callee entry-copies and the two frames
+    /// own distinct heap. It must stay clean, and a fix that suppressed the
+    /// caller's drop for it would have traded this double free for a leak.
+    #[test]
+    fn asan_copy_unsupported_own_drop_by_value_arg_has_one_owner() {
+        let src = r#"struct R { id: i64, tag: String }
+impl Drop for R { fn drop(mut ref self) { println(f"dR{self.id}") } }
+fn mk(i: i64) -> R { return R { id: i, tag: f"t{i}" }; }
+
+struct Mo { m: Map[i64, String], r: R, z: i64 }
+impl Drop for Mo { fn drop(mut ref self) { println(f"dMo{self.z}") } }
+fn moOwn(h: Mo) -> i64 { println("in"); return h.z; }
+
+struct Cs { s: String, r: R, z: i64 }
+impl Drop for Cs { fn drop(mut ref self) { println(f"dCs{self.z}") } }
+fn csOwn(h: Cs) -> i64 { println("in"); return h.z; }
+
+fn moTemp()  { let mut m: Map[i64, String] = Map.new(); m.insert(1, f"v1"); let _ = moOwn(Mo { m: m, r: mk(3), z: 21 }); }
+fn moLocal() { let mut m: Map[i64, String] = Map.new(); m.insert(2, f"v2"); let h = Mo { m: m, r: mk(4), z: 22 }; let _ = moOwn(h); }
+fn csTemp()  { let _ = csOwn(Cs { s: f"s7", r: mk(7), z: 25 }); }
+fn csLocal() { let h = Cs { s: f"s8", r: mk(8), z: 26 }; let _ = csOwn(h); }
+
+fn main() {
+    moTemp();
+    moLocal();
+    csTemp();
+    csLocal();
+    println("done");
+}
+"#;
+        assert_clean_asan_run_min_allocs(
+            src,
+            &[
+                "in", "dMo21", "dR3", "in", "dMo22", "dR4", "in", "dCs25", "dR7", "in", "dCs26",
+                "dR8", "done",
+            ],
+            "asan_copy_unsupported_own_drop_by_value_arg_has_one_owner",
+            8,
+        );
+    }
 }
