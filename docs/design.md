@@ -9143,7 +9143,7 @@ struct Point { x: f64, y: f64 }   // OK: both fields are Copy
 struct User { id: u64, name: String }
 ```
 
-**`Copy` implies `Clone`.** Every `Copy` type automatically implements `Clone`. Writing `#[derive(Copy)]` without `Clone` is an error — derive both or derive only `Clone` for types that are cloneable but not trivially copyable.
+**`Copy` implies `Clone`.** Every `Copy` type automatically implements `Clone`. Writing `#[derive(Copy)]` without `Clone` is **not** an error: the compiler auto-derives the missing `Clone` (see [Derive](#derive), "Derive dependency order"), so `#[derive(Copy)]` and `#[derive(Copy, Clone)]` are equivalent. Derive only `Clone` for types that are cloneable but not trivially copyable.
 
 **`distinct type` does not inherit `Copy`.** A `distinct type UserId = u64` does not automatically become `Copy` even though `u64` is `Copy`. The point of a distinct type is to prevent accidental treatment as the underlying type — inheriting `Copy` silently would undermine that. Opt in explicitly:
 
