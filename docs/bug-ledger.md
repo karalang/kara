@@ -92,26 +92,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total |
 |---|---|
-| miscompile | 404 |
-| run-vs-build | 381 |
+| miscompile | 403 |
+| run-vs-build | 382 |
 | leak | 316 |
 | double-free | 222 |
 | missing-feature | 194 |
-| codegen-gap | 169 |
+| codegen-gap | 170 |
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
 | soundness | 95 |
-| other | 90 |
+| other | 91 |
 | crash | 79 |
-| use-after-free | 36 |
+| use-after-free | 37 |
 
 ### By surface
 
 | surface | total |
 |---|---|
-| codegen | 1647 |
-| interp | 413 |
+| codegen | 1650 |
+| interp | 414 |
 | typecheck | 295 |
 | other | 81 |
 | ownership | 74 |
@@ -156,17 +156,18 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-09-5 | 2026-09-09 | other | low | THREE LOAD-SENSITIVE TESTS IN THE REQUIRED GATE SET ARE STILL UNEXPLAINED after B-2026-09-09-1's named one turned out NOT to be flaky -- that one was a deterministic watchdog race that never armed (fixed 32223a5a6, 2-in-6 permanent orphans under load -> 0 in 8), so its resolution transfers no conclusion to the rest. Leading hypothesis for the ASAN pair is the vacuous-fixture floor: n=102 against a per-process HOST FLOOR of 90 measured on a box running dozens of concurrent ASAN processes, a 12-allocation margin that a drifting floor would trip with nothing wrong in the compiler -- with the counter-argument that a shared OnceLock floor should fail many fixtures at once, and only one failed | — |
 | B-2026-09-09-7 | 2026-09-09 | other | medium | A FULL DISK FAILS THE GATE SET AS AN LLVM CRASH, A LINKER BUS ERROR, OR A LOST OUTPUT STREAM -- never as a named test -- and it hit ELEVEN times across seven unrelated slices in one session. The session allowance is ~38 GiB (df's '252G size' is the host volume and is meaningless), ONE leg of `cargo test --no-run` costs 19.6 GiB in test binaries (134 executables x ~250 MiB at the default debug=2), so the SECOND feature leg cannot start. The obvious suspect is wrong: both clippy legs together cost 1.19 GiB. `CARGO_PROFILE_TEST_DEBUG=line-tables-only` cuts a test binary 252 -> 97 MiB and makes both legs fit | — |
 | B-2026-09-09-12 | 2026-09-09 | runtime | medium | kara's MAP PROBE WALKS ONE CONTROL BYTE PER STEP WITH A DATA-DEPENDENT BRANCH, and an 8-byte SWAR group scan is 2.03x FASTER IN CYCLES WHILE EXECUTING 30% MORE INSTRUCTIONS (36.0 -> 17.7 cyc/lookup, IPC 1.15 -> 3.05) -- the cost is mispredicts, not work, which is why no instruction-count fix on B-2026-09-07-53 reached it. Prototyped and validated against the reference walk on every key; not shipped, because the win needs the same scan in find_insert_slot and in the CODEGEN MONO probes, not just the runtime's lookup | docs/investigations/hash-cost/README.md |
-| B-2026-09-09-20 | 2026-09-09 | codegen+interp | low | AN `Option` PAYLOAD THAT IS ITSELF A TUPLE RUNS ITS `Drop` BODY NOWHERE ON THE INTERPRETER AND TOO EARLY ON THE COMPILED BACKEND -- `fn f(r: R) -> Option[(R, i64)]` with `let z = f(mk(20)); println("ok")` prints `dR20` BEFORE `ok` when built (the body fires while `z` is still live and readable) and prints no `dR20` at all under `--interp`; correct is `ok` then `dR20`. The bare tuple and the bare `Option[R]` spellings are both correct, so it needs an Option/Result payload that is itself an aggregate. Memory is balanced on both, at both opt levels | — |
 | B-2026-09-09-21 | 2026-09-09 | codegen+interp | low | A DISCARDED TUPLE'S `Drop` BODY RUNS ON NEITHER BACKEND -- `f(mk(20));` over `fn f(r: R) -> (R, i64)` prints no `dR20` under `karac build` OR `--interp`, so the value dies with its destructor never running and the A/B rule passes because both surfaces are wrong the same way. The discarded BARE struct (`mk(20);`) does run its body, so the gap is the aggregate wrapper. a159b15e1 gave this shape its memory walk and deliberately left the body alone -- adding it on the compiled side alone would convert a silent agreed-wrong into a run-vs-build divergence | — |
 | B-2026-09-09-24 | 2026-09-09 | codegen | low | AN `Array` PAYLOAD BINDING THAT IS INDEXED STRANDS ITS ELEMENTS AT `-O0` -- 18 B in 2 blocks for `Some(t) => t[0]` over `Option[Array[String, 2]]` and 48 B in 1 for a user enum's `Array[Vec[String], 2]` read two levels deep, while the same binding never indexed and the same index off a `let` are both clean | none |
 | B-2026-09-09-25 | 2026-09-09 | codegen | low | THE INDEX-STORE HALF OF B-2026-09-09-9 IS STILL REFUSED FOR AN `Array` OUTER -- `a[0][1] = 99` over `Array[Vec[i64], 2]` fails `codegen: Index assignment target must be a variable` on every compiled backend while `--interp` runs it and the `Vec` outer stores fine; the read half of the same declaration now agrees on all five surfaces | none |
 | B-2026-09-10-6 | 2026-09-10 | codegen | medium | AN ARM-BOUND `Array` PAYLOAD PASSED BY VALUE INTO A CALLEE DOUBLE FREES -- `Some(t) => { take(t) }` over `fn take(a: Array[String, 2])` aborts `free(): double free detected in tcache 2` under the JIT and at `-O0` (clean at `-O2`, correct on `--interp`), because `suppress_array_binding_move_arg` retracts the caller's array drop only for `owned_array_params` and a `match`-arm binding is not in that set | none |
 | B-2026-09-10-7 | 2026-09-10 | codegen+interp | low | AN ARM-BOUND `Array` PAYLOAD NEVER RUNS ITS ELEMENTS' `Drop` BODIES, and the rebind spelling runs them on the COMPILED backends only -- `Some(t) => { t[0].tag }` over `Array[S, 2]` prints no `drop:` line on any backend, while `Some(t) => { let u: Array[S, 2] = t; .. }` prints both on `karac build`/`karac run` and none on `--interp` | none |
 | B-2026-09-10-8 | 2026-09-10 | codegen | low | AN `Array[Array[T, N], M]` PAYLOAD LEAKS ITS INNER ARRAYS' ELEMENTS -- 36 B in 4 blocks at `-O0` for `Some(t) => t[0][0]` over `Array[Array[String, 2], 2]`, with or without a rebind, so the outer array's drop walk never recurses into the inner one | none |
-| B-2026-09-10-9 | 2026-09-10 | codegen | medium | THE FIRST ELEMENT OF A BOXED TUPLE PAYLOAD RUNS ITS `Drop` BODY OVER THE WRONG POINTER -- `fn takeR(x: Option[(R, R)])` prints a pointer-shaped `id` for element 0 and the correct one for every later element, on every compiled surface, while `--interp` is correct; no sanitizer catches it because the read is a wrong OFFSET inside live memory | none |
 | B-2026-09-10-10 | 2026-09-10 | cli | low | SIGKILL TO `karac run` PERMANENTLY LEAKS THE HANDOFF IR FILE -- `/tmp/karac_run_<pid>_jit.ll` is still on disk 30 minutes after the run, so the 5-second poll in `signalling_karac_run_does_not_orphan_the_jit_runner` is not a tight budget but a real unlink that never happens; 2 failures in 4 full-gate runs, 0 in isolation | none |
 | B-2026-09-10-11 | 2026-09-10 | codegen | low | A SHARED-PAYLOAD ENUM ON THE RETURN ROUTE STRANDS ITS 16-BYTE REFCOUNT BLOCK -- `let z = passt(mket(3))` over `enum Et { A(Sh), B }` with `shared struct Sh` loses 16 B in 1 block at -O0, because the admission gate's `shared` clause asks whether the ENUM is shared and not whether its PAYLOAD is | — |
 | B-2026-09-10-13 | 2026-09-10 | codegen+interp | low | A GENERIC ENVELOPE NESTED INSIDE A GENERIC ENVELOPE RUNS NO `Drop` BODY AND LEAKS 72 B DIRECT + 27 B INDIRECT -- `let n = G.X(G.X(mkr(4)));` over `enum G[T] { X(T), Y }` prints nothing on either backend and strands both the inner envelope's box and the payload's three `String`s, while the one-level spelling `G.X(mkr(4))` is correct and clean after B-2026-09-10-2 | — |
+| B-2026-09-10-14 | 2026-09-10 | codegen+interp | low | A WHOLE-PAYLOAD ARM BINDING OVER A LOCAL `Option[(R, R)]` RUNS NO ELEMENT `Drop` BODY ON EITHER BACKEND -- `match o { Some(t) => { println("hit") } .. }` prints `x hit` where `x hit dR1 dR2` is due, on `--interp`, `-O0` and `-O2` auto-par alike; the DESTRUCTURING arm `Some((a, b))` over the same local is correct on all three, and so is the same local with no `match` at all, so the gap is the whole-value binding rather than the payload shape. Memory is balanced (0 valgrind errors, nothing lost), so the absent output is the only observable | none |
+| B-2026-09-10-15 | 2026-09-10 | codegen | low | AN `Option[Option[R]]` PAYLOAD RUNS ITS `Drop` BODY ON THE INTERPRETER AND NOWHERE ON THE COMPILED BACKENDS -- `fn takeR(x: Option[Option[R]])` over a fresh-temp argument prints `ok dR71 done` under `--interp` and `ok done` on `karac build` at both opt levels, because `emit_optres_payload_user_drop_bodies_fn` has arms for a payload that is a user struct, a user enum or a tuple and none for a payload that is itself an `Option`/`Result` envelope; the memory side already walks that chain, so the box and interior are owned and only the body is lost (0 valgrind errors, nothing lost) | none |
+| B-2026-09-10-16 | 2026-09-10 | codegen | low | A FIELD READ THROUGH AN ARM-BOUND ENUM TUPLE PAYLOAD NEVER LOWERS -- `match o { Some(t) => t.0.id }` over `Option[(W, W)]` fails `karac build` with "codegen: cannot resolve field 'id' on this receiver (its type was not recorded for codegen)" while `karac check` accepts it and `--interp` answers it; the match-arm payload binding is a fourth source of a tuple's element types that the place-chain recorder does not populate, after the container-element, struct-field and Array-from-field sources fixed by B-2026-08-28-34, B-2026-09-03-12 and B-2026-09-04-28. LOUD (codegen refuses), and destructuring the payload instead builds and runs | none |
 
 ### Relocated
 
@@ -2447,6 +2448,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-09-17 | codegen | medium | THE REBIND STAND-DOWN OF B-2026-09-09-13/-16 IS MUTABLE-ONLY, so the IMMUTABLE spelling still double-frees on `main` -- `fn f(x: Option[K]) { let y =… | 1d3facb50 |
 | B-2026-09-09-18 | codegen+interp | medium | A FRESH-TEMP `Option`/`Result` ARGUMENT RUNS ITS PAYLOAD'S `Drop` BODY IN NO FRAME AT ALL -- filed as a by-value PARAM defect and the param is not th… | 14d886c57 |
 | B-2026-09-09-19 | codegen | low | A BOXED ENUM PAYLOAD'S INTERIOR IS UNOWNED ONE LEVEL DEEPER, INSIDE A STRUCT FIELD -- `fn show(h: Holder)` over `struct Holder { k: Option[K], n: i64… | 827b31a |
+| B-2026-09-09-20 | codegen+interp | low | AN `Option` PAYLOAD THAT IS ITSELF A TUPLE RUNS ITS `Drop` BODY NOWHERE ON THE INTERPRETER AND TOO EARLY ON THE COMPILED BACKEND -- `fn f(r: R) -> Op… | a56142bd8 |
 | B-2026-09-09-22 | codegen | medium | A `Vec[Vec[String]]` PAYLOAD BOUND OUT OF AN `Option` OR `Result` ARM DOUBLE FREES ON EVERY COMPILED BACKEND -- `match x { Some(t) => t[0][0] }` abor… | ce145d9 |
 | B-2026-09-09-23 | codegen | medium | REBINDING AN `Array[Vec[T], N]` DUPLICATES ITS ELEMENT OWNERS -- `let b: Array[Vec[i64], 2] = a;` with no index anywhere in the program aborts `free(… | 1e4e74a |
 | B-2026-09-10-1 | codegen | medium | AN `Option[Vec[<heap-bearing struct>]]` PASSED AS AN ARGUMENT STILL DOUBLE FREES AFTER B-2026-09-09-22 -- `plainV(Some([S { s: f".." }, ..]))` aborts… | fb5bdc4 |
@@ -2454,6 +2456,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-3 | codegen | low | THE `Result` SPELLING OF B-2026-09-09-19 LOSES THE ENVELOPE AS WELL AS THE INTERIOR, AND LOSES IT ON A WHOLE-PAYLOAD BIND TOO -- `struct HolderR { k:… | 818c3b4 |
 | B-2026-09-10-4 | codegen | medium | A REBIND OF A `match`-ARM-BOUND `Array` PAYLOAD IS A SECOND, SEPARATE DOUBLE FREE -- `Some(t) => { let u = t; u[0][0] }` still refuses to build after… | 2d991e9 |
 | B-2026-09-10-5 | codegen | high | A NAMED-LOCAL GENERIC ENUM PASSED BY VALUE SMASHES THE CALLER'S STACK -- `let a = G.X(W2 { a: 1, b: 2 }); hg(a);` over `enum G[T] { X(T), Y }` SIGSEG… | 91bd67b01 |
+| B-2026-09-10-9 | codegen | high | EVERY ELEMENT OF A BOXED TUPLE PAYLOAD RUNS ITS `Drop` BODY OVER A BOX THE CALLEE HAS ALREADY FREED -- `fn takeR(x: Option[(R, R)])` reads freed memo… | a56142bd8 |
 | B-2026-09-10-12 | codegen | medium | THE -O0 ASAN RATCHET IS RED ON `main`: `asan_arm_bound_array_rebind_leaves_memory_with_one_owner` (2d991e9's own fixture) leaks 48 B in 1 allocation… | 92eeb8a |
 
 </details>
