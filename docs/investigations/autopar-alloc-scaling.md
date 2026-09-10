@@ -384,3 +384,176 @@ KARAC_PAR_WORKERS=2 LD_PRELOAD=./mcount.so ./d2      # malloc/free counts + size
 clang -O3 mt_malloc_shape.c -o mt_malloc_shape -lpthread
 ./mt_malloc_shape 2 3                                 # 2 threads, 3-byte steps
 ```
+
+## The collapse reproduces on homogeneous Linux cores, on demand
+
+Measured 2026-09-10 (B-2026-08-28-76, Group D), x86_64 Linux container, **4
+homogeneous Intel Xeon @ 2.10GHz cores, no SMT**, Linux 6.18.44, **glibc 2.39**,
+16 GB. `karac` at `e898cb1` with **both** runtime archives rebuilt at that
+revision — the lean archive on disk predated `6cc0298` and `2ed5deb`, two
+Map-probe runtime commits, and `karac` links the *lean* archive for these
+programs, so measuring the tree as found would have silently benchmarked the
+old probe on a Map-heavy workload. No hyperfine on this host: medians over the
+stated run counts, child stdout to `/dev/null`, user/sys from `wait4` rusage.
+
+The section above concludes that the two-worker collapse "is not Kāra's
+allocation shape on its own — glibc is untroubled by the identical shape". That
+is true and it is worth being precise about *why* glibc is untroubled: it
+supplies per-thread allocation caching (an arena per thread, plus tcache) that
+the Kāra runtime does not have. `karac_alloc_or_panic` → `karac_alloc_fallible`
+→ plain `malloc`, per object, on every worker thread; the only cache in
+`runtime/src/alloc.rs` is the ≥ 1 MiB large-buffer recycler, which small String
+churn deliberately never touches.
+
+**Take that caching away and the collapse reproduces here** — same binary, same
+static partition, homogeneous cores, four of them.
+
+### kata:288, `KARAC_PAR_WORKERS=4`, three interleaved passes of 15 runs
+
+| lane | wall | user CPU | vs own seq | user infl |
+|---|---|---|---|---|
+| sequential twin (`KARAC_AUTO_PAR=0`) | 86.69 ms | 83.71 ms | 1.00x | 1.00x |
+| auto-par, default arenas | **27.56 ms** | 89.91 ms | **3.15x** | 1.07x |
+| auto-par, `MALLOC_ARENA_MAX=1` | **68.75 ms** | 208.49 ms | **1.26x** | **2.49x** |
+| auto-par, `glibc.malloc.tcache_count=0` | 41.42 ms | 143.14 ms | 2.09x | 1.71x |
+
+Per-pass spread was 26.3–28.8 (default), 63.0–74.0 (arena1), 39.8–44.2
+(tcache0) — the ordering never changes. An earlier non-interleaved tcache0 cell
+read 91.63 ms; three interleaved passes do not reproduce it and the table above
+supersedes it.
+
+**1.26x for four cores at 2.49x user-CPU inflation is this row's M5 signature**
+(1.08x for 15.7 cores at 3.15x inflation), reproduced with no heterogeneity, no
+many-core machine, and no macOS.
+
+### The worker sweep, which is where it is clearest
+
+| N | default arenas | user | `MALLOC_ARENA_MAX=1` | user |
+|---|---|---|---|---|
+| 1 | 85.18 ms | 84.02 | 79.69 ms | 78.52 |
+| 2 | 48.97 ms | 90.27 | 64.22 ms | 105.27 |
+| 3 | 32.41 ms | 84.03 | 73.43 ms | 161.80 |
+| 4 | 26.84 ms | 85.67 | 71.22 ms | 198.97 |
+
+Default: near-linear, user CPU **flat** (84.02 → 85.67). Starved: wall time gets
+*worse* from N=2 on while user CPU climbs monotonically to 2.53x. That is the
+row's "NO WORKER COUNT RECOVERS IT", on this box, on demand.
+
+### kata:282 goes past flat into net loss
+
+| lane | wall | user |
+|---|---|---|
+| seq | 886.03 ms | 883.82 |
+| par, default arenas | 222.85 / 237.83 / 254.64 ms | 860.62 / 901.29 / 942.62 |
+| par, `MALLOC_ARENA_MAX=1` | **1375.65 / 1334.22 ms** | 4099.86 / 3117.91 |
+| seq, `MALLOC_ARENA_MAX=1` | 873.96 ms | 873.54 |
+| seq, `tcache_count=0` | 1175.00 ms | 1170.63 |
+| par, `tcache_count=0` | 576.40 ms | 2157.78 |
+
+Starved of arenas, kata:282's parallel lane is **0.65x of its own sequential
+twin** — a net loss, which is where `uniqueabbr_par.c` sits on the M5 (0.76x).
+
+`MALLOC_ARENA_MAX=4` — one arena per core — does **not** restore it either
+(288: 67.73 ms, 282: 532.09 ms), and it fails differently: CPU utilisation
+*drops* (133% / 182%) with user CPU near flat, i.e. workers blocking on the
+arena mutex rather than burning cycles. Arena1 shows both blocking and burn.
+
+### The controls that make it a mechanism rather than a slowdown
+
+The sequential twins barely move under arena starvation — 288 seq 87.58 → 92.05
+ms, 282 seq 886.03 → 873.96 ms. `MALLOC_ARENA_MAX` is a *concurrency* knob and
+it costs a single-threaded program nothing, so the entire effect is contention
+between workers, not a slower allocator. (`tcache_count=0` is not a clean
+control in this respect — it costs the sequential lane 1.18x on 288 and 1.33x
+on 282 — which is why the arena knob is the one to quote.)
+
+### What this changes
+
+Nothing about the M5 measurements, and nothing about `B-2026-09-05-22`'s
+finding that macOS libmalloc collapses on a shape glibc handles. What it changes
+is the **reading**. "A platform ceiling that is nobody's bug" is too generous to
+the compiler: Kāra's auto-par throughput on allocation-heavy work is a function
+of a host-allocator property Kāra neither provides nor requires. glibc happens
+to provide it, libmalloc happens not to for this shape, and one env var moves
+Linux to the wrong side of that line. Go — the only comparator that scales on
+the M5 — has a per-P allocator cache, which is the same property held
+internally rather than borrowed.
+
+It also gives **`B-2026-09-09-6`** (per-thread small-block free list, closed
+`wontfix`) the test bed it never had. That row measured its prototype **2.76x
+slower on kata:288** and concluded the TLS access cost more than the malloc it
+replaced — measured on hosts where the host allocator was *already* doing the
+job, so the prototype could only add cost. `MALLOC_ARENA_MAX=1` on Linux is a
+contended allocator reachable in one env var, and it is the lane where such a
+cache has something to win. A re-test there is cheap and would separate "the
+idea is wrong" from "the idea was measured where it could not pay".
+
+### The C mirror is immune here, and that corrects an earlier reading
+
+Same-host comparators, `clang -O3`, two interleaved passes of 15 runs:
+
+| lane | pass 1 | pass 2 | user |
+|---|---|---|---|
+| C seq | 58.28 ms | 67.00 ms | 57.62 / 65.41 |
+| C par, default arenas | 18.54 ms | 19.77 ms | 64.28 / 64.30 |
+| C par, `MALLOC_ARENA_MAX=1` | **17.94 ms** | **18.62 ms** | 62.44 / 61.61 |
+| Kāra par, default arenas | 27.53 ms | 24.91 ms | 92.62 / 83.49 |
+| Kāra par, `MALLOC_ARENA_MAX=1` | **75.50 ms** | **70.75 ms** | 214.66 / 194.24 |
+| Kāra seq | 87.60 ms | 90.45 ms | 84.72 / 87.04 |
+
+The arena knob reproduces the **Kāra** half of the signature and not the C half:
+`uniqueabbr_par.c` does not move. The reason is checkable and decisive — **that
+file contains no dynamic allocation anywhere**. No `malloc`, `calloc`,
+`realloc`, `strdup`, `aligned_alloc` or `mmap` appears in it; the table is a
+fixed `slot tbl[TABLE_SZ]` of inline `char key[MAXW]` arrays and the worker
+formats into a stack buffer (`char a[MAXW]`). A program with no allocator
+traffic cannot contend on the allocator, so one arena costs it nothing.
+
+**This refutes the sentence above** — "the pthreads mirror and kara collapse
+together on kata:288 not because they share a partitioning strategy, but because
+they share an allocator." They do not share an allocator problem, because the
+mirror does not use the allocator. Whatever puts `uniqueabbr_par.c` at 0.76x on
+the M5, malloc contention is not it, and `B-2026-08-28-76` leans on that C row
+as its single most important piece of evidence.
+
+**A hypothesis for the M5, not a finding here.** `abbrev` in that C file is
+`sprintf(out, "%c%zu%c", ...)`, once per punch, a million times, across 18
+threads. `B-2026-09-05-23` already measured libc `snprintf` serializing on this
+exact kata on macOS, worth the difference between 1.08x and 3.45x on the *Kāra*
+lane. The C mirror calls the same family in the same loop at the same rate. If
+the M5's C collapse is `sprintf` rather than the partition or the allocator,
+then all three witnesses reduce to causes already named and the C row stops
+cutting against a Kāra-side diagnosis. It is minutes to test on an M5 — replace
+that `sprintf` with manual digit formatting and re-run the par lane. Not
+testable here: no macOS, and on glibc the C par lane has no collapse to remove.
+
+Kāra's par lane is **not** at parity with C on this host — 24.9–27.5 ms against
+18.5–19.8 ms, ~1.35x slower — against a mirror that allocates nothing while
+Kāra allocates a String per punch.
+
+### Still out of reach here
+
+A **homogeneous many-core** control. This container is 4 cores, the same width
+as the lane already in the corpus, so it cannot separate core count from
+heterogeneity. That measurement still needs a wide homogeneous Linux box.
+
+### Reproducing this section
+
+```sh
+cd kara-katas/leetcode/201-300/288-unique-word-abbreviation/bench
+karac build uniqueabbr.kara -o /tmp/u_par
+KARAC_AUTO_PAR=0 karac build uniqueabbr.kara -o /tmp/u_seq
+sh docs/investigations/autopar-alloc-scaling/arena_sweep.sh /tmp/u_par /tmp/u_seq
+```
+
+Rebuild **both** runtime archives first if `git log <archive-revision>..HEAD --
+runtime/src` is non-empty; these katas link the lean one.
+
+The C comparators in that table are built from the kata's own sources:
+
+```sh
+clang -O3 uniqueabbr.c     -o c_seq
+clang -O3 uniqueabbr_par.c -o c_par -lpthread
+python3 docs/investigations/autopar-alloc-scaling/timeit.py --runs 15 --warmup 3 \
+    --env MALLOC_ARENA_MAX=1 ./c_par
+```

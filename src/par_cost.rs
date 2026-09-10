@@ -1904,6 +1904,92 @@ mod tests {
         );
     }
 
+    /// The memory-bound gate is unreachable ABOVE the cost floor, whatever
+    /// the detector says (B-2026-08-28-76).
+    ///
+    /// `fanout_verdict_with_cost` reads `memory_bound` at exactly one site,
+    /// `if !substantial && memory_bound && !strided_gather`, so a body scoring
+    /// at or above `VARIABLE_K_PER_ITER_FLOOR_UNITS` never consults it — the
+    /// carve-out documented on [`fanout_verdict`] is a cost threshold, not a
+    /// shape test. B-2026-08-28-76 named "this body is scored
+    /// `memory_bound=false` and that looks wrong" as the narrowest place a fix
+    /// for kata-#288's auto-par shortfall could start; it is inert twice over.
+    /// The classification is correct on its own contract (that body calls
+    /// `abbrev`, a substantial call), and flipping it would not move the
+    /// verdict, because the same body scores 156 against a floor of 64.
+    ///
+    /// The two witnesses below are the boundary in both directions: the same
+    /// memory-bound SHAPE — top-level index reads, no substantial call —
+    /// declines when small and fans out when long.
+    ///
+    /// The bodies here are scored UN-LOWERED (`first_while_shape` parses
+    /// only), so their estimates run well below what the same source scores in
+    /// the real pipeline, where lowering has rewritten every binop into a
+    /// `Call` node — the long body needs ~15 statements to clear 64 here
+    /// against kata-#288's 156 for eight. The assertions pin the cost
+    /// RELATIVE to the floor rather than an absolute number, so the test is
+    /// about the gate's guard, not about either estimate.
+    #[test]
+    fn memory_bound_gate_is_unreachable_above_the_cost_floor() {
+        // Small: kata-153's calibration shape. Below the floor, so the gate
+        // fires. This is the pairing `test_ir_memory_bound_body_skips_par_reduce`
+        // pins at the IR level.
+        let small = first_while_shape(
+            "fn main() {\n    let v = vec![1, 2, 3];\n    let mut m = 999;\n    let mut i = 0;\n    while i < 100000000 {\n        let x = v[i];\n        if x < m {\n            m = x;\n        }\n        i += 1;\n    }\n    print(\"{m}\");\n}\n",
+            "main",
+        );
+        assert!(
+            body_is_memory_bound(&small.body),
+            "index read, no substantial call → memory-bound"
+        );
+        let (small_v, small_cost) = fanout_verdict_with_cost(
+            &small.body,
+            &small.end_expr,
+            small.lo_expr.as_ref(),
+            None,
+            false,
+            true,
+            Some(&small.loop_var),
+            Some("main"),
+        );
+        assert!(
+            small_cost < VARIABLE_K_PER_ITER_FLOOR_UNITS,
+            "the calibration body must stay under the floor: {small_cost}"
+        );
+        assert_eq!(small_v, FanoutVerdict::DeclinedMemoryBound);
+
+        // Long: the SAME shape, still `memory_bound`, but scoring over the
+        // floor. `substantial` short-circuits the gate and it fans out.
+        let long = first_while_shape(
+            "fn main() {\n    let v = vec![1, 2, 3];\n    let mut acc = 0;\n    let mut i = 6;\n    while i < 100000000 {\n        let p = v[i];\n        let q = v[i - 1];\n        let r = v[i - 2];\n        let s = v[i - 3];\n        let t = v[i - 4];\n        let u = (p * 3 + q * 5) % 65521;\n        let w = (r * 7 + s * 11) % 65521;\n        let y = (t * 13 + u * 17) % 65521;\n        let z = (w * 19 + y * 23) % 65521;\n        let b = v[i - 5];\n        let c = v[i - 6];\n        let d = (b * 29 + c * 31) % 65521;\n        let e = (d * 37 + z * 41) % 65521;\n        let g = (e * 43 + p * 47) % 65521;\n        acc += g;\n        i += 1;\n    }\n    print(\"{acc}\");\n}\n",
+            "main",
+        );
+        assert!(
+            body_is_memory_bound(&long.body),
+            "same shape, still no substantial call → still memory-bound"
+        );
+        let (long_v, long_cost) = fanout_verdict_with_cost(
+            &long.body,
+            &long.end_expr,
+            long.lo_expr.as_ref(),
+            None,
+            false,
+            true,
+            Some(&long.loop_var),
+            Some("main"),
+        );
+        assert!(
+            long_cost >= VARIABLE_K_PER_ITER_FLOOR_UNITS,
+            "the long body must clear the floor: {long_cost}"
+        );
+        assert_eq!(
+            long_v,
+            FanoutVerdict::Fanout,
+            "a memory-bound body above the floor must still fan out: the gate \
+             is guarded by `!substantial`"
+        );
+    }
+
     /// The accumulator TYPE gate (B-2026-07-31-14): integer widths fan out,
     /// floats decline, unresolved (`None`) stays eligible.
     #[test]
