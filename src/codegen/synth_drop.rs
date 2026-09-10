@@ -3551,6 +3551,54 @@ impl<'ctx> super::Codegen<'ctx> {
                             break 'tes;
                         }
                     }
+                    // B-2026-09-10-17 — ENVELOPE NESTING, the instance of this
+                    // widening's own recorded residual ("One container level;
+                    // deeper nesting (`Vec[Vec[Res]]`) is the recorded
+                    // residual") that turned out to be a RUN-VS-BUILD
+                    // divergence rather than an agreed silence. The leg above
+                    // reads a payload's HEAD NAME, so `W { o: Option[Option[R]]
+                    // }` asks `type_runs_user_drop("Option")`, gets false, and
+                    // `W` classified drop-free -- no bodies action registered
+                    // for `w` at all, even though
+                    // `emit_optres_payload_user_drop_bodies_fn` has had an
+                    // envelope arm since B-2026-09-10-15 and the field arm
+                    // calls it unconditionally. The walker was emittable and
+                    // nothing called it.
+                    //
+                    // DELIBERATELY ENVELOPE-ONLY, and the measurement is what
+                    // chose that over recursing this predicate through every
+                    // container level. Sweeping the family on the commit before
+                    // this one, `Option[Option[R]]`, `Result[Result[R, i64],
+                    // i64]`, `Option[Option[Option[R]]]`, `Option[Option[E]]`
+                    // for a user enum and `Option[Option[Wf]]` for a struct
+                    // with a Drop-bearing field all printed under `--interp`
+                    // and nothing compiled -- five divergences. But every
+                    // nesting through a `Vec` level -- `Vec[Option[R]]`,
+                    // `Vec[Vec[R]]`, `Option[Vec[R]]`,
+                    // `Vec[Option[Option[R]]]`, `Option[Option[Vec[R]]]` --
+                    // was silent on BOTH backends, because the interpreter's
+                    // `field_te_runs_user_drop` has the identical one-level
+                    // horizon. Recursing through containers here would repair
+                    // codegen for those five and leave the interpreter silent,
+                    // manufacturing five NEW divergences out of an agreed
+                    // silence. The envelope chain is the part where the
+                    // interpreter is already right, because it reaches those
+                    // positions through the value-driven
+                    // `run_discarded_value_user_drops`, whose `Option`/`Result`
+                    // arm recurses structurally over the VALUE and so handles
+                    // envelope nesting for free while never descending a `Vec`.
+                    //
+                    // So this closes the divergent half and leaves the
+                    // `Vec`-level half exactly as it was -- still the recorded
+                    // residual, now measured rather than assumed.
+                    if self.optres_envelope_reaches_user_drop(
+                        te,
+                        &std::collections::HashMap::new(),
+                        seen,
+                    ) {
+                        found = true;
+                        break 'tes;
+                    }
                     // B-2026-09-05-5 — a field that is a GENERIC STRUCT
                     // INSTANTIATION (`inner: Gd[R]`). The head-name walk above
                     // asks `type_runs_user_drop("Gd")`, which reads
@@ -3579,6 +3627,56 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         seen.pop();
         found
+    }
+
+    /// Does an `Option`/`Result` field type reach a user `Drop` through
+    /// ENVELOPE nesting alone — `Option[Option[R]]`, `Result[Result[R, E], E]`,
+    /// and deeper — with no `Vec`/`Map`/tuple level anywhere in the chain?
+    ///
+    /// The bounded companion of [`Self::type_runs_user_drop`]'s one-container-
+    /// level widening, added by B-2026-09-10-17. It recurses through
+    /// `Option`/`Result` payloads and NOWHERE else: at the first payload whose
+    /// head is not an envelope it asks `type_runs_user_drop` for that head and
+    /// stops. That is what keeps `Option[Option[Vec[R]]]` answering `false`,
+    /// which it must — that shape is silent on the interpreter too, and
+    /// admitting it here would print a body `--interp` does not.
+    ///
+    /// Terminates on the type's nesting depth: each step strips one envelope
+    /// from a finite `TypeExpr`. `seen` is threaded into the `type_runs_user_
+    /// drop` calls only, which is where a cyclic user type could recur.
+    fn optres_envelope_reaches_user_drop(
+        &self,
+        te: &TypeExpr,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+        seen: &mut Vec<String>,
+    ) -> bool {
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        let n = match p.segments.first().map(|s| s.as_str()) {
+            Some("Option") => 1usize,
+            Some("Result") => 2usize,
+            _ => return false,
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        args.iter().take(n).any(|a| {
+            let GenericArg::Type(payload) = a else {
+                return false;
+            };
+            let TypeKind::Path(pp) = &payload.kind else {
+                return false;
+            };
+            let Some(head) = pp.segments.first() else {
+                return false;
+            };
+            if matches!(head.as_str(), "Option" | "Result") {
+                return self.optres_envelope_reaches_user_drop(payload, subst, seen);
+            }
+            let resolved = self.resolve_field_head_mono(head, subst);
+            self.type_runs_user_drop(&resolved, seen)
+        })
     }
 
     /// The ELEMENT head name of a `Vec[E]` / `VecDeque[E]` TypeExpr whose
@@ -3773,6 +3871,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.type_runs_user_drop(&resolved, &mut Vec::new())
                     })
                 });
+                // B-2026-09-10-17 — the ENVELOPE-NESTED payload
+                // (`W { o: Option[Option[R]] }`). The leg above reads the
+                // payload's HEAD NAME, so it asks about `Option` and answers
+                // false, the field never entered the walk set, and
+                // `emit_user_drop_field_bodies_fn_skipping` declined for an
+                // empty set — no `__karac_dropelems_*` in the module at all,
+                // confirmed by capturing the JIT IR for the two-deep field
+                // beside the one-deep one that works.
+                //
+                // THIS gate is the blocker, not the parent classification in
+                // `type_runs_user_drop`. That predicate has the identical
+                // horizon and gets the identical leg beside this one, because
+                // both have to agree for a walker to be emitted AND called;
+                // patching only the classifier moved nothing, which is how the
+                // two were told apart.
+                let optres_envelope = field_te.is_some_and(|te| {
+                    self.optres_envelope_reaches_user_drop(te, subst, &mut Vec::new())
+                });
                 // B-2026-09-05-5 — a field that is itself a GENERIC STRUCT
                 // INSTANTIATION: `inner: Gd[T]` under `T -> R`, or a concrete
                 // `inner: Gd[R]` inside a non-generic parent. `direct` above
@@ -3809,7 +3925,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             !nsub.is_empty() && self.type_runs_user_drop_mono(&head, &nsub)
                         }
                 });
-                (direct || vec_elem || map_val || tuple_elem || optres_payload || nested_generic)
+                (direct
+                    || vec_elem
+                    || map_val
+                    || tuple_elem
+                    || optres_payload
+                    || optres_envelope
+                    || nested_generic)
                     .then_some(idx)
             })
             .collect()
@@ -9191,9 +9313,26 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         // B-2026-08-03-1 — Option/Result payload level.
-        Self::optres_payload_heads(te)
+        if Self::optres_payload_heads(te)
             .iter()
             .any(|ph| self.type_runs_user_drop(ph, &mut Vec::new()))
+        {
+            return true;
+        }
+        // B-2026-09-10-17 — the ENVELOPE-NESTED payload, one container level
+        // out. This is the THIRD site carrying the same head-name horizon, and
+        // the one that kept `let p = (Some(Some(R { .. })), 7);` silent after
+        // B-2026-09-10-18 taught the tuple binding to name its element type:
+        // the element resolved to `Option[Option[R]]` and then this selector
+        // asked `type_runs_user_drop("Option")` and declined it. Bounded to
+        // envelope chains for the reason the gate legs give — a chain through
+        // a `Vec` level is silent on the interpreter too, so admitting one
+        // here would print a body `--interp` does not.
+        self.optres_envelope_reaches_user_drop(
+            te,
+            &std::collections::HashMap::new(),
+            &mut Vec::new(),
+        )
     }
 
     /// Run the Drop BODIES reachable from ONE SLOT `ep` holding a value of

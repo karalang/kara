@@ -152791,6 +152791,131 @@ fn main() {
         }
     }
 
+    /// B-2026-09-10-17 — an ENVELOPE-NESTED payload lost its `Drop` body
+    /// wherever a type-level gate read a payload's HEAD NAME.
+    ///
+    /// `W { o: Option[Option[R]] }` printed `dR71` under `--interp` and nothing
+    /// compiled. THREE functions carried the same one-level horizon, each able
+    /// on its own to stop the body: `user_drop_field_indices_mono` (the field
+    /// never entered the walk set, so no walker was BUILT),
+    /// `type_runs_user_drop` (the parent classified drop-free), and
+    /// `elem_te_runs_user_drop` (a tuple element declined). Patching the
+    /// classifier alone moved NOTHING — capturing the JIT IR showed the
+    /// two-deep field emitting no `__karac_dropelems_*` symbol at all beside
+    /// the one-deep field that emits `__karac_dropelems_opt_R` — which is how
+    /// the build gate was told apart from the call gate.
+    ///
+    /// THE LEG IS ENVELOPE-ONLY, and that is the measured half of the design
+    /// rather than a shortcut. Every nesting through a `Vec` level is silent on
+    /// the INTERPRETER too, because its `field_te_runs_user_drop` has the same
+    /// horizon and it reaches envelope chains by a different route entirely —
+    /// the value-driven `run_discarded_value_user_drops`, which recurses over
+    /// the VALUE and so descends nested envelopes for free while never entering
+    /// a `Vec`. Recursing this leg through containers would repair codegen for
+    /// those and leave the interpreter silent, turning five agreed silences
+    /// into five run-vs-build divergences.
+    ///
+    /// So the last three cells assert SILENCE, and they are the point of this
+    /// test: if a later change makes them print, the interpreter has to move in
+    /// the same commit or the tree gains divergences.
+    #[test]
+    fn e2e_envelope_nested_payload_runs_its_drop_body_in_a_field() {
+        const PRE: &str = "struct Re { id: i64, name: String }\n\
+             impl Drop for Re { fn drop(mut ref self) { println(f\"dRe{self.id}\") } }\n";
+        for (label, body, want) in [
+            // THE ROW: a field two envelopes deep, never read.
+            (
+                "field-option-option",
+                "struct Wa { o: Option[Option[Re]] }\n\
+                 fn main() { let w = Wa { o: Some(Some(Re { id: 71, name: f\"a\" })) }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // The `Result` spelling, which the row left unmeasured.
+            (
+                "field-result-result",
+                "struct Wb { o: Result[Result[Re, i64], i64] }\n\
+                 fn main() { let w = Wb { o: Result[Result[Re, i64], i64].Ok(Result[Re, i64].Ok(Re { id: 71, name: f\"a\" })) }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // Three deep — the recursion has no horizon of its own.
+            (
+                "field-three-deep",
+                "struct Wc { o: Option[Option[Option[Re]]] }\n\
+                 fn main() { let w = Wc { o: Some(Some(Some(Re { id: 71, name: f\"a\" }))) }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // The leaf is a user ENUM rather than a struct: the recursion stops
+            // at the first non-envelope head and asks `type_runs_user_drop`,
+            // whose enum leg answers for this one.
+            (
+                "field-envelope-of-user-enum",
+                "enum Ee { A(Re), B }\n\
+                 struct Wd { o: Option[Option[Ee]] }\n\
+                 fn main() { let w = Wd { o: Some(Some(Ee.A(Re { id: 71, name: f\"a\" }))) }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // The leaf is a struct with NO `Drop` of its own but a Drop-bearing
+            // field — the same `type_runs_user_drop` question, field leg.
+            (
+                "field-envelope-of-struct-with-drop-field",
+                "struct Wf { r: Re }\n\
+                 struct Wg { o: Option[Option[Wf]] }\n\
+                 fn main() { let w = Wg { o: Some(Some(Wf { r: Re { id: 71, name: f\"a\" } })) }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // The TUPLE-ELEMENT site — the third horizon, and the cell left
+            // over from B-2026-09-10-18 once its element inference landed.
+            (
+                "tuple-element-envelope",
+                "fn main() { let p = (Some(Some(Re { id: 71, name: f\"a\" })), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // CONTROL — one level, correct throughout.
+            (
+                "field-option-control",
+                "struct Wh { o: Option[Re] }\n\
+                 fn main() { let w = Wh { o: Some(Re { id: 71, name: f\"a\" }) }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // CONTROL — a one-level `Vec` field, correct throughout.
+            (
+                "field-vec-control",
+                "struct Wi { xs: Vec[Re] }\n\
+                 fn main() { let w = Wi { xs: [Re { id: 71, name: f\"a\" }] }; println(\"ok\"); println(\"done\") }\n",
+                "dRe71\nok\ndone\n",
+            ),
+            // BOUNDARY — `Vec[Vec[Re]]` is the residual this widening does NOT
+            // close, and is silent on the interpreter too. Printing here means
+            // a divergence was just created.
+            (
+                "boundary-vec-of-vec-stays-silent",
+                "struct Wj { xs: Vec[Vec[Re]] }\n\
+                 fn main() { let w = Wj { xs: [[Re { id: 71, name: f\"a\" }]] }; println(\"ok\"); println(\"done\") }\n",
+                "ok\ndone\n",
+            ),
+            // BOUNDARY — an envelope chain that ends in a `Vec`. The recursion
+            // must stop at the `Vec` head, not walk through it.
+            (
+                "boundary-envelope-of-vec-stays-silent",
+                "struct Wk { o: Option[Option[Vec[Re]]] }\n\
+                 fn main() { let w = Wk { o: Some(Some([Re { id: 71, name: f\"a\" }])) }; println(\"ok\"); println(\"done\") }\n",
+                "ok\ndone\n",
+            ),
+            // BOUNDARY — a `Vec` of envelopes, the mirror of the one above.
+            (
+                "boundary-vec-of-option-stays-silent",
+                "struct Wl { xs: Vec[Option[Re]] }\n\
+                 fn main() { let w = Wl { xs: [Some(Re { id: 71, name: f\"a\" })] }; println(\"ok\"); println(\"done\") }\n",
+                "ok\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-18 — a tuple literal's `Option` element lost its payload's
     /// `Drop` body, but ONLY in the bare-constructor spelling.
     ///
