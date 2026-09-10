@@ -152573,8 +152573,11 @@ fn main() {
     /// This harness pins the OUTPUT of the family. It is not the gate for the
     /// use-after-free itself — that is
     /// `asan_boxed_tuple_payload_param_bodies_precede_the_box_free` in
-    /// `tests/memory_sanitizer.rs`, which reports `heap-use-after-free` with
-    /// this commit reverted. What these cells catch is the OTHER direction: a
+    /// `tests/memory_sanitizer.rs`, which with this commit reverted reports
+    /// `heap-use-after-free` on the INSTRUMENTED leg
+    /// (`KARAC_SANITIZE_ADDRESS=1`) and fails on the printed value alone on
+    /// the default one -- as that fixture's own doc comment states, and as
+    /// this sentence did not until B-2026-09-10-15's commit corrected it. What these cells catch is the OTHER direction: a
     /// body that stops running at all, which is what moving the walk to the
     /// callee costs if the arm-level disarm is left to fire for a whole-payload
     /// binding (`Some(t)`), and what the interpreter did for every named local
@@ -152684,6 +152687,130 @@ fn main() {
                  fn takeS(x: Option[(St, St)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
                  fn main() { takeS(Some((St { id: 71 }, St { id: 72 }))); println(\"done\") }\n",
                 "ok\ndSt71\ndSt72\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
+    /// B-2026-09-10-15 — an `Option`/`Result` payload that is ITSELF an
+    /// `Option`/`Result` ran its inner `Drop` body on the interpreter and
+    /// nowhere on the compiled backends.
+    ///
+    /// `emit_optres_payload_user_drop_bodies_fn`'s shared core had arms for a
+    /// payload that is a user struct, a user enum or a tuple, and its filter
+    /// excluded `Option`/`Result` outright with the note that "a nested
+    /// built-in payload rides its own walker, not this arm". There is no such
+    /// walker: a walker for the OUTER `Option[Option[R]]` is precisely what
+    /// that fn emits, and it declined the shape, so nothing anywhere ran the
+    /// inner `R`'s body. Memory was balanced throughout — the box and its
+    /// interior always had owners — so the missing output was the whole
+    /// observable.
+    ///
+    /// The fix recurses: an envelope payload's arm calls the same emitter for
+    /// the inner envelope. THE ADMISSION TEST IS THAT CALL, not a predicate
+    /// beside it, and the three-deep cell is why. `elem_te_runs_user_drop`
+    /// reads a nested envelope's payload HEAD NAME only, so
+    /// `Option[Option[R]]` asks `type_runs_user_drop("Option")` and gets
+    /// `false`; gated on it, the two-deep cells here passed and
+    /// `Option[Option[Option[R]]]` stayed silent. The emitter has no horizon.
+    ///
+    /// The three DISCARDED-LOCAL cells print the body BEFORE `ok`, which is
+    /// this tree's NLL model for a binding that is never read (`exec.rs`'s
+    /// `note_unread`), not an ordering quirk of the nesting.
+    #[test]
+    fn e2e_nested_optres_payload_runs_its_inner_drop_body() {
+        const PRE: &str = "struct Rn { id: i64, name: String }\n\
+             impl Drop for Rn { fn drop(mut ref self) { println(f\"dRn{self.id}\") } }\n";
+        for (label, body, want) in [
+            // THE ROW: a fresh-temp argument to a by-value param.
+            (
+                "fresh-temp-param",
+                "fn takeR(x: Option[Option[Rn]]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some(Rn { id: 71, name: f\"a\" }))); println(\"done\") }\n",
+                "ok\ndRn71\ndone\n",
+            ),
+            // A NAMED local handed to the same param. The caller's let-site
+            // registration is disarmed at the move, so the callee owns it.
+            (
+                "named-local-param",
+                "fn takeR(x: Option[Option[Rn]]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { let o = Some(Some(Rn { id: 71, name: f\"a\" })); takeR(o); println(\"done\") }\n",
+                "ok\ndRn71\ndone\n",
+            ),
+            // A DISCARDED local: never read, so it dies at its own `let`.
+            (
+                "discarded-local",
+                "fn main() { let o = Some(Some(Rn { id: 71, name: f\"a\" })); println(\"ok\"); println(\"done\") }\n",
+                "dRn71\nok\ndone\n",
+            ),
+            // The same, with the value arriving from a call rather than a
+            // literal — a different construction route to the same slot.
+            (
+                "returned-then-bound",
+                "fn mk() -> Option[Option[Rn]] { Some(Some(Rn { id: 71, name: f\"a\" })) }\n\
+                 fn main() { let o = mk(); println(\"ok\"); println(\"done\") }\n",
+                "dRn71\nok\ndone\n",
+            ),
+            // A CONTAINER element rather than a binding: the per-element
+            // walker reaches the same emitter.
+            (
+                "vec-element",
+                "fn main() { let v: Vec[Option[Option[Rn]]] = [Some(Some(Rn { id: 71, name: f\"a\" }))]; println(\"ok\"); println(\"done\") }\n",
+                "dRn71\nok\ndone\n",
+            ),
+            // The `Result` spelling on the `Ok` side, which the row left
+            // unmeasured and which diverged identically.
+            (
+                "result-of-result",
+                "fn takeR(x: Result[Result[Rn, i64], i64]) { match x { Ok(t) => { println(\"ok\") } Err(e) => { println(\"n\") } } }\n\
+                 fn main() { takeR(Ok(Ok(Rn { id: 71, name: f\"a\" }))); println(\"done\") }\n",
+                "ok\ndRn71\ndone\n",
+            ),
+            // THREE deep — the cell that fails on any one-level predicate and
+            // the reason the admission test is the recursive emitter itself.
+            (
+                "three-deep",
+                "fn takeR(x: Option[Option[Option[Rn]]]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Some(Some(Rn { id: 71, name: f\"a\" })))); println(\"done\") }\n",
+                "ok\ndRn71\ndone\n",
+            ),
+            // CONTROL — the OUTER envelope is `None`, so the tag switch must
+            // fall through and the recursion never run.
+            (
+                "outer-none",
+                "fn takeR(x: Option[Option[Rn]]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { let e: Option[Option[Rn]] = None; takeR(e); println(\"done\") }\n",
+                "n\ndone\n",
+            ),
+            // CONTROL — the INNER envelope is `None`: the outer arm is taken,
+            // the recursion runs, and its own tag switch finds nothing. This
+            // is the cell a recursion that walked a level too far would fail.
+            (
+                "inner-none",
+                "fn takeR(x: Option[Option[Rn]]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { let e: Option[Rn] = None; takeR(Some(e)); println(\"done\") }\n",
+                "ok\ndone\n",
+            ),
+            // CONTROL — one level only. Correct before this commit; here so a
+            // later change that double-fires the recursion prints `dRn71`
+            // twice and is caught.
+            (
+                "single-level-control",
+                "fn takeR(x: Option[Rn]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some(Rn { id: 71, name: f\"a\" })); println(\"done\") }\n",
+                "ok\ndRn71\ndone\n",
+            ),
+            // CONTROL — a TUPLE payload (B-2026-09-10-9's shape), the sibling
+            // arm of the same filter, unchanged by this commit.
+            (
+                "tuple-payload-control",
+                "fn takeR(x: Option[(Rn, Rn)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rn { id: 71, name: f\"a\" }, Rn { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "ok\ndRn71\ndRn72\ndone\n",
             ),
         ] {
             let Some(out) = run_program(&format!("{PRE}{body}")) else {

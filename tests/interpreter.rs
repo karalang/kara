@@ -18201,6 +18201,115 @@ fn test_a_discarded_enum_statement_runs_its_payloads_drop_body() {
 }
 
 #[test]
+fn test_a_nested_optres_payload_runs_its_inner_drop_body() {
+    // B-2026-09-10-15 (interpreter half) — an `Option`/`Result` payload that
+    // is ITSELF an `Option`/`Result`.
+    //
+    // The row was filed against the COMPILED backends, where a fresh-temp
+    // argument printed nothing while `--interp` printed the body: the
+    // interpreter reaches that position through its value-driven
+    // `run_discarded_value_user_drops`, whose `Option`/`Result` arm recurses
+    // structurally and so handles nesting for free. A NAMED LOCAL is a
+    // different path — `optres_payload_bodies_tes` — and there the
+    // interpreter was silent too, so the two backends agreed and nothing
+    // showed. Giving codegen its envelope arm broke that agreement in the
+    // named-local, discarded-local and returned-then-bound positions, which
+    // is why both halves move in one commit.
+    //
+    // Two changes here, mirroring the two the tuple payload needed in
+    // B-2026-09-09-20: the registration gate now qualifies an envelope
+    // payload through a RECURSIVE predicate, and the walk gained an envelope
+    // arm that re-enters itself with the declared inner payload type instead
+    // of returning outright.
+    //
+    // The old gate was one level deep in the same way codegen's was:
+    // `field_te_runs_user_drop` reads a nested envelope's arg head name and
+    // asks `type_name_runs_user_drop("Option")`, which is false. That is why
+    // the three-deep cell below is here.
+    const PRELUDE: &str = "struct W { id: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n";
+
+    // THE NAMED LOCAL, never read, so it dies at its own `let`.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[Option[W]] = Some(Some(W {{ id: 1 }}));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dW1\nx\n"
+    );
+
+    // The `Result` twin on the `Ok` side.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let r: Result[Result[W, i64], i64] = Result.Ok(Result.Ok(W {{ id: 1 }}));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dW1\nx\n"
+    );
+
+    // THREE deep — fails on any predicate with a one-level horizon.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[Option[Option[W]]] = Some(Some(Some(W {{ id: 1 }})));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dW1\nx\n"
+    );
+
+    // CONTROL — the INNER envelope is `None`. The outer arm is taken and the
+    // recursion runs, finding nothing; a walk that went a level too far would
+    // fault or print here.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[Option[W]] = Some(None);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "x\n"
+    );
+
+    // CONTROL — the OUTER envelope is `None`.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[Option[W]] = None;\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "x\n"
+    );
+
+    // CONTROL — ONE level. Correct before this commit; here so a recursion
+    // that re-enters at the wrong level prints `dW1` twice.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[W] = Some(W {{ id: 1 }});\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dW1\nx\n"
+    );
+
+    // CONTROL — the FRESH-TEMP argument the row was filed on. This one always
+    // printed under `--interp` (the value-driven discard walk handles nesting
+    // structurally), so it pins the position the widened registration must not
+    // start double-counting.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn takeW(x: Option[Option[W]]) {{\n\
+             \x20   match x {{ Some(t) => {{ println(\"ok\"); }} None => {{ println(\"n\"); }} }}\n\
+             }}\n\
+             fn main() {{\n\
+             \x20   takeW(Some(Some(W {{ id: 1 }})));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "ok\ndW1\nx\n"
+    );
+}
+
+#[test]
 fn test_a_named_local_option_tuple_payload_runs_its_element_bodies() {
     // B-2026-09-09-20 (interpreter half) — a NAMED LOCAL whose `Option`/
     // `Result` payload is a TUPLE ran no element `Drop` body at all.

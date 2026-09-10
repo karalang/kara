@@ -9845,8 +9845,36 @@ impl<'ctx> super::Codegen<'ctx> {
         // no `UserDrop` registration at all. That is the payload-level twin of
         // the container gaps B-2026-08-28-46/-47 (struct field, tuple element)
         // and -55 (`Vec` element) closed one level up, and it is the last
-        // position in that family. `Option`/`Result` are excluded because a
-        // nested built-in payload rides its own walker, not this arm.
+        // position in that family.
+        // B-2026-09-10-15 — the ENVELOPE-payload arm, and the correction of
+        // the reason this filter used to give for excluding one. That reason
+        // read "`Option`/`Result` are excluded because a nested built-in
+        // payload rides its own walker, not this arm", and no such walker
+        // exists: a walker for the OUTER `Option[Option[R]]` is exactly what
+        // this fn emits, and it declined the shape, so nothing anywhere ran
+        // the inner `R`'s body. Ten positions of the same type were swept:
+        // SEVEN printed under `--interp` and nothing compiled (a fresh-temp
+        // argument -- the row's own -- a struct field, a `Vec` element, a
+        // tuple element, the `Result[Result[R, i64], i64]` spelling, a
+        // three-deep `Option[Option[Option[R]]]`, and a destructuring
+        // `Some(Some(r))` arm), and THREE were silent on both backends and so
+        // had never been reported at all (a discarded local, a named local
+        // handed to a param, a returned-then-bound local). Memory was balanced
+        // throughout (0 valgrind errors), so the box and its interior always
+        // had owners and only the user body was lost.
+        //
+        // Admit an envelope payload that reaches a user drop and drain it in
+        // the case body by RECURSING into this same emitter for the inner
+        // envelope, which walks the inner tag and its own payload. Recursion
+        // terminates on the payload type's nesting depth, since a `TypeExpr`
+        // is a finite tree.
+        //
+        // That repairs the seven positions that reach a walker through this
+        // emitter. THREE ARE NOT THIS ARM'S and stay divergent: the struct
+        // FIELD and the TUPLE ELEMENT are never registered one level up (the
+        // parent's own gate widens a single container level by design), and
+        // the destructuring arm hands ownership to a leaf that does not take
+        // it. Filed rather than widened in here.
         // B-2026-09-05-14 — the TUPLE-payload arm. `Option[(R, i64)]` /
         // `Result[(R, i64), _]` reached the `TypeKind::Path` gate below, was
         // dropped as a non-Path, and so emitted NO walker: a discarded such
@@ -9861,11 +9889,15 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // One Drop-carrying payload arm the tag switch will handle. `sname` is
         // the payload struct/enum name (empty for a tuple); `tuple_elems` is
-        // `Some` only for a tuple payload, carrying its element `TypeExpr`s.
+        // `Some` only for a tuple payload, carrying its element `TypeExpr`s;
+        // `envelope` marks a payload that is itself an `Option`/`Result`,
+        // whose inner bodies come from a recursive walker rather than from a
+        // struct/enum/tuple one.
         struct PayloadArm {
             tag: u64,
             sname: String,
             tuple_elems: Option<Vec<TypeExpr>>,
+            envelope: bool,
             pte: TypeExpr,
             thresh: usize,
         }
@@ -9878,6 +9910,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             tag,
                             sname: String::new(),
                             tuple_elems: Some(elem_tes.clone()),
+                            envelope: false,
                             pte,
                             thresh,
                         });
@@ -9888,6 +9921,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     return None;
                 };
                 let sname = pp.segments.first()?.clone();
+                // The envelope arm. THE EMITTER ITSELF IS THE PREDICATE:
+                // admit this arm exactly when the recursion can emit a walker
+                // for the inner envelope, which is the only test that cannot
+                // disagree with what the case body will actually call.
+                //
+                // `elem_te_runs_user_drop` is the predicate this reached for
+                // first and it is WRONG here, one level down rather than at
+                // the top: its `optres_payload_heads` leg reads the payload's
+                // HEAD NAME only, so `Option[Option[R]]` answers `["Option"]`
+                // and `type_runs_user_drop("Option")` is false. Measured: with
+                // that gate, every TWO-deep cell was repaired and the
+                // three-deep `Option[Option[Option[R]]]` was not -- its middle
+                // envelope failed the gate, so the outer arm was dropped and
+                // the compiled backends stayed silent while `--interp` printed
+                // `ok dR71 done`. The recursive emitter has no such horizon.
+                //
+                // Emitting during the filter is deliberate rather than
+                // incidental: the walker is memoized by symbol name, so the
+                // case body's call below returns this same function instead of
+                // re-synthesising it.
+                if matches!(sname.as_str(), "Option" | "Result") {
+                    self.emit_optres_payload_user_drop_bodies_fn(&pte)?;
+                    return Some(PayloadArm {
+                        tag,
+                        sname,
+                        tuple_elems: None,
+                        envelope: true,
+                        pte,
+                        thresh,
+                    });
+                }
                 let user_enum = sname != "Option"
                     && sname != "Result"
                     && self
@@ -9905,6 +9969,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     tag,
                     sname,
                     tuple_elems: None,
+                    envelope: false,
                     pte,
                     thresh,
                 })
@@ -9960,6 +10025,7 @@ impl<'ctx> super::Codegen<'ctx> {
             PayloadArm {
                 sname,
                 tuple_elems,
+                envelope,
                 pte,
                 thresh,
                 ..
@@ -10024,7 +10090,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|l| !l.is_shared)
                 && sname != "Option"
                 && sname != "Result";
-            let inner = if let Some(elem_tes) = &tuple_elems {
+            let inner = if envelope {
+                // B-2026-09-10-15 — the payload is itself an `Option`/
+                // `Result`. `target_ptr` is the inner envelope's own base
+                // (deboxed above when the outer payload area could not hold
+                // it), which is exactly what this walker's parameter is, so
+                // the recursion needs no reshaping. Body-only like every
+                // sibling arm: the inner envelope's box and interior are
+                // owned by the value's free channel, unchanged by this.
+                self.emit_optres_payload_user_drop_bodies_fn(&pte)
+            } else if let Some(elem_tes) = &tuple_elems {
                 // B-2026-09-05-14 — the tuple payload: run each Drop-carrying
                 // element's body over the tuple aggregate at `target_ptr`
                 // (inline or deboxed above). Body-only, like the struct/enum

@@ -7083,12 +7083,9 @@ impl<'a> super::Interpreter<'a> {
                 // Widened HERE rather than inside `type_expr_runs_user_drop`,
                 // whose other callers answer a different question about the
                 // same predicate and are deliberately left alone.
-                Some("Option") | Some("Result") => payload_tes.iter().any(|pt| {
-                    if let TypeKind::Tuple(elems) = &pt.kind {
-                        return elems.iter().any(|e| self.type_expr_runs_user_drop(e));
-                    }
-                    self.type_expr_runs_user_drop(pt)
-                }),
+                Some("Option") | Some("Result") => payload_tes
+                    .iter()
+                    .any(|pt| self.optres_payload_te_runs_user_drop(pt)),
                 _ => false,
             }
         });
@@ -7348,6 +7345,68 @@ impl<'a> super::Interpreter<'a> {
         true
     }
 
+    /// Does an `Option`/`Result` PAYLOAD type reach user-`Drop` work?
+    ///
+    /// The recursive companion of [`Self::run_optres_payload_bodies_for`],
+    /// written so the gate that arms the walk and the walk itself have the
+    /// same reach — the two disagreeing is the whole shape of this family's
+    /// defects. Three legs, one per arm of that walker: a TUPLE payload
+    /// answers on its elements (B-2026-09-10-9), an `Option`/`Result`
+    /// ENVELOPE payload answers on its own payload by recursion
+    /// (B-2026-09-10-15), and anything else answers through
+    /// `type_expr_runs_user_drop`.
+    ///
+    /// The envelope leg is why this is a separate predicate rather than a
+    /// call to `field_te_runs_user_drop`, which looks like it would serve:
+    /// that one reads a nested envelope's arg HEAD NAME only, so
+    /// `Option[Option[R]]` asks `type_name_runs_user_drop("Option")` and gets
+    /// `false` — the same one-level horizon codegen's
+    /// `elem_te_runs_user_drop` has, and the reason this defect survived
+    /// three earlier widenings of the same family.
+    ///
+    /// Kept out of `type_expr_runs_user_drop` itself: its other callers ask a
+    /// different question about the same predicate and are deliberately left
+    /// alone.
+    fn optres_payload_te_runs_user_drop(&self, pt: &TypeExpr) -> bool {
+        if let TypeKind::Tuple(elems) = &pt.kind {
+            return elems.iter().any(|e| self.type_expr_runs_user_drop(e));
+        }
+        if let TypeKind::Path(p) = &pt.kind {
+            if matches!(
+                p.segments.last().map(String::as_str),
+                Some("Option") | Some("Result")
+            ) {
+                return p.generic_args.as_ref().is_some_and(|args| {
+                    args.iter().any(|a| match a {
+                        crate::ast::GenericArg::Type(t) => self.optres_payload_te_runs_user_drop(t),
+                        _ => false,
+                    })
+                });
+            }
+        }
+        self.type_expr_runs_user_drop(pt)
+    }
+
+    /// The payload `TypeExpr` an `Option`/`Result` type carries in `variant`'s
+    /// position — `Some`/`Ok` at index 0, `Err` at index 1. Shared by the
+    /// walker's entry and its envelope recursion so both read the declared
+    /// payload the same way.
+    fn optres_payload_te_at(te: &TypeExpr, variant: &str) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let args = p.generic_args.as_ref()?;
+        let pos = match (p.segments.last().map(String::as_str), variant) {
+            (Some("Option"), "Some") | (Some("Result"), "Ok") => 0usize,
+            (Some("Result"), "Err") => 1usize,
+            _ => return None,
+        };
+        match args.get(pos) {
+            Some(crate::ast::GenericArg::Type(t)) => Some(t.clone()),
+            _ => None,
+        }
+    }
+
     /// The walk half of [`Self::record_optres_payload_te`]: run the live
     /// payload's user `impl Drop` body (and its field bodies) for a dying
     /// `Option`/`Result` binding. BODY ONLY — the interpreter's value model
@@ -7358,27 +7417,33 @@ impl<'a> super::Interpreter<'a> {
         let Some(te) = self.optres_payload_bodies_tes.get(name).cloned() else {
             return;
         };
-        let TypeKind::Path(p) = &te.kind else {
+        let Some(payload_te) = Self::optres_payload_te_at(&te, variant) else {
             return;
         };
-        let Some(args) = p.generic_args.as_ref() else {
-            return;
-        };
-        let payload_pos = match (p.segments.last().map(String::as_str), variant) {
-            (Some("Option"), "Some") | (Some("Result"), "Ok") => 0usize,
-            (Some("Result"), "Err") => 1usize,
-            _ => return,
-        };
-        let Some(crate::ast::GenericArg::Type(payload_te)) = args.get(payload_pos) else {
-            return;
-        };
-        let declared_head = Self::declared_field_type_head(payload_te);
         let EnumData::Tuple(items) = data else {
             return;
         };
-        let Some(payload) = items.first() else {
+        let Some(payload) = items.first().cloned() else {
             return;
         };
+        self.run_optres_payload_bodies_for(&payload_te, &payload);
+    }
+
+    /// The recursive core of [`Self::run_optres_payload_user_drops`]: run the
+    /// user `Drop` bodies reachable from ONE payload value whose declared type
+    /// is `payload_te`. BODY ONLY — the interpreter's value model owns the
+    /// memory — and declared-head-vs-runtime-name gated on every arm, so a
+    /// payload whose static type was erased where codegen emitted its walker
+    /// is skipped here too.
+    ///
+    /// Split out of its caller by B-2026-09-10-15 so the `Option`/`Result`
+    /// ENVELOPE arm can re-enter it for the inner envelope. Codegen's
+    /// `emit_payload_user_drop_bodies_core` recurses through
+    /// `emit_optres_payload_user_drop_bodies_fn` for the same shape and in the
+    /// same order, which is what keeps the two backends printing the same
+    /// sequence.
+    fn run_optres_payload_bodies_for(&mut self, payload_te: &TypeExpr, payload: &Value) {
+        let declared_head = Self::declared_field_type_head(payload_te);
         // B-2026-08-28-58 — a payload that is a user ENUM, not just a struct.
         // The `Value::Struct` bind below rejected it outright, which is why
         // `let o: Option[E] = Some(E.B);` ran no body on ANY backend. Same
@@ -7389,13 +7454,33 @@ impl<'a> super::Interpreter<'a> {
         if let Value::EnumVariant {
             enum_name: pn,
             variant: pv,
-            ..
+            data: pdata,
         } = payload
         {
-            if pn == "Option" || pn == "Result" {
+            if declared_head.as_deref() != Some(pn.as_str()) {
                 return;
             }
-            if declared_head.as_deref() != Some(pn.as_str()) {
+            // B-2026-09-10-15 — a payload that is ITSELF an `Option`/`Result`.
+            // This arm used to `return` outright, on the same premise codegen's
+            // filter stated: that a nested built-in payload "rides its own
+            // walker". No such walker exists at either level, so the inner
+            // `R`'s body ran nowhere on either backend for a NAMED local, and
+            // nowhere compiled for the fresh-temp argument the row was filed
+            // on. Recursing with the DECLARED inner payload type keeps the
+            // same declared-vs-runtime gate every other arm applies, one level
+            // down, and terminates on the type's nesting depth.
+            if pn == "Option" || pn == "Result" {
+                let EnumData::Tuple(inner_items) = pdata else {
+                    return;
+                };
+                let Some(inner) = inner_items.first().cloned() else {
+                    return;
+                };
+                let pv = pv.clone();
+                let Some(inner_te) = Self::optres_payload_te_at(payload_te, &pv) else {
+                    return;
+                };
+                self.run_optres_payload_bodies_for(&inner_te, &inner);
                 return;
             }
             let pn = pn.clone();
