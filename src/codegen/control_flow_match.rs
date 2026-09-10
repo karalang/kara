@@ -12906,6 +12906,40 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
+        // B-2026-09-10-9 — a WHOLE-payload binding out of a param whose
+        // bodies this frame runs keeps the place's walk armed.
+        //
+        // The disarm's premise, stated above, is that "the arm's binding owns
+        // the resource from then on". For a by-value param that premise rests
+        // on the caller having retained the bodies, which is what makes the
+        // arm's leaves param views with memory-only drops. It stops holding
+        // exactly where `callee_owned_payload_bodies_params` records that it
+        // does — a boxed non-struct payload, whose box this frame frees before
+        // returning, so the bodies had to move here (see the registration in
+        // `compile_function_body`). Disarming there hands the bodies to a
+        // binding that was never given any, and they run nowhere: measured
+        // `ok / done` against the interpreter's `ok / dR71 / dR72 / done` for
+        // `match x { Some(t) => { println("ok") } .. }` over
+        // `x: Option[(R, R)]`, and the same silence when the arm forwards `t`
+        // into another call.
+        //
+        // Restricted to sub-patterns that BIND rather than destructure,
+        // because a destructure is the case where the premise still holds:
+        // `Some((a, b))`'s leaves each take an element and each get their own
+        // body, so leaving the place armed as well would run every body twice.
+        // Measured correct on both backends before and after this narrowing
+        // (`a71 / dR71 / dR72 / done`), which is what the `all` below
+        // preserves.
+        if self
+            .payload_vars
+            .callee_owned_payload_bodies_params
+            .contains(&name)
+            && patterns
+                .iter()
+                .all(|sub| matches!(sub.kind, PatternKind::Binding(_) | PatternKind::Wildcard))
+        {
+            return;
+        }
         // B-2026-09-02-14 — EDGE-SENSITIVE since this row, and the builder is
         // positioned in the arm's own block at every one of the four call
         // sites, so the `false` store lands on the hit edge alone. The static

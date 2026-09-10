@@ -1534,6 +1534,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.payload_vars.inline_option_payload_vars.clear();
         self.payload_vars.boxed_enum_payload_vars.clear();
         self.payload_vars.boxed_struct_payload_param_vars.clear();
+        self.payload_vars.callee_owned_payload_bodies_params.clear();
         self.payload_vars.boxed_payload_alias.clear();
         self.payload_vars.boxed_optres_payload_view_vars.clear();
         self.payload_vars.deboxed_payload_box_ptrs.clear();
@@ -2966,6 +2967,88 @@ impl<'ctx> super::Codegen<'ctx> {
                             payload_inner_drop,
                             deeper,
                         );
+                    }
+                    // B-2026-09-10-9 — the payload's user `Drop` BODIES, on the
+                    // CALLEE, for exactly the shapes the loop above just took
+                    // the box for.
+                    //
+                    // The bodies were the CALLER's by design (B-2026-09-09-18,
+                    // `track_optres_arg_temp_bodies`, and the let site's own
+                    // note at B-2026-09-04-29): the callee's leaves are marked
+                    // param views and take memory-only drops precisely so the
+                    // caller can run one body per argument. That division is
+                    // unachievable once the payload BOXES, and the reason is
+                    // ordering rather than ownership. The caller's walk runs
+                    // after the call returns; the box it walks through was
+                    // freed by the `BoxedEnumDrop` registered two lines up,
+                    // inside the callee, before the return. So the caller's
+                    // bodies read a pointer the callee handed to `free`.
+                    //
+                    // MEASURED at `-O0` on `fn takeR(x: Option[(R, R)])` with
+                    // `impl Drop for R`, under valgrind:
+                    //
+                    //     Invalid read of size 8
+                    //     Address 0x… is 0 bytes inside a block of size 64 free'd
+                    //     Invalid read of size 8
+                    //     Address 0x… is 32 bytes inside a block of size 64 free'd
+                    //
+                    // one per tuple element, all of them inside the freed box.
+                    // Only element 0 PRINTS wrong (`dR23108613045` for `dR71`),
+                    // and that is an allocator artifact rather than a second
+                    // defect: glibc's tcache writes its safe-linked `next` over
+                    // the chunk's first 8 bytes and its `key` over the next 8,
+                    // so a field at offset 0 reads freelist metadata and every
+                    // later element still reads its own stale-but-intact bytes.
+                    // The row this closes was filed on the printed value and
+                    // concluded "a wrong OFFSET inside live memory"; it is the
+                    // right offset inside dead memory.
+                    //
+                    // A COPY WOULD NOT FIX IT, which is why this moves the walk
+                    // rather than the value it walks. The box's interior drop
+                    // has already freed each element's own heap (the `String`
+                    // behind `R.name`) by the time the caller runs, so a body
+                    // reading a heap field would fault through a caller-side
+                    // copy of the payload bytes just as it faults through the
+                    // box. Bodies have to precede the memory drop, and the
+                    // memory drop is the callee's.
+                    //
+                    // REGISTERED AFTER the `BoxedEnumDrop` so it drains BEFORE
+                    // it — the same LIFO the caller relies on to get its own
+                    // bodies out ahead of its own box free (`main`'s
+                    // `__karac_dropelems_opt_W` call precedes its `boxdrop_free`
+                    // for a struct payload, where the caller does own the box).
+                    //
+                    // Keyed on the PARAM NAME rather than the caller's fixed
+                    // `__optres_arg_bodies_tmp` sentinel, so the existing
+                    // `suppress_container_elem_bodies_for_var` retraction
+                    // reaches it when an arm binds the payload out and takes
+                    // the bodies with it — the same retraction the interior
+                    // drop gets from `retract_boxed_tuple_inner_drop_for_arm`.
+                    //
+                    // A STRUCT payload is untouched: the loop above `continue`s
+                    // on `inner_struct.is_some()`, so the CALLER keeps the box
+                    // (`optbox_arg_tmp0`), its walk runs before its own free,
+                    // and there is nothing here to move. That is the shape
+                    // B-2026-09-09-18 was filed on and it stays exactly as it
+                    // was — verified clean under valgrind before and after.
+                    if self
+                        .boxed_enum_payload_variants(&mono_ty)
+                        .iter()
+                        .any(|(_, _, inner_struct)| inner_struct.is_none())
+                    {
+                        if let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(&mono_ty)
+                        {
+                            self.track_user_drop_var_with_fn(
+                                "",
+                                &param_name,
+                                alloca,
+                                bodies,
+                                crate::codegen::state::UserDropKind::ContainerElemBodies,
+                            );
+                            self.payload_vars
+                                .callee_owned_payload_bodies_params
+                                .insert(param_name.clone());
+                        }
                     }
                     // B-2026-08-07-2 shapes 1+2 — the same param, one level
                     // further down: a box inside the param's INLINE payload

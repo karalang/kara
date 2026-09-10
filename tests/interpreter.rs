@@ -18201,6 +18201,117 @@ fn test_a_discarded_enum_statement_runs_its_payloads_drop_body() {
 }
 
 #[test]
+fn test_a_named_local_option_tuple_payload_runs_its_element_bodies() {
+    // B-2026-09-09-20 (interpreter half) — a NAMED LOCAL whose `Option`/
+    // `Result` payload is a TUPLE ran no element `Drop` body at all.
+    //
+    // The walk is reached through `optres_payload_bodies_tes`, and that table
+    // is populated only when `type_expr_runs_user_drop` says the payload runs
+    // one. That predicate answers for a `TypeKind::Path` and returns `false`
+    // for everything else, so `Option[(W, W)]` classified drop-free, no record
+    // was made, and `run_optres_payload_user_drops` returned on its first line.
+    // The same value built as a FRESH TEMP printed both bodies throughout —
+    // an argument temp goes down the call path, which never consults the table
+    // — which is what made this look like a call-shape question rather than a
+    // registration one.
+    //
+    // Two changes, both needed: the registration gate now qualifies a tuple
+    // payload on its ELEMENTS, and the walk itself gained a `Value::Tuple` arm
+    // (it bound `Value::Struct` and returned otherwise, exactly as it bound
+    // only structs before B-2026-08-28-58 added the user-enum arm).
+    //
+    // ORDER is element order, matching the compiled `__karac_dropelems_tuple_*`
+    // walk, which GEPs each element off the payload base in declaration order.
+    //
+    // The row's OTHER half — that the compiled backend fires "TOO EARLY",
+    // before a following statement — does not survive re-measurement as a
+    // defect. `let r = mk(20); println("ok")` over a plain `Drop`-bearing
+    // struct prints `dR20` then `ok` on BOTH backends and always has: an
+    // unread binding dies at its own `let` under the NLL model this tree
+    // implements on purpose (`exec.rs`'s `note_unread`: "Bindings introduced
+    // but never read: NLL says they die immediately after the let"). The
+    // `Option[(R, i64)]` spelling now does the same thing on both backends,
+    // which is agreement with the model rather than a second fix.
+    const PRELUDE: &str = "struct W { id: i64 }\n\
+         impl Drop for W { fn drop(mut ref self) { println(f\"dW{self.id}\"); } }\n";
+
+    // THE ROW: a named local, never read, so it dies at its own `let`.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[(W, W)] = Some((W {{ id: 1 }}, W {{ id: 2 }}));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dW1\ndW2\nx\n"
+    );
+
+    // A DESTRUCTURING arm over the same local, where the leaves take the
+    // elements and each owns its own body. This is the spelling that was
+    // already correct, and it is here so the registration widened above cannot
+    // start double-counting it.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[(W, W)] = Some((W {{ id: 1 }}, W {{ id: 2 }}));\n\
+             \x20   println(\"x\");\n\
+             \x20   match o {{ Some((a, b)) => {{ println(f\"t{{a.id}}\"); }} None => {{ println(\"n\"); }} }}\n}}\n"
+        )),
+        "x\nt1\ndW2\ndW1\n"
+    );
+
+    // A RECORDED RESIDUAL, deliberately not asserted: a WHOLE-payload binding
+    // over a LOCAL (`match o { Some(t) => { println("hit") } .. }`) still runs
+    // no element body, on BOTH backends — the local twin of the arm-level
+    // disarm this commit narrowed for a by-value PARAM. It is left alone here
+    // because the two backends agree on it, so it breaks no parity rule, and
+    // because pinning it would freeze the silence rather than the behaviour.
+    // Memory is balanced on it either way (valgrind: 0 errors, nothing lost).
+
+    // The `Result` twin, on the `Ok` side.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let r: Result[(W, W), i64] = Result.Ok((W {{ id: 1 }}, W {{ id: 2 }}));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "dW1\ndW2\nx\n"
+    );
+
+    // CONTROL — the `Err` side of the same type constructs no `W` at all, so
+    // the tag guard has to keep the walk silent rather than reading a payload
+    // that is not there.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let r: Result[(W, W), i64] = Result.Err(9);\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "x\n"
+    );
+
+    // CONTROL — a tuple payload with NO Drop-bearing element must not arm the
+    // walk, which is what the per-element `any` in the gate preserves.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[(i64, i64)] = Some((1, 2));\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "x\n"
+    );
+
+    // CONTROL — `None`, where there is no payload to walk.
+    assert_eq!(
+        run(&format!(
+            "{PRELUDE}fn main() {{\n\
+             \x20   let o: Option[(W, W)] = None;\n\
+             \x20   println(\"x\");\n}}\n"
+        )),
+        "x\n"
+    );
+}
+
+#[test]
 fn test_a_bound_optres_local_whose_arm_missed_runs_its_payload_drop_body() {
     // B-2026-09-02-14 — a BOUND `Option`/`Result` local whose arm MISSED lost
     // its payload's `Drop` body, on all four surfaces.

@@ -166,6 +166,23 @@ pub(crate) struct PayloadVars<'ctx> {
     /// the channel `deboxed_payload_box_ptrs` documents for the move-out
     /// mirror, reused here for the destructure that has no move to mirror.
     pub(crate) boxed_struct_payload_param_vars: std::collections::HashSet<String>,
+    /// B-2026-09-10-9 — by-value `Option`/`Result` params whose payload user
+    /// `Drop` BODIES this frame runs, because it also owns and frees the
+    /// payload box.
+    ///
+    /// The bodies are normally the CALLER's (B-2026-09-09-18 for a fresh-temp
+    /// argument, the let site for a named one), which is why a param's arm
+    /// leaves are marked param views and take memory-only drops. That split
+    /// cannot hold once the payload BOXES into a box the callee's own
+    /// `BoxedEnumDrop` frees before returning: the caller's walk runs after the
+    /// call and reads freed memory. `compile_function_body` therefore registers
+    /// the walk here instead, and records membership so the two readers that
+    /// assume the caller-retained arrangement can tell this population apart.
+    ///
+    /// Reach only, like `boxed_struct_payload_param_vars` above — membership
+    /// confers no ownership of anything and is not consulted by any move rule.
+    /// Cleared per function.
+    pub(crate) callee_owned_payload_bodies_params: std::collections::HashSet<String>,
     /// B-2026-08-06-32 — bindings carrying a `NestedBoxedEnumDrop`, i.e. a box
     /// living inside the binding's INLINE payload area
     /// (`Result[Option[Wide], E]`).

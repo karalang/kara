@@ -152551,6 +152551,148 @@ fn main() {
         }
     }
 
+    /// B-2026-09-10-9 — a boxed TUPLE payload handed to a by-value
+    /// `Option`/`Result` param ran its elements' `Drop` bodies THROUGH A BOX
+    /// THE CALLEE HAD ALREADY FREED.
+    ///
+    /// The bodies were the caller's (B-2026-09-09-18), the box was the
+    /// callee's (B-2026-09-04-12 and the rows around it), and the caller's walk
+    /// runs after the call returns — so the two orders could not both be
+    /// satisfied. Under valgrind, two invalid reads per call for
+    /// `takeR(Some((Rt { .. }, Rt { .. })))`, one per element, every one of
+    /// them inside a 64-byte block already passed to `free`.
+    ///
+    /// ONLY ELEMENT 0 PRINTED WRONG, and that is an allocator artifact rather
+    /// than a second defect: glibc's tcache writes its safe-linked `next` over
+    /// a freed chunk's first 8 bytes, so a field at offset 0 reads freelist
+    /// metadata (`dRt23108613045`, a different value on every run) while every
+    /// later element still reads its own stale-but-intact bytes. The row was
+    /// filed on that printed value and called it a wrong OFFSET into live
+    /// memory; it is the right offset into dead memory.
+    ///
+    /// This harness pins the OUTPUT of the family. It is not the gate for the
+    /// use-after-free itself — that is
+    /// `asan_boxed_tuple_payload_param_bodies_precede_the_box_free` in
+    /// `tests/memory_sanitizer.rs`, which reports `heap-use-after-free` with
+    /// this commit reverted. What these cells catch is the OTHER direction: a
+    /// body that stops running at all, which is what moving the walk to the
+    /// callee costs if the arm-level disarm is left to fire for a whole-payload
+    /// binding (`Some(t)`), and what the interpreter did for every named local
+    /// until this commit.
+    ///
+    /// The two CONTROLS are the shapes that must not move. A boxed STRUCT
+    /// payload keeps the box on the CALLER, so its walk already preceded its
+    /// own free and nothing here may disturb it; an INLINE tuple payload has no
+    /// box at all and reads the caller's own spilled bytes.
+    #[test]
+    fn e2e_boxed_tuple_payload_param_runs_its_element_bodies() {
+        const PRE: &str = "struct Rt { id: i64, name: String }\n\
+             impl Drop for Rt { fn drop(mut ref self) { println(f\"dRt{self.id}\") } }\n";
+        for (label, body, want) in [
+            // The row's own shape: a whole-tuple binding the arm never reads.
+            (
+                "whole-tuple-binding",
+                "fn takeR(x: Option[(Rt, Rt)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "ok\ndRt71\ndRt72\ndone\n",
+            ),
+            // Arity 3 — every element is read after the free, so a fix that
+            // only repaired "element 0" would leave this one printing 71/72/73
+            // by luck rather than by ownership.
+            (
+                "arity-three",
+                "fn takeR(x: Option[(Rt, Rt, Rt)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" }, Rt { id: 73, name: f\"c\" }))); println(\"done\") }\n",
+                "ok\ndRt71\ndRt72\ndRt73\ndone\n",
+            ),
+            // Element 0 the ONLY Drop-bearing position: the one cell where the
+            // freelist word is the whole observable, since there is no correct
+            // later element to sit beside it.
+            (
+                "drop-bearing-element-zero-only",
+                "fn takeR(x: Option[(Rt, i64)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rt { id: 71, name: f\"a\" }, 5))); println(\"done\") }\n",
+                "ok\ndRt71\ndone\n",
+            ),
+            // A NAMED local rather than a fresh temp. The caller's let-site
+            // registration is disarmed at the call-arg move, so this spelling
+            // never had a caller-side walk to be wrong — it printed NOTHING on
+            // both backends, and is the half the interpreter change repairs.
+            (
+                "named-local",
+                "fn takeR(x: Option[(Rt, Rt)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { let o: Option[(Rt, Rt)] = Some((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" })); takeR(o); println(\"done\") }\n",
+                "ok\ndRt71\ndRt72\ndone\n",
+            ),
+            // The `Result` twin. It reached this family only when
+            // B-2026-09-09-8 (92eeb8a84) gave `Result` the box owner it was
+            // missing; before that its box leaked and its bodies came from the
+            // caller's temp path, which is why it printed correctly while
+            // losing 144 B per program.
+            (
+                "result-twin",
+                "fn takeR(x: Result[(Rt, Rt), i64]) { match x { Ok(t) => { println(\"ok\") } Err(e) => { println(\"n\") } } }\n\
+                 fn main() { takeR(Result.Ok((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "ok\ndRt71\ndRt72\ndone\n",
+            ),
+            // A DESTRUCTURING arm, where the leaves each take an element and
+            // each own their own body. This cell is why the arm-level disarm is
+            // narrowed to sub-patterns that BIND rather than destructure:
+            // leaving the place armed here would print every body twice.
+            (
+                "destructuring-arm",
+                "fn takeR(x: Option[(Rt, Rt)]) { match x { Some((a, b)) => { println(f\"a{a.id}\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "a71\ndRt71\ndRt72\ndone\n",
+            ),
+            // A callee that never matches at all — nothing disarms, so this is
+            // the cell that passes purely on the callee-side registration.
+            (
+                "callee-does-not-match",
+                "fn takeR(x: Option[(Rt, Rt)]) { println(\"nomatch\") }\n\
+                 fn main() { takeR(Some((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "nomatch\ndRt71\ndRt72\ndone\n",
+            ),
+            // The arm FORWARDS its binding into a second call. Exactly one set
+            // of bodies is owed, and the inner callee's plain tuple param runs
+            // none of its own.
+            (
+                "arm-forwards-into-a-call",
+                "fn eat(p: (Rt, Rt)) { println(\"eat\") }\n\
+                 fn takeR(x: Option[(Rt, Rt)]) { match x { Some(t) => { eat(t) } None => { println(\"n\") } } }\n\
+                 fn main() { takeR(Some((Rt { id: 71, name: f\"a\" }, Rt { id: 72, name: f\"b\" }))); println(\"done\") }\n",
+                "eat\ndRt71\ndRt72\ndone\n",
+            ),
+            // CONTROL — a boxed STRUCT payload. The callee's arm declines it
+            // (`inner_struct.is_some()`), the CALLER owns the box, and its walk
+            // already ran ahead of its own free. Unchanged by this commit, and
+            // here so a later change that moves the struct case shows up.
+            (
+                "boxed-struct-payload-control",
+                "struct Wt { a: Rt, b: Rt }\n\
+                 fn takeW(x: Option[Wt]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeW(Some(Wt { a: Rt { id: 71, name: f\"a\" }, b: Rt { id: 72, name: f\"b\" } })); println(\"done\") }\n",
+                "ok\ndRt72\ndRt71\ndone\n",
+            ),
+            // CONTROL — an INLINE tuple payload: two one-word elements fit the
+            // 3-word seeded area, so there is no box, the caller's walk reads
+            // its own spilled copy, and nothing about this cell was ever wrong.
+            (
+                "inline-tuple-payload-control",
+                "struct St { id: i64 }\n\
+                 impl Drop for St { fn drop(mut ref self) { println(f\"dSt{self.id}\") } }\n\
+                 fn takeS(x: Option[(St, St)]) { match x { Some(t) => { println(\"ok\") } None => { println(\"n\") } } }\n\
+                 fn main() { takeS(Some((St { id: 71 }, St { id: 72 }))); println(\"done\") }\n",
+                "ok\ndSt71\ndSt72\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-5 — a NAMED LOCAL of a user generic enum passed BY VALUE
     /// smashed the caller's stack, because the moved-from-slot disarm zeroed
     /// `Option`'s four words into whatever the binding's slot actually was.

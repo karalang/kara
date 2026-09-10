@@ -7070,9 +7070,25 @@ impl<'a> super::Interpreter<'a> {
                 })
                 .collect();
             match head {
-                Some("Option") | Some("Result") => payload_tes
-                    .iter()
-                    .any(|pt| self.type_expr_runs_user_drop(pt)),
+                // B-2026-09-10-9 — a TUPLE payload qualifies on its ELEMENTS.
+                // `type_expr_runs_user_drop` answers only for a
+                // `TypeKind::Path`, so `Option[(R, R)]` classified drop-free,
+                // no record was made, and `run_optres_payload_user_drops`
+                // returned on its first line — the interpreter half of
+                // B-2026-09-09-20, measured as `let o: Option[(R, R)] = …`
+                // printing no body at all while the same value built as a
+                // fresh temp printed both (the temp goes down the argument
+                // path, which never consults this table).
+                //
+                // Widened HERE rather than inside `type_expr_runs_user_drop`,
+                // whose other callers answer a different question about the
+                // same predicate and are deliberately left alone.
+                Some("Option") | Some("Result") => payload_tes.iter().any(|pt| {
+                    if let TypeKind::Tuple(elems) = &pt.kind {
+                        return elems.iter().any(|e| self.type_expr_runs_user_drop(e));
+                    }
+                    self.type_expr_runs_user_drop(pt)
+                }),
                 _ => false,
             }
         });
@@ -7389,6 +7405,51 @@ impl<'a> super::Interpreter<'a> {
                 self.run_user_drop_body_only(&pn, payload.clone());
             }
             self.run_enum_payload_user_drops_value(&payload);
+            return;
+        }
+        // B-2026-09-10-9 — a payload that is a TUPLE, which the
+        // `Value::Struct` bind below rejects outright exactly as the enum arm
+        // above was rejected before B-2026-08-28-58. `declared_field_type_head`
+        // answers `None` for a `TypeKind::Tuple`, so the gate every other arm
+        // uses has to become per-ELEMENT here rather than whole-payload.
+        //
+        // The compiled twin is `__karac_dropelems_tuple_<i>_<T>…`, which GEPs
+        // each element off the payload base and calls `<T>.drop` in DECLARATION
+        // order; this walks `items` in the same order for the same reason the
+        // map arm documents — the bodies are observable, so the two backends
+        // have to agree on the sequence.
+        //
+        // WHY IT SURFACED NOW: the walk is reached only through
+        // `optres_payload_bodies_tes`, i.e. for a NAMED local, and a fresh-temp
+        // argument goes down the arg path instead — which is why
+        // `takeR(Some((R { .. }, R { .. })))` printed both bodies under
+        // `--interp` while `let o: Option[(R, R)] = …; takeR(o);` printed
+        // neither. That silence is B-2026-09-09-20's interpreter half. It sat
+        // agreed-wrong with the compiled backend until this commit gave the
+        // callee its payload bodies, at which point the compiled side started
+        // printing them and the pair diverged; the row's own instruction is to
+        // move both halves together, which is what this arm does.
+        if let Value::Tuple(items) = payload {
+            let TypeKind::Tuple(elem_tes) = &payload_te.kind else {
+                return;
+            };
+            let items = items.clone();
+            for (elem, elem_te) in items.iter().zip(elem_tes.iter()) {
+                let Some(head) = Self::declared_field_type_head(elem_te) else {
+                    continue;
+                };
+                let Value::Struct { name: en, .. } = elem else {
+                    continue;
+                };
+                if *en != head {
+                    continue;
+                }
+                let en = en.clone();
+                if self.program.drop_method_keys.contains_key(&en) {
+                    self.run_user_drop_body_only(&en, elem.clone());
+                }
+                self.drop_user_drop_fields_of_value(elem);
+            }
             return;
         }
         let Value::Struct { name: tn, .. } = payload else {

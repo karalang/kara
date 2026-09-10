@@ -3789,6 +3789,36 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         param_te: &TypeExpr,
     ) {
+        // B-2026-09-10-9 — stand down when the payload BOXES into a box the
+        // CALLEE owns. `functions.rs`'s param-site arm registers a
+        // `BoxedEnumDrop` for every boxing variant whose payload is not a user
+        // struct, and that action frees the box before the callee returns — so
+        // a walk from here, which runs after the call, reads freed memory.
+        // Two invalid reads per call under valgrind for
+        // `takeR(Some((R { .. }, R { .. })))`, one per tuple element, with
+        // element 0 printing the allocator's freelist word in place of its own
+        // field. The bodies are registered on the callee's frame instead,
+        // ahead of that box drop; see the note there for why a caller-side
+        // copy of the payload cannot substitute.
+        //
+        // `inner_struct.is_none()` is the same test the callee arm keys on, so
+        // the two cannot both claim or both drop the walk. A STRUCT payload
+        // keeps the caller — the callee arm `continue`s there and the box stays
+        // this frame's (`__optbox_arg_tmp0`), draining after this walk — which
+        // is the shape B-2026-09-09-18 was filed on and measures unchanged.
+        //
+        // The escape half needs no test here: this fn is only reached through
+        // `callee_by_value_optres_param_nonescaping`, whose set is
+        // `by_value_nonescaping_param_names` — the very set the callee arm ORs
+        // into its own gate, so a param that reaches here always satisfies the
+        // callee's escape condition too.
+        if self
+            .boxed_enum_payload_variants(param_te)
+            .iter()
+            .any(|(_, _, inner_struct)| inner_struct.is_none())
+        {
+            return;
+        }
         let Some(bodies) = self.emit_optres_payload_user_drop_bodies_fn(param_te) else {
             return;
         };

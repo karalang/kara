@@ -85770,4 +85770,161 @@ fn main() {
             "b8-option-tuple-twin-control",
         );
     }
+
+    /// B-2026-09-10-9 — the payload's user `Drop` BODIES ran through a box the
+    /// CALLEE had already freed.
+    ///
+    /// This is the gate for the defect itself; `tests/codegen.rs`'s
+    /// `e2e_boxed_tuple_payload_param_runs_its_element_bodies` pins the output
+    /// of the same family. It is an ASAN fixture rather than a leak one because
+    /// the allocation count BALANCES exactly — valgrind reports 18 allocs, 18
+    /// frees and nothing lost — and the row was filed on the belief that the
+    /// balance meant no memory tool could see it. Valgrind saw it on that same
+    /// run, in the section above the leak summary: two `Invalid read of size 8`,
+    /// each `inside a block of size 64 free'd`.
+    ///
+    /// WHICH LEG REPORTS WHAT, measured with the fix reverted, because the two
+    /// answers are different and only one of them is an ASAN report:
+    ///
+    ///   * the DEFAULT leg (`-O2`, object NOT instrumented) fails on the
+    ///     OUTPUT. ASAN's quarantine fill is what the body reads, so element 0
+    ///     prints `d-4702111234474983746` (0xbe…) deterministically rather than
+    ///     the run-to-run heap addresses an ordinary build shows. Reliable, but
+    ///     it is an assertion failure, not a sanitizer diagnosis.
+    ///   * the INSTRUMENTED leg (`scripts/asan-instrumented-leg.sh`, i.e.
+    ///     `KARAC_SANITIZE_ADDRESS=1`) reports the defect for what it is:
+    ///     `ERROR: AddressSanitizer: heap-use-after-free`, `READ of size 32`,
+    ///     `freed by thread T0 here`, `in Rt.drop`.
+    ///
+    /// So the uninstrumented legs catch this only through the printed value —
+    /// which is the concrete reason B-2026-09-07-40's instrumentation leg
+    /// exists, on a defect filed after it landed and still described in its row
+    /// as invisible to sanitizers.
+    #[test]
+    fn asan_boxed_tuple_payload_param_bodies_precede_the_box_free() {
+        const PRE: &str = "fn seed() -> i64 { env.args().len() }\n\
+             struct Rt { id: i64, name: String }\n\
+             impl Drop for Rt { fn drop(mut ref self) { println(f\"d{self.id}\") } }\n";
+
+        // 1 — the row's shape. A fresh temp handed to a by-value param, an arm
+        //     that binds the whole tuple and never reads it. The bodies used to
+        //     run after the callee's `boxdrop_free`.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn takeR(x: Option[(Rt, Rt)]) {{\n\
+                 \x20  match x {{ Some(t) => {{ println(\"ok\") }} None => {{ println(\"n\") }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  takeR(Some((Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20               Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }}))); i = i + 1; }} }}\n"
+            ),
+            &["ok", "d71", "d80", "ok", "d72", "d81"],
+            "b9-boxed-tuple-param-whole-binding",
+        );
+
+        // 2 — the `Result` twin. It only joined this family when 92eeb8a84 gave
+        //     `Result` the box owner it lacked; before that the box leaked and
+        //     the caller's walk read live memory.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn takeR(x: Result[(Rt, Rt), i64]) {{\n\
+                 \x20  match x {{ Ok(t) => {{ println(\"ok\") }} Err(e) => {{ println(\"n\") }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  takeR(Result.Ok((Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20                    Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }}))); i = i + 1; }} }}\n"
+            ),
+            &["ok", "d71", "d80", "ok", "d72", "d81"],
+            "b9-boxed-tuple-param-result-twin",
+        );
+
+        // 3 — a NAMED local. The caller's let-site walk is disarmed at the
+        //     call-arg move, so this spelling had no caller-side reader to
+        //     fault; it printed no body at all on either backend. Included
+        //     because the callee-side registration now has to serve it, and a
+        //     registration that fired twice here would double-free the
+        //     interior rather than merely double-print.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn takeR(x: Option[(Rt, Rt)]) {{\n\
+                 \x20  match x {{ Some(t) => {{ println(\"ok\") }} None => {{ println(\"n\") }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  let o: Option[(Rt, Rt)] = Some((Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20                                  Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }}));\n\
+                 \x20  takeR(o); i = i + 1; }} }}\n"
+            ),
+            &["ok", "d71", "d80", "ok", "d72", "d81"],
+            "b9-boxed-tuple-param-named-local",
+        );
+
+        // 4 — a DESTRUCTURING arm, where the leaves own the elements. The
+        //     arm-level disarm still has to fire here: leaving the place armed
+        //     as well runs each element's body twice, and its `drop_user_drop_
+        //     fields_of_value` half frees each `String` twice with it.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn takeR(x: Option[(Rt, Rt)]) {{\n\
+                 \x20  match x {{ Some((a, b)) => {{ println(f\"a{{a.id}}\") }} None => {{ println(\"n\") }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  takeR(Some((Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20               Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }}))); i = i + 1; }} }}\n"
+            ),
+            &["a71", "d71", "d80", "a72", "d72", "d81"],
+            "b9-boxed-tuple-param-destructured",
+        );
+
+        // 5 — the arm FORWARDS its binding into a second call, so the tuple
+        //     crosses one more frame before it dies. One set of bodies is owed.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn eat(p: (Rt, Rt)) {{ println(\"eat\") }}\n\
+                 fn takeR(x: Option[(Rt, Rt)]) {{\n\
+                 \x20  match x {{ Some(t) => {{ eat(t) }} None => {{ println(\"n\") }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  takeR(Some((Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20               Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }}))); i = i + 1; }} }}\n"
+            ),
+            &["eat", "d71", "d80", "eat", "d72", "d81"],
+            "b9-boxed-tuple-param-forwarded",
+        );
+
+        // 6 — CONTROL, a boxed STRUCT payload: the callee's arm declines it and
+        //     the CALLER keeps the box, so its walk always preceded its own
+        //     free. Clean before this commit and after it.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 struct Wt {{ a: Rt, b: Rt }}\n\
+                 fn takeW(x: Option[Wt]) {{\n\
+                 \x20  match x {{ Some(t) => {{ println(\"ok\") }} None => {{ println(\"n\") }} }} }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  takeW(Some(Wt {{ a: Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20                   b: Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }} }})); i = i + 1; }} }}\n"
+            ),
+            &["ok", "d80", "d71", "ok", "d81", "d72"],
+            "b9-boxed-struct-payload-control",
+        );
+
+        // 7 — CONTROL, an ESCAPING param. `outerT` hands its argument straight
+        //     back, so the callee registers nothing — neither box nor bodies —
+        //     and the terminal consumer stays the only owner. A bodies
+        //     registration that ignored the escape set would run a body over a
+        //     value it had already handed on.
+        assert_clean_asan_run(
+            &format!(
+                "{PRE}\
+                 fn innerT(x: Option[(Rt, Rt)]) {{\n\
+                 \x20  match x {{ Some((a, b)) => {{ println(f\"a{{a.id}}\") }} None => {{ println(\"n\") }} }} }}\n\
+                 fn outerT(x: Option[(Rt, Rt)]) -> Option[(Rt, Rt)] {{ return x; }}\n\
+                 fn main() {{ let mut i = 0; while i < 2 {{\n\
+                 \x20  innerT(outerT(Some((Rt {{ id: 70 + i + seed(), name: f\"aaaaaaaa{{i}}\" }},\n\
+                 \x20                       Rt {{ id: 80 + i, name: f\"bbbbbbbb{{i}}\" }})))); i = i + 1; }} }}\n"
+            ),
+            &["a71", "d71", "d80", "a72", "d72", "d81"],
+            "b9-boxed-tuple-escaping-param-control",
+        );
+    }
 }
