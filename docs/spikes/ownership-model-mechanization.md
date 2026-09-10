@@ -167,3 +167,65 @@ Slice 1 ✅ (2026-07-07): a one-command fuzzer wired to the LSan gate, producing
 ## Open question (owner sign-off)
 
 Sequencing vs LLJIT and vs the flagship diagnostic-fix work ([[diagnostic-fix-invariant-audit]], `docs/diagnostic-fix-audit.md`) — all three are hardening axes competing for the same attention. This spike is the only one fully independent of the others (touches neither the interpreter nor the diagnostic surface), so it can run in parallel. Slice 1 is cheap and pure-measurement — a low-commitment way to size the problem before committing to slices 2–4.
+
+---
+
+## Re-measurement 2026-09-10: the corpus was green because it could not build the shapes
+
+This spike closed as COMPLETE (core) on 2026-07-08 with the differential at
+**0 divergences**. Two months on, the drop-bug class it targets is still the
+open queue: of **42 open ledger rows, ~30 (71%) are drop-placement/ownership**,
+the family totals **953 rows of which 52% are follow-ups to an earlier row**,
+and follow-up chains run **20 deep** — the deepest is one week of 2026-08-28 →
+09-04, every link fixed, every fix spawning the next spelling. Codegen carries
+**93** `disarm_* / suppress_* / retract_*` functions, several of them the same
+rule duplicated per syntactic context (`disarm_moved_bare_tuple_elem_bodies`
+and `..._for_block`; four variants of `disarm_tuple_elem_bodies_at`).
+
+A green gate and an unshrinking bug class cannot both be health signals. The
+cause is coverage, and it is the **second** time — `drop_differential.rs`
+already records the corpus sitting at 94 against a doc reading 0 because "no
+curated shape declared an `impl Drop`". Three distinct blindness mechanisms,
+each measured:
+
+1. **Generator vocabulary.** `Array` appeared *nowhere* in `drop_fuzz`'s type
+   enum while five open rows were filed against `Array` element drops in one
+   week (B-2026-09-09-24, -09-10-7, -8, -26, -27). Hand-fed the nested shape,
+   the differential reports it correctly — `Divergence { function: "main",
+   place: "aa" }` — so the tooling was never blind, the corpus just could not
+   build one. **Fixed here:** four `Array` producers added. The differential
+   went **0 → 30 divergences** (116 programs, 581 drops) and the ASan/drop-log
+   run found **60 valid repros** (38 the `Option[Array[Tracked,2]]` of -27, 22
+   the `Array[Array[Tracked,2],2]` of -8/-26). The two *correct* Array shapes
+   added alongside them produce zero findings — no false alarms.
+
+2. **Oracle scope.** A `match` over an owned heap local takes the compared
+   schedule from 1 to 0 — including `Some(_)`, which binds nothing. `match` is
+   how Kāra consumes every `Option`/`Result`/enum, so the 0-divergence record
+   is substantially vacuous over the family it would be most valuable on. This
+   is the residual this doc calls "match-payload place-equivalence …
+   low value"; the measurement says it is where the bugs are.
+   Filed **B-2026-09-10-31**.
+
+3. **Validity decided at the wrong boundary, in both directions.** A program
+   that typechecks but fails `compile_to_ir` returns `DiffOutcome::Invalid` and
+   is silently uncounted — so the gate excludes exactly the shapes codegen is
+   worst at, and codegen-refusal is its own open row class
+   (**B-2026-09-10-30**). Mirror image on the fuzzer side: the shrinker deletes
+   a `let` and saves a program that no longer compiles as a repro, because "a
+   constructed `Drop` body never ran" is vacuously true of a program that never
+   runs — the empty program is the shrink predicate's fixed point, 2 of 62 in
+   one run (**B-2026-09-10-33**).
+
+**What this does not argue.** Nothing here reopens the 2026-07-08 Decision that
+the end state is *verified independence* rather than codegen literally
+consuming the oracle; that argument (consumption makes the verification
+tautological) is untouched. The finding is narrower and cheaper to act on: the
+verification is only as good as its corpus, and the corpus needs widening
+before the 0 means what it is read to mean. Extending the generator touches no
+compiler code — the Slice 1 property — so it stays the low-risk half.
+
+**Next widenings, in open-row order:** generic by-value payloads
+(B-2026-09-10-22), nested tuples inside arm bindings (-21), `shared`/`par` enum
+payloads (-11, -20). Each is a `Ty` variant, a producer, a sink arm and a
+prelude helper — the pattern the `Array` block now demonstrates.

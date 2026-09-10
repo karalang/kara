@@ -166,6 +166,19 @@ mod llvm_main {
         OptTupVec,     // Option[(Vec[String], i64)] — heap in a tuple in an Option
         MapTracked,    // Map[String, Tracked] — a Drop value as a Map value
         ResTracked,    // Result[Tracked, i64] — the Result twin of OptTracked
+        // ── `Array[T, N]` shapes (B-2026-09-09-24 / -09-10-7 / -8 / -26 / -27) ──
+        //
+        // The fixed-size sibling of the `Vec` shapes above, and — until this
+        // widening — absent from the corpus entirely: `Array` appeared nowhere
+        // in this generator while five open ledger rows were filed against
+        // `Array` element drops in one week. The differential DOES see the
+        // nested case (hand-fed, it reports the missing `aa` drop), so the gate
+        // was green only because nothing here could build one. Same lesson as
+        // the NESTED block above, one type constructor over.
+        ArrStr,        // Array[String, 3] — heap elements, no user body
+        ArrTracked,    // Array[Tracked, 2] — a Drop value as an Array element
+        ArrArrTracked, // Array[Array[Tracked, 2], 2] — the nested-interior shape
+        OptArrTracked, // Option[Array[Tracked, 2]] — a boxed Array payload
     }
 
     // A live binding in the generated `main` body.
@@ -613,6 +626,65 @@ mod llvm_main {
                 ));
             }
             self.add_var_mut(n, Ty::ResTracked);
+        }
+
+        fn make_arr_str(&mut self) {
+            let n = self.fresh("as");
+            let (a, b, c) = (self.str_literal(), self.str_literal(), self.str_literal());
+            self.emit(format!(
+                "        let mut {n}: Array[String, 3] = [{a}, {b}, {c}];"
+            ));
+            self.add_var_mut(n, Ty::ArrStr);
+        }
+
+        fn make_arr_tracked(&mut self) {
+            let n = self.fresh("at");
+            let (t1, t2) = (self.fresh_tag(), self.fresh_tag());
+            let (l1, l2) = (self.str_literal(), self.str_literal());
+            self.emit(format!(
+                "        let mut {n}: Array[Tracked, 2] = \
+                 [new_tracked({t1}i64, {l1}), new_tracked({t2}i64, {l2})];"
+            ));
+            self.add_var_mut(n, Ty::ArrTracked);
+        }
+
+        fn make_arr_arr_tracked(&mut self) {
+            let n = self.fresh("aat");
+            let (t1, t2, t3, t4) = (
+                self.fresh_tag(),
+                self.fresh_tag(),
+                self.fresh_tag(),
+                self.fresh_tag(),
+            );
+            let (l1, l2, l3, l4) = (
+                self.str_literal(),
+                self.str_literal(),
+                self.str_literal(),
+                self.str_literal(),
+            );
+            self.emit(format!(
+                "        let mut {n}: Array[Array[Tracked, 2], 2] = \
+                 [[new_tracked({t1}i64, {l1}), new_tracked({t2}i64, {l2})], \
+                 [new_tracked({t3}i64, {l3}), new_tracked({t4}i64, {l4})]];"
+            ));
+            self.add_var_mut(n, Ty::ArrArrTracked);
+        }
+
+        fn make_opt_arr_tracked(&mut self) {
+            let n = self.fresh("oat");
+            if self.rng.chance(4, 5) {
+                let (t1, t2) = (self.fresh_tag(), self.fresh_tag());
+                let (l1, l2) = (self.str_literal(), self.str_literal());
+                self.emit(format!(
+                    "        let mut {n}: Option[Array[Tracked, 2]] = \
+                     Some([new_tracked({t1}i64, {l1}), new_tracked({t2}i64, {l2})]);"
+                ));
+            } else {
+                self.emit(format!(
+                    "        let mut {n}: Option[Array[Tracked, 2]] = None;"
+                ));
+            }
+            self.add_var_mut(n, Ty::OptArrTracked);
         }
 
         // ── transforms: consume live bindings, exercise drop-prone shapes ──
@@ -1193,6 +1265,26 @@ mod llvm_main {
                             v.name
                         )
                     }
+                    // `Array` sinks read one element in place. Spelling matters:
+                    // a method call directly on an indexed element of a `ref
+                    // Array` PARAM does not lower ("indexed-receiver method
+                    // 'len' on 'a' — outer is not a Vec/Slice/Array"), while
+                    // field-then-method does, so the interior read goes through
+                    // `arr_inner_peek` and never through `a[i].len()` on a ref.
+                    Ty::ArrStr => format!("        acc = acc + {}[0].len();", v.name),
+                    Ty::ArrTracked => {
+                        format!("        acc = acc + {}[0].name.len();", v.name)
+                    }
+                    Ty::ArrArrTracked => {
+                        format!("        acc = acc + arr_inner_peek({}[0]);", v.name)
+                    }
+                    Ty::OptArrTracked => {
+                        let x = self.fresh("oax");
+                        format!(
+                            "        match {} {{ Some({x}) => {{ acc = acc + {x}[0].name.len(); }}, None => {{}} }}",
+                            v.name
+                        )
+                    }
                 };
                 self.emit(line);
             }
@@ -1223,7 +1315,7 @@ mod llvm_main {
             // weight. They are the only ones the drop-log oracle can judge, and
             // the displacement transforms all need one live to apply at all —
             // too thin a share and most programs never reach the new shapes.
-            match self.rng.below(20) {
+            match self.rng.below(24) {
                 0 => self.make_str(),
                 1 => self.make_vecstr(),
                 2 => self.make_pair(),
@@ -1243,7 +1335,11 @@ mod llvm_main {
                 16 => self.make_vec_tup_tracked(),
                 17 => self.make_opt_tup_vec(),
                 18 => self.make_map_tracked(),
-                _ => self.make_res_tracked(),
+                19 => self.make_res_tracked(),
+                20 => self.make_arr_str(),
+                21 => self.make_arr_tracked(),
+                22 => self.make_arr_arr_tracked(),
+                _ => self.make_opt_arr_tracked(),
             }
         }
 
@@ -1362,7 +1458,9 @@ fn tup_vec_len(t: (Vec[String], i64)) -> i64 {
     return acc;
 }
 
-fn peek_vec(v: ref Vec[String]) -> i64 { return v.len(); }"#;
+fn peek_vec(v: ref Vec[String]) -> i64 { return v.len(); }
+
+fn arr_inner_peek(a: ref Array[Tracked, 2]) -> i64 { return a[1].name.len(); }"#;
 
     // ───────────────────────── compile + run under ASan ──────────────────
 

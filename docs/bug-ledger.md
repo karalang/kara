@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 319 |
 | double-free | 223 |
 | missing-feature | 194 |
-| codegen-gap | 172 |
+| codegen-gap | 173 |
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
 | soundness | 95 |
-| other | 92 |
+| other | 95 |
 | crash | 79 |
 | use-after-free | 38 |
 
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1663 |
+| codegen | 1664 |
 | interp | 417 |
 | typecheck | 295 |
-| other | 81 |
+| other | 84 |
 | ownership | 74 |
 | cli | 73 |
 | autopar | 56 |
@@ -171,6 +171,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-25 | 2026-09-10 | codegen+interp | low | A FRESH TUPLE TEMP PASSED AS A CALL ARGUMENT RUNS ITS `Option` ELEMENT'S `Drop` BODY ON NEITHER BACKEND -- `eat((Some(R { .. }), 7))` over `fn eat(p: (Option[R], i64))` prints `eat done` under `--interp`, `-O0` and `-O2` auto-par alike, where one `dR71` is owed; the BINDING spelling of the same value (`let p = (Some(R { .. }), 7);`) is correct on all four surfaces since B-2026-09-10-18, so the element types resolve and what is missing is an owner for a tuple ARGUMENT temp's element bodies. Both backends agree, so no parity rule catches it and repairing either side alone would convert it into a divergence. Memory is balanced (0 valgrind errors, nothing lost) | none |
 | B-2026-09-10-26 | 2026-09-10 | codegen | medium | AN `Array` WHOSE ELEMENT IS ITSELF AN `Array` LEAKS ITS WHOLE INTERIOR -- `Array[Array[String, 2], 2]` loses all four `String` buffers (36 B at `-O0`) as a plain local, as a by-value param and as an enum payload alike, because `emit_drop_fn_for_array`'s element drop does not recurse into an array element | — |
 | B-2026-09-10-27 | 2026-09-10 | interp+codegen | medium | A BOXED `Array` PAYLOAD'S ELEMENT `Drop` BODIES RUN ON NO BACKEND -- `Option[Array[R, 2]]` over `impl Drop for R` prints no `dR` under `--interp`, the JIT or either AOT lane; an AGREED SILENCE and the `Array` peer of the TUPLE gap a56142bd8 closed, so both backends must gain it together | — |
+| B-2026-09-10-30 | 2026-09-10 | other | medium | THE ORACLE<->CODEGEN DIFFERENTIAL COUNTS A CODEGEN FAILURE AS "NOT A VALID SUBJECT", so the gate is blind exactly where codegen is weakest -- `DiffOutcome::Invalid` covers parse, type, ownership AND `compile_to_ir` errors alike, none counted toward coverage and none reported, while "codegen refuses this shape" is its own open ledger class | — |
+| B-2026-09-10-31 | 2026-09-10 | other | medium | A `match` OVER AN OWNED HEAP LOCAL REMOVES IT FROM THE OWNERSHIP ORACLE'S COMPARED DROP SCHEDULE, so the differential reports checked=0 and is structurally blind to the match-arm family that dominates the open drop-bug queue -- adding a `match` takes the schedule from 1 to 0, and an arm binding nothing (`Some(_)`) does it too | — |
+| B-2026-09-10-32 | 2026-09-10 | codegen | low | A DIRECT METHOD CALL ON AN INDEXED ELEMENT OF A `ref Array[T, N]` PARAM FAILS CODEGEN -- `fn f(a: ref Array[String, 2]) -> i64 { return a[0].len(); }` is rejected with "outer is not a Vec/Slice/Array" though the outer IS an Array; by-value `Array`, `ref Vec` and field-then-method all lower | — |
+| B-2026-09-10-33 | 2026-09-10 | other | low | THE DROP-FUZZER'S SHRINKER SAVES A PROGRAM THAT NO LONGER COMPILES AS A REPRO -- it deleted a `let` declaration and kept the reassignment, and "a constructed `Drop` body never ran" is vacuously true of a program that never runs, so the empty program is the shrink predicate's fixed point (2 of 62 repros in one run) | — |
 
 ### Relocated
 
