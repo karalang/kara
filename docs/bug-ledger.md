@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|
 | miscompile | 403 |
 | run-vs-build | 387 |
-| leak | 318 |
+| leak | 319 |
 | double-free | 222 |
 | missing-feature | 194 |
-| codegen-gap | 171 |
+| codegen-gap | 172 |
 | diagnostics | 125 |
 | false-positive | 106 |
 | perf | 104 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total |
 |---|---|
-| codegen | 1659 |
-| interp | 416 |
+| codegen | 1661 |
+| interp | 417 |
 | typecheck | 295 |
 | other | 81 |
 | ownership | 74 |
@@ -147,7 +147,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-06-36 | 2026-09-06 | codegen | low | A MATCH OVER A LOCAL STRUCT SCRUTINEE WITH AN UNCONSUMED ENUM LEAF LOSES THE LEAF'S `Drop` BODY ON THE COMPILED BACKENDS -- `let c = H1 { e: E.A(mk(34)) }; match c { H1 { e } => .. }` with `e` never touched prints `dE dR34` under `--interp` and NOTHING on run/build/AUTO_PAR=0 (memory balanced -- a lost BODY, not a leak). The by-value PARAM spelling is correct (the caller runs the body); only a LOCAL scrutinee has no such owner | — |
 | B-2026-09-06-39 | 2026-09-06 | interp+codegen | low | A READ-ONLY ARM OVER AN OWNED ENUM RECEIVER RUNS THE PAYLOAD'S `Drop` BODY BEFORE THE SHELL'S ON EVERY SURFACE -- `a.m_read()` prints `dR1 dE`, the reverse of the local-scrutinee order B-2026-08-28-67 established (`dE dR`, shell then fields per design.md § Part 8), so the same read-only arm orders its two bodies differently depending on whether the scrutinee is `self` or a local | — |
 | B-2026-09-06-40 | 2026-09-06 | interp+codegen | low | A REORDERED STRUCT `let` PATTERN DROPS ITS LEAVES IN REVERSE PATTERN ORDER ON THE INTERPRETER AND REVERSE DECLARATION ORDER ON EVERY COMPILED BACKEND -- `let s = S3 { a: mk(7), b: mk(8) }; let S3 { b, a } = s; return b.id * 100 + a.id;` prints `dR7 dR8 dR6 v=807` under `--interp` and `dR8 dR7 dR6 v=807` under jit / aot / `KARAC_AUTO_PAR=0`; every body runs once, the sequence alone diverges | — |
-| B-2026-09-06-49 | 2026-09-06 | codegen | low | AN INLINE-BUILT `Array` PAYLOAD LOSES ITS INTERIOR EXACTLY AS THE TUPLE DID -- 54 B in 6 blocks for `f(Some([f"a{i}", f"b{i}"]))`, while the same array through a NAMED LOCAL is clean, because the array's interior is owned by a caller-side drop that a missing move-suppressor leaves armed | — |
 | B-2026-09-06-54 | 2026-09-06 | interp+codegen | low | AN OWNED-`self` ENUM RECEIVER'S PAYLOAD `Drop` BODY RUNS NOWHERE WHEN THE CALLEE BINDS NOTHING OUT -- `fn plain(self, c: bool) -> i64 { return 1; }` called on `E.A(mk(16))` prints `dE` and never `dR16`, on --interp / jit / aot / `KARAC_AUTO_PAR=0` alike, for a named receiver and a fresh temp; the same receiver prints `dR16 dE` the moment the callee matches on `self` | — |
 | B-2026-09-06-65 | 2026-09-06 | interp+codegen | low | A PLAIN OWNED-`self` METHOD ON A FRESH TEMP RUNS THE RECEIVER'S `Drop` BODY BEFORE THE CALL'S RESULT IS PRINTED ON THE INTERPRETER AND AFTER IT ON EVERY COMPILED BACKEND -- `println(f"v={mk(4).plain()}")` over `fn plain(self) -> i64 { return self.id; }` prints `dR4 v=4` under --interp and `v=4 dR4` on jit / aot / -O0, a stdout-visible A/B divergence with no memory difference | — |
 | B-2026-09-07-1 | 2026-09-07 | interp+codegen | low | A DEEP-CHAIN MOVE-OUT WHOSE HOP IS THEN BOUND OUT RUNS THE MOVED LEAF'S `Drop` BODY TWICE, AND THE SECOND FIRE READS A HUSK ON THE COMPILED BACKENDS -- `let x = o.h.r; let Outer { h, k } = o;` prints `dR1 dR2 dR1` on all four surfaces, and with a `String` field the compiled second fire is `dR1/` (empty name) against `--interp`'s `dR1/n1` | — |
@@ -159,7 +158,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-09-21 | 2026-09-09 | codegen+interp | low | A DISCARDED TUPLE'S `Drop` BODY RUNS ON NEITHER BACKEND -- `f(mk(20));` over `fn f(r: R) -> (R, i64)` prints no `dR20` under `karac build` OR `--interp`, so the value dies with its destructor never running and the A/B rule passes because both surfaces are wrong the same way. The discarded BARE struct (`mk(20);`) does run its body, so the gap is the aggregate wrapper. a159b15e1 gave this shape its memory walk and deliberately left the body alone -- adding it on the compiled side alone would convert a silent agreed-wrong into a run-vs-build divergence | — |
 | B-2026-09-09-24 | 2026-09-09 | codegen | low | AN `Array` PAYLOAD BINDING THAT IS INDEXED STRANDS ITS ELEMENTS AT `-O0` -- 18 B in 2 blocks for `Some(t) => t[0]` over `Option[Array[String, 2]]` and 48 B in 1 for a user enum's `Array[Vec[String], 2]` read two levels deep, while the same binding never indexed and the same index off a `let` are both clean | none |
 | B-2026-09-09-25 | 2026-09-09 | codegen | low | THE INDEX-STORE HALF OF B-2026-09-09-9 IS STILL REFUSED FOR AN `Array` OUTER -- `a[0][1] = 99` over `Array[Vec[i64], 2]` fails `codegen: Index assignment target must be a variable` on every compiled backend while `--interp` runs it and the `Vec` outer stores fine; the read half of the same declaration now agrees on all five surfaces | none |
-| B-2026-09-10-6 | 2026-09-10 | codegen | medium | AN ARM-BOUND `Array` PAYLOAD PASSED BY VALUE INTO A CALLEE DOUBLE FREES -- `Some(t) => { take(t) }` over `fn take(a: Array[String, 2])` aborts `free(): double free detected in tcache 2` under the JIT and at `-O0` (clean at `-O2`, correct on `--interp`), because `suppress_array_binding_move_arg` retracts the caller's array drop only for `owned_array_params` and a `match`-arm binding is not in that set | none |
 | B-2026-09-10-7 | 2026-09-10 | codegen+interp | low | AN ARM-BOUND `Array` PAYLOAD NEVER RUNS ITS ELEMENTS' `Drop` BODIES, and the rebind spelling runs them on the COMPILED backends only -- `Some(t) => { t[0].tag }` over `Array[S, 2]` prints no `drop:` line on any backend, while `Some(t) => { let u: Array[S, 2] = t; .. }` prints both on `karac build`/`karac run` and none on `--interp` | none |
 | B-2026-09-10-8 | 2026-09-10 | codegen | low | AN `Array[Array[T, N], M]` PAYLOAD LEAKS ITS INNER ARRAYS' ELEMENTS -- 36 B in 4 blocks at `-O0` for `Some(t) => t[0][0]` over `Array[Array[String, 2], 2]`, with or without a rebind, so the outer array's drop walk never recurses into the inner one | none |
 | B-2026-09-10-10 | 2026-09-10 | cli | low | SIGKILL TO `karac run` PERMANENTLY LEAKS THE HANDOFF IR FILE -- `/tmp/karac_run_<pid>_jit.ll` is still on disk 30 minutes after the run, so the 5-second poll in `signalling_karac_run_does_not_orphan_the_jit_runner` is not a tight budget but a real unlink that never happens; 2 failures in 4 full-gate runs, 0 in isolation | none |
@@ -173,6 +171,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-23 | 2026-09-10 | codegen | low | A WHOLE-PAYLOAD ARM BINDING OVER A BY-VALUE `Option[(W, i64)]` PARAM LEAKS THE TUPLE ELEMENT'S INTERIOR -- 2 B in 1 block at -O0, in the GENERIC and CONCRETE legs alike; the by-value param and the match are BOTH required (either alone is clean), making this the TUPLE-payload sibling of B-2026-09-07-44's struct-payload leak | none |
 | B-2026-09-10-24 | 2026-09-10 | codegen | medium | AN `Option`/`Result`-TYPED LOCAL MOVED INTO A TUPLE LITERAL LOSES ITS PAYLOAD'S `Drop` BODY, AND THE THREE-LINE FIX FOR IT DOUBLE-FREES -- `let o: Option[R] = ..; let p = (o, 7);` prints `dR71 ok done` under `--interp` and `ok done` on `karac build` at both opt levels (the `Result` twin likewise); `refined_tuple_literal_elem_te`'s `Identifier` arm resolves only `Vec`/`VecDeque`, and handing it the local's already-recorded `optres_var_payload_tes` instantiation was MEASURED to abort with `free(): double free detected in tcache 2` at `-O0` and `-O2`, because a move into a tuple literal does not disarm the source's own walk the way a bare rebind does. Memory is balanced without that edit (0 valgrind errors, nothing lost), so today the absent body is the only observable | none |
 | B-2026-09-10-25 | 2026-09-10 | codegen+interp | low | A FRESH TUPLE TEMP PASSED AS A CALL ARGUMENT RUNS ITS `Option` ELEMENT'S `Drop` BODY ON NEITHER BACKEND -- `eat((Some(R { .. }), 7))` over `fn eat(p: (Option[R], i64))` prints `eat done` under `--interp`, `-O0` and `-O2` auto-par alike, where one `dR71` is owed; the BINDING spelling of the same value (`let p = (Some(R { .. }), 7);`) is correct on all four surfaces since B-2026-09-10-18, so the element types resolve and what is missing is an owner for a tuple ARGUMENT temp's element bodies. Both backends agree, so no parity rule catches it and repairing either side alone would convert it into a divergence. Memory is balanced (0 valgrind errors, nothing lost) | none |
+| B-2026-09-10-26 | 2026-09-10 | codegen | medium | AN `Array` WHOSE ELEMENT IS ITSELF AN `Array` LEAKS ITS WHOLE INTERIOR -- `Array[Array[String, 2], 2]` loses all four `String` buffers (36 B at `-O0`) as a plain local, as a by-value param and as an enum payload alike, because `emit_drop_fn_for_array`'s element drop does not recurse into an array element | — |
+| B-2026-09-10-27 | 2026-09-10 | interp+codegen | medium | A BOXED `Array` PAYLOAD'S ELEMENT `Drop` BODIES RUN ON NO BACKEND -- `Option[Array[R, 2]]` over `impl Drop for R` prints no `dR` under `--interp`, the JIT or either AOT lane; an AGREED SILENCE and the `Array` peer of the TUPLE gap a56142bd8 closed, so both backends must gain it together | — |
 
 ### Relocated
 
@@ -2343,6 +2343,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-06-46 | codegen | medium | A PARTIAL `let` DESTRUCTURE OF A LOCAL WHOSE OTHER FIELD WAS MOVED OUT EARLIER LOSES THE BOUND LEAF'S `Drop` BODY ON EVERY COMPILED BACKEND -- `let s… | 736a4fc |
 | B-2026-09-06-47 | interp | medium | THE `let`-DESTRUCTURE DISCARD RE-RUNS THE `Drop` BODY OF A FIELD ALREADY MOVED OUT OF THE SOURCE -- `let s = S3 { a: mk(8), b: mk(9) }; let x: R = s.… | 20e9ebc |
 | B-2026-09-06-48 | codegen | low | THE GENERIC HALF OF B-2026-09-04-12 STILL LOSES A BOXED TUPLE PAYLOAD'S INTERIOR -- `generic[T](x: Option[T])` leaks the same 54 B in 6 blocks the no… | 1ed0321 |
+| B-2026-09-06-49 | codegen | low | AN INLINE-BUILT `Array` PAYLOAD LOSES ITS INTERIOR EXACTLY AS THE TUPLE DID -- 54 B in 6 blocks for `f(Some([f"a{i}", f"b{i}"]))`, while the same arr… | 4dc4bdf |
 | B-2026-09-06-50 | codegen | high | A BOXED STRUCT PAYLOAD DESTRUCTURED OUT OF A BY-VALUE PARAM ABORTS ON BOTH COMPILED BACKENDS -- `free(): double free detected in tcache 2`, exit 134,… | 7020445 |
 | B-2026-09-06-51 | codegen | medium | THE -O0 ASAN RATCHET HAS BEEN RED ON `main` SINCE edb7236 -- six fixtures that commit ADDED fail `scripts/asan-o0-leg.sh` unquarantined, so the gate… | f2ec7d6ac |
 | B-2026-09-06-52 | codegen | high | A TOP-LEVEL WHOLE REBIND OF A BY-VALUE PARAM WHOSE STRUCT HAS A DIRECT `shared` FIELD DOUBLE-FREES ON EVERY COMPILED SURFACE -- `fn topreb(r: R) -> i… | 0083494 |
@@ -2461,6 +2462,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` (2026-05-20 → 202
 | B-2026-09-10-3 | codegen | low | THE `Result` SPELLING OF B-2026-09-09-19 LOSES THE ENVELOPE AS WELL AS THE INTERIOR, AND LOSES IT ON A WHOLE-PAYLOAD BIND TOO -- `struct HolderR { k:… | 818c3b4 |
 | B-2026-09-10-4 | codegen | medium | A REBIND OF A `match`-ARM-BOUND `Array` PAYLOAD IS A SECOND, SEPARATE DOUBLE FREE -- `Some(t) => { let u = t; u[0][0] }` still refuses to build after… | 2d991e9 |
 | B-2026-09-10-5 | codegen | high | A NAMED-LOCAL GENERIC ENUM PASSED BY VALUE SMASHES THE CALLER'S STACK -- `let a = G.X(W2 { a: 1, b: 2 }); hg(a);` over `enum G[T] { X(T), Y }` SIGSEG… | 91bd67b01 |
+| B-2026-09-10-6 | codegen | medium | AN ARM-BOUND `Array` PAYLOAD PASSED BY VALUE INTO A CALLEE DOUBLE FREES -- `Some(t) => { take(t) }` over `fn take(a: Array[String, 2])` aborts `free(… | 4dc4bdf |
 | B-2026-09-10-9 | codegen | high | EVERY ELEMENT OF A BOXED TUPLE PAYLOAD RUNS ITS `Drop` BODY OVER A BOX THE CALLEE HAS ALREADY FREED -- `fn takeR(x: Option[(R, R)])` reads freed memo… | a56142bd8 |
 | B-2026-09-10-12 | codegen | medium | THE -O0 ASAN RATCHET IS RED ON `main`: `asan_arm_bound_array_rebind_leaves_memory_with_one_owner` (2d991e9's own fixture) leaks 48 B in 1 allocation… | 92eeb8a |
 | B-2026-09-10-13 | codegen+interp | low | A GENERIC ENVELOPE NESTED INSIDE A GENERIC ENVELOPE RUNS NO `Drop` BODY AND LEAKS 72 B DIRECT + 27 B INDIRECT -- `let n = G.X(G.X(mkr(4)));` over `en… | 2201cdc |
