@@ -152791,6 +152791,131 @@ fn main() {
         }
     }
 
+    /// B-2026-09-10-18 — a tuple literal's `Option` element lost its payload's
+    /// `Drop` body, but ONLY in the bare-constructor spelling.
+    ///
+    /// `refined_tuple_literal_elem_te` has a constructor-rebuild arm, added by
+    /// B-2026-08-03-1 for `Option.Some(x)` — whose callee is a `Path` — and it
+    /// sat in the CATCH-ALL arm of a match on the callee's shape. A bare
+    /// `Some(x)` parses with an `Identifier` callee, so it took the sibling
+    /// branch, looked itself up in `fn_return_type_exprs` (a constructor names
+    /// no function), missed, and returned `None`. The element then fell back to
+    /// head-name inference, came back as a bare `Option` with no generic args,
+    /// and the binding registered no bodies walker at all.
+    ///
+    /// WHAT ISOLATES IT TO THE EXPRESSION'S SHAPE rather than to tuples or to
+    /// payloads: five spellings of one value disagreed. The qualified
+    /// `Option.Some(x)`, the annotated `Option[R].Some(x)`, an annotated
+    /// binding `let p: (Option[R], i64)`, a call element `mk()` returning
+    /// `Option[R]`, and a plain struct element `(R { .. }, 7)` were all correct
+    /// throughout; only the bare `Some(x)` was silent. Those five are the
+    /// CONTROLS below.
+    ///
+    /// The fix hoists the function-return lookup so a declared `fn Some(..)`
+    /// still wins, then lets the existing rebuild run for both callee shapes.
+    /// The rebuild itself is untouched, so the qualified spellings keep the
+    /// exact path they had.
+    ///
+    /// NOT FIXED HERE, and measured so rather than assumed: an `Option`-typed
+    /// LOCAL moved into the tuple (`let o: Option[R] = ..; let p = (o, 7);`)
+    /// stays silent, because handing this arm that local's recorded
+    /// instantiation makes the tuple's walk and the un-disarmed source's walk
+    /// both own the payload — an abort, not a missed body. And a
+    /// `(Option[Option[R]], i64)` element stays silent for a different reason
+    /// again: the element type now resolves, and the tuple-element SELECTOR
+    /// has the one-level horizon B-2026-09-10-17 covers.
+    #[test]
+    fn e2e_bare_ctor_tuple_element_runs_its_payload_drop_body() {
+        const PRE: &str = "struct Rq { id: i64, name: String }\n\
+             impl Drop for Rq { fn drop(mut ref self) { println(f\"dRq{self.id}\") } }\n";
+        for (label, body, want) in [
+            // THE ROW: never read, so the binding dies at its own `let`.
+            (
+                "bare-ctor-element",
+                "fn main() { let p = (Some(Rq { id: 71, name: f\"a\" }), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // The same binding READ, so it lives to the end of the statement
+            // instead — the body moves, but it must still be exactly one.
+            (
+                "bare-ctor-element-read",
+                "fn main() { let p = (Some(Rq { id: 71, name: f\"a\" }), 7); println(f\"n{p.1}\"); println(\"done\") }\n",
+                "n7\ndRq71\ndone\n",
+            ),
+            // Arity one: the Option is the whole tuple.
+            (
+                "arity-one",
+                "fn main() { let p = (Some(Rq { id: 71, name: f\"a\" }),); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // The Option in the SECOND slot, so a fix that only inspected
+            // element 0 shows up here.
+            (
+                "option-not-first",
+                "fn main() { let p = (7, Some(Rq { id: 71, name: f\"a\" })); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // TWO Option elements: both bodies, in element order.
+            (
+                "two-option-elements",
+                "fn main() { let p = (Some(Rq { id: 71, name: f\"a\" }), Some(Rq { id: 72, name: f\"b\" })); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\ndRq72\nok\ndone\n",
+            ),
+            // A NESTED tuple literal — the rebuild recurses through
+            // `refined_tuple_literal_elem_te` one level down.
+            (
+                "nested-tuple-literal",
+                "fn main() { let p = ((Some(Rq { id: 71, name: f\"a\" }), 6), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // CONTROL — the QUALIFIED ctor, which always reached the rebuild.
+            (
+                "qualified-ctor-control",
+                "fn main() { let p = (Option.Some(Rq { id: 71, name: f\"a\" }), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // CONTROL — the ANNOTATED ctor, which reaches the MethodCall arm.
+            (
+                "annotated-ctor-control",
+                "fn main() { let p = (Option[Rq].Some(Rq { id: 71, name: f\"a\" }), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // CONTROL — an annotated BINDING, which takes the declared element
+            // types and never consults the element expressions at all.
+            (
+                "annotated-binding-control",
+                "fn main() { let p: (Option[Rq], i64) = (Some(Rq { id: 71, name: f\"a\" }), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // CONTROL — a CALL element, resolved from the callee's declared
+            // return type by the branch the fix hoists above the rebuild.
+            (
+                "call-element-control",
+                "fn mk() -> Option[Rq] { Some(Rq { id: 71, name: f\"a\" }) }\n\
+                 fn main() { let p = (mk(), 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // CONTROL — a plain struct element, which never needed the rebuild.
+            (
+                "struct-element-control",
+                "fn main() { let p = (Rq { id: 71, name: f\"a\" }, 7); println(\"ok\"); println(\"done\") }\n",
+                "dRq71\nok\ndone\n",
+            ),
+            // CONTROL — a bare ctor over a payload with NO `Drop`. The rebuild
+            // now names this element too; nothing may run for it.
+            (
+                "no-drop-payload-control",
+                "fn main() { let p = (Some(5), 7); println(f\"ok{p.1}\"); println(\"done\") }\n",
+                "ok7\ndone\n",
+            ),
+        ] {
+            let Some(out) = run_program(&format!("{PRE}{body}")) else {
+                return;
+            };
+            assert_eq!(out, want, "[{label}]");
+        }
+    }
+
     /// B-2026-09-10-15 — an `Option`/`Result` payload that is ITSELF an
     /// `Option`/`Result` ran its inner `Drop` body on the interpreter and
     /// nowhere on the compiled backends.

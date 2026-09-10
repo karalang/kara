@@ -18050,11 +18050,37 @@ impl<'ctx> super::Codegen<'ctx> {
             // silent in the tuple position. Rebuild `Option[P]` / `Result[P]`
             // from the ctor's own argument (the same head-name inference,
             // applied one level down).
-            ExprKind::Call { callee, args } => match &callee.kind {
-                ExprKind::Identifier(f) => {
-                    self.fn_sig.fn_return_type_exprs.get(f.as_str()).cloned()
+            ExprKind::Call { callee, args } => {
+                // A declared function's return type wins, and is checked FIRST
+                // so a user `fn Some(..)` is never mistaken for the built-in
+                // constructor below.
+                if let ExprKind::Identifier(f) = &callee.kind {
+                    if let Some(rt) = self.fn_sig.fn_return_type_exprs.get(f.as_str()) {
+                        return Some(rt.clone());
+                    }
                 }
-                _ => {
+                // B-2026-09-10-18 — the BARE constructor spelling, `Some(x)`.
+                // The ctor rebuild below was written for `Option.Some(x)`,
+                // whose callee is a `Path`, and it sat in the CATCH-ALL arm of
+                // a match on the callee's shape. A bare `Some(x)` parses with
+                // an `Identifier` callee, so it took the branch above instead,
+                // missed `fn_return_type_exprs` (a constructor names no
+                // function), and returned `None` -- the element fell back to
+                // `infer_arg_elem_te`, came back as a bare `Option` with no
+                // generic args, and the binding registered no bodies walker at
+                // all. Measured: `let p = (Some(R { .. }), 7);` printed `dR71`
+                // under `--interp` and nothing on either compiled backend,
+                // while `(Option.Some(R { .. }), 7)`, `(Option[R].Some(..), 7)`
+                // and the annotated `let p: (Option[R], i64)` were all correct
+                // -- three spellings of one value disagreeing, which is what
+                // isolates this to the shape of the expression rather than to
+                // anything about tuples or payloads.
+                //
+                // `enum_name_of_expr` already resolves a bare ctor callee
+                // through `enum_name_for_variant_ctor`, so reaching it is the
+                // whole fix; the rebuild itself is unchanged and the qualified
+                // spellings keep the exact path they had.
+                {
                     let ctor = self.enum_name_of_expr(e)?;
                     if ctor != "Option" && ctor != "Result" {
                         return None;
@@ -18072,7 +18098,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: e.span,
                     })
                 }
-            },
+            }
             // B-2026-09-03-39 — the ANNOTATED constructor spelling
             // (`Result[R, String].Ok(mk(135))`). It does NOT parse as a `Call`
             // like its unannotated sibling: the type arguments make the head a
